@@ -11,19 +11,19 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** v1 — Phase 1, Portability spike
+**Current focus:** v1 — Phase 2.1, Coherence gate
 
 ## Current Position
 
-Milestone: v1 — Speed and memory, one model (0.1.0)
-Phase: 1 of 5 (Portability spike)
-Plan: 0 of 1 in current phase
-Status: Ready to plan
-Last activity: 2026-09-14 — Repo created and pushed; PAUL initialized from the approved restart plan.
+Milestone: v1 — Format axis on small models (0.1.0)
+Phase: 2.1 of 6 (Coherence gate)
+Plan: 1 of 1 in current phase
+Status: Applying
+Last activity: 2026-09-15 — Phases 1 and 2 complete, 199 tests green. Coherence gate rewiring in flight.
 
 Progress:
-- Milestone: [░░░░░░░░░░] 0%
-- Phase: [░░░░░░░░░░] 0%
+- Milestone: [███░░░░░░░] 33%
+- Phase: [███████░░░] 70%
 
 ## Loop Position
 
@@ -51,13 +51,18 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Speed + memory only in v1 | Pre-phase | Accuracy work is refused until v1 ships, however tempting. |
 | Hero model is `gemma-4-12B-it-qat` | Pre-phase | Zero downloads; 36 GiB free disk forbids more. |
 | `--cells a,b,c` is the only cell selector | Pre-phase | Any second mechanism gets deleted on sight. |
-| Implementation delegated to `cc-agent` (deepseek-v4.1-flash) | Pre-phase | Opus reviews every diff and every test run personally; worker prose is not evidence. |
+| Implementation delegated to `cc-agent` (deepseek-v4.1-flash, max effort) | Pre-phase | Opus reviews every diff and every test run personally; worker prose is not evidence. |
+| Hero models are `Qwen3.5-4B` + `LFM2.5-8B-A1B` | Phase 1 | `gemma4_unified` is not shipped by mlx-lm, so that family can carry no stock-mlx control. 33.7 GB for both, all four formats each. |
+| Format axis ships before runtime axis | Phase 1 | `mlx-Chronos` already published a runtime-axis protocol; nobody has done the format axis properly. |
+| A cell emitting garbage FAILS, however fast | Phase 1 | Stock mlx-lm loaded a 256-expert oQ4 MoE, hit full throughput, and returned token salad with nothing raised. |
+| JANG is a runtime+format bundle, not an axis point | Phase 1 | No runtime loads JANG and the other formats both. Own study, after v1. |
 
 ### Deferred Issues
 
 | Issue | Origin | Effort | Revisit |
 |-------|--------|--------|---------|
-| LMRE not yet archived to ~/Dev/archive/ | Pre-phase | S | After Phase 2 ports the salvage files out of it |
+| LMRE not yet archived to ~/Dev/archive/ | Pre-phase | S | After Phase 4, once nothing more is needed from it |
+| Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: both hero models fit in 36 GiB without deleting anything |
 | LMRE's rubric/ruling design (floors then one ordering metric) not ported | Pre-phase | M | v2, with the accuracy axis |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
 
@@ -65,8 +70,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 | Blocker | Impact | Resolution Path |
 |---------|--------|-----------------|
-| oQ portability to stock mlx-lm is an unverified research claim | Study A's whole design rests on it | Phase 1 is exactly this spike; fallback is an `mlx-community/*-4bit` artifact |
-| 36 GiB free disk, `/System/Volumes/Data` at 96% | Caps model choice; no bf16 reference possible | v1 downloads nothing. Move models to `/Volumes/Storage` (931 GiB free) before v2 |
+| Stock mlx-lm executes a 256-expert oQ4 MoE incorrectly — loads and generates at speed, output is token salad | Invalidates any speed number taken without a coherence check | Phase 2.1 gate; Phase 4 settles whether it is runtime-specific |
+| 36 GiB free, `/System/Volumes/Data` at 96%; external drive offline | Caps model choice; no bf16 reference possible | Both hero models fit at 33.7 GB. Jason is clearing JANG/LMRE models by hand |
 
 ## Boundaries (Active)
 
@@ -76,10 +81,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-14
-Stopped at: Repo initialized, pushed to github.com/JasonRandazza/OhYesMLX; PAUL installed and populated.
-Next action: `/paul:plan` for Phase 1 (Portability spike).
-Resume context: The approved restart plan lives at `~/.claude/plans/twinkling-hopping-crab.md`. Salvage sources are in `~/Dev/active/local-model-runtime-evaluation-harness` (not yet archived).
+Last session: 2026-09-15
+Stopped at: Phases 1-2 complete and pushed. `coherence.py` landed with 16 tests; its call site in `measure.py` is being rewired by a worker.
+Next action: verify and commit the coherence wiring, close #7, then begin Phase 3 (format axis).
+Resume context: **Read `.paul/HANDOFF.md` first** — it carries the three findings that redirected the project, the traps that cost time, and machine state.
 
 ---
 *STATE.md — Updated after every significant action*
