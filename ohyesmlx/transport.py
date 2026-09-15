@@ -376,15 +376,6 @@ def chat(
                 "incomplete SSE stream", reason="incomplete_sse"
             )
         ended = time.monotonic()
-        if first_token is None:
-            raise TransportError(
-                "chat stream produced no content", reason="empty_content"
-            )
-        if last_content is None:
-            raise TransportError(
-                "chat stream content timing is unavailable",
-                reason="content_timing_unavailable",
-            )
         joined = "".join(content)
         reasoning_text = "".join(reasoning_parts)
         # oMLX 0.6.4 mirrors its reasoning text into the content channel: the same string
@@ -401,10 +392,56 @@ def chat(
         # copy measured the wrong channel — 5.499 s of TTFT where the first reasoning delta
         # landed at 0.685 s, and a 1.66e-07 s decode window against a real 1.668 s.
         mirrored = bool(reasoning_text) and reasoning_text == joined
-        accounting_reasoning_text = "" if mirrored else reasoning_text
+        # mlx-lm 0.31.3 and vMLX 1.6.59 answer a thinking model entirely in the reasoning
+        # channel and never reach content inside the workload's cap. The stream produced
+        # output; it is spelled in the other channel. Timing only the content channel raised
+        # empty_content over the top of a response that had just streamed, which is how 24 of
+        # the grid's 60 results came back with no figure and no token count at all.
+        reasoning_only = bool(reasoning_text) and not joined
+        # The output stream, decided once for all three shapes: the content deltas, unless the
+        # reasoning deltas are what streamed — because the runtime mirrored them into content,
+        # or because no content ever arrived. The count moves with the timing, never without
+        # it: report.py reads a count below two as a stream with no interval to divide by and
+        # omits decode tok/s, ITL and prefill tok/s, so a corrected window under a count of one
+        # is computed and then discarded. A stream of one reasoning delta still reports one —
+        # it really did arrive whole — and still publishes no rate.
+        if mirrored or reasoning_only:
+            stream_ttft_s, stream_last_s, stream_events = (
+                first_reasoning,
+                last_reasoning,
+                reasoning_event_count,
+            )
+        else:
+            stream_ttft_s, stream_last_s, stream_events = (
+                first_token,
+                last_content,
+                content_event_count,
+            )
+        # Neither channel produced anything, so there is no output stream to measure.
+        if stream_ttft_s is None:
+            raise TransportError(
+                "chat stream produced no content", reason="empty_content"
+            )
+        if stream_last_s is None:
+            raise TransportError(
+                "chat stream content timing is unavailable",
+                reason="content_timing_unavailable",
+            )
+        # A response that never reached content arrived in one channel, so there is no second
+        # one to split it from and the runtime's own completion total is that channel's count.
+        # Accounting is sent an empty reasoning channel and reads the total — the branch
+        # resolve_token_accounting already takes when a runtime emits no reasoning at all,
+        # reached from the other side. Mirrored text is the same case: one stream, read twice.
+        accounting_reasoning_text = (
+            "" if (mirrored or reasoning_only) else reasoning_text
+        )
         if (
             usage_reasoning_tokens is not None
             and completion_tokens is not None
+            # Not when reasoning is the only channel: the split the runtime reports is the
+            # whole response, and the visible remainder of zero is not a count this response
+            # has.
+            and not reasoning_only
         ):
             if usage_reasoning_tokens > completion_tokens:
                 raise TransportError(
@@ -429,24 +466,11 @@ def chat(
                 token_counter=token_counter,
             )
             token_source = _TOKEN_SOURCES[accounting_status]
-        # The count moves with the timing, never without it: report.py reads a count below
-        # two as a stream with no interval to divide by and omits decode tok/s, ITL and
-        # prefill tok/s, so a corrected window under a count of one is computed and then
-        # discarded. A mirrored stream of one reasoning delta still reports one — it really
-        # did arrive whole — and still publishes no rate.
-        if mirrored:
-            stream_ttft_s = first_reasoning - started
-            stream_last_s = last_reasoning - started
-            stream_events = reasoning_event_count
-        else:
-            stream_ttft_s = first_token - started
-            stream_last_s = last_content - started
-            stream_events = content_event_count
         return Observation(
             ok=True,
             error=None,
-            ttft_s=stream_ttft_s,
-            last_content_s=stream_last_s,
+            ttft_s=stream_ttft_s - started,
+            last_content_s=stream_last_s - started,
             total_s=ended - started,
             prompt_tokens=prompt_tokens,
             completion_tokens=content_tokens,

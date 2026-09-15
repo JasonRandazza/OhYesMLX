@@ -67,15 +67,24 @@ MIN_PERCENTILE_N = 5
 MIN_CONTENT_DELTAS = 2
 
 # How far above the median measured request the cold visit's first request has to sit before
-# the row says a load was deferred into it. Measured (scripts/probe_lazy.py: three requests,
-# no warmups, same artifact): oMLX 0.6.4 spent 3.08-3.93 s in request #1 against ~0.42 s for
-# the two after it, on three artifacts -- a 7.3x-9.4x gap -- while mlx-lm, mlx-optiq and vMLX
-# stayed within 0.04-0.10 s of their own later requests, at worst 1.2x. 5x sits between those
-# two populations with room on both sides, which is what a wide margin means here: below it a
-# first request is warm-up-shaped, above it the runtime has moved a load into the request. It
-# is a note and not a metric -- the row prints both numbers, so a reader can disagree with the
-# factor without disagreeing with the finding.
-DEFERRED_LOAD_FACTOR = 5.0
+# the row says a load was deferred into it, in SECONDS rather than as a ratio. The ratio this
+# replaced was workload-dependent and the deferral is not: oMLX 0.6.4's deferral read as 9.4x
+# against a 0.42 s probe request and as 3.3x against a 1.6 s grid request, so the same load
+# moved in and out of the verdict because the measured requests got longer. An absolute excess
+# does not move that way.
+#
+# Measured populations. Deferred: oMLX 0.6.4 sat 2.66-3.51 s above its own later requests on
+# scripts/probe_lazy.py (three requests, no warmups, three artifacts) and +3.63 s above the
+# median on the grid's 128-token chat column. Honest: mlx-lm, mlx-optiq and vMLX stayed
+# 0.04-0.10 s above their own later requests on the probe, and -0.19, -0.09 and +0.21 s on the
+# grid's four columns. 1 s is 10x the probe's worst honest excess, 4.8x the grid's worst, and
+# 2.7x below the smallest deferred one, which puts it in that gap with room on both sides.
+#
+# It also fires on a deferral a longer workload had hidden: oMLX's own prefill column measured
+# +1.47 s, and any threshold above that restores the workload-dependence this replaced. It is
+# a note and not a metric -- the row prints both numbers and the excess -- so a reader can
+# disagree with the threshold without disagreeing with the finding.
+DEFERRED_LOAD_EXCESS_S = 1.0
 
 # Each axis holds one variable and varies the other, which is the whole point of the split.
 HELD_CONSTANT = {"runtime": "format", "format": "runtime"}
@@ -504,20 +513,20 @@ def _deferred_load_note(first_request_s, request_seconds) -> str | None:
 
     The cold visit's first request is the one that carries whatever the runtime did not do
     before it was ready, so for a lazy loader it is a whole model load wearing a request's
-    name. Above ``DEFERRED_LOAD_FACTOR`` times the median measured request the row says so,
-    and prints both numbers: the load is the reason the user's first prompt is slow, and a
-    reader left to guess would file it as warm-up.
+    name. Above ``DEFERRED_LOAD_EXCESS_S`` seconds more than the median measured request the
+    row says so, and prints both numbers and their difference: the load is the reason the
+    user's first prompt is slow, and a reader left to guess would file it as warm-up.
     """
     median_s = median(request_seconds)
     if first_request_s is None or not median_s or median_s <= 0:
         return None
-    factor = first_request_s / median_s
-    if factor < DEFERRED_LOAD_FACTOR:
+    excess = first_request_s - median_s
+    if excess < DEFERRED_LOAD_EXCESS_S:
         return None
     return (
         f"the cold visit's first request took {first_request_s:.2f} s against a median "
-        f"measured request of {median_s:.2f} s ({factor:.1f}x): a load this runtime deferred "
-        "past readiness, not warm-up noise"
+        f"measured request of {median_s:.2f} s ({excess:+.2f} s over it): a load this "
+        "runtime deferred past readiness, not warm-up noise"
     )
 
 
@@ -790,8 +799,8 @@ def _footnotes() -> list[str]:
         "weights at startup it is an ordinary warm request; for one that loads them lazily it "
         "is where the load landed. cold load s and first request s are the two halves of what "
         "a cold start costs — a cross-runtime load comparison uses their sum — and a first "
-        f"request more than {DEFERRED_LOAD_FACTOR:g}x the median measured request says so in "
-        "the row's notes rather than being read as warm-up noise.",
+        f"request more than {DEFERRED_LOAD_EXCESS_S:g} s above the median measured request "
+        "says so in the row's notes rather than being read as warm-up noise.",
         "",
         f"p90 and p99 need at least {MIN_PERCENTILE_N} samples; below that the cell shows "
         "`—` and the row says `n=<k>` rather than inventing a percentile.",

@@ -1,0 +1,27 @@
+{
+  "settings": {
+    "server-runtime.json:cache.blockDisk.enabled": true,
+    "server-runtime.json:cache.blockDisk.maxSizePercent": 10,
+    "server-runtime.json:cache.defaultMaxKVSize": 65536,
+    "server-runtime.json:cache.liveKVCodec": "engine_selected",
+    "server-runtime.json:cache.longPromptMultiplier": 2,
+    "server-runtime.json:cache.pagedKV.enabled": false,
+    "server-runtime.json:cache.prefix.enabled": true,
+    "server-runtime.json:cache.storedKVCodec": "auto",
+    "server-runtime.json:concurrency.continuousBatching": true,
+    "server-runtime.json:concurrency.maxConcurrentSequences": 1,
+    "server-runtime.json:generation.streamInterval": 1,
+    "server-runtime.json:memorySafety.mode": "safe_auto",
+    "server-runtime.json:memorySafety.slider": 2,
+    "server-runtime.json:mtp.mode": "auto",
+    "server-runtime.json:performance.compiledDecode": false,
+    "server-runtime.json:performance.tiedHeadCodec": "q6",
+    "server.json:backlog": 256,
+    "server.json:modelEvictionPolicy": "Strict (One Model)",
+    "server.json:modelIdleResidencyPolicy.mode": "after_seconds",
+    "server.json:modelIdleResidencyPolicy.seconds": 900,
+    "server.json:modelLoadRAMHardThreshold": 0.9,
+    "server.json:modelLoadRAMSoftThreshold": 0.8,
+    "server.json:numberOfThreads": 12
+  }
+}

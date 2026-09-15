@@ -10,6 +10,7 @@ reproducible with stdlib alone.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
@@ -161,6 +162,17 @@ def _usage(
     if reasoning_tokens is not None:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
     return _sse({"choices": [], "usage": usage})
+
+
+def _without_clocks(observation: Observation) -> Observation:
+    """An observation with its three wall-clock fields blanked.
+
+    Only the machine knows when the deltas landed, so a field-for-field pin compares every
+    field but those three.
+    """
+    return dataclasses.replace(
+        observation, ttft_s=None, last_content_s=None, total_s=0.0
+    )
 
 
 def test_chunked_transfer_encoding_stream_is_decoded(server):
@@ -549,6 +561,134 @@ def test_a_mirrored_stream_of_one_reasoning_delta_still_reports_a_count_of_one(s
     # the response was written, and the copy at 0.6s is not.
     assert observation.ttft_s < 0.45
     assert observation.last_content_s < 0.45
+
+
+def test_a_mirrored_stream_is_unchanged_field_for_field(server):
+    """The mirrored path, pinned whole: the fix below must not have moved a single field."""
+    server.respond(
+        (0.0, _reasoning(OMLX_MIRRORED)),
+        (0.0, _content(OMLX_MIRRORED)),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=13, completion_tokens=8)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=8)
+
+    assert _without_clocks(observation) == Observation(
+        ok=True,
+        error=None,
+        ttft_s=None,
+        last_content_s=None,
+        total_s=0.0,
+        prompt_tokens=13,
+        completion_tokens=8,
+        reasoning_tokens=None,
+        content_event_count=1,
+        text=OMLX_MIRRORED,
+        token_source="usage",
+        reasoning_text=OMLX_MIRRORED,
+    )
+
+
+def test_an_ordinary_content_stream_is_unchanged_field_for_field(server):
+    """The ordinary path, pinned whole, split accounting included."""
+    server.respond(
+        (0.0, _content("hello")),
+        (0.0, _content(" world")),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=7, completion_tokens=5, reasoning_tokens=2)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert _without_clocks(observation) == Observation(
+        ok=True,
+        error=None,
+        ttft_s=None,
+        last_content_s=None,
+        total_s=0.0,
+        prompt_tokens=7,
+        completion_tokens=3,
+        reasoning_tokens=2,
+        content_event_count=2,
+        text="hello world",
+        token_source="usage",
+        reasoning_text="",
+    )
+
+
+def test_a_reasoning_only_stream_times_and_counts_its_reasoning_deltas(server):
+    """mlx-lm 0.31.3 and vMLX 1.6.59: the whole response streams in `delta.reasoning`.
+
+    Twenty-four of the grid's sixty results carried no figure for this. `chat` saw no content
+    delta, raised empty_content over a response that had just streamed, and the cell was
+    excluded for a decode window the reasoning channel had already produced.
+    """
+    server.respond(
+        (0.0, b": keepalive 1/1\n\n"),
+        (0.2, _reasoning("thinking ", field="reasoning")),
+        (0.4, _reasoning("out loud", field="reasoning")),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=13, completion_tokens=8)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=128)
+
+    assert observation.ok, observation.error
+    # The output stream is the reasoning channel: deltas at 0.2s and 0.6s are the window, and
+    # its count of two is what report.py needs before it will publish a rate from it.
+    assert observation.ttft_s < 0.45
+    assert observation.last_content_s - observation.ttft_s >= 0.3
+    assert observation.last_content_s < 1.0
+    assert observation.content_event_count == 2
+    # Content stayed content and reasoning stayed reasoning. The gate reads text first and
+    # falls back to reasoning_text, so the two channels have to arrive intact.
+    assert observation.text == ""
+    assert observation.reasoning_text == "thinking out loud"
+    # Reasoning is the only channel, so there is no split to derive and usage's own completion
+    # total is that channel's count — the rule the mirrored case already follows.
+    assert observation.completion_tokens == 8
+    assert observation.token_source == "usage"
+
+
+def test_a_reasoning_only_stream_takes_the_total_when_usage_reports_the_split(server):
+    """A runtime that reports reasoning_tokens and still never reaches content.
+
+    The split it reports is the whole response, so there is no visible remainder to require
+    and usage's total is the count of the one channel that produced output.
+    """
+    server.respond(
+        (0.0, _reasoning("thinking", field="reasoning")),
+        (0.0, _reasoning(" out loud", field="reasoning")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=6, reasoning_tokens=6)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=128)
+
+    assert observation.ok, observation.error
+    assert observation.completion_tokens == 6
+    assert observation.token_source == "usage"
+
+
+def test_a_stream_with_neither_channel_still_raises_empty_content(server):
+    """Nothing in content and nothing in reasoning: no output stream to measure."""
+    server.respond(
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=0)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=128)
+
+    assert observation.ok is False
+    assert observation.error == "chat stream produced no content"
+    assert observation.text == ""
+    assert observation.reasoning_text == ""
 
 
 def test_a_reasoning_channel_that_differs_from_content_keeps_content_timing(server):

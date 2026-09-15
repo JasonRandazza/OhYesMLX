@@ -528,30 +528,71 @@ def test_first_request_is_its_own_column_and_the_cold_load_is_not_summed_into_it
 
 
 def test_the_deferred_load_note_fires_above_the_threshold_and_not_below():
-    """5x is the named threshold, and both sides of it are checked."""
-    above = report.summarize([first_request_cell(2.5, request_seconds=0.5)])[0]
-    below = report.summarize([first_request_cell(2.49, request_seconds=0.5)])[0]
+    """1 s of excess is the named threshold, and both sides of it are checked."""
+    above = report.summarize([first_request_cell(1.5, request_seconds=0.5)])[0]
+    below = report.summarize([first_request_cell(1.49, request_seconds=0.5)])[0]
 
-    assert report.DEFERRED_LOAD_FACTOR == 5.0
+    assert report.DEFERRED_LOAD_EXCESS_S == 1.0
     assert above["first_request_note"] is not None, "exactly at the threshold still fires"
     assert below["first_request_note"] is None
 
 
 def test_a_deferred_load_is_named_as_one_in_the_row_notes():
-    """oMLX's first request is 9.4x the requests that followed: a load, not warm-up noise."""
+    """oMLX's first request is 3.51 s above the requests that followed: a load, not warm-up
+    noise."""
     row = report.summarize([first_request_cell(DEFERRED_FIRST_S)])[0]
 
     assert "deferred past readiness" in row["first_request_note"]
     assert "not warm-up noise" in row["first_request_note"]
-    # Both numbers, so the factor can be checked rather than trusted.
+    # Both numbers and the excess between them, so the threshold can be checked rather than
+    # trusted.
     assert "3.93 s" in row["first_request_note"]
     assert "0.42 s" in row["first_request_note"]
-    assert "9.4x" in row["first_request_note"]
+    assert "+3.51 s over it" in row["first_request_note"]
 
     printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
     assert "deferred past readiness" in printed["notes"]
     card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
     assert "deferred past readiness" in card
+
+
+# The four columns of the runtime-axis grid: cold_load_s, first_request_s and the median
+# measured request. oMLX charges a whole load to request #1; the other three are warm-up.
+GRID_COLUMNS = (
+    ("mlxlm", "mlx-lm 0.31.3", 3.84, 1.61, 1.8),
+    ("omlx", "oMLX 0.6.4", 2.16, 5.23, 1.6),
+    ("optiq", "mlx-optiq 0.5.6", 4.11, 2.06, 1.85),
+    ("vmlx", "vMLX 1.6.59", 7.10, 1.81, 1.9),
+)
+
+
+def grid_column(runtime, runtime_version, cold_load_s, first_request_s, median_s):
+    """One grid column as a row: its cold visit, and the requests measured after it."""
+    return report.summarize(
+        [
+            first_request_cell(
+                first_request_s,
+                request_seconds=median_s,
+                cell_id=f"oq4__{runtime}",
+                runtime=runtime,
+                runtime_version=runtime_version,
+                cold_load_s=cold_load_s,
+            )
+        ]
+    )[0]
+
+
+def test_the_deferred_load_note_fires_on_the_omlx_column_and_not_the_other_three():
+    """The case the ratio missed: 5.23 s against 1.6 s is only 3.3x — under the 5x the deleted
+    factor required — and 3.63 s of excess, which is a load however long the requests got."""
+    rows = {column[0]: grid_column(*column) for column in GRID_COLUMNS}
+
+    assert rows["omlx"]["first_request_note"] is not None, "the deferred load went unremarked"
+    assert "+3.63 s over it" in rows["omlx"]["first_request_note"]
+    for runtime in ("mlxlm", "optiq", "vmlx"):
+        assert rows[runtime]["first_request_note"] is None, (
+            f"{runtime}'s first request is warm-up-shaped, not a deferred load"
+        )
 
 
 def test_a_first_request_in_line_with_the_measured_ones_gets_no_note():

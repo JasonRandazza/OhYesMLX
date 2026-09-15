@@ -38,7 +38,14 @@ def chat(base_url: str, model: str, messages: list[dict], *,
 `/v1/chat/completions` with HTTP 401 and `Runtime.api_key()` already supplies the key the
 runtime was started with. A measured run that never sends it measures nothing.
 
-**Which channel is the output stream.** Normally it is the content channel: `ttft_s` is the
+**Which channel is the output stream.** There are two exceptions, not one: a **mirrored**
+runtime (reasoning identical to content) and a **reasoning-only** runtime (content empty,
+reasoning present). In both, the reasoning deltas are the output stream and supply `ttft_s`,
+`last_content_s` and `content_event_count`. mlx-lm 0.31.3 and vMLX 1.6.59 are reasoning-only on
+a thinking model: before this was handled, all 24 of their grid rows failed with "no
+content-delta timing". A response with neither channel still raises `empty_content`.
+
+Normally it is the content channel: `ttft_s` is the
 first content delta, `last_content_s` the last, `content_event_count` how many. The exception
 is a runtime that **mirrors** — one whose accumulated reasoning text is identical to its
 accumulated content, meaning it streamed incrementally in the reasoning channel and then
