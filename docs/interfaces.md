@@ -111,6 +111,11 @@ def run_cells(cells: list[Cell], workload: dict, *,
               results_dir: str) -> list[CellResult]: ...
 ```
 
+**Exactly one runtime may hold weights at any moment.** `run_cells` stops the current
+runtime and confirms its port is free before starting the next. Two resident 20 GB models
+on a 64 GB machine saturate unified memory and quietly poison every number in the run
+while the run still completes and still looks plausible.
+
 Cell order is **interleaved**, never config order — otherwise thermal drift aliases
 perfectly onto runtime identity. Persist after every cell. `max_tokens` is fixed so tok/s
 is never compared across different generation lengths.

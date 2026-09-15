@@ -57,6 +57,7 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 - **oMLX** must be given a per-run temporary model catalog so only the cell's model is visible; otherwise it may serve something other than what you think.
 - **oMLX's SSD prefix cache survives restarts** and consumes real disk. Clear it between cold-cache runs.
 - **Ports:** Osaurus 1337, `optiq serve` 8080, `mlx_lm.server` 8081, oMLX 8100. A run that does not release its port has failed, whatever else it reported.
+- **Exactly one model is resident at a time.** Never start a second runtime while another holds weights. On 64 GB of unified memory a 35B MoE is ~20 GB resident; two at once saturates memory, forces compression and swap, and silently corrupts every number in the run — the measurement would still complete and still look plausible. `measure.py` stops the previous runtime and confirms its port is free *before* starting the next. This is not an optimization; a run that violates it is void.
 - **Thermal.** An M2 Max in a laptop chassis throttles under sustained inference. Interleave cell order, insert cooldowns, record drift. Walking cells in config order aliases thermal drift perfectly onto runtime identity.
 
 ## Delegation contract
