@@ -19,11 +19,11 @@ Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
 Phase: 3 of 6 (the sparse grid) — 20 of 25 cells probed live; two fixes before the run
 Plan: 1 of 1 in current phase
 Status: Applying
-Last activity: 2026-09-15 — Phase 2.1 closed. Harness run against real servers for the first time; Phase 4 answered out of order because it cost no downloads.
+Last activity: 2026-09-15 — the grid ran. All 20 cells measured across 5 columns; 325 tests. Six measurement-validity defects found and fixed, all found by running rather than by testing.
 
 Progress:
-- Milestone: [██████░░░░] 60%
-- Phase: [███████░░░] 75%
+- Milestone: [███████░░░] 70%
+- Phase: [█████████░] 90%
 
 ## Loop Position
 
@@ -59,6 +59,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | A grid contains both axes as its slices | Phase 3 | Rows (one format, many runtimes) are the runtime axis; columns (one runtime, many formats) are the format axis; the best cell is a recommendation. Attribute within a row or column, recommend across the whole. The two axes were never alternatives to the diagonal — they are readings of one measurement. |
 | Three workloads, never averaged | Phase 3 | chat/prefill/decode. One shape measures one corner and prefill-heavy and decode-heavy work can have different winners. A richer suite is v2's. |
 | Floors then one ordering metric, never a blended score | Phase 3 | Weighting speed against memory has no objective answer, so a single number would encode an arbitrary trade-off as though it were measured. Full metric card behind every ranking. |
+| Osaurus prefill was a cache hit: 8.3x cache, 1.15x version | Phase 3 | Three runs isolated it. Its KV cache cannot be disabled from any command line, only from ~/.osaurus/config, and the settings drift guard already watches both keys. |
+| cold_load_s is not one quantity across runtimes | Phase 3 | oMLX loads lazily and hides 3.08-3.85 s in request #1. first_request_s now records it. A cross-runtime load comparison uses the sum. |
+| The reasoning channel is the output stream when there is no content | Phase 3 | mlx-lm and vMLX answer entirely in it; all 24 of their grid rows failed before this. |
 | Every runtime advertises models it cannot serve | Phase 3 | mlx-lm, oMLX and Osaurus all list a model in /v1/models and then refuse it. oMLX published a 2.15 s cold load for weights it had already failed to load. Readiness is not the port, and not the model list either. |
 | Osaurus and vMLX are two independent JANG runtimes, both kept | Phase 3 | JANG cannot be a format-axis row, but JANG-on-Osaurus vs JANG-on-vMLX is the runtime axis with format held constant. Two implementations are what make a single-variable JANG study possible at all. |
 | The 256-expert failure is runtime-specific, not format-specific | Phase 4 | oMLX 0.6.4 answers coherently from the same bytes stock mlx-lm turns into salad. The format axis is not built on a corrupting quantizer. |
@@ -92,7 +95,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-15
 Stopped at: Phase 2.1 closed (#7). Harness driven against real servers for the first time across three runs; each exposed a defect, each fixed. Phase 4 answered: the 256-expert failure is the runtime, not the format.
-Next action: steps 1-4 of Phase 3 are done (downloads, probe, vMLX, workloads, floors/ranking/card). Two fixes in flight before the grid run: the report/measure n=0 divergence, and Osaurus model ids + readiness. Then run the 20-cell grid.
+Next action: re-run the full grid (task #6). The first grid exposed three column-level defects, two now fixed unverified-live (reasoning-only output stream) and one open (Osaurus peak_mb samples the launcher, task #3). Open tasks are in the session task list, mirrored in .paul/HANDOFF.md.
 Resume context: **Read `.paul/HANDOFF.md` first** — it carries the three findings that redirected the project, the traps that cost time, and machine state.
 
 ---
