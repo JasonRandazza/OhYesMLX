@@ -268,3 +268,25 @@ to quote for this spike.
 - Port 8081 was confirmed free before the run and after `kill`, per house port hygiene.
 - The repo's own test suite (`python3 -m pytest -q`, 29 tests) passes unchanged; this
   spike touched no code.
+
+## Round 2
+
+**VERDICT: LOADS.**
+
+**Artifact tested:** `Jundot/Qwen3.6-35B-A3B-oQ4-mtp` from
+`~/.cache/huggingface/hub/Jundot/Qwen3.6-35B-A3B-oQ4-mtp/` (20.1 GiB, five safetensors
+shards; same flat `local_dir` layout as Round 1). **Load duration ≈ 4 s.** mlx-lm 0.31.3
+preloads `--model` at server start on a silent generator thread, so the load was timed on
+an identical re-run by sampling the server's RSS every 2 s: 0.2 GB at 0 s → 4.6 GB at 2 s
+→ 17.9 GB at 4 s → 20.1 GB plateau at 8 s. The first request then returned HTTP 200 in
+1.83 s.
+
+**Completion text, verbatim** — `choices[0].message.reasoning`, `finish_reason: "length"`,
+64/64 completion tokens (15 prompt tokens), `message.content` absent:
+
+```
+，,跟ashaa.atore quell�不会ulatSR2ancel Hard1* "uhl an:...,1. 40面-VP : tep  1etasconfIAS11. ass question questionys- 0 memory 1 exleCT us  以能 ze
+```
+
+Not coherent English — it is mixed-script token salad with replacement characters, so the
+artifact loads and generates without error but its output is unusable text.
