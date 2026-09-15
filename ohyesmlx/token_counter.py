@@ -1,0 +1,119 @@
+"""Local token counting for a pinned model directory.
+
+The runtime's ``usage`` block is the preferred source for token counts, but only when it
+separates reasoning tokens from content tokens. When it does not, :class:`TokenCounter`
+supplies the content count — and :func:`resolve_token_accounting` refuses to report a
+count unless it reconciles with the runtime's own completion total. Two sources are never
+mixed inside one comparison.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+
+
+class TokenCounter:
+    """Best-effort tokenizer counter for a pinned model directory.
+
+    Prefers HuggingFace ``tokenizers`` reading ``tokenizer.json``, then
+    ``transformers.AutoTokenizer``.
+    """
+
+    def __init__(self, model_dir: str | Path) -> None:
+        self._model_dir = str(model_dir)
+        self._backend: str | None = None
+        self._tokenizer: object | None = None
+
+    def _load(self) -> tuple[str, object]:
+        if self._tokenizer is not None and self._backend is not None:
+            return self._backend, self._tokenizer
+
+        tokenizer_json = Path(self._model_dir) / "tokenizer.json"
+        if tokenizer_json.is_file():
+            try:
+                from tokenizers import (
+                    Tokenizer,  # type: ignore[import-not-found]
+                )
+            except ImportError:
+                Tokenizer = None  # type: ignore[assignment,misc]
+            if Tokenizer is not None:
+                self._backend = "tokenizers"
+                self._tokenizer = Tokenizer.from_file(str(tokenizer_json))
+                return self._backend, self._tokenizer
+
+        try:
+            from transformers import (
+                AutoTokenizer,  # type: ignore[import-not-found]
+            )
+        except ImportError as error:
+            raise RuntimeError(
+                "neither tokenizers nor transformers is available"
+            ) from error
+        self._backend = "transformers"
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            self._model_dir,
+            trust_remote_code=True,
+        )
+        return self._backend, self._tokenizer
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        backend, tokenizer = self._load()
+        if backend == "tokenizers":
+            encoded = tokenizer.encode(text)  # type: ignore[attr-defined]
+            return len(encoded.ids)
+        encoded = tokenizer.encode(text, add_special_tokens=False)  # type: ignore[attr-defined]
+        return len(encoded)
+
+
+class FixedMapTokenCounter:
+    """Test/helper counter: exact string → count; unknown strings → 0."""
+
+    def __init__(self, counts: Mapping[str, int]) -> None:
+        self._counts = dict(counts)
+
+    def count(self, text: str) -> int:
+        return int(self._counts.get(text, 0))
+
+
+def resolve_token_accounting(
+    *,
+    reasoning_text: str,
+    visible_text: str,
+    completion_tokens: int | None,
+    usage_reasoning_tokens: int | None,
+    token_counter: TokenCounter | None,
+) -> tuple[int | None, int | None, str]:
+    """Return (reasoning_tokens, visible_output_tokens,
+    token_accounting_status).
+    """
+    if usage_reasoning_tokens is not None:
+        if completion_tokens is None:
+            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+        if usage_reasoning_tokens > completion_tokens:
+            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+        visible = completion_tokens - usage_reasoning_tokens
+        if visible <= 0:
+            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+        return usage_reasoning_tokens, visible, "EXACT_VISIBLE"
+
+    if token_counter is None:
+        return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+
+    reasoning = token_counter.count(reasoning_text)
+    visible = token_counter.count(visible_text)
+    if reasoning < 0 or visible < 0:
+        return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+
+    if completion_tokens is not None:
+        if reasoning + visible != completion_tokens:
+            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+        if visible <= 0:
+            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
+        return reasoning, visible, "DERIVED_REASONING_CONTENT"
+
+    if reasoning > 0 and visible > 0:
+        return reasoning, visible, "DERIVED_REASONING_CONTENT"
+    return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
