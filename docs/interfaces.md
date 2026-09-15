@@ -180,6 +180,22 @@ prefill_tps = prompt_tokens / ttft_s
 itl_s       = (last_content_s - ttft_s) / max(1, completion_tokens - 1)
 ```
 
-`completion_tokens` comes from `token_source` in priority order: the runtime's `usage`
-only when it separates reasoning from content, else the local tokenizer. Never mix sources
-within one comparison.
+`completion_tokens` comes from `token_source` in priority order. Two ways to be exact,
+one way to derive:
+
+1. **`usage`** — the runtime reports the reasoning count itself, so content is the
+   remainder.
+2. **`usage`** — the runtime emitted no reasoning channel at all, so there is no split to
+   derive and `completion_tokens` *is* the content count. The local tokenizer is not
+   consulted.
+3. **`local_tokenizer`** — the stream mixes both and the runtime reports one total, so the
+   counter splits it, and the two parts must sum to that total **exactly**.
+
+Never mix sources within one comparison, and never soften case 3 with a tolerance.
+
+Case 2 is not a shortcut. Re-tokenizing decoded text is not the inverse of generation: a
+response truncated at `max_tokens` re-tokenizes across different boundaries and lands a
+token or two away. Measured — oMLX 0.6.4 generated 256, the local counter re-read the same
+text as 257, and five coherent responses published no tok/s at all. The reconciliation in
+case 3 validates a *derived split*; where nothing is derived there is nothing to validate,
+and demanding the round-trip makes the metric unreachable rather than more honest.

@@ -419,7 +419,9 @@ def test_a_mirrored_reasoning_stream_reconciles_against_usage(server):
     assert observation.ok, observation.error
     assert observation.prompt_tokens == 13
     assert observation.completion_tokens == 8
-    assert observation.token_source == "local_tokenizer"
+    # "usage", not "local_tokenizer": the duplicate is dropped before accounting, so there
+    # is no split left to derive and the count comes straight from the runtime's own total.
+    assert observation.token_source == "usage"
     # The runtime did send a reasoning channel, so the record still carries it; only the
     # accounting drops the duplicate.
     assert observation.reasoning_text == OMLX_MIRRORED
@@ -449,7 +451,7 @@ def test_a_mirrored_stream_is_caught_across_unequal_non_adjacent_chunks(server):
     )
 
     assert observation.ok, observation.error
-    assert observation.token_source == "local_tokenizer"
+    assert observation.token_source == "usage"
     assert observation.completion_tokens == 8
     assert observation.reasoning_text == OMLX_MIRRORED
     assert observation.text == OMLX_MIRRORED
