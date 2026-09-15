@@ -170,6 +170,10 @@ A cell is ranked only after it clears every floor, and floors are pass/fail, nev
 2. **Every published metric present** — already enforced by `_set_status`.
 3. **Fits** — `peak_mb` did not exceed available unified memory.
 
+`report.render_markdown(rows, *, axis, rank="decode_tps")` — `rank` is keyword-only with a
+default, so a call that predates it still works. One table per workload, each ranked
+independently and numbered from 1.
+
 Ranking then uses **one named metric**, chosen by the caller and printed in the table header.
 It is never a weighted blend of speed and memory: those weights have no objective value, and a
 single number would encode an arbitrary trade-off as though it were measured, hiding exactly

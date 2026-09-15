@@ -55,6 +55,10 @@ class FakeCellResult:
     memory: dict
     runtime_version: str | None
     disk_bytes: int | None
+    # Results are per (cell, workload): one row per shape, never an average across them.
+    # Defaulted here only so the many single-workload fixtures below stay readable.
+    workload_id: str = "chat"
+    warmup_observations: list = dataclasses.field(default_factory=list)
 
 
 def obs(
@@ -97,8 +101,9 @@ def cell_result(
     memory=None,
     runtime_version="mlx-lm 0.31.3",
     disk_bytes=None,
+    workload_id="chat",
 ):
-    """A cell as measure.py will hand it over."""
+    """A cell as measure.py will hand it over: one result per (cell, workload)."""
     return FakeCellResult(
         cell=FakeCell(cell_id, runtime, artifact_dir, label),
         status=status,
@@ -108,6 +113,7 @@ def cell_result(
         memory={"peak_mb": 9150.0} if memory is None else memory,
         runtime_version=runtime_version,
         disk_bytes=disk_bytes,
+        workload_id=workload_id,
     )
 
 
@@ -647,7 +653,7 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
         for option in action.option_strings
     }
 
-    assert flags == {"-h", "--help", "--study", "--cells", "--results-dir"}
+    assert flags == {"-h", "--help", "--study", "--cells", "--results-dir", "--rank"}
     assert set(subcommands.choices) == {"run"}
 
 
@@ -663,3 +669,583 @@ def test_modules_stay_on_the_standard_library():
             else:
                 continue
             assert set(imported) <= allowed, f"{module.__name__} imports {imported}"
+
+
+# --- reading a rendered leaderboard back ---------------------------------------------------
+
+
+def leaderboard_rows(markdown):
+    """The leaderboard tables' body rows, in printed order, as ``{column: value}`` dicts.
+
+    The metric card is built from tables too, and its first column is `field`, so it is
+    skipped: this reads the ordering, and the card is read by ``card_blocks`` below.
+    """
+    lines = markdown.splitlines()
+    records = []
+    for index, line in enumerate(lines):
+        if not line.startswith("|") or index + 1 >= len(lines):
+            continue
+        if not lines[index + 1].startswith("|---"):
+            continue
+        header = [cell.strip() for cell in line.strip("|").split("|")]
+        if not header or header[0] != "cell":
+            continue
+        for body in lines[index + 2:]:
+            if not body.startswith("|"):
+                break
+            cells = [cell.strip() for cell in body.strip("|").split("|")]
+            records.append(dict(zip(header, cells)))
+    return records
+
+
+def printed_order(markdown, workload=None):
+    """The cells in the order the tables print them, optionally for one workload alone."""
+    return [
+        row["cell"]
+        for row in leaderboard_rows(markdown)
+        if workload is None or row["workload"] == workload
+    ]
+
+
+def card_blocks(markdown):
+    """The metric card's text, keyed by ``(workload, cell)``."""
+    blocks, workload, cell = {}, None, None
+    for line in markdown.splitlines():
+        if line.startswith("### Workload "):
+            workload, cell = line[len("### Workload "):].strip("`"), None
+        elif line.startswith("#### `"):
+            cell = line.split("`")[1]
+            blocks[(workload, cell)] = []
+        elif cell is not None:
+            blocks[(workload, cell)].append(line)
+    return {key: "\n".join(block) for key, block in blocks.items()}
+
+
+def two_shapes():
+    """Two cells under two shapes, and the shapes do not agree on a winner.
+
+    `chat` decodes in a short window, `decode` in a long one, and the two runtimes are
+    strong in opposite ones — which is the whole reason a figure is never averaged across
+    workloads, and the reason each table is ordered on its own.
+    """
+    def shape(cell_id, runtime, *, window, workload_id):
+        return cell_result(
+            [obs(ttft=0.4, last=0.4 + window) for _ in range(5)],
+            cell_id=cell_id,
+            runtime=runtime,
+            runtime_version=f"{runtime} 1.0",
+            workload_id=workload_id,
+        )
+
+    return report.summarize(
+        [
+            shape("oq4__mlxlm", "mlxlm", window=1.0, workload_id="chat"),
+            shape("oq4__mlxlm", "mlxlm", window=4.0, workload_id="decode"),
+            shape("oq4__osaurus", "osaurus", window=2.0, workload_id="chat"),
+            shape("oq4__osaurus", "osaurus", window=1.0, workload_id="decode"),
+        ]
+    )
+
+
+# --- floors --------------------------------------------------------------------------------
+
+
+def test_a_cell_that_failed_the_coherence_gate_is_excluded_and_names_its_floor():
+    """A FAILed cell is a result: still printed, still shown, never ranked."""
+    rows = report.summarize(
+        [
+            cell_result([obs()]),
+            cell_result(
+                [obs()],
+                cell_id="oq4__omlx",
+                runtime="omlx",
+                status="FAIL",
+                reason="incoherent output: replacement characters",
+            ),
+        ]
+    )
+    gagged = rows[1]
+
+    assert gagged["rankable"] is False
+    assert gagged["excluded_by"] == "coherence"
+    assert gagged["exclusion"] == "excluded by coherence"
+    assert [floor["state"] for floor in gagged["floors"]] == [
+        "fail",
+        "not reached",
+        "not evaluated",
+    ]
+
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+
+    assert [row["cell"] for row in printed] == ["oq4__mlxlm", "oq4__omlx"]
+    assert printed[1]["rank by decode_tps"] == "—"
+    assert "excluded by coherence" in printed[1]["notes"]
+    assert "incoherent output: replacement characters" in printed[1]["notes"]
+
+
+def test_a_fast_cell_that_failed_a_floor_does_not_rank():
+    """Speed buys no rank: the floors are pass/fail, never a weight added to a metric."""
+    rows = report.summarize(
+        [
+            cell_result([obs(ttft=0.4, last=4.4) for _ in range(5)]),
+            cell_result(
+                [obs(ttft=0.4, last=0.6) for _ in range(5)],
+                cell_id="oq4__omlx",
+                runtime="omlx",
+                status="FAIL",
+                reason="incoherent output: replacement characters",
+            ),
+        ]
+    )
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+
+    # The excluded cell decodes at 505 tok/s against the healthy cell's 25, and ranks
+    # nowhere: it is not in the ordering at all, rather than losing a tie-break in it.
+    assert rows[1]["decode_tps"] == pytest.approx(505.0)
+    assert rows[0]["decode_tps"] == pytest.approx(25.25)
+    assert [row["cell"] for row in printed] == ["oq4__mlxlm", "oq4__omlx"]
+    assert printed[1]["rank by decode_tps"] == "—"
+
+
+def test_a_cell_that_lost_a_published_metric_is_excluded_by_the_metrics_floor():
+    rows = report.summarize(
+        [
+            cell_result([obs()]),
+            cell_result(
+                [obs(completion=None, token_source="none")],
+                cell_id="oq4__omlx",
+                runtime="omlx",
+                status="FAIL",
+                reason="no content completion tokens from token_source='none', so decode "
+                "tok/s is undefined",
+            ),
+        ]
+    )
+    gagged = rows[1]
+
+    assert gagged["excluded_by"] == "metrics"
+    assert [floor["state"] for floor in gagged["floors"]] == [
+        "pass",
+        "fail",
+        "not evaluated",
+    ]
+    notes = leaderboard_rows(report.render_markdown(rows, axis="runtime"))[1]["notes"]
+    assert "excluded by metrics" in notes
+    assert "no content completion tokens" in notes
+
+
+def test_a_cell_that_never_ran_is_shown_and_says_it_was_not_measured():
+    """N/A is not a gate failure, so it names no floor — and it still cannot rank."""
+    rows = report.summarize(
+        [
+            cell_result([obs()]),
+            cell_result(
+                [],
+                cell_id="oq4__omlx",
+                runtime="omlx",
+                status="N/A",
+                reason="runtime 'omlx' did not start: TimeoutError: port 8100 never opened",
+            ),
+        ]
+    )
+    never_ran = rows[1]
+
+    assert never_ran["rankable"] is False
+    assert never_ran["excluded_by"] is None
+    assert never_ran["exclusion"] == "not ranked: not measured"
+    assert {floor["state"] for floor in never_ran["floors"]} == {"not measured"}
+    assert all("not measured" in floor["detail"] for floor in never_ran["floors"])
+
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+    assert [row["cell"] for row in printed] == ["oq4__mlxlm", "oq4__omlx"]
+    assert "not ranked: not measured" in printed[1]["notes"]
+    assert "port 8100 never opened" in printed[1]["notes"]
+
+
+def test_the_fits_floor_is_reported_as_not_evaluated_and_excludes_nothing():
+    """No source for a total-memory figure here, so the floor says so instead of passing."""
+    row = report.summarize([cell_result([obs()])])[0]
+    fits, = [floor for floor in row["floors"] if floor["floor"] == "fits"]
+
+    assert fits["state"] == "not evaluated"
+    assert "sample.py" in fits["detail"]
+    assert row["rankable"] is True, "a floor nobody can ask does not exclude a row"
+    assert "fits" in report.FLOORS
+    assert report.FLOOR_STATES == (
+        "pass",
+        "fail",
+        "not reached",
+        "not measured",
+        "not evaluated",
+    )
+
+
+def test_the_floors_are_pass_fail_and_never_weighted(rows):
+    for row in rows:
+        assert [floor["floor"] for floor in row["floors"]] == list(report.FLOORS)
+        assert all(floor["state"] in report.FLOOR_STATES for floor in row["floors"])
+        assert row["rankable"] is all(
+            floor["state"] in report.FLOOR_CLEARED for floor in row["floors"]
+        )
+
+
+# --- ordering ------------------------------------------------------------------------------
+
+# 101 completion tokens over windows of 1.0 s and 5.0 s: 101.0 tok/s against 20.2 tok/s.
+HEALTHY = [obs(ttft=0.5, last=1.5) for _ in range(5)]
+SLOW = [obs(ttft=0.5, last=5.5) for _ in range(5)]
+
+
+def test_a_higher_is_better_metric_sorts_descending():
+    rows = report.summarize(
+        [
+            cell_result(SLOW, cell_id="oq4__mlxlm", runtime="mlxlm"),
+            cell_result(HEALTHY, cell_id="oq4__osaurus", runtime="osaurus"),
+        ]
+    )
+    table = report.render_markdown(rows, axis="runtime", rank="decode_tps")
+    printed = leaderboard_rows(table)
+
+    assert [row["cell"] for row in printed] == ["oq4__osaurus", "oq4__mlxlm"]
+    assert [row["rank by decode_tps"] for row in printed] == ["1", "2"]
+    assert [row["decode tok/s"] for row in printed] == ["101.0", "20.2"]
+
+
+def test_a_lower_is_better_metric_sorts_ascending():
+    rows = report.summarize(
+        [
+            cell_result(SLOW, cell_id="oq4__mlxlm", runtime="mlxlm", memory={"peak_mb": 9150.0}),
+            cell_result(
+                HEALTHY, cell_id="oq4__osaurus", runtime="osaurus", memory={"peak_mb": 4200.0}
+            ),
+        ]
+    )
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime", rank="peak_mb"))
+
+    assert [row["cell"] for row in printed] == ["oq4__osaurus", "oq4__mlxlm"]
+    assert [row["peak MB"] for row in printed] == ["4200.0", "9150.0"]
+    assert report.RANK_METRICS["peak_mb"] == "lower"
+
+
+def test_every_rank_metric_is_named_and_carries_its_direction():
+    """The metric keys are the ones a row already carries, and each says which end is good."""
+    assert set(report.RANK_METRICS) == {
+        "decode_tps",
+        "aggregate_tps",
+        "ttft_p50_s",
+        "prefill_tps",
+        "itl_s",
+        "peak_mb",
+        "cold_load_s",
+        "disk_bytes",
+    }
+    assert report.RANK_METRICS["decode_tps"] == "higher"
+    for metric in ("ttft_p50_s", "itl_s", "peak_mb", "cold_load_s", "disk_bytes"):
+        assert report.RANK_METRICS[metric] == "lower"
+
+    row = report.summarize([cell_result(HEALTHY)])[0]
+    assert set(report.RANK_METRICS) <= set(row)
+
+
+def test_the_table_header_names_the_metric_it_is_ordered_by(rows):
+    default = report.render_markdown(rows, axis="runtime")
+    chosen = report.render_markdown(rows, axis="runtime", rank="cold_load_s")
+
+    assert "rank by decode_tps" in default
+    assert "ordered by `decode_tps` (higher is better)" in default
+    assert "rank by cold_load_s" in chosen
+    assert "ordered by `cold_load_s` (lower is better)" in chosen
+    assert "rank by decode_tps" not in chosen
+
+
+def test_a_row_whose_ranking_metric_is_none_ranks_last_and_says_why():
+    """A stream with no decode window has no rate to rank by. It is not silently dropped."""
+    rows = report.summarize(
+        [
+            one_delta_cell(),
+            cell_result(HEALTHY, cell_id="oq4__mlxlm", runtime="mlxlm"),
+        ]
+    )
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+
+    assert [row["cell"] for row in printed] == ["oq4__mlxlm", "oq4__omlx"]
+    assert printed[1]["rank by decode_tps"] == "—"
+    assert printed[1]["decode tok/s"] == "—"
+    assert "decode_tps is None, so this row ranks last" in printed[1]["notes"]
+    assert "fewer than 2 content deltas" in printed[1]["notes"]
+    # The rank note quotes the reason once; the notes cell does not print it again.
+    assert printed[1]["notes"].count("decode tok/s, ITL and prefill tok/s omitted") == 1
+
+    # The row that has a value still gets a rank; the valueless one is not one of the ranks.
+    assert printed[0]["rank by decode_tps"] == "1"
+    valueless = report.order_rows(rows, "decode_tps")[1]
+    assert valueless["rank"] is None
+    assert valueless["rankable"] is True
+
+
+def test_each_workload_is_ranked_on_its_own():
+    """The shapes disagree, so one figure for both would describe neither."""
+    table = report.render_markdown(two_shapes(), axis="runtime")
+    printed = leaderboard_rows(table)
+
+    assert printed_order(table, "chat") == ["oq4__mlxlm", "oq4__osaurus"]
+    assert printed_order(table, "decode") == ["oq4__osaurus", "oq4__mlxlm"]
+    # And each table is numbered from one: a rank is a position in one shape's ordering,
+    # never a position in some ordering of all the shapes taken together.
+    for workload in ("chat", "decode"):
+        assert [
+            row["rank by decode_tps"] for row in printed if row["workload"] == workload
+        ] == ["1", "2"]
+
+
+def test_the_workload_is_a_column_so_a_row_quoted_alone_still_says_which_shape_it_is():
+    printed = leaderboard_rows(report.render_markdown(two_shapes(), axis="runtime"))
+
+    assert [row["workload"] for row in printed] == ["chat", "chat", "decode", "decode"]
+
+
+def test_ranking_one_metric_leaves_the_rows_it_was_given_alone():
+    rows = report.summarize(
+        [
+            cell_result(SLOW, cell_id="oq4__mlxlm", runtime="mlxlm"),
+            cell_result(HEALTHY, cell_id="oq4__osaurus", runtime="osaurus"),
+        ]
+    )
+    before = [dict(row) for row in rows]
+
+    assert [row["cell_id"] for row in report.order_rows(rows, "decode_tps")] == [
+        "oq4__osaurus",
+        "oq4__mlxlm",
+    ]
+    assert [row["cell_id"] for row in report.order_rows(rows, "peak_mb")] == [
+        "oq4__mlxlm",
+        "oq4__osaurus",
+    ]
+    assert rows == before
+
+
+def test_an_unknown_metric_is_refused_rather_than_guessed(rows):
+    with pytest.raises(ValueError):
+        report.order_rows(rows, "vibes")
+    with pytest.raises(ValueError):
+        report.render_markdown(rows, axis="runtime", rank="vibes")
+    with pytest.raises(ValueError):
+        report.render_cards(rows, rank="vibes")
+
+
+def test_the_row_carries_no_blended_or_normalised_figure(rows):
+    """One number blending speed and memory would need weights nobody can justify."""
+    numbers = {
+        key
+        for key, value in rows[0].items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+
+    assert numbers <= {
+        "n_measured",
+        "n_requests",
+        "content_deltas",
+        "ttft_p50_s",
+        "ttft_p90_s",
+        "ttft_p99_s",
+        "itl_s",
+        "decode_tps",
+        "aggregate_tps",
+        "prefill_tps",
+        "cold_load_s",
+        "peak_mb",
+        "disk_bytes",
+    }
+    assert not any(
+        word in key
+        for key in rows[0]
+        for word in ("score", "blend", "composite", "index", "normal", "weighted")
+    )
+
+
+# --- the metric card -----------------------------------------------------------------------
+
+
+def test_the_card_carries_every_metric_for_every_cell_and_workload():
+    rows = two_shapes()
+    card = card_blocks(report.render_cards(rows, rank="decode_tps"))
+
+    assert set(card) == {
+        ("chat", "oq4__mlxlm"),
+        ("chat", "oq4__osaurus"),
+        ("decode", "oq4__mlxlm"),
+        ("decode", "oq4__osaurus"),
+    }
+    # Every figure the row carries, named here rather than read from the card's own list of
+    # fields: a card that dropped one should fail this, not quietly shrink the expectation.
+    for block in card.values():
+        for field in (
+            "ttft_p50_s",
+            "ttft_p90_s",
+            "ttft_p99_s",
+            "itl_s",
+            "decode_tps",
+            "aggregate_tps",
+            "prefill_tps",
+            "cold_load_s",
+            "peak_mb",
+            "disk_bytes",
+        ):
+            assert f"| {field} |" in block, field
+
+
+def test_the_card_prints_the_values_the_ranking_was_computed_from():
+    rows = two_shapes()
+    card = card_blocks(report.render_cards(rows, rank="decode_tps"))
+    by_key = {(row["workload_id"], row["cell_id"]): row for row in rows}
+
+    for key, block in card.items():
+        row = by_key[key]
+        assert f"{row['decode_tps']:.1f}" in block
+        assert f"{row['ttft_p50_s']:.3f}" in block
+        assert f"{row['peak_mb']:.1f}" in block
+
+
+def test_the_card_carries_the_raw_inputs_the_figures_were_derived_from():
+    rows = report.summarize([cell_result(HEALTHY)])
+    block = card_blocks(report.render_cards(rows, rank="decode_tps"))[("chat", "oq4__mlxlm")]
+
+    assert "| n measured | 5 |" in block
+    assert "| n requests | 5 |" in block
+    assert "| content deltas | 505 |" in block
+    assert "| token_source | usage |" in block
+
+
+def test_the_card_prints_every_floor_verdict_including_the_one_it_cannot_evaluate():
+    rows = report.summarize(
+        [
+            cell_result(HEALTHY),
+            cell_result(
+                HEALTHY,
+                cell_id="oq4__omlx",
+                runtime="omlx",
+                status="FAIL",
+                reason="incoherent output: replacement characters",
+            ),
+        ]
+    )
+    card = card_blocks(report.render_cards(rows, rank="decode_tps"))
+
+    healthy = card[("chat", "oq4__mlxlm")]
+    assert "| floor coherence | pass |" in healthy
+    assert "| floor metrics | pass |" in healthy
+    assert "| floor fits | not evaluated |" in healthy
+
+    gagged = card[("chat", "oq4__omlx")]
+    assert "| floor coherence | fail |" in gagged
+    assert "incoherent output: replacement characters" in gagged
+    assert "| floor metrics | not reached |" in gagged
+    assert "| rank | — | excluded by coherence |" in gagged
+
+
+def test_the_card_marks_the_metric_the_ordering_used():
+    rows = report.summarize([cell_result(HEALTHY)])
+    block = card_blocks(report.render_cards(rows, rank="peak_mb"))[("chat", "oq4__mlxlm")]
+
+    assert "| peak_mb | 9150.0 | the ranking metric |" in block
+    assert "| decode_tps | 101.0 |" in block
+    assert "| decode_tps | 101.0 | the ranking metric" not in block
+
+
+def test_the_card_rides_under_the_tables_in_the_rendered_leaderboard():
+    markdown = report.render_markdown(two_shapes(), axis="runtime")
+
+    assert "## Metric card" in markdown
+    assert markdown.index("## Workload `chat`") < markdown.index("## Metric card")
+    assert len(card_blocks(markdown)) == 4
+
+
+def test_the_card_states_an_empty_value_and_why_rather_than_leaving_a_blank():
+    """A one-delta stream has no rate, and the card says so where the number would be."""
+    block = card_blocks(report.render_cards(report.summarize([one_delta_cell()])))[
+        ("chat", "oq4__omlx")
+    ]
+
+    assert "| decode_tps | — | the ranking metric; n=0: decode tok/s, ITL and prefill tok/s" in (
+        block
+    )
+    assert "| ttft_p50_s | 5.499 |" in block
+    assert "time-to-completion" in block
+
+
+# --- --rank on the CLI ----------------------------------------------------------------------
+
+
+def rank_action():
+    actions = cli._parser()._subparsers._group_actions[0].choices["run"]._actions
+    return next(action for action in actions if "--rank" in action.option_strings)
+
+
+def test_the_cli_defaults_to_one_named_metric_and_offers_the_rows_own_keys():
+    action = rank_action()
+
+    assert action.default == "decode_tps"
+    assert set(action.choices) == set(report.RANK_METRICS)
+
+
+def test_run_writes_a_leaderboard_ordered_by_the_default_metric(fake_measure, tmp_path):
+    code = cli.main(
+        [
+            "run",
+            "--study",
+            "runtime",
+            "--cells",
+            "oq4__mlxlm=/models/oq4,oq4__osaurus=/models/oq4",
+            "--results-dir",
+            str(tmp_path / "results"),
+        ]
+    )
+    leaderboard = (list((tmp_path / "results").iterdir())[0] / "leaderboard.md").read_text()
+
+    assert code == 0
+    assert "rank by decode_tps" in leaderboard
+    # The osaurus fixture decodes faster (72.1 tok/s against 53.2), so it prints first
+    # although it was handed over second.
+    assert printed_order(leaderboard) == ["oq4__osaurus", "oq4__mlxlm"]
+
+
+def test_run_orders_the_leaderboard_by_the_metric_the_caller_named(fake_measure, tmp_path):
+    code = cli.main(
+        [
+            "run",
+            "--study",
+            "runtime",
+            "--cells",
+            "oq4__mlxlm=/models/oq4,oq4__osaurus=/models/oq4",
+            "--rank",
+            "ttft_p50_s",
+            "--results-dir",
+            str(tmp_path / "results"),
+        ]
+    )
+    leaderboard = (list((tmp_path / "results").iterdir())[0] / "leaderboard.md").read_text()
+
+    assert code == 0
+    assert "rank by ttft_p50_s" in leaderboard
+    assert "lower is better" in leaderboard
+    # The same two cells, the other ordering: 0.6 s against 1.1 s.
+    assert printed_order(leaderboard) == ["oq4__mlxlm", "oq4__osaurus"]
+
+
+def test_run_refuses_a_metric_that_is_not_one_a_row_carries(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "run",
+                "--study",
+                "runtime",
+                "--cells",
+                "oq4__mlxlm=/models/oq4",
+                "--rank",
+                "vibes",
+                "--results-dir",
+                str(tmp_path),
+            ]
+        )
+
+    assert list(tmp_path.iterdir()) == []

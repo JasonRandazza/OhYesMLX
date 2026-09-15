@@ -1,11 +1,15 @@
-"""``ohyesmlx run --study runtime --cells <cell>,<cell>``.
+"""``ohyesmlx run --study runtime --cells <cell>,<cell> [--rank <metric>]``.
 
-One selector, one axis, one table. ``--cells`` is the only way to say which cells run:
-there is no config-file selector, no profile, no lineup, and there will not be a second
-one. Each entry is ``<format>__<runtime>=<artifact dir>`` — the ``Cell.id`` convention —
-and ``--study`` says which of those two variables the run is allowed to vary. A selection
-that varies both is refused before a runtime is started, because a number that changed two
-things is not a result.
+One selector, one axis, one table per workload, one named ordering metric. ``--cells`` is the
+only way to say which cells run: there is no config-file selector, no profile, no lineup, and
+there will not be a second one. Each entry is ``<format>__<runtime>=<artifact dir>`` — the
+``Cell.id`` convention — and ``--study`` says which of those two variables the run is allowed
+to vary. A selection that varies both is refused before a runtime is started, because a number
+that changed two things is not a result.
+
+``--rank`` picks the single metric the tables are ordered by, and there is no blend of them:
+weighting a second of latency against a megabyte has no objective answer, so the ordering
+names its metric and the metric card carries every number behind it.
 """
 
 from __future__ import annotations
@@ -219,6 +223,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--cells", required=True, help=CELLS_HELP)
     run.add_argument(
+        "--rank",
+        default=report.DEFAULT_RANK,
+        choices=tuple(report.RANK_METRICS),
+        metavar="METRIC",
+        help="the one metric each table is ordered by; lower-is-better metrics sort "
+        f"ascending (default: {report.DEFAULT_RANK}). There is no blended score.",
+    )
+    run.add_argument(
         "--results-dir",
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
@@ -243,7 +255,7 @@ def _run(args) -> int:
     )
     rows = report.summarize(results)
 
-    leaderboard = report.render_markdown(rows, axis=args.study)
+    leaderboard = report.render_markdown(rows, axis=args.study, rank=args.rank)
     (run_dir / "leaderboard.md").write_text(leaderboard, encoding="utf-8")
 
     print(leaderboard)
