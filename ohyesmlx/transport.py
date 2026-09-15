@@ -139,6 +139,12 @@ def chat(
     reasoning_parts: list[str] = []
     content_event_count = 0
     last_content: float | None = None
+    # Reasoning deltas are timed unconditionally. Whether they are this response's output
+    # stream is only knowable once both accumulations are complete, and the timings have to
+    # already exist by then.
+    first_reasoning: float | None = None
+    last_reasoning: float | None = None
+    reasoning_event_count = 0
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
@@ -309,6 +315,11 @@ def chat(
                         reasoning_delta = delta_obj.get("reasoning")
                     if reasoning_delta:
                         reasoning_parts.append(str(reasoning_delta))
+                        reasoning_event_count += 1
+                        arrived = time.monotonic()
+                        if first_reasoning is None:
+                            first_reasoning = arrived
+                        last_reasoning = arrived
                     delta = delta_obj.get("content")
                     if delta:
                         if first_token is None:
@@ -383,9 +394,14 @@ def chat(
         # when a runtime emits content alone. Comparing the accumulations is what holds when
         # the duplicate arrives non-adjacently or in chunks of a different size. The
         # duplicate itself stays in ``reasoning_text``: the record keeps what was sent.
-        accounting_reasoning_text = (
-            "" if reasoning_text and reasoning_text == joined else reasoning_text
-        )
+        #
+        # The same comparison answers the timing question, and it is the only detector: when
+        # the two accumulations are identical it is the reasoning deltas that streamed, and
+        # the content channel carries the finished text as one copy at the end. Timing the
+        # copy measured the wrong channel — 5.499 s of TTFT where the first reasoning delta
+        # landed at 0.685 s, and a 1.66e-07 s decode window against a real 1.668 s.
+        mirrored = bool(reasoning_text) and reasoning_text == joined
+        accounting_reasoning_text = "" if mirrored else reasoning_text
         if (
             usage_reasoning_tokens is not None
             and completion_tokens is not None
@@ -413,16 +429,29 @@ def chat(
                 token_counter=token_counter,
             )
             token_source = _TOKEN_SOURCES[accounting_status]
+        # The count moves with the timing, never without it: report.py reads a count below
+        # two as a stream with no interval to divide by and omits decode tok/s, ITL and
+        # prefill tok/s, so a corrected window under a count of one is computed and then
+        # discarded. A mirrored stream of one reasoning delta still reports one — it really
+        # did arrive whole — and still publishes no rate.
+        if mirrored:
+            stream_ttft_s = first_reasoning - started
+            stream_last_s = last_reasoning - started
+            stream_events = reasoning_event_count
+        else:
+            stream_ttft_s = first_token - started
+            stream_last_s = last_content - started
+            stream_events = content_event_count
         return Observation(
             ok=True,
             error=None,
-            ttft_s=first_token - started,
-            last_content_s=last_content - started,
+            ttft_s=stream_ttft_s,
+            last_content_s=stream_last_s,
             total_s=ended - started,
             prompt_tokens=prompt_tokens,
             completion_tokens=content_tokens,
             reasoning_tokens=reasoning_tokens,
-            content_event_count=content_event_count,
+            content_event_count=stream_events,
             text=joined,
             reasoning_text=reasoning_text,
             token_source=token_source,

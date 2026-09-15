@@ -93,6 +93,8 @@ class SseServer:
         framing: str = "content-length",
         pre_body_delay_s: float = 0.0,
     ) -> None:
+        """Queue one stream. Each event's delay is slept before that event is written, so
+        the delays are cumulative: ``(0.0, a), (0.2, b)`` writes ``b`` 0.2s after ``a``."""
         SseHandler.events = list(events)
         SseHandler.framing = framing
         SseHandler.pre_body_delay_s = pre_body_delay_s
@@ -455,7 +457,120 @@ def test_a_mirrored_stream_is_caught_across_unequal_non_adjacent_chunks(server):
     assert observation.completion_tokens == 8
     assert observation.reasoning_text == OMLX_MIRRORED
     assert observation.text == OMLX_MIRRORED
-    assert observation.content_event_count == 3
+    # Two reasoning deltas, not the three content ones: the reasoning channel is the stream
+    # that carried the output, and the content copy of it is not a second one.
+    assert observation.content_event_count == 2
+
+
+def test_a_mirrored_stream_is_timed_from_the_reasoning_deltas(server):
+    """The oMLX shape: the output streams in reasoning and arrives again, whole, in content.
+
+    Timing the content copy measured the duplicate — 5.499 s of TTFT where the first
+    reasoning delta landed at 0.685 s, and a decode window of 1.66e-07 s where the
+    generation ran for 1.668 s.
+
+    The keepalive goes first so the deltas are clocked as they are written: a body byte that
+    lands in the same read as the response headers is not seen until the next write. Delays
+    are cumulative, so this stream writes reasoning at 0.2 s and 0.6 s and the content copy
+    of the same text at 1.2 s.
+    """
+    server.respond(
+        (0.0, b": keepalive 1/1\n\n"),
+        (0.2, _reasoning("\nThinking ")),
+        (0.4, _reasoning("Process:\n\n1.  **")),
+        (0.6, _content(OMLX_MIRRORED)),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=13, completion_tokens=8)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=8)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == OMLX_MIRRORED
+    assert observation.text == OMLX_MIRRORED
+    assert observation.token_source == "usage"
+    # Every published metric's inputs are now present: a window from the reasoning deltas, a
+    # count of two, usage prompt tokens and the runtime's own content token count.
+    assert observation.completion_tokens == 8
+    # The clock starts at the first reasoning delta, 0.2s in. Content timing would put it at
+    # the copy, 1.2s in.
+    assert observation.ttft_s < 0.45
+    # And it stops at the last reasoning delta, 0.6s in: a window of the 0.4s the generation
+    # actually took, not the float noise between two timestamps on one copy.
+    assert observation.last_content_s - observation.ttft_s >= 0.3
+    assert observation.last_content_s < 1.0
+    # Timing and count move together. report.py omits decode tok/s, ITL and prefill tok/s
+    # below two deltas, so the corrected window under the content channel's count of one
+    # would be computed and then discarded, and the bug would survive its own fix.
+    assert observation.content_event_count == 2
+
+
+def test_a_content_streaming_response_keeps_its_own_timing(server):
+    """No reasoning channel: every field is what the content deltas measured, as before."""
+    server.respond(
+        (0.0, b": keepalive 1/1\n\n"),
+        (0.2, _content("hello")),
+        (0.4, _content(" world")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=2, reasoning_tokens=0)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == ""
+    assert observation.text == "hello world"
+    # Content deltas at 0.2s and 0.6s: the timing and the count are the content channel's own.
+    assert observation.ttft_s < 0.45
+    assert observation.last_content_s >= 0.55
+    assert observation.last_content_s - observation.ttft_s >= 0.3
+    assert observation.content_event_count == 2
+    assert observation.reasoning_tokens == 0
+
+
+def test_a_mirrored_stream_of_one_reasoning_delta_still_reports_a_count_of_one(server):
+    """One delta is the whole response, so report.py must still omit that cell's rates."""
+    server.respond(
+        (0.0, b": keepalive 1/1\n\n"),
+        (0.2, _reasoning(OMLX_MIRRORED)),
+        (0.4, _content(OMLX_MIRRORED)),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=13, completion_tokens=8)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=8)
+
+    assert observation.ok, observation.error
+    assert observation.content_event_count == 1
+    # The timing still moved off the content copy: the one reasoning delta at 0.2s is when
+    # the response was written, and the copy at 0.6s is not.
+    assert observation.ttft_s < 0.45
+    assert observation.last_content_s < 0.45
+
+
+def test_a_reasoning_channel_that_differs_from_content_keeps_content_timing(server):
+    """A real second channel is not a mirror, and its timing is not the output's."""
+    server.respond(
+        (0.0, b": keepalive 1/1\n\n"),
+        (0.2, _reasoning("think")),
+        (0.4, _content("ok")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=7)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == "think"
+    assert observation.text == "ok"
+    # The content delta at 0.6s is the first output event; the reasoning delta 0.4s earlier
+    # is a different channel and is not part of the response's timing.
+    assert observation.ttft_s >= 0.55
+    assert observation.content_event_count == 1
 
 
 def test_a_reasoning_channel_that_differs_from_content_is_still_counted(server):

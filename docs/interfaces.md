@@ -14,13 +14,13 @@ class Observation:
     """One measured request."""
     ok: bool
     error: str | None
-    ttft_s: float | None            # send -> first CONTENT delta. Reasoning deltas excluded.
+    ttft_s: float | None            # send -> first delta of the OUTPUT stream (see below)
     last_content_s: float | None    # send -> final content delta
     total_s: float                  # send -> stream closed
     prompt_tokens: int | None       # from usage
     completion_tokens: int | None   # from usage, content only
     reasoning_tokens: int | None    # from usage.completion_tokens_details, if present
-    content_event_count: int
+    content_event_count: int        # deltas of the OUTPUT stream, not always the content channel
     text: str                       # CONTENT deltas only
     reasoning_text: str             # reasoning deltas joined; "" when the model emitted none
     token_source: str               # "usage" | "local_tokenizer" | "none"
@@ -37,6 +37,21 @@ def chat(base_url: str, model: str, messages: list[dict], *,
 **`api_key` must be wired at every call site.** oMLX refuses an unauthenticated
 `/v1/chat/completions` with HTTP 401 and `Runtime.api_key()` already supplies the key the
 runtime was started with. A measured run that never sends it measures nothing.
+
+**Which channel is the output stream.** Normally it is the content channel: `ttft_s` is the
+first content delta, `last_content_s` the last, `content_event_count` how many. The exception
+is a runtime that **mirrors** — one whose accumulated reasoning text is identical to its
+accumulated content, meaning it streamed incrementally in the reasoning channel and then
+repeated the whole text once as a single content delta. There the reasoning deltas *are* the
+output stream, and all three fields are taken from them.
+
+Measured — oMLX 0.6.4, one request: 15 reasoning deltas spanning 0.685 s to 2.352 s, against
+one content delta at 2.352 s. Timing the content channel reported a TTFT of 5.499 s for a
+runtime whose real TTFT is 0.685 s, and left the decode window as 1.66e-07 s of float noise.
+The same mirror test drives the token-accounting dedupe; there is one detector, not two.
+
+The count moves with the timing deliberately. `report.py` omits every rate below two deltas,
+so a corrected timestamp with a stale count of 1 would be computed and then discarded.
 
 **Reasoning deltas are captured, never dropped.** A reasoning model can spend an entire
 response in the reasoning channel and emit no content at all — and that reasoning text can
