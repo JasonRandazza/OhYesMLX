@@ -1,0 +1,39 @@
+# ─── Identity ────────────────────────────────────────────────
+name = "OhYesMLX"
+version = "0.1.0"
+status = "active"
+path = "Dev/active/OhYesMLX"
+tags = ["benchmarking", "mlx", "apple-silicon", "local-llm"]
+
+# ─── Framework Provenance ────────────────────────────────────
+[paul]
+version = "1.4.0"
+source = "https://chrisai.cv/skool"
+
+# ─── Milestone ───────────────────────────────────────────────
+[milestone]
+name = "v1 — Speed and memory, one model"
+version = "0.1.0"
+status = "in_progress"
+phases = 5
+
+# ─── Phase ───────────────────────────────────────────────────
+[phase]
+number = 1
+name = "Portability spike"
+status = "not_started"
+plans_completed = 0
+
+# ─── Loop ────────────────────────────────────────────────────
+[loop]
+position = "IDLE"
+
+# ─── Satellite ───────────────────────────────────────────────
+[satellite]
+groom = true
+
+# ─── Stats ───────────────────────────────────────────────────
+[stats]
+total_plans = 0
+total_phases = 0
+last_activity = "2026-09-14T22:00:00Z"
