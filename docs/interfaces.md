@@ -127,9 +127,16 @@ def summarize(results: list[CellResult]) -> list[dict]: ...
 # one row per cell: ttft_p50_s/p90/p99, itl_s, decode_tps, prefill_tps,
 # cold_load_s, peak_mb, disk_bytes, runtime_version, status
 
-def write_jsonl(results: list[CellResult], path: str) -> None: ...   # raw observations included
 def render_markdown(rows: list[dict], *, axis: str) -> str: ...      # axis: "runtime" | "format"
 ```
+
+**`measure.py` owns `results.jsonl`, and is the only thing that writes it.** The
+serializer (`write_jsonl`, and the per-cell record it builds) lives in `measure.py`
+alongside `CellResult`, which owns the shape. `run_cells` calls it after every cell so a
+run that dies still has its completed cells on disk; `report.py` imports it if it needs
+it, and never defines a second one.
+
+Two writers for one artifact is the exact pattern this project exists to avoid.
 
 `axis` is required, and `render_markdown` emits the caveat naming what that axis cannot
 claim. A table that does not say which variable it held constant is not a result.
