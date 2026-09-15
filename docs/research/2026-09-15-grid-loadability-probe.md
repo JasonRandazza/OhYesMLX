@@ -144,3 +144,91 @@ also guarantees a thinking model never exits `<think>`, which a larger budget wo
 Run `probe_grid.py` with `~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin` on `PATH`, and quit
 `osaurus.app` first. `READY_TIMEOUT_S` is lowered to 180 s: a cell needing fifteen minutes to
 load is a no for grid purposes.
+
+---
+
+# Addendum — the full 25-cell grid, after the Osaurus and JANG rows
+
+Written after the initial 20-cell probe, once `osaurus.app` released port 1337 and JANG_4S
+finished downloading. **20 of 25 cells are live.**
+
+| format | mlx-lm 0.31.3 | oMLX 0.6.4 | mlx-optiq 0.5.6 | vMLX 1.6.59 | Osaurus 0.25.3 |
+|---|---|---|---|---|---|
+| stock-4bit | ✓ | ✓ | ✓ | ✓ | ✗ not registered |
+| oQ4 | ✓ | ✓ | ✓ | ✓ | ✓ |
+| oQ4e | ✓ | ✓ | ✓ | ✓ | ✓ |
+| OptiQ-4bit | ✓ | ✓ | ✓ | ✗ vision map | ✓ |
+| JANG_4S | ✗ shape | ✗ shape | ✗ shape | ✓ | ✓ |
+
+## The JANG row settles a founding decision at the tensor level
+
+`STATE.md` has recorded since the founding session that JANG is a runtime+format bundle rather
+than an axis point. That rested on repo cards, three unmerged oMLX PRs, and a maintainer's
+objection — documentary evidence. It is now measured.
+
+Three independent runtimes reject JANG_4S with the **byte-identical** error:
+
+```
+ValueError: Expected shape (248320, 640) but received shape (248320, 320)
+           for parameter language_model.model.embed_tokens.weight
+```
+
+`embed_tokens` is packed at **half** the expected width. This is not a precision variant that a
+generic loader reads badly — the tensor geometry differs, so a loader either implements JANG
+unpacking or sees a malformed file. oMLX tried both of its paths and failed both: the VLM path
+reported 1221 parameters not in the model, then the LLM fallback hit the same shape error.
+
+Two runtimes load it. vMLX logs `JANG v2 VLM loaded in 1.2s` through `utils/jang_loader`, having
+`Pre-fixed 217 module(s) with mixed-precision bit widths`. Osaurus serves it and answered
+coherently.
+
+**Two JANG runtimes is what makes JANG studiable.** A format that loads in exactly one runtime
+can never be compared without moving two variables. With vMLX and Osaurus both serving JANG_4S,
+`JANG on vMLX` against `JANG on Osaurus` is the runtime axis with the format held constant —
+the only legal single-variable study JANG can appear in, and it exists only because both were
+kept.
+
+## Every runtime advertises models it cannot serve
+
+Three for three, now measured rather than suspected:
+
+| runtime | lists it? | serves it? | how the truth surfaces |
+|---|---|---|---|
+| mlx-lm 0.31.3 | yes | no | documented in `runtimes.py`: `/v1/models` echoes `str(Path(--model).resolve())` off disk |
+| oMLX 0.6.4 | yes | no | `cold_load_s = 2.15 s` recorded, then **HTTP 409** on the chat request |
+| Osaurus 0.25.3 | yes | no | lists `qwen3.5-4b-4bit`, answers `not installed or registered with any provider` |
+
+The existing rule — *readiness comes from the log, never the port* — is not strong enough.
+**And never the model list either.** oMLX is the sharpest case: it passed `await_ready`, returned
+a handle, and published a cold-load figure for weights it had already failed to load. A FAIL
+cell would still have been honest, but it would have carried a fabricated 2.15 s load time into
+the record.
+
+## Osaurus needs a name, not a path
+
+Every Osaurus cell failed with `osaurus exited before it served 'osaurus/stock4bit'`. Osaurus
+serves from its own catalogue and names models after the **repo, lowercased**. Live
+`GET /v1/models` returns:
+
+```
+qwen3.5-4b-4bit, qwen3.5-4b-oq4, qwen3.5-4b-oq4e, qwen3.5-4b-optiq-4bit,
+qwen3.5-4b-jang_4s, nanbeige4.2-3b-jang_6m, ornith-1.0-35b-jang_4m, foundation
+```
+
+`Osaurus.model_id_candidates` builds from `name_forms(artifact_dir)`, and in Hugging Face cache
+layout that directory is `.../models--<org>--<name>/snapshots/<commit-hash>` — so every
+candidate it generates is a commit hash, which Osaurus never answers to. Driven by hand with
+the right id, Osaurus served oQ4, oQ4e, OptiQ and JANG_4S, all coherent.
+
+Osaurus also discovers the Hugging Face cache on its own: all five formats appeared in its
+catalogue without being copied into `~/MLXModels/`. A symlink placed there during
+investigation was removed and changed nothing.
+
+## What the grid costs and what it yields
+
+Five formats of Qwen3.5-4B total **15.6 GB**. Twenty live cells, on a 4B model that most
+runtimes load in 2–4 seconds. Against that: four rows that are clean runtime comparisons, five
+columns that are clean format comparisons, and one best cell that answers what to actually run.
+
+The two holes are both explained rather than empty, which is the point of probing instead of
+predicting.
