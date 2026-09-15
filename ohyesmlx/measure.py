@@ -1,9 +1,10 @@
 """The measurement loop: cells in, raw observations out.
 
-One cell is one (format, runtime) pair. A visit to a cell starts its runtime, warms it up,
-measures a fixed number of requests, samples memory for the life of the visit, stops the
-runtime, and persists. This module never speaks HTTP (``ohyesmlx/transport.py`` does) and
-never spawns a server (``ohyesmlx/runtimes.py`` does).
+One cell is one (format, runtime) pair, and every cell is measured under every workload it is
+given. A visit to a cell starts its runtime once, runs each workload's warmups, measured
+requests and memory sampling under that single load, stops the runtime, and persists. This
+module never speaks HTTP (``ohyesmlx/transport.py`` does) and never spawns a server
+(``ohyesmlx/runtimes.py`` does).
 
 What this module refuses to do:
 
@@ -23,9 +24,11 @@ What this module refuses to do:
   floor of 3 so Metal shader compilation and lazy mmap land before the first measured
   request.
 
-* **Compare different generation lengths.** ``max_tokens`` is one value for every request
-  in the run, so decode tok/s is never a ratio between a model that stopped at 40 tokens
-  and one that ran to the cap.
+* **Compare different generation lengths.** ``max_tokens`` belongs to the workload, and every
+  request in a workload uses that workload's value, so decode tok/s is never a ratio between
+  a model that stopped at 40 tokens and one that ran to the cap. Workloads are never averaged
+  into each other either: prefill-heavy and decode-heavy work can have different winners, and
+  one figure blended from both describes neither shape.
 
 * **Walk cells in config order.** A run visits every cell twice, in opposite directions
   (see :func:`visit_plan`), with a cooldown between visits and the drift across the window
@@ -130,11 +133,27 @@ class Cell:
     label: str
 
 
+@dataclass(frozen=True)
+class Workload:
+    """One corner of the space. ``id`` is the column key in every report.
+
+    ``max_tokens`` lives here rather than on the run because the shapes need different caps:
+    a prefill probe that generated 512 tokens would be measuring decode. Every request in a
+    workload uses that workload's cap, which is what keeps one workload's decode tok/s out of
+    the other's.
+    """
+
+    id: str
+    messages: list[dict]
+    max_tokens: int
+
+
 @dataclass
 class CellResult:
-    """Everything one cell produced, raw observations included."""
+    """Everything one (cell, workload) pair produced, raw observations included."""
 
     cell: Cell
+    workload_id: str
     status: str
     reason: str | None
     observations: list[Observation]
@@ -236,21 +255,26 @@ def artifact_bytes(path: str) -> int | None:
 
 def run_cells(
     cells: list[Cell],
-    workload: dict,
+    workloads: list[Workload],
     *,
     warmup: int = 3,
     measured: int = 5,
-    max_tokens: int = 256,
     cooldown_s: float = 30.0,
     results_dir: str,
 ) -> list[CellResult]:
-    """Measure every cell and return one :class:`CellResult` per cell, in first-visit order.
+    """Measure every cell under every workload; one :class:`CellResult` per pair.
 
-    ``measured`` requests are made per cell in total, split across the visits the plan
-    calls for (five becomes three then two). Warmups are re-run on every visit because
-    every visit is a fresh process. Results are written to
+    A visit starts the cell's runtime **once** and runs every workload under that one load,
+    so the model is loaded twice per cell however many workloads there are. ``measured``
+    requests are made per (cell, workload) in total, split across the visits the plan calls
+    for (five becomes three then two), and every workload gets its own warmups because a long
+    prompt compiles a different set of kernels than a short one does. Results are written to
     ``<results_dir>/results.jsonl`` after every visit, so a run that dies still has
     everything it had measured up to that point.
+
+    The returned results are in first-visit order, each cell's workloads kept together in the
+    order they were given. Figures are never averaged across workloads: a prefill-bound number
+    blended with a decode-bound one describes no workload that was run.
     """
     if warmup < MIN_WARMUP:
         raise ValueError(
@@ -261,23 +285,29 @@ def run_cells(
         raise ValueError("measured must be >= 1")
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
-    messages = _workload_messages(workload)
+    workloads = _workloads(workloads)
     _require_modules()
 
     results_path = Path(results_dir) / RESULTS_FILENAME
     results_path.parent.mkdir(parents=True, exist_ok=True)
     run = {
-        "workload": {"id": workload.get("id"), "messages": messages},
+        "workloads": [
+            {
+                "id": workload.id,
+                "messages": workload.messages,
+                "max_tokens": workload.max_tokens,
+            }
+            for workload in workloads
+        ],
         "temperature": TEMPERATURE,
         "seed": SEED,
-        "max_tokens": max_tokens,
         "warmup": warmup,
         "measured": measured,
         "cooldown_s": cooldown_s,
     }
 
     results: list[CellResult] = []
-    by_id: dict[str, CellResult] = {}
+    by_key: dict[tuple[str, str], CellResult] = {}
     counters: dict[str, tuple] = {}
     unmeasurable: set[str] = set()
 
@@ -287,10 +317,45 @@ def run_cells(
             # A cell that cannot run here is not visited again, and nothing waits for it.
             continue
 
-        result = by_id.get(cell.id)
+        cell_results = _results_for(cell, workloads, by_key, results)
+        measured_before = sum(len(result.observations) for result in cell_results)
+        outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
+                         counters=counters)
+        if outcome == "measured":
+            for result in cell_results:
+                _set_status(result)
+        elif outcome == "skip":
+            unmeasurable.add(cell.id)
+        # "retry" keeps the reason the failed visit wrote, and the next visit tries again.
+
+        write_jsonl(results, results_path, run=run)
+        # A cooldown after a visit that started no runtime and took no sample is 30
+        # seconds spent cooling nothing.
+        sampled = sum(len(result.observations) for result in cell_results)
+        if sampled > measured_before and index < len(visits) - 1:
+            _sleep(cooldown_s)
+
+    return results
+
+
+def _results_for(
+    cell: Cell,
+    workloads: list[Workload],
+    by_key: dict[tuple[str, str], CellResult],
+    results: list[CellResult],
+) -> list[CellResult]:
+    """This cell's result per workload, created on the first visit and reused after.
+
+    The pair is the key, so a cell's three shapes are three results rather than three
+    measurements collapsed into one.
+    """
+    cell_results = []
+    for workload in workloads:
+        result = by_key.get((cell.id, workload.id))
         if result is None:
             result = CellResult(
                 cell=cell,
+                workload_id=workload.id,
                 status="N/A",
                 reason=None,
                 observations=[],
@@ -300,25 +365,10 @@ def run_cells(
                 runtime_version=None,
                 disk_bytes=artifact_bytes(cell.artifact_dir),
             )
-            by_id[cell.id] = result
+            by_key[(cell.id, workload.id)] = result
             results.append(result)
-
-        measured_before = len(result.observations)
-        outcome = _visit(result, cell, messages, warmup=warmup, quota=quota,
-                         max_tokens=max_tokens, counters=counters)
-        if outcome == "measured":
-            _set_status(result)
-        elif outcome == "skip":
-            unmeasurable.add(cell.id)
-        # "retry" keeps the reason the failed visit wrote, and the next visit tries again.
-
-        write_jsonl(results, results_path, run=run)
-        # A cooldown after a visit that started no runtime and took no sample is 30
-        # seconds spent cooling nothing.
-        if len(result.observations) > measured_before and index < len(visits) - 1:
-            _sleep(cooldown_s)
-
-    return results
+        cell_results.append(result)
+    return cell_results
 
 
 def _visits(cells: list[Cell], *, measured: int) -> list[tuple[Cell, int]]:
@@ -340,30 +390,35 @@ def _visits(cells: list[Cell], *, measured: int) -> list[tuple[Cell, int]]:
 
 
 def _visit(
-    result: CellResult,
+    results: list[CellResult],
     cell: Cell,
-    messages: list[dict],
+    workloads: list[Workload],
     *,
     warmup: int,
     quota: int,
-    max_tokens: int,
     counters: dict,
 ) -> str:
     """One visit to one cell, returning ``"measured"``, ``"retry"`` or ``"skip"``.
 
+    The runtime is started once and every workload runs under that load, then it is stopped:
+    reloading the weights per workload would triple the cost of the only expensive step here.
     ``"skip"`` means the cell cannot run here at all and no later visit will change that.
-    ``"retry"`` means this visit failed for a reason that may not hold next time — a
-    runtime that will not load is usually deterministic, but a port still held by a stale
-    server is not — and the samples already taken, if any, stand.
+    ``"retry"`` means this visit failed for a reason that may not hold next time — a runtime
+    that will not load is usually deterministic, but a port still held by a stale server is
+    not — and the samples already taken, if any, stand.
     """
     runtime = runtimes.RUNTIMES.get(cell.runtime)
     if runtime is None:
-        _na(result, f"unknown runtime {cell.runtime!r}; known runtimes: {sorted(runtimes.RUNTIMES)}")
+        reason = f"unknown runtime {cell.runtime!r}; known runtimes: {sorted(runtimes.RUNTIMES)}"
+        for result in results:
+            _na(result, reason)
         return "skip"
 
     counter, counter_error = _token_counter(cell, counters)
     if counter is None:
-        _na(result, f"token counter unavailable for {cell.artifact_dir}: {counter_error}")
+        reason = f"token counter unavailable for {cell.artifact_dir}: {counter_error}"
+        for result in results:
+            _na(result, reason)
         return "skip"
 
     try:
@@ -372,37 +427,57 @@ def _visit(
         handle = runtime.start(cell.artifact_dir, cell.artifact_dir)
     except Exception as error:  # noqa: BLE001 - a runtime that will not load is a result
         reason = f"runtime {cell.runtime!r} did not start: {type(error).__name__}: {error}"
-        if result.observations:
-            result.status, result.reason = "FAIL", reason
-        else:
-            _na(result, reason)
+        for result in results:
+            if result.observations:
+                result.status, result.reason = "FAIL", reason
+            else:
+                _na(result, reason)
         return "retry"
 
-    if result.cold_load_s is None:
-        # The first visit's load is the cold one; a later visit starts from a warm page
-        # cache. Its provenance is recorded for the same reason.
-        result.cold_load_s = handle.cold_load_s
-        result.runtime_version = handle.version
+    for result in results:
+        if result.cold_load_s is None:
+            # The first visit's load is the cold one; a later visit starts from a warm page
+            # cache. One load is shared by the cell's workloads, so it is recorded on every
+            # one of their rows rather than on whichever shape happened to run first.
+            result.cold_load_s = handle.cold_load_s
+            result.runtime_version = handle.version
 
+    try:
+        for result, workload in zip(results, workloads):
+            memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
+                                     counter=counter)
+            result.memory = _highest_peak(result.memory, memory)
+    finally:
+        handle.stop()
+
+    return "measured"
+
+
+def _workload_visit(
+    handle, result: CellResult, workload: Workload, *, warmup: int, quota: int, counter
+) -> dict:
+    """One workload's requests inside a visit, sampled over that workload's own window.
+
+    The sampler covers this workload alone. A visit that ran a 512-token decode and a
+    128-token chat has two different memory peaks, and publishing the visit's peak under both
+    names would report decode's footprint as chat's.
+    """
     sampler = sample.Sampler(handle.pid).start()
     memory = None
     try:
         for _ in range(warmup):
             result.warmup_observations.append(
-                _request(handle, messages, max_tokens=max_tokens, counter=counter)
+                _request(handle, workload.messages, max_tokens=workload.max_tokens,
+                         counter=counter)
             )
         for _ in range(quota):
             result.observations.append(
-                _request(handle, messages, max_tokens=max_tokens, counter=counter)
+                _request(handle, workload.messages, max_tokens=workload.max_tokens,
+                         counter=counter)
             )
     finally:
-        try:
-            memory = sampler.stop()
-        finally:
-            handle.stop()
-
-    result.memory = _highest_peak(result.memory, memory)
-    return "measured"
+        memory = sampler.stop()
+    return memory
 
 
 def _request(handle, messages: list[dict], *, max_tokens: int, counter) -> Observation:
@@ -597,11 +672,34 @@ def _na(result: CellResult, reason: str) -> None:
     result.reason = reason
 
 
-def _workload_messages(workload: dict) -> list[dict]:
-    messages = workload.get("messages") if isinstance(workload, dict) else None
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("workload must be a dict with a non-empty 'messages' list")
-    return [dict(message) for message in messages]
+def _workloads(workloads: list[Workload]) -> list[Workload]:
+    """The workloads, validated, their messages copied out of the caller's hands.
+
+    A duplicate id is refused rather than measured: a result is keyed by (cell, workload),
+    so two workloads sharing an id would share one row and quietly pool their observations
+    instead of producing two.
+    """
+    if not workloads:
+        raise ValueError("workloads must name at least one Workload")
+    checked = []
+    seen = set()
+    for workload in workloads:
+        if not workload.messages:
+            raise ValueError(f"workload {workload.id!r} has no messages")
+        if workload.id in seen:
+            raise ValueError(
+                f"duplicate workload id {workload.id!r}: results are keyed by "
+                "(cell, workload), so two workloads of the same id are one result"
+            )
+        seen.add(workload.id)
+        checked.append(
+            Workload(
+                id=workload.id,
+                messages=[dict(message) for message in workload.messages],
+                max_tokens=workload.max_tokens,
+            )
+        )
+    return checked
 
 
 def _require_modules() -> None:
@@ -623,12 +721,14 @@ def _require_modules() -> None:
 
 
 def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> None:
-    """The run's ``results.jsonl``: a header line of the pins, then one line per cell.
+    """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
-    Line 1 is the run header — temperature, seed, max_tokens, warmup, measured,
-    cooldown_s and the workload every cell in the file was measured under. Every line
-    after it is one cell. Rewritten whole and atomically after every visit, so a run
-    that dies still has everything it measured and no reader sees half a file.
+    Line 1 is the run header — temperature, seed, warmup, measured, cooldown_s and every
+    workload that was measured, each with the messages it sent and its own max_tokens (a
+    single run-level cap would be a half-truth once three workloads carry three of them).
+    Every line after it is one (cell, workload) pair, naming the workload that produced it.
+    Rewritten whole and atomically after every visit, so a run that dies still has everything
+    it measured and no reader sees half a file.
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -645,6 +745,7 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
 def _record(result: CellResult) -> dict:
     return {
         "cell": asdict(result.cell),
+        "workload_id": result.workload_id,
         "status": result.status,
         "reason": result.reason,
         "cold_load_s": result.cold_load_s,

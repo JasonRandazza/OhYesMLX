@@ -26,6 +26,26 @@ WARMUPS = 3
 MEASURED = 5
 
 
+def workload(workload_id="chat", *, content="hi", max_tokens=256) -> measure.Workload:
+    """One ``measure.Workload``, the pinned shape, for a test that needs a specific one."""
+    return measure.Workload(
+        id=workload_id,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=max_tokens,
+    )
+
+
+# The default workload the harness measures under. One shape keeps a test that is about the
+# loop's shape -- visits, quotas, cooldowns, persistence -- reading as the loop's shape, and
+# the three-shape tests below pin the grouping on top of it.
+DEFAULT_WORKLOAD = workload("short-chat", content="hi")
+THREE = [
+    workload("chat", content="hi", max_tokens=128),
+    workload("prefill", content="long " * 400, max_tokens=64),
+    workload("decode", content="hi", max_tokens=512),
+]
+
+
 @dataclass(frozen=True)
 class FakeObservation:
     """``ohyesmlx.transport.Observation``, field for field."""
@@ -240,10 +260,10 @@ class Harness:
             label=label,
         )
 
-    def run(self, cells, *, workload=None, results_dir=None, **kwargs):
+    def run(self, cells, *, workloads=None, results_dir=None, **kwargs):
         return measure.run_cells(
             cells,
-            workload if workload is not None else {"id": "short-chat", "messages": [{"role": "user", "content": "hi"}]},
+            [DEFAULT_WORKLOAD] if workloads is None else workloads,
             results_dir=str(results_dir if results_dir is not None else self.tmp_path / "results"),
             **kwargs,
         )
@@ -253,7 +273,7 @@ class Harness:
         return Path(root) / measure.RESULTS_FILENAME
 
     def header(self, results_dir=None) -> dict:
-        """Line 1: the pins and the workload every cell in the file was measured under."""
+        """Line 1: the pins and every workload the run's cells were measured under."""
         return json.loads(self.results_file(results_dir).read_text().splitlines()[0])
 
     def lines(self, results_dir=None) -> list[dict]:
@@ -262,6 +282,17 @@ class Harness:
             json.loads(line)
             for line in self.results_file(results_dir).read_text().splitlines()[1:]
         ]
+
+    def calls_by_workload(self):
+        """The requests, grouped by the cap of the workload that made them.
+
+        The cap is what tells the three shapes' requests apart: `chat` and `decode` send the
+        same prompt on purpose, and each workload pins its own distinct max_tokens.
+        """
+        grouped: dict[int, list] = {}
+        for call in self.transport.calls:
+            grouped.setdefault(call.max_tokens, []).append(call)
+        return grouped
 
     def sleeps(self):
         return [event[0] for event in self.recorder.of("sleep")]
@@ -382,8 +413,30 @@ def test_a_run_too_short_to_split_still_measures_something(harness):
 
 def test_a_workload_without_messages_is_refused(harness):
     harness.add_runtime("mlxlm")
+    empty = measure.Workload(id="empty", messages=[], max_tokens=64)
+
     with pytest.raises(ValueError, match="messages"):
-        harness.run([harness.cell("oq__mlxlm", "mlxlm")], workload={"id": "empty"})
+        harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=[empty])
+
+
+def test_a_run_with_no_workloads_is_refused(harness):
+    """No workload is no measurement, and starting a runtime to run none of them is a load
+    spent on nothing."""
+    harness.add_runtime("mlxlm")
+    with pytest.raises(ValueError, match="workloads"):
+        harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=[])
+
+
+def test_two_workloads_cannot_share_an_id(harness):
+    """A result is keyed by (cell, workload): a repeated id would pool two shapes' samples
+    into one row instead of producing two."""
+    harness.add_runtime("mlxlm")
+
+    with pytest.raises(ValueError, match="duplicate workload id"):
+        harness.run(
+            [harness.cell("oq__mlxlm", "mlxlm")],
+            workloads=[workload("chat", max_tokens=128), workload("chat", max_tokens=512)],
+        )
 
 
 def test_a_missing_module_is_named_rather_than_measured(harness, monkeypatch):
@@ -392,6 +445,139 @@ def test_a_missing_module_is_named_rather_than_measured(harness, monkeypatch):
 
     with pytest.raises(measure.MeasureError, match="transport.py"):
         harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+
+# ------------------------------------------------------------------- the three workloads
+
+
+def test_every_cell_runs_every_workload(harness):
+    """One shape measures one corner, so a cell produces one result per (cell, workload)."""
+    harness.add_runtime("mlxlm")
+    harness.add_runtime("osaurus")
+    cells = [harness.cell("oq__mlxlm", "mlxlm"), harness.cell("oq__osaurus", "osaurus")]
+
+    results = harness.run(cells, workloads=THREE)
+
+    assert [(result.cell.id, result.workload_id) for result in results] == [
+        ("oq__mlxlm", "chat"), ("oq__mlxlm", "prefill"), ("oq__mlxlm", "decode"),
+        ("oq__osaurus", "chat"), ("oq__osaurus", "prefill"), ("oq__osaurus", "decode"),
+    ]
+    assert all(len(result.observations) == MEASURED for result in results)
+    assert all(result.status == "PASS" for result in results)
+
+
+def test_one_model_load_serves_every_workload_in_a_visit(harness):
+    """The cost that matters: a load per workload per visit would triple the wall time."""
+    runtime = harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    assert starts(harness) == ["mlxlm"] * 2  # two visits, one load each
+    assert [handle.stops for handle in runtime.handles] == [1, 1]
+    assert len(results) == 3  # three results out of two loads
+
+
+def test_the_workloads_run_under_the_load_their_visit_started(harness):
+    """Every request of a visit belongs to a runtime that was started once for that visit."""
+    harness.add_runtime("mlxlm")
+    harness.add_runtime("osaurus")
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm"), harness.cell("oq__osaurus", "osaurus")],
+                workloads=THREE)
+
+    per_visit = harness.transport.calls_by_visit()
+    # The plan flattens by round, so all cells take the larger quota first and the smaller
+    # one on the reversed second round. Each visit carries three workloads' warmups and
+    # measured requests under the single load it started.
+    assert [len(calls) for calls in per_visit.values()] == [18, 18, 15, 15]
+    assert starts(harness) == ["mlxlm", "osaurus", "osaurus", "mlxlm"]
+
+
+def test_each_workload_carries_its_own_cap_and_messages(harness):
+    harness.add_runtime("mlxlm")
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    by_cap = harness.calls_by_workload()
+    assert set(by_cap) == {128, 64, 512}
+    assert {call.messages[0]["content"] for call in by_cap[128]} == {"hi"}
+    assert {call.messages[0]["content"] for call in by_cap[512]} == {"hi"}
+    assert {call.messages[0]["content"] for call in by_cap[64]} == {"long " * 400}
+
+
+def test_each_workload_is_measured_and_sampled_on_its_own(harness):
+    """A figure averaged across shapes describes no shape, so samples and peaks never mix."""
+    harness.sample.peaks = [100.0, 20.0, 30.0, 10.0, 200.0, 3.0]
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    assert [len(result.observations) for result in results] == [MEASURED] * 3
+    assert [len(result.warmup_observations) for result in results] == [2 * WARMUPS] * 3
+    # One sampler per workload per visit: a sampler around the whole visit would publish
+    # decode's footprint as chat's.
+    assert len(harness.sample.samplers) == 6
+    assert [result.memory["peak_mb"] for result in results] == [100.0, 200.0, 30.0]
+
+
+def test_the_cooldown_is_per_visit_and_not_per_workload(harness):
+    harness.add_runtime("mlxlm")
+    harness.add_runtime("osaurus")
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm"), harness.cell("oq__osaurus", "osaurus")],
+                workloads=THREE, cooldown_s=12.5)
+
+    assert harness.sleeps() == [12.5] * 3
+
+
+def test_each_workload_keeps_its_own_cold_load_provenance(harness):
+    """One load is shared by the three shapes, so every row carries it rather than whichever
+    shape happened to run first."""
+    harness.add_runtime("mlxlm", cold_load_s=23.25, version="0.31.3")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    assert [result.cold_load_s for result in results] == [pytest.approx(23.25)] * 3
+    assert {result.runtime_version for result in results} == {"0.31.3"}
+
+
+def test_the_persisted_header_names_all_three_workloads_and_every_line_names_its_own(harness):
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    assert harness.header()["workloads"] == [
+        {"id": "chat", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 128},
+        {"id": "prefill", "messages": [{"role": "user", "content": "long " * 400}],
+         "max_tokens": 64},
+        {"id": "decode", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 512},
+    ]
+    records = harness.lines()
+    assert len(records) == len(results) == 3
+    assert [record["workload_id"] for record in records] == ["chat", "prefill", "decode"]
+
+
+def test_a_visit_persists_one_line_per_workload_pair(harness):
+    results_dir = harness.tmp_path / "results"
+    seen: list[int | None] = []
+
+    def responder(call):
+        path = Path(results_dir) / measure.RESULTS_FILENAME
+        seen.append(None if not path.exists() else len(path.read_text().splitlines()))
+        return FakeObservation()
+
+    harness.transport.responder = responder
+    harness.add_runtime("mlxlm")
+    harness.add_runtime("osaurus")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm"), harness.cell("oq__osaurus", "osaurus")],
+                          workloads=THREE, results_dir=results_dir)
+
+    # Nothing on disk during the first visit; after it, the header and the first cell's three
+    # pairs; after the last one, the header and six pairs. A line is a (cell, workload) pair.
+    assert seen[0] is None
+    assert sorted(set(seen) - {None}) == [4, 7]
+    assert len(harness.lines(results_dir)) == len(results) == 6
 
 
 # ------------------------------------------------------------------------- every request
@@ -408,12 +594,16 @@ def test_every_request_pins_temperature_zero_and_the_fixed_seed(harness):
     assert measure.TEMPERATURE == 0.0
 
 
-def test_every_request_carries_the_fixed_max_tokens(harness):
+def test_every_request_carries_its_workload_s_max_tokens(harness):
+    """The cap belongs to the workload: it moved there so one shape's decode tok/s is never
+    a ratio between a model that stopped at 40 tokens and one that ran to the cap."""
     harness.add_runtime("mlxlm")
+    pinned = workload("chat", max_tokens=99)
 
-    harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=[pinned])
 
-    assert {call.max_tokens for call in harness.transport.calls} == {256}
+    assert {call.max_tokens for call in harness.transport.calls} == {99}
+    assert {call.messages[0]["content"] for call in harness.transport.calls} == {"hi"}
 
 
 def test_the_token_counter_is_wired_into_every_request(harness):
@@ -654,19 +844,24 @@ def test_results_are_persisted_after_every_visit(harness):
 def test_the_persisted_record_carries_raw_observations_and_the_pins(harness):
     harness.add_runtime("mlxlm")
     cells = [harness.cell("oq__mlxlm", "mlxlm")]
-    workload = {"id": "short-chat", "messages": [{"role": "user", "content": "hello"}]}
+    pinned = workload("short-chat", content="hello")
 
-    harness.run(cells, workload=workload)
+    harness.run(cells, workloads=[pinned])
 
     header = harness.header()
     assert header["temperature"] == 0.0
     assert header["seed"] == 0
-    assert header["max_tokens"] == 256
     assert header["warmup"] == WARMUPS
     assert header["measured"] == MEASURED
-    assert header["workload"] == workload
+    # The run-level max_tokens is gone on purpose: three workloads carry three caps, and one
+    # run-level number would be a half-truth about two of them. The cap is in the workload.
+    assert "max_tokens" not in header
+    assert header["workloads"] == [
+        {"id": "short-chat", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 256}
+    ]
 
     record, = harness.lines()
+    assert record["workload_id"] == "short-chat"
     assert record["cell"] == {"id": "oq__mlxlm", "runtime": "mlxlm",
                               "artifact_dir": cells[0].artifact_dir, "label": "affine-4bit"}
     assert record["status"] == "PASS"
@@ -722,10 +917,11 @@ def test_a_second_run_overwrites_rather_than_appends(harness):
 
 
 def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
-                runtime_version="mlx-lm 0.31.3", disk_bytes=123):
+                runtime_version="mlx-lm 0.31.3", disk_bytes=123, workload_id="chat"):
     """A CellResult to hand straight to write_jsonl, with no run behind it."""
     return measure.CellResult(
         cell=measure.Cell(id=cell_id, runtime=runtime, artifact_dir="/models/oq4", label="oq4"),
+        workload_id=workload_id,
         status="PASS",
         reason=None,
         observations=list(observations),
@@ -737,7 +933,7 @@ def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
     )
 
 
-def test_write_jsonl_writes_a_header_and_one_object_per_cell(tmp_path):
+def test_write_jsonl_writes_a_header_and_one_object_per_result(tmp_path):
     observations = [
         FakeObservation(),
         FakeObservation(total_s=2.75),
@@ -746,16 +942,18 @@ def test_write_jsonl_writes_a_header_and_one_object_per_cell(tmp_path):
     results = [
         cell_result(observations, disk_bytes=123),
         cell_result([FakeObservation()], cell_id="oq__omlx", runtime="omlx",
-                    runtime_version="oMLX 0.3"),
+                    runtime_version="oMLX 0.3", workload_id="decode"),
     ]
     run = {
         "temperature": 0.0,
         "seed": 0,
-        "max_tokens": 256,
         "warmup": WARMUPS,
         "measured": MEASURED,
         "cooldown_s": 30.0,
-        "workload": {"id": "short-chat", "messages": [{"role": "user", "content": "hi"}]},
+        "workloads": [
+            {"id": "chat", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 128},
+            {"id": "decode", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 512},
+        ],
     }
     path = tmp_path / "run" / "results.jsonl"
 
@@ -764,6 +962,8 @@ def test_write_jsonl_writes_a_header_and_one_object_per_cell(tmp_path):
     header, *lines = [json.loads(line) for line in path.read_text().splitlines()]
     assert header == run
     assert len(lines) == 2
+    # One line per (cell, workload) pair, each naming the shape that produced it.
+    assert [line["workload_id"] for line in lines] == ["chat", "decode"]
     assert lines[0]["cell"] == {
         "id": "oq__mlxlm",
         "runtime": "mlxlm",
@@ -798,6 +998,7 @@ def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
     rebuilt = [
         measure.CellResult(
             cell=measure.Cell(**record["cell"]),
+            workload_id=record["workload_id"],
             status=record["status"],
             reason=record["reason"],
             observations=[FakeObservation(**raw) for raw in record["observations"]],

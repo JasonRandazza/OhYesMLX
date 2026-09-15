@@ -474,6 +474,15 @@ def test_render_markdown_draws_no_charts(rows):
 # --- the CLI -------------------------------------------------------------------------------
 
 
+@dataclasses.dataclass(frozen=True)
+class FakeWorkload:
+    """``measure.Workload``'s shape, no behaviour: the CLI only constructs and forwards it."""
+
+    id: str
+    messages: list
+    max_tokens: int
+
+
 class FakeMeasure:
     """Stands in for ohyesmlx.measure, and persists the way its ``run_cells`` does.
 
@@ -483,14 +492,25 @@ class FakeMeasure:
     """
 
     Cell = FakeCell
+    # cli.workloads() builds its three shapes against whichever measure module the run uses,
+    # so a stand-in has to offer the same constructor or the CLI cannot build a run at all.
+    Workload = FakeWorkload
 
     def __init__(self, results):
         self.results = results
         self.calls = []
 
-    def run_cells(self, cells, workload, **kwargs):
-        self.calls.append({"cells": cells, "workload": workload, **kwargs})
-        records = [{"temperature": 0.0, "seed": 0, "max_tokens": 256, "workload": workload}]
+    def run_cells(self, cells, workloads, **kwargs):
+        self.calls.append({"cells": cells, "workloads": workloads, **kwargs})
+        # The header names every workload the run pinned, the way the real one does: a cell
+        # line says which shape produced it, and the header is where that id is defined.
+        records = [
+            {
+                "temperature": 0.0,
+                "seed": 0,
+                "workloads": [dataclasses.asdict(workload) for workload in workloads],
+            }
+        ]
         records += [dataclasses.asdict(result) for result in self.results]
         path = Path(kwargs["results_dir"]) / "results.jsonl"
         path.write_text(
@@ -548,7 +568,11 @@ def test_run_writes_one_jsonl_and_one_leaderboard_into_the_run_directory(
     call = fake_measure.calls[0]
     assert [c.id for c in call["cells"]] == ["oq4__mlxlm", "oq4__osaurus"]
     assert call["results_dir"] == str(run_dirs[0])
-    assert "messages" in call["workload"]
+    # All three shapes reach run_cells in one call, each carrying its own cap: the CLI hands
+    # over the whole set so one runtime load can serve them, not one run per shape.
+    assert [w.id for w in call["workloads"]] == ["chat", "prefill", "decode"]
+    assert [w.max_tokens for w in call["workloads"]] == [128, 64, 512]
+    assert all(w.messages for w in call["workloads"])
     assert "leaderboard.md" in capsys.readouterr().out
 
 
