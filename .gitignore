@@ -1,0 +1,20 @@
+# Results are evidence, not source. Regenerate them.
+results/
+*.jsonl
+
+# Environments and build output. LMRE carried 231 MB of this; never again.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Node (PAUL installs via npx)
+node_modules/
+
+# macOS
+.DS_Store
