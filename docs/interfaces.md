@@ -138,6 +138,26 @@ it, and never defines a second one.
 
 Two writers for one artifact is the exact pattern this project exists to avoid.
 
+### The raw record stays raw
+
+```python
+def write_jsonl(results: list[CellResult], path: str, *, run: dict) -> None: ...
+```
+
+Line 1 of the file is the **run header**: the pins (`temperature`, `seed`, `max_tokens`,
+`warmup`, `measured`, `cooldown_s`, `workload`). Every line after it is one cell.
+
+A stored observation carries **only the `Observation` fields** — never `decode_tps`,
+`prefill_tps`, or `itl_s`. Those are derived, and `report.summarize` computes them from the
+raw fields on read. Storing a derived value beside the raw values it comes from creates two
+sources of truth for one metric, and when they disagree there is no way to say which is
+right. That disagreement is not hypothetical: it is how the predecessor reported 243.5 and
+57.2 tok/s for the same cell on consecutive runs.
+
+`CellResult` carries `warmup_observations: list[Observation]` alongside `observations`.
+Warmups are discarded from the summary, never from the record — they are how a cold-start
+anomaly is spotted after the fact.
+
 `axis` is required, and `render_markdown` emits the caveat naming what that axis cannot
 claim. A table that does not say which variable it held constant is not a result.
 
