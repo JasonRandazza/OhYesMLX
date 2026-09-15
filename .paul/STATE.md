@@ -68,7 +68,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | LMRE's rubric/ruling design (floors then one ordering metric) not ported | Pre-phase | M | v2, with the accuracy axis |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
 | Tokenizer-unavailable should make a cell N/A, not 5 transport failures | Phase 4 | S | measure.py's docstring promises visible N/A; behaviour gives FAIL with a server-shaped reason |
-| `mlx-lm` 0.31.3 lives only in `/tmp/mlxspike` and will not survive a reboot | Phase 4 | S | It is the control arm of every runtime-axis run. Move it somewhere durable before Phase 3. |
+| ~~`mlx-lm` 0.31.3 lives only in `/tmp/mlxspike`~~ **RESOLVED 2026-09-15** | Phase 4 | — | Reinstalled at `~/.local/share/ohyesmlx/mlx-lm-0.31.3` with the spike's exact pins (mlx 0.32.2, transformers 5.17.0, tokenizers 0.23.2, numpy 2.5.3). |
 
 ### Blockers/Concerns
 

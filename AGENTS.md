@@ -80,3 +80,25 @@ ran a command against an explicit capitalised warning and left a server holding 
 - Prefer deleting to adding. Prefer boring to clever.
 - A deliberate shortcut with a known ceiling gets a `# ponytail:` comment naming the ceiling and the upgrade path.
 - Non-trivial logic leaves one runnable check behind — the smallest thing that fails if the logic breaks.
+
+## Dispatching work to Command Code
+
+Work orders go out through `.paul/orders/dispatch.sh <role> <order-file>`, which prepends
+`.paul/orders/PREAMBLE.md` verbatim. The preamble carries the project's standing rules and
+is byte-identical on every dispatch, so DeepSeek V4.1 Flash bills it as a cache read at
+$0.003/M rather than fresh input at $0.15/M — a 50x difference on the part of the prompt
+that never changes. Order-specific text goes after it, never before: anything prepended
+breaks the shared prefix and every order that follows pays full price.
+
+Editing PREAMBLE.md costs one full re-read on the next dispatch. Edit it when the standing
+rules actually change, not to tidy wording.
+
+Traps worth keeping:
+
+- `cc-agent` hardcodes `--max-turns 40`. Scope each dispatch to one deliverable and forbid
+  tangents explicitly.
+- `explain` and `review` run in plan mode and cannot write. Research that must produce a
+  file needs `implement`.
+- The collateral-deletion guard compares definition snapshots and misfires under fan-out —
+  concurrent workers' files register as deletions. Verify against `git`, not the warning.
+- Pin interfaces in `docs/interfaces.md` before fanning out. Shapes are the coupling.
