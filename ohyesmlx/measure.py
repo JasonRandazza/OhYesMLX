@@ -47,6 +47,11 @@ What this module refuses to do:
   more than half of them incoherent and the cell is ``FAIL``, with the sample that failed
   still on the record. The measured responses *are* the sample, so asking costs no request.
 
+  A response is judged on its content, or on its reasoning when it emitted no content at
+  all: the same model spent one whole response in the reasoning channel and that channel
+  was token salad too. ``STILL_THINKING`` is the honest verdict for a response that
+  produced neither — no output is not bad output — but output in the other channel is.
+
 A cell is ``PASS`` only when every measured request came back ok, carried what the published
 metrics need (content-delta timing, content completion tokens, usage prompt tokens), and
 produced language. Anything else is ``FAIL`` with the first reason — a failed cell is not a
@@ -97,12 +102,14 @@ RESULTS_FILENAME = "results.jsonl"
 INCOHERENT_PREFIX = "incoherent output: "
 
 # transport.py's empty-content failure: the stream closed without a single content delta.
-# It is the only signal measure has that a response produced no output at all, and it is
-# what separates a model that spent its budget thinking from a stream that broke.
+# It is measure's only signal that a response emitted nothing in the content channel, and it
+# is the shape a model that spent its whole budget in the reasoning channel arrives in. The
+# reasoning it did emit is judged like any other output; only a response with nothing in
+# either channel is still thinking.
 EMPTY_CONTENT_ERROR = "chat stream produced no content"
 
-# The still-thinking cell's own reason, never an incoherence verdict: reasoning is not
-# content, so there is no output to judge and no figure to publish.
+# The still-thinking cell's own reason, never an incoherence verdict: the response produced
+# neither content nor reasoning, so there is no output to judge and no figure to publish.
 STILL_THINKING = "still thinking: no content within max_tokens"
 
 # Indirection so a test can watch cooldowns without waiting for them.
@@ -410,6 +417,9 @@ def _request(handle, messages: list[dict], *, max_tokens: int, counter) -> Obser
             temperature=TEMPERATURE,
             seed=SEED,
             token_counter=counter,
+            # oMLX answers an unauthenticated request with HTTP 401, and a run that never
+            # sends this key measures a server that loaded no weights at all.
+            api_key=handle.api_key,
         )
     except Exception as error:  # noqa: BLE001 - a dead server is a FAILed cell, not a crash
         return transport.Observation(
@@ -454,8 +464,8 @@ def _set_status(result: CellResult) -> None:
 
     A cell that produced no language is FAIL however fast it was, and a FAILed cell is not
     a result: no tok/s, TTFT, ITL or throughput figure is read from it. Its observations —
-    the offending sample included — stay on the record, so the reason can be read against
-    the text that earned it.
+    the offending sample included, in whichever channel it was spelled — stay on the
+    record, so the reason can be read against the text that earned it.
     """
     if not result.observations:
         # Nothing measured, so there is no verdict to give: the N/A or FAIL reason the
@@ -463,9 +473,7 @@ def _set_status(result: CellResult) -> None:
         return
 
     failures = [
-        observation
-        for observation in result.observations
-        if not observation.ok and not _still_thinking(observation)
+        observation for observation in result.observations if not _came_back(observation)
     ]
     if failures:
         result.status = "FAIL"
@@ -476,9 +484,17 @@ def _set_status(result: CellResult) -> None:
         return
 
     if all(_still_thinking(observation) for observation in result.observations):
-        # Every measured response went to reasoning and none of it to content. No output is
-        # not bad output, so this cell gets its own reason and never an incoherence verdict.
+        # Every measured response produced neither content nor reasoning. No output is not
+        # bad output, so this cell gets its own reason and never an incoherence verdict.
         result.status, result.reason = "FAIL", STILL_THINKING
+        return
+
+    # The gate runs before the metric check. A response that answered only in the reasoning
+    # channel carries no content window, so asking for its metrics first would report the
+    # missing window and bury the garbage that is the reason there is nothing to publish.
+    incoherent = _incoherent(result.observations)
+    if incoherent is not None:
+        result.status, result.reason = "FAIL", incoherent
         return
 
     missing = next(
@@ -490,20 +506,40 @@ def _set_status(result: CellResult) -> None:
         result.status, result.reason = "FAIL", missing
         return
 
-    result.reason = _incoherent(result.observations)
-    result.status = "FAIL" if result.reason else "PASS"
+    result.status, result.reason = "PASS", None
+
+
+def _judged_text(observation) -> str:
+    """The text one response is judged on: its content, or its reasoning when content is empty.
+
+    Content wins when a response carries both, because content is the channel the published
+    metrics describe. A response that never left the reasoning channel has still produced
+    output — it is simply spelled in the other channel, and the gate reads it there.
+    """
+    if observation.text.strip():
+        return observation.text
+    return observation.reasoning_text
+
+
+def _came_back(observation) -> bool:
+    """The request reached the model, and the model answered in whichever channel.
+
+    The transport reports a stream with no content delta as its empty-content failure. That
+    is not a request that failed: it is a model that spent its budget in the reasoning
+    channel, and what it wrote there is judged like any other output. Every other failure is
+    the transport's, and :func:`_set_status` reports it as one.
+    """
+    return observation.ok or observation.error == EMPTY_CONTENT_ERROR
 
 
 def _still_thinking(observation) -> bool:
-    """A response that produced no content at all: the budget went to reasoning.
+    """A response that produced neither content nor reasoning.
 
-    Reasoning is not content, so there is nothing here to judge and nothing to publish. The
-    transport reports this as its empty-content failure — the stream closed without a single
-    content delta — and a response that came back blank says the same thing.
+    Reasoning is not content and never becomes a published figure, but a response that
+    answered in the reasoning channel is not an empty one: token salad there is token salad.
+    Only a response with nothing in either channel is still thinking.
     """
-    if observation.text.strip():
-        return False
-    return observation.ok or observation.error == EMPTY_CONTENT_ERROR
+    return _came_back(observation) and not _judged_text(observation).strip()
 
 
 def _incoherent(observations) -> str | None:
@@ -513,20 +549,25 @@ def _incoherent(observations) -> str | None:
     without making a request of its own, and it pins no expected answer, because an
     arbitrary workload declares none.
 
-    Only responses that came back with text are judged. A response that failed is a
-    transport failure that :func:`_set_status` already reports, and a response with no
-    content is not a wrong answer — no output is not bad output. Majority rule, taken over
-    the responses that could be judged rather than over the requests that were made: a cell
-    does not survive the gate by having most of its requests die.
+    A response is judged on its content, or on its reasoning when it emitted no content: a
+    model that spends the whole budget in the reasoning channel has produced output, and
+    garbage is garbage in either channel. A response that failed is a transport failure that
+    :func:`_set_status` already reports, and a response with no text at all is not a wrong
+    answer — no output is not bad output. Majority rule, taken over the responses that could
+    be judged rather than over the requests that were made: a cell does not survive the gate
+    by having most of its requests die.
     """
     judged = 0
     failures = 0
     first: str | None = None
     for observation in observations:
-        if not observation.ok or not observation.text.strip():
+        if not _came_back(observation):
+            continue
+        text = _judged_text(observation)
+        if not text.strip():
             continue
         judged += 1
-        passed, reason = coherence.is_coherent(observation.text)
+        passed, reason = coherence.is_coherent(text)
         if not passed:
             failures += 1
             first = first or reason

@@ -407,6 +407,10 @@ class Handle:
     cold_load_s: float
     stop_command: tuple[str, ...] = ()
     scratch: str | None = None
+    # The credential the runtime was started with. Measured requests must send it: oMLX
+    # answers an unauthenticated /v1/chat/completions with 401, and the readiness probe
+    # authenticating while the measurement did not is how that went unnoticed.
+    api_key: str | None = None
 
     def stop(self) -> None:
         """Stop the runtime. Does not return until the port is free."""
@@ -558,6 +562,7 @@ class Runtime:
             cold_load_s=_now() - started,
             stop_command=self.stop_command(),
             scratch=scratch,
+            api_key=self.api_key(),
         )
 
 

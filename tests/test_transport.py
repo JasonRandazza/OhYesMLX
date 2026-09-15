@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from ohyesmlx.token_counter import FixedMapTokenCounter
-from ohyesmlx.transport import chat
+from ohyesmlx.transport import Observation, chat
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 DONE = b"data: [DONE]\n\n"
@@ -32,6 +32,7 @@ class SseHandler(BaseHTTPRequestHandler):
     pre_body_delay_s = 0.0
     chunk_bytes = 24
     posted: list[dict] = []
+    authorization: list[str | None] = []
 
     def log_message(self, *args: object) -> None:
         return
@@ -39,6 +40,7 @@ class SseHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         SseHandler.posted.append(json.loads(self.rfile.read(length)))
+        SseHandler.authorization.append(self.headers.get("Authorization"))
         chunked = SseHandler.framing == "chunked"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -91,9 +93,14 @@ class SseServer:
         SseHandler.framing = framing
         SseHandler.pre_body_delay_s = pre_body_delay_s
         SseHandler.posted = []
+        SseHandler.authorization = []
 
     def posted(self) -> dict:
         return SseHandler.posted[-1]
+
+    def authorization(self) -> str | None:
+        """The Authorization header the last POST carried, or ``None`` if it carried none."""
+        return SseHandler.authorization[-1]
 
     def stop(self) -> None:
         self._httpd.shutdown()
@@ -126,9 +133,9 @@ def _content(text: str) -> bytes:
     return _sse({"choices": [{"delta": {"content": text}, "finish_reason": None}]})
 
 
-def _reasoning(text: str) -> bytes:
+def _reasoning(text: str, field: str = "reasoning_content") -> bytes:
     return _sse(
-        {"choices": [{"delta": {"reasoning_content": text}, "finish_reason": None}]}
+        {"choices": [{"delta": {field: text}, "finish_reason": None}]}
     )
 
 
@@ -196,6 +203,111 @@ def test_ttft_ignores_reasoning_deltas_and_counts_content_only(server):
     assert observation.reasoning_tokens == 3
     assert observation.completion_tokens == 2
     assert observation.token_source == "usage"
+
+
+def test_reasoning_deltas_spelled_reasoning_are_captured(server):
+    """mlx-lm 0.31.3 emits delta.reasoning. Matching only reasoning_content dropped them."""
+    server.respond(
+        (0.0, _reasoning("ext", field="reasoning")),
+        (0.0, _reasoning("ultip", field="reasoning")),
+        (0.0, _content("ok")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=5, reasoning_tokens=2)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == "extultip"
+    assert observation.text == "ok"
+    # Captured, never folded into the visible output or its timing.
+    assert observation.content_event_count == 1
+
+
+def test_reasoning_text_joins_both_spellings_in_one_stream(server):
+    server.respond(
+        (0.0, _reasoning("think ")),
+        (0.0, _reasoning("again", field="reasoning")),
+        (0.0, _content("ok")),
+        (0.0, _stop()),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == "think again"
+    assert observation.text == "ok"
+
+
+def test_a_delta_carrying_both_spellings_is_counted_once(server):
+    server.respond(
+        (
+            0.0,
+            _sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {"reasoning_content": "think", "reasoning": "think"},
+                            "finish_reason": None,
+                        }
+                    ]
+                }
+            ),
+        ),
+        (0.0, _content("ok")),
+        (0.0, _stop()),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == "think"
+
+
+def test_reasoning_text_is_empty_when_the_model_emits_none(server):
+    server.respond(
+        (0.0, _content("ok")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=2, reasoning_tokens=0)),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.reasoning_text == ""
+
+
+def test_reasoning_text_is_defaulted_so_an_observation_can_omit_it():
+    """measure.py's failure path builds an Observation with no reasoning to report."""
+    observation = Observation(
+        ok=False,
+        error="chat stream failed",
+        ttft_s=None,
+        last_content_s=None,
+        total_s=0.1,
+        prompt_tokens=None,
+        completion_tokens=None,
+        reasoning_tokens=None,
+        content_event_count=0,
+        text="",
+        token_source="none",
+    )
+
+    assert observation.reasoning_text == ""
+
+
+def test_reasoning_text_survives_an_incomplete_stream(server):
+    server.respond((0.0, _reasoning("ext", field="reasoning")), (0.0, _stop()))
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok is False
+    assert observation.error == "incomplete SSE stream"
+    assert observation.reasoning_text == "ext"
 
 
 def test_first_chunk_more_than_a_second_after_headers_is_survived(server):
@@ -307,6 +419,31 @@ def test_seed_is_omitted_when_the_runtime_is_not_asked_to_pin_one(server):
     chat(server.base_url, "model", MESSAGES, max_tokens=32)
 
     assert "seed" not in server.posted()
+
+
+def test_api_key_is_sent_as_a_bearer_token(server):
+    """oMLX answers an unauthenticated measured request with HTTP 401."""
+    server.respond((0.0, _content("ok")), (0.0, _stop()), (0.0, DONE))
+
+    observation = chat(
+        server.base_url,
+        "model",
+        MESSAGES,
+        max_tokens=16,
+        api_key="ohyesmlx-local",
+    )
+
+    assert observation.ok, observation.error
+    assert server.authorization() == "Bearer ohyesmlx-local"
+
+
+def test_no_authorization_header_without_an_api_key(server):
+    server.respond((0.0, _content("ok")), (0.0, _stop()), (0.0, DONE))
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert server.authorization() is None
 
 
 def test_endpoint_must_be_loopback_v1(server):

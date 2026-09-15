@@ -60,6 +60,10 @@ class Observation:
     content_event_count: int
     text: str
     token_source: str
+    # Appended last, not slotted in beside ``text`` where docs/interfaces.md lists it: a
+    # field with a default cannot precede one without, and the default is what lets the
+    # failure path in measure.py build an Observation with no reasoning to report.
+    reasoning_text: str = ""
 
 
 def _parts(base_url: str) -> tuple[str, int, str]:
@@ -125,6 +129,7 @@ def chat(
     temperature: float = 0.0,
     seed: int | None = None,
     timeout_s: float = 600.0,
+    api_key: str | None = None,
     token_counter: TokenCounter | None = None,
 ) -> Observation:
     connection: http.client.HTTPConnection | None = None
@@ -153,6 +158,10 @@ def chat(
         payload = json.dumps(body).encode()
         deadline = started + timeout_s
         headers = {"Content-Type": "application/json"}
+        if api_key:
+            # oMLX answers an unauthenticated /v1/chat/completions with HTTP 401 and a run
+            # that never sends this measures a server that loaded no weights at all.
+            headers["Authorization"] = f"Bearer {api_key}"
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TransportError("request timed out", reason="timeout")
@@ -292,7 +301,12 @@ def chat(
                     delta_obj = choices[0].get("delta", {})
                     if not isinstance(delta_obj, dict):
                         delta_obj = {}
+                    # mlx-lm 0.31.3 spells the reasoning channel `reasoning`; other servers
+                    # spell it `reasoning_content`. Both are read, and a delta that carries
+                    # both is counted once.
                     reasoning_delta = delta_obj.get("reasoning_content")
+                    if not reasoning_delta:
+                        reasoning_delta = delta_obj.get("reasoning")
                     if reasoning_delta:
                         reasoning_parts.append(str(reasoning_delta))
                     delta = delta_obj.get("content")
@@ -400,6 +414,7 @@ def chat(
             reasoning_tokens=reasoning_tokens,
             content_event_count=content_event_count,
             text=joined,
+            reasoning_text=reasoning_text,
             token_source=token_source,
         )
     except TransportError as error:
@@ -428,5 +443,6 @@ def chat(
         reasoning_tokens=None,
         content_event_count=content_event_count,
         text="".join(content),
+        reasoning_text="".join(reasoning_parts),
         token_source="none",
     )

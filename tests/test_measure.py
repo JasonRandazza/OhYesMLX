@@ -40,6 +40,7 @@ class FakeObservation:
     reasoning_tokens: int | None = None
     content_event_count: int = 100
     text: str = "measured"
+    reasoning_text: str = ""
     token_source: str = "usage"
 
 
@@ -60,7 +61,7 @@ class Recorder:
 
 
 class FakeHandle:
-    def __init__(self, runtime, model_id, port, version, cold_load_s, recorder):
+    def __init__(self, runtime, model_id, port, version, cold_load_s, recorder, api_key=None):
         self.pid = 40000 + port
         self.port = port
         self.base_url = f"http://127.0.0.1:{port}/v1"
@@ -69,6 +70,7 @@ class FakeHandle:
         self.cold_load_s = cold_load_s
         self.runtime = runtime
         self.recorder = recorder
+        self.api_key = api_key
         self.stops = 0
 
     def stop(self):
@@ -122,7 +124,7 @@ class FakeTransport:
         self.responses: list[FakeObservation] = []
 
     def chat(self, base_url, model, messages, *, max_tokens, temperature=0.0, seed=None,
-             timeout_s=600.0, token_counter=None):
+             timeout_s=600.0, api_key=None, token_counter=None):
         kinds = self.recorder.kinds()
         visit = kinds.count("start")
         since_start = kinds[len(kinds) - 1 - kinds[::-1].index("start"):]
@@ -959,10 +961,46 @@ def test_a_response_that_did_not_come_back_is_never_called_incoherent(harness):
     assert measure._incoherent(results[0].observations) is None
 
 
+def reasoning_only(text, *, ok=False, error=measure.EMPTY_CONTENT_ERROR):
+    """One response that emitted no content at all: everything it wrote is in the reasoning
+    channel, which is the shape the transport reports as its empty-content failure."""
+    return FakeObservation(
+        ok=ok,
+        error=error,
+        ttft_s=None,
+        last_content_s=None,
+        completion_tokens=None,
+        content_event_count=0,
+        text="",
+        reasoning_text=text,
+        token_source="none",
+    )
+
+
+def measured_responses(*shapes):
+    """A responder handing each measured request one shape, in order, the last one repeating.
+
+    Warmups are never judged, so they are not part of the sequence.
+    """
+    measured = list(shapes)
+    seen = 0
+
+    def responder(call):
+        nonlocal seen
+        if call.visit_index < WARMUPS:
+            return FakeObservation()
+        shape = measured[min(seen, len(measured) - 1)]
+        seen += 1
+        return shape
+
+    return responder
+
+
 def test_a_cell_that_is_still_thinking_gets_its_own_reason(harness):
-    """Reasoning is not content, so there is no output here to call incoherent."""
+    """Neither channel produced anything, so there is no output here to call incoherent."""
     harness.transport.responder = lambda call: FakeObservation(
-        ok=False, error=measure.EMPTY_CONTENT_ERROR, ttft_s=None, last_content_s=None, text=""
+        ok=False, error=measure.EMPTY_CONTENT_ERROR, ttft_s=None, last_content_s=None,
+        text="", reasoning_text="",
     )
     harness.add_runtime("mlxlm")
 
@@ -972,6 +1010,106 @@ def test_a_cell_that_is_still_thinking_gets_its_own_reason(harness):
     assert results[0].reason == measure.STILL_THINKING
     assert "incoherent" not in results[0].reason
     assert len(results[0].observations) == MEASURED
+    # Empty in both channels is what earns this verdict, and nothing else —
+    # "no output is not bad output" stops where the model starts writing.
+    assert all(
+        observation.text == "" and observation.reasoning_text == ""
+        for observation in results[0].observations
+    )
+    assert measure._incoherent(results[0].observations) is None
+
+
+def test_a_reasoning_only_salad_cell_fails_as_incoherent(harness):
+    """The captured failure: zero content deltas, the whole budget in the reasoning channel,
+    and that channel full of token salad. Garbage is garbage in either channel, so this cell
+    fails on the garbage rather than reading as a token-budget problem."""
+    harness.transport.responder = measured_responses(*[reasoning_only(SALAD)] * MEASURED)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert results[0].reason == "incoherent output: replacement characters"
+    assert results[0].reason != measure.STILL_THINKING
+    # The content-less stream is not the failure being reported here.
+    assert "measured requests failed" not in results[0].reason
+
+    record, = harness.lines()
+    assert record["status"] == "FAIL"
+    assert record["reason"] == "incoherent output: replacement characters"
+    # The offending sample is on the record in full, in the channel it was spelled in.
+    assert record["observations"][0]["text"] == ""
+    assert record["observations"][0]["reasoning_text"] == SALAD
+
+    row = report.summarize(results)[0]
+    assert row["status"] == "FAIL"
+    assert row["reason"] == results[0].reason
+
+
+def test_a_reasoning_only_response_is_judged_even_when_the_stream_is_not_a_failure(harness):
+    """A stream that reported the same reasoning-only answer as a success must not slip past
+    the gate either: the channel is what makes it judgeable, not the transport's error."""
+    harness.transport.responder = measured_responses(
+        *[reasoning_only(SALAD, ok=True, error=None)] * MEASURED
+    )
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert results[0].reason == "incoherent output: replacement characters"
+
+
+def test_reasoning_that_is_language_is_no_longer_still_thinking(harness):
+    """A response that answered in the reasoning channel is not an empty one, so it gets no
+    still-thinking verdict — and it still carries no content window for the metrics."""
+    harness.transport.responder = measured_responses(*[reasoning_only(COHERENT)] * MEASURED)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert results[0].reason == "no content-delta timing, so decode tok/s is undefined"
+    assert measure.STILL_THINKING not in results[0].reason
+
+
+def test_incoherent_reasoning_counts_in_the_same_majority_as_content(harness):
+    """The denominator stays the responses that were judged, not the requests that were
+    made: a reasoning-only salad is one judged response among five, content or not."""
+    harness.add_runtime("mlxlm")
+    content = [FakeObservation(text=COHERENT)] * 3
+
+    harness.transport.responder = measured_responses(
+        reasoning_only(SALAD), reasoning_only(SALAD), *content
+    )
+    two_of_five = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    harness.transport.responder = measured_responses(
+        reasoning_only(SALAD), reasoning_only(SALAD), reasoning_only(SALAD),
+        FakeObservation(text=COHERENT), FakeObservation(text=COHERENT),
+    )
+    three_of_five = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert measure._incoherent(two_of_five[0].observations) is None
+    assert measure._incoherent(three_of_five[0].observations) == (
+        "incoherent output: replacement characters"
+    )
+    assert three_of_five[0].status == "FAIL"
+    assert three_of_five[0].reason == "incoherent output: replacement characters"
+
+
+def test_a_response_with_content_is_judged_on_its_content(harness):
+    """Content is the channel the published metrics describe, so a coherent answer is judged
+    on the answer — the reasoning trace behind it is not the answer."""
+    harness.transport.responder = lambda call: FakeObservation(
+        text=COHERENT, reasoning_text=SALAD
+    )
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "PASS"
+    assert results[0].reason is None
 
 
 def test_the_gate_pins_no_expected_answer(harness, monkeypatch):
