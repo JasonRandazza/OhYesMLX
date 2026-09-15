@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — Format axis on small models (0.1.0)
-Phase: 2.1 of 6 (Coherence gate)
+Phase: 4 of 6 (256-expert question) — answered; Phase 3 next
 Plan: 1 of 1 in current phase
 Status: Applying
-Last activity: 2026-09-15 — Phases 1 and 2 complete, 199 tests green. Coherence gate rewiring in flight.
+Last activity: 2026-09-15 — Phase 2.1 closed. Harness run against real servers for the first time; Phase 4 answered out of order because it cost no downloads.
 
 Progress:
-- Milestone: [███░░░░░░░] 33%
-- Phase: [███████░░░] 70%
+- Milestone: [█████░░░░░] 50%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
@@ -56,6 +56,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Format axis ships before runtime axis | Phase 1 | `mlx-Chronos` already published a runtime-axis protocol; nobody has done the format axis properly. |
 | A cell emitting garbage FAILS, however fast | Phase 1 | Stock mlx-lm loaded a 256-expert oQ4 MoE, hit full throughput, and returned token salad with nothing raised. |
 | JANG is a runtime+format bundle, not an axis point | Phase 1 | No runtime loads JANG and the other formats both. Own study, after v1. |
+| The 256-expert failure is runtime-specific, not format-specific | Phase 4 | oMLX 0.6.4 answers coherently from the same bytes stock mlx-lm turns into salad. The format axis is not built on a corrupting quantizer. |
+| A server's self-reported tok/s is not a measurement | Phase 4 | oMLX reports 15,286 tok/s from a generation_duration of 0.0. The harness measures; it does not relay. |
 
 ### Deferred Issues
 
@@ -65,13 +67,15 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: both hero models fit in 36 GiB without deleting anything |
 | LMRE's rubric/ruling design (floors then one ordering metric) not ported | Pre-phase | M | v2, with the accuracy axis |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
+| Tokenizer-unavailable should make a cell N/A, not 5 transport failures | Phase 4 | S | measure.py's docstring promises visible N/A; behaviour gives FAIL with a server-shaped reason |
+| `mlx-lm` 0.31.3 lives only in `/tmp/mlxspike` and will not survive a reboot | Phase 4 | S | It is the control arm of every runtime-axis run. Move it somewhere durable before Phase 3. |
 
 ### Blockers/Concerns
 
 | Blocker | Impact | Resolution Path |
 |---------|--------|-----------------|
-| Stock mlx-lm executes a 256-expert oQ4 MoE incorrectly — loads and generates at speed, output is token salad | Invalidates any speed number taken without a coherence check | Phase 2.1 gate; Phase 4 settles whether it is runtime-specific |
-| 36 GiB free, `/System/Volumes/Data` at 96%; external drive offline | Caps model choice; no bf16 reference possible | Both hero models fit at 33.7 GB. Jason is clearing JANG/LMRE models by hand |
+| ~~Stock mlx-lm executes a 256-expert oQ4 MoE incorrectly~~ **RESOLVED Phase 4** | Was: invalidates any speed number taken without a coherence check | Runtime-specific, not format-specific. oMLX serves the same bytes coherently. Gate catches it. `docs/research/2026-09-15-phase4-256-expert.md` |
+| ~~36 GiB free~~ **RESOLVED 2026-09-15** | Was: caps model choice | 312 GiB free after Jason cleared JANG models and deleted the Time Machine local snapshots that were pinning the blocks. Phase 3 is unconstrained. |
 
 ## Boundaries (Active)
 
@@ -82,8 +86,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-15
-Stopped at: Phases 1-2 complete and pushed. `coherence.py` landed with 16 tests; its call site in `measure.py` is being rewired by a worker.
-Next action: verify and commit the coherence wiring, close #7, then begin Phase 3 (format axis).
+Stopped at: Phase 2.1 closed (#7). Harness driven against real servers for the first time across three runs; each exposed a defect, each fixed. Phase 4 answered: the 256-expert failure is the runtime, not the format.
+Next action: land the oMLX duplicate-token fix (in flight), re-run Phase 4 for a published tok/s, then download and run Phase 3 (format axis on Qwen3.5-4B and LFM2.5-8B-A1B).
 Resume context: **Read `.paul/HANDOFF.md` first** — it carries the three findings that redirected the project, the traps that cost time, and machine state.
 
 ---
