@@ -849,3 +849,147 @@ def test_the_results_directory_is_created(harness, tmp_path):
     harness.run([harness.cell("oq__mlxlm", "mlxlm")], results_dir=results_dir)
 
     assert (results_dir / measure.RESULTS_FILENAME).exists()
+
+
+# ---------------------------------------------------------------------- the coherence gate
+
+# The gate keeps a cell that emitted garbage out of the results, however fast it was. These
+# are shapes, not a scoring rubric: tests/test_coherence.py owns the captured salad verbatim
+# and the four checks themselves.
+SALAD = "，,跟ashaa.atore quell\ufffd不会ulatSR2ancel Hard1"
+COHERENT = "Change one thing at a time, or the number cannot say which change moved it."
+
+
+def measured_text(bad, *, warmup_text="warmup", bad_text=SALAD, good_text=COHERENT):
+    """A responder whose first *bad* measured responses are *bad_text*, the rest coherent.
+
+    Every response keeps the timing and token accounting of a healthy request: the gate
+    judges text, and a cell is not let off because its garbage decoded quickly.
+    """
+    seen = 0
+
+    def responder(call):
+        nonlocal seen
+        if call.visit_index < WARMUPS:
+            return FakeObservation(text=warmup_text)
+        seen += 1
+        return FakeObservation(text=bad_text if seen <= bad else good_text)
+
+    return responder
+
+
+def test_an_incoherent_cell_fails_and_keeps_the_sample_that_failed(harness):
+    """The failure the gate exists for: HTTP 200, full speed, 64/64 tokens of token salad."""
+    harness.transport.responder = measured_text(MEASURED)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert results[0].reason == "incoherent output: replacement characters"
+
+    record, = harness.lines()
+    assert record["status"] == "FAIL"
+    assert record["reason"] == "incoherent output: replacement characters"
+    # The offending sample is on the record in full, and the record holds raw fields only:
+    # nothing derived sits beside it for a reader to mistake for an accepted figure.
+    assert record["observations"][0]["text"] == SALAD
+    assert not set(record["observations"][0]) & {"decode_tps", "prefill_tps", "itl_s"}
+
+    # The leaderboard row carries the verdict, not a good number in a fast-looking row.
+    row = report.summarize(results)[0]
+    assert row["status"] == "FAIL"
+    assert row["reason"] == results[0].reason
+
+
+def test_the_gate_makes_no_transport_call_of_its_own(harness):
+    """The measured responses are the sample, so the gate asks no question of its own."""
+    harness.transport.responder = measured_text(MEASURED)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert len(harness.transport.calls) == MEASURED + 2 * WARMUPS
+    per_visit = [len(calls) - WARMUPS for calls in harness.transport.calls_by_visit().values()]
+    assert per_visit == [3, 2]
+
+
+def test_the_gate_judges_the_measured_responses_and_not_the_warmups(harness):
+    harness.transport.responder = measured_text(0, warmup_text=SALAD)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert [response.text for response in harness.transport.responses[:WARMUPS]] == [SALAD] * WARMUPS
+    assert results[0].status == "PASS"
+    assert results[0].reason is None
+
+
+def test_more_than_half_the_judged_responses_have_to_be_incoherent(harness):
+    harness.add_runtime("mlxlm")
+
+    harness.transport.responder = measured_text(2)
+    two_of_five = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    harness.transport.responder = measured_text(3)
+    three_of_five = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert [observation.text for observation in two_of_five[0].observations] == (
+        [SALAD, SALAD, COHERENT, COHERENT, COHERENT]
+    )
+    assert two_of_five[0].status == "PASS"
+    assert three_of_five[0].status == "FAIL"
+    assert three_of_five[0].reason == "incoherent output: replacement characters"
+
+
+def test_a_response_that_did_not_come_back_is_never_called_incoherent(harness):
+    """An empty or failed response is a transport failure, already reported as one."""
+    harness.transport.responder = lambda call: FakeObservation(
+        ok=False, error="TimeoutError: read timed out", ttft_s=None, last_content_s=None, text=""
+    )
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert "TimeoutError: read timed out" in results[0].reason
+    assert "incoherent" not in results[0].reason
+    # Nothing came back with text, so there was nothing to judge and no majority to take.
+    assert measure._incoherent(results[0].observations) is None
+
+
+def test_a_cell_that_is_still_thinking_gets_its_own_reason(harness):
+    """Reasoning is not content, so there is no output here to call incoherent."""
+    harness.transport.responder = lambda call: FakeObservation(
+        ok=False, error=measure.EMPTY_CONTENT_ERROR, ttft_s=None, last_content_s=None, text=""
+    )
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "FAIL"
+    assert results[0].reason == measure.STILL_THINKING
+    assert "incoherent" not in results[0].reason
+    assert len(results[0].observations) == MEASURED
+
+
+def test_the_gate_pins_no_expected_answer(harness, monkeypatch):
+    """A pinned substring cannot work against an arbitrary workload, so none is passed."""
+    expectations = []
+    is_coherent = measure.coherence.is_coherent
+
+    def spy(text, *, expect=None):
+        expectations.append(expect)
+        return is_coherent(text, expect=expect)
+
+    monkeypatch.setattr(measure.coherence, "is_coherent", spy)
+    harness.transport.responder = measured_text(0)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].status == "PASS"
+    assert expectations, "the gate never ran"
+    assert set(expectations) == {None}
+    assert "4" not in COHERENT

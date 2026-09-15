@@ -40,10 +40,18 @@ What this module refuses to do:
   whichever request happened to be answered. If the tokenizer cannot be built, the cell is
   ``N/A`` — visible — rather than quietly falling back to usage tokens.
 
-A cell is ``PASS`` only when every measured request came back ok *and* carried what the
-published metrics need (content-delta timing, content completion tokens, usage prompt
-tokens). Anything else is ``FAIL`` with the first reason, so a blank column is never
-mistaken for a fast runtime. ``N/A`` means the cell could not be run at all here — an
+* **Publish a row that is not language.** Stock ``mlx_lm.server`` loaded a 256-expert oQ4
+  MoE in 4 s, answered HTTP 200, decoded 64/64 tokens at full speed — and returned
+  mixed-script token salad with replacement characters. Nothing raised. Before a cell's
+  status is decided, the responses it already made are judged by ``ohyesmlx/coherence.py``:
+  more than half of them incoherent and the cell is ``FAIL``, with the sample that failed
+  still on the record. The measured responses *are* the sample, so asking costs no request.
+
+A cell is ``PASS`` only when every measured request came back ok, carried what the published
+metrics need (content-delta timing, content completion tokens, usage prompt tokens), and
+produced language. Anything else is ``FAIL`` with the first reason — a failed cell is not a
+result and no tok/s, TTFT, ITL or throughput figure is read from one — so a blank column is
+never mistaken for a fast runtime. ``N/A`` means the cell could not be run at all here — an
 unknown runtime, a runtime that will not load the artifact, no tokenizer.
 """
 
@@ -57,7 +65,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import sample
+from . import coherence, sample
 
 if TYPE_CHECKING:  # pragma: no cover - the shapes the loop is written against
     from .transport import Observation
@@ -85,6 +93,17 @@ VISIT_ROUNDS = 2
 TEMPERATURE = 0.0
 SEED = 0
 RESULTS_FILENAME = "results.jsonl"
+
+INCOHERENT_PREFIX = "incoherent output: "
+
+# transport.py's empty-content failure: the stream closed without a single content delta.
+# It is the only signal measure has that a response produced no output at all, and it is
+# what separates a model that spent its budget thinking from a stream that broke.
+EMPTY_CONTENT_ERROR = "chat stream produced no content"
+
+# The still-thinking cell's own reason, never an incoherence verdict: reasoning is not
+# content, so there is no output to judge and no figure to publish.
+STILL_THINKING = "still thinking: no content within max_tokens"
 
 # Indirection so a test can watch cooldowns without waiting for them.
 _sleep = time.sleep
@@ -431,13 +450,23 @@ def _highest_peak(current: dict, candidate: dict | None) -> dict:
 
 
 def _set_status(result: CellResult) -> None:
-    """PASS only when every measured request carried what the published metrics need."""
+    """PASS only when every measured request carried what the published metrics need.
+
+    A cell that produced no language is FAIL however fast it was, and a FAILed cell is not
+    a result: no tok/s, TTFT, ITL or throughput figure is read from it. Its observations —
+    the offending sample included — stay on the record, so the reason can be read against
+    the text that earned it.
+    """
     if not result.observations:
         # Nothing measured, so there is no verdict to give: the N/A or FAIL reason the
         # failed visit wrote stands. Only the next visit can move this.
         return
 
-    failures = [observation for observation in result.observations if not observation.ok]
+    failures = [
+        observation
+        for observation in result.observations
+        if not observation.ok and not _still_thinking(observation)
+    ]
     if failures:
         result.status = "FAIL"
         result.reason = (
@@ -446,13 +475,64 @@ def _set_status(result: CellResult) -> None:
         )
         return
 
+    if all(_still_thinking(observation) for observation in result.observations):
+        # Every measured response went to reasoning and none of it to content. No output is
+        # not bad output, so this cell gets its own reason and never an incoherence verdict.
+        result.status, result.reason = "FAIL", STILL_THINKING
+        return
+
     missing = next(
         (reason for observation in result.observations
          if (reason := _missing_metric(observation)) is not None),
         None,
     )
-    result.status = "FAIL" if missing else "PASS"
-    result.reason = missing
+    if missing is not None:
+        result.status, result.reason = "FAIL", missing
+        return
+
+    result.reason = _incoherent(result.observations)
+    result.status = "FAIL" if result.reason else "PASS"
+
+
+def _still_thinking(observation) -> bool:
+    """A response that produced no content at all: the budget went to reasoning.
+
+    Reasoning is not content, so there is nothing here to judge and nothing to publish. The
+    transport reports this as its empty-content failure — the stream closed without a single
+    content delta — and a response that came back blank says the same thing.
+    """
+    if observation.text.strip():
+        return False
+    return observation.ok or observation.error == EMPTY_CONTENT_ERROR
+
+
+def _incoherent(observations) -> str | None:
+    """``"incoherent output: <first failing reason>"``, or ``None`` when the cell is language.
+
+    The measured responses *are* the sample: this asks the question the gate exists for
+    without making a request of its own, and it pins no expected answer, because an
+    arbitrary workload declares none.
+
+    Only responses that came back with text are judged. A response that failed is a
+    transport failure that :func:`_set_status` already reports, and a response with no
+    content is not a wrong answer — no output is not bad output. Majority rule, taken over
+    the responses that could be judged rather than over the requests that were made: a cell
+    does not survive the gate by having most of its requests die.
+    """
+    judged = 0
+    failures = 0
+    first: str | None = None
+    for observation in observations:
+        if not observation.ok or not observation.text.strip():
+            continue
+        judged += 1
+        passed, reason = coherence.is_coherent(observation.text)
+        if not passed:
+            failures += 1
+            first = first or reason
+    if failures * 2 > judged:
+        return f"{INCOHERENT_PREFIX}{first}"
+    return None
 
 
 def _missing_metric(observation) -> str | None:
