@@ -21,17 +21,28 @@ class Observation:
     completion_tokens: int | None   # from usage, content only
     reasoning_tokens: int | None    # from usage.completion_tokens_details, if present
     content_event_count: int
-    text: str
+    text: str                       # CONTENT deltas only
+    reasoning_text: str             # reasoning deltas joined; "" when the model emitted none
     token_source: str               # "usage" | "local_tokenizer" | "none"
 
 def chat(base_url: str, model: str, messages: list[dict], *,
          max_tokens: int, temperature: float = 0.0, seed: int | None = None,
-         timeout_s: float = 600.0,
+         timeout_s: float = 600.0, api_key: str | None = None,
          token_counter: "TokenCounter | None" = None) -> Observation: ...
 ```
 
 `base_url` is `http://127.0.0.1:<port>/v1`. Streaming is always on internally with
 `stream_options.include_usage`; `Observation` is what the caller sees.
+
+**`api_key` must be wired at every call site.** oMLX refuses an unauthenticated
+`/v1/chat/completions` with HTTP 401 and `Runtime.api_key()` already supplies the key the
+runtime was started with. A measured run that never sends it measures nothing.
+
+**Reasoning deltas are captured, never dropped.** A reasoning model can spend an entire
+response in the reasoning channel and emit no content at all — and that reasoning text can
+itself be token salad. `reasoning_text` is what lets the coherence gate see it. mlx-lm
+0.31.3 spells the field `delta.reasoning`; other servers spell it `delta.reasoning_content`.
+Both are read.
 
 **`token_counter` must be wired at every call site.** In the predecessor project the exact
 token path existed, was never passed by any production caller, and
