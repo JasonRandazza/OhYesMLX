@@ -49,18 +49,19 @@ runtime or their quantization is what's actually costing them speed and memory.
 
 ### Active (In Progress)
 
-- [ ] Phase 1 — prove the portable-format assumption, then build the measurement core.
+- [ ] Phase 2.1 — the coherence gate, which every later number depends on.
 
 ### Planned (Next)
 
-- [ ] Study A: the runtime axis, concurrency 1, published.
-- [ ] Concurrency and prompt-length sweeps.
-- [ ] Cold vs warm KV-cache split.
-- [ ] Study B: the format axis inside oMLX, including JANG.
+- [ ] Format axis on `Qwen3.5-4B` and `LFM2.5-8B-A1B` — the headline contribution.
+- [ ] The 256-expert question: one cached artifact, two runtimes, coherence as the outcome.
+- [ ] Runtime axis, citing `mlx-Chronos` rather than duplicating it.
+- [ ] Concurrency, prompt-length, and cold/warm KV-cache sweeps.
 
 ### Out of Scope
 
-- **Accuracy / "intelligence" scoring** — deferred to v2 entirely. It is a harder problem than speed and it is what drowned the predecessor project. When it lands it will be `lm-evaluation-harness` over the same endpoints, not a bespoke scorer.
+- **Accuracy / "intelligence" scoring** — deferred to v2 entirely. It is a harder problem than speed and it is what drowned the predecessor project. When it lands it will be `lm-evaluation-harness` over the same endpoints, not a bespoke scorer. The v1 coherence gate is a floor, not an eval: it answers "is this producing language at all", never "is it smart".
+- **JANG as a point on either axis** — it loads in no runtime that loads the other formats, so it is a runtime+format bundle rather than a quantization you can isolate. It gets its own labelled study after v1.
 - **Any new model download** — v1 runs only on artifacts already in the local HF cache. Free disk is 36 GiB.
 - **35B model families** — deferred until models move to `/Volumes/Storage`.
 - **vMLX/MLX Studio, LM Studio, llama.cpp** as runtimes — v2.
@@ -115,7 +116,11 @@ Testing that claim fairly is the sharpest single reason this project should exis
 | Two single-variable studies, not a diagonal | LMRE's native diagonal correctly spotted that quant and runtime co-vary, then drew the wrong conclusion — a diagonal can never attribute a difference to either axis. | 2026-09-14 | Active |
 | PAUL is the only process spine | LMRE carried three dev methodologies at once. `.paul/STATE.md` is the single state store; Matt Pocock skills are tools called inside the loop. | 2026-09-14 | Active |
 | Speed + memory only in v1 | Accuracy is a separate, harder problem and is what drowned the predecessor. | 2026-09-14 | Active |
-| Hero model is `gemma-4-12B-it-qat`, not a 35B | All three format variants are already on disk, iteration takes minutes not hours, and 36 GiB free forbids anything larger. | 2026-09-14 | Active |
+| Hero model is `gemma-4-12B-it-qat`, not a 35B | All three format variants are already on disk, iteration takes minutes not hours, and 36 GiB free forbids anything larger. | 2026-09-14 | **Superseded 2026-09-15** |
+| Hero models are `Qwen3.5-4B` (dense) and `LFM2.5-8B-A1B` (MoE) | `gemma4_unified` is not shipped by mlx-lm 0.31.3, so that family can carry no stock-mlx control. These two are the smallest pair with all four formats published, 33.7 GB combined. | 2026-09-15 | Active |
+| Format axis ships before runtime axis | Prior-art research: `mlx-Chronos` already publishes a runtime-axis protocol, while no published format comparison holds the runtime constant. The unoccupied ground is the format axis. | 2026-09-15 | Active |
+| A cell emitting incoherent output FAILS, however fast | Stock mlx-lm loaded a 256-expert oQ4 MoE in 4s, returned HTTP 200 at full throughput, and produced mixed-script token salad with nothing raised. Speed without a coherence floor is worse than no number. | 2026-09-15 | Active |
+| The 256-expert question is its own single-format two-runtime study | All four formats of a 256-expert model would need ~52 GiB, which this machine does not have. Two runtimes over one cached artifact answers it with zero downloads. | 2026-09-15 | Active |
 | `--cells a,b,c` is the only cell selector | LMRE built six overlapping mechanisms across ~3,700 lines for this exact job. | 2026-09-14 | Active |
 | Build on GuideLLM / lm-eval rather than reimplement | Only three jobs are genuinely ours: runtime lifecycle, macOS memory sampling, and the result join. | 2026-09-14 | Active |
 
@@ -123,7 +128,8 @@ Testing that claim fairly is the sharpest single reason this project should exis
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| Decode tok/s reported as a real number | 100% of cells | — | Not started |
+| Decode tok/s reported as a real number | 100% of passing cells | — | Not started |
+| Cells passing the coherence gate before any number is reported | 100% | — | Phase 2.1 |
 | Same-cell rerun variance | within 5% | — | Not started |
 | Ports released after a run (1337/8080/8081/8100) | 100% | — | Not started |
 | Total source size | under ~1,000 lines | 0 | On track |
@@ -150,4 +156,4 @@ Testing that claim fairly is the sharpest single reason this project should exis
 
 ---
 *PROJECT.md — Updated when requirements or context change*
-*Last updated: 2026-09-14*
+*Last updated: 2026-09-15*

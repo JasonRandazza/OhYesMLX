@@ -8,113 +8,137 @@ about: "OhYesMLX"
 
 ## Overview
 
-Prove one assumption, build a ~1,000-line measurement core, publish four honest
-numbers, then widen. Every phase after the first ends in something publishable, so
-the project can stop at any phase boundary and still have given the community more
-than it had. The predecessor project failed by making everything a prerequisite for
-everything else; here, Phase 3 ships.
+Three studies, each varying exactly one thing, each publishable on its own. The format
+axis leads because research found it is the genuinely unoccupied ground: every published
+format comparison either changes the runtime too, is vendor self-reported, or measures
+perplexity instead of task accuracy. The runtime axis follows, and cites `mlx-Chronos`
+rather than pretending to be first. The third study is the one our own first spike handed
+us.
 
 ## Current Milestone
 
-**v1 — Speed and memory, one model** (0.1.0)
+**v1 — Format axis on small models** (0.1.0)
 Status: In progress
-Phases: 0 of 5 complete
+Phases: 2 of 6 complete
 
 ## Phases
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
-| 1 | Portability spike | 1 | Not started | - |
-| 2 | Measurement core | 5 | Not started | - |
-| 3 | Study A — runtime axis | 1 | Not started | - |
-| 4 | Sweeps | 2 | Not started | - |
-| 5 | Study B — format axis | 1 | Not started | - |
+| 1 | Portability spike | 1 | **Complete** | 2026-09-15 |
+| 2 | Measurement core | 5 | **Complete** | 2026-09-15 |
+| 2.1 | Coherence gate [INSERTED] | 1 | In progress | - |
+| 3 | Format axis — dense and MoE | 2 | Not started | - |
+| 4 | The 256-expert question | 1 | Not started | - |
+| 5 | Runtime axis | 1 | Not started | - |
+| 6 | Sweeps | 2 | Not started | - |
 
 ## Phase Details
 
-### Phase 1: Portability spike
+### Phase 1: Portability spike — COMPLETE
 
-**Goal:** Answer one question that can invalidate Study A before any code is written:
-can `mlx_lm.server` load an oQ4 artifact?
-**Depends on:** Nothing (first phase)
-**Research:** Unlikely (the answer is empirical, not documentary)
+Answered, twice, and the second answer redirected the project.
 
-**Scope:**
-- A fresh venv with `mlx-lm` installed.
-- `mlx_lm.server` serving `avneetsb/gemma-4-12B-it-qat-oQ4-fp16` from the local HF cache.
-- One valid completion returned over `/v1/chat/completions`.
-- The answer recorded either way. If it fails, Study A's portable format falls back to an `mlx-community/*-4bit` artifact and the README says so.
+- `gemma-4-12B-it-qat-oQ4` is `model_type: gemma4_unified`, which **mlx-lm 0.31.3 does not
+  ship**. That family cannot have a stock-mlx control and was dropped as hero model.
+- `Jundot/Qwen3.6-35B-A3B-oQ4-mtp` (`qwen3_5_moe`, 256 experts) **loads** in 4s, returns
+  HTTP 200, generates 64/64 tokens at full speed — and emits mixed-script token salad.
 
-**Plans:**
-- [ ] 01-01: Prove or disprove oQ portability to stock mlx-lm
+The second result is the finding the project now exists to chase, and it produced Phase 2.1
+and Phase 4.
 
-### Phase 2: Measurement core
+### Phase 2: Measurement core — COMPLETE
 
-**Goal:** A tool that starts each runtime, measures it honestly, samples its memory,
-and writes one joined result file.
-**Depends on:** Phase 1 (which format is portable decides what `runtimes.py` serves)
-**Research:** Unlikely (LMRE already paid for the hard-won parts; they get ported)
+`transport.py`, `token_counter.py`, `runtimes.py`, `osaurus_settings.py`, `sample.py`,
+`measure.py`, `report.py`, `cli.py`. 183 tests. Built by five concurrent Command Code
+sessions against `docs/interfaces.md`.
 
-**Scope:**
-- `transport.py` vendored from LMRE near-verbatim — the SSE client with chunked-encoding handling, the `select()` loop, OptiQ keepalive tolerance, and reasoning-vs-content delta separation.
-- `runtimes.py` — four runtime definitions carrying LMRE's pinned flag tuples, plus the Osaurus host-settings snapshot and baseline diff.
-- `sample.py` — a `footprint -p <pid>` poller returning peak and timeseries, optional `powermetrics`, graceful without sudo. New; LMRE has no equivalent.
-- `measure.py` — warmup of at least 3, fixed 256-token output, interleaved cell order, raw observations retained, persist after every cell.
-- `report.py` — join transport, sampler, and `du` into `results.jsonl` and a markdown leaderboard.
+### Phase 2.1: Coherence gate [INSERTED]
+
+**Goal:** a cell that emits garbage fails, however fast it was.
+**Reason for insertion:** Phase 1 proved a runtime can load, answer HTTP 200, hit full
+throughput, and return unusable text with nothing raised anywhere. Every speed number in
+this project is worthless without this gate, so it precedes all measurement.
 
 **Plans:**
-- [ ] 02-01: Vendor transport.py with its tests
-- [ ] 02-02: runtimes.py — lifecycle for four runtimes
-- [ ] 02-03: sample.py — macOS memory sampling
-- [ ] 02-04: measure.py — the measurement loop
-- [ ] 02-05: report.py and the results schema
+- [ ] 02.1-01: `coherence.py` and its call site in `measure.py` — issue #7
 
-### Phase 3: Study A — runtime axis
+### Phase 3: Format axis — dense and MoE
 
-**Goal:** The first real numbers, and the first thing worth publishing.
-**Depends on:** Phase 2
-**Research:** Unlikely
+**Goal:** the project's headline contribution. Hold the runtime constant at oMLX, vary the
+quantization format, and publish the first properly controlled format comparison.
+**Depends on:** Phase 2.1 (no format result means anything without the gate)
+**Research:** Complete — see `docs/research/2026-09-15-small-model-candidates.md`
 
-**Scope:**
-- One portable format served by `mlx_lm.server`, Osaurus, oMLX, and `optiq serve`.
-- Concurrency 1, one prompt length. Deliberately narrow.
-- README updated with the leaderboard and the runtime-axis caveat: format held constant, this compares serving and not quantization.
-- **Ship it.**
+**Subjects.** Both fit on a 36 GiB disk at 33.7 GB combined, with every format present:
+
+| | Model | Formats | GB |
+|---|---|---|---|
+| Dense | `Qwen3.5-4B` | stock-4bit, oQ4, oQ4e, OptiQ | 13.4 |
+| MoE | `LFM2.5-8B-A1B` (8B/1B active, 32 experts) | stock-4bit, oQ4, oQ4e, OptiQ | 20.2 |
+
+**Standing caveat, carried in every table this phase produces:** LFM2.5 has 32 experts; the
+checkpoint that failed has 256. A clean result here validates the machinery and does **not**
+exonerate stock mlx-lm on high-expert-count MoE. That is Phase 4's job, and no format
+matrix on this machine can do it — all formats of a 256-expert model would need ~52 GiB.
 
 **Plans:**
-- [ ] 03-01: Run and publish Study A
+- [ ] 03-01: Format axis, dense (`Qwen3.5-4B`)
+- [ ] 03-02: Format axis, MoE (`LFM2.5-8B-A1B`)
 
-### Phase 4: Sweeps
+### Phase 4: The 256-expert question
 
-**Goal:** Find where continuous batching and mixed-precision KV cache actually pay off.
+**Goal:** settle whether stock mlx-lm is broken on high-expert-count MoE, as a clean
+single-variable result.
+**Depends on:** Phase 2.1
+**Research:** Unlikely — the artifact is already on disk
+
+One format (`Jundot/Qwen3.6-35B-A3B-oQ4-mtp`, already cached), two runtimes
+(`mlx_lm.server` and oMLX), coherence as the measured outcome. **Zero downloads.**
+
+If identical weights yield English from one runtime and salad from the other, that is a
+publishable single-variable result — and it approaches the JANG vendor's "MLX is broken on
+MiniMax at ALL bit levels" claim from an independent direction, with no vendor involved.
+
+**Plans:**
+- [ ] 04-01: Two-runtime coherence comparison on 256 experts
+
+### Phase 5: Runtime axis
+
+**Goal:** hold the format constant, vary the serving runtime.
 **Depends on:** Phase 3
-**Research:** Likely (GuideLLM integration, and how each runtime's prefix cache is cleared)
-**Research topics:** GuideLLM request-rate shaping against a local endpoint; oMLX SSD prefix cache location and eviction; whether Osaurus and OptiQ cache prefixes at all.
+**Research:** Likely — prior art exists and must be cited, not duplicated
 
-**Scope:**
-- Concurrency sweep 1/2/4/8/16/32, sustained at least 60s each, per-request and aggregate throughput reported separately.
-- Prompt-length sweep 128/1k/4k/16k/32k in, fixed 256 out.
-- Cold vs warm KV-cache split: every config run twice, caches cleared between.
+`mlx-Chronos` already publishes a protocol for this axis. Our contribution is the specific
+runtime set and the format-held-constant discipline, not the idea. Say so in the write-up.
 
 **Plans:**
-- [ ] 04-01: Concurrency and prompt-length sweeps
-- [ ] 04-02: Cold/warm KV-cache split
+- [ ] 05-01: Runtime axis on the portable format
 
-### Phase 5: Study B — format axis
+### Phase 6: Sweeps
 
-**Goal:** Hold the runtime constant and vary the quantization — including JANG, which
-means the first honest third-party look at the "2-bit destroys 4-bit" claim.
-**Depends on:** Phase 4
-**Research:** Likely (whether oMLX loads all four target formats in one install)
+**Goal:** find where continuous batching and mixed-precision KV cache actually pay off.
+**Depends on:** Phase 5
+**Research:** Likely — GuideLLM integration, and how each runtime's prefix cache is cleared
 
-**Scope:**
-- oMLX serving mlx-lm 4-bit, oQ4, OptiQ-4bit, and JANG_4M of the same base model, one at a time.
-- On-disk size including sidecars, so JANGTQ's runtime sidecar counts against it.
-- Published with the format-axis caveat stated as plainly as Study A's.
+Concurrency 1/2/4/8/16/32; prompt lengths 128/1k/4k/16k/32k; cold vs warm KV cache with
+caches cleared between.
 
 **Plans:**
-- [ ] 05-01: Run and publish Study B
+- [ ] 06-01: Concurrency and prompt-length sweeps
+- [ ] 06-02: Cold/warm KV-cache split
+
+## Out of this milestone
+
+- **JANG** is not a point on either axis. It loads in no runtime that loads the other
+  formats: three oMLX support PRs are open and unmerged, the maintainer objected on the
+  record, and JANG's own model card says it "requires our custom loader" and is "meant to
+  be run in vMLX". It therefore gets its own study, declared as a cell comparison —
+  JANG-in-vMLX against the best portable format in the same vMLX — after v1.
+- **Accuracy scoring.** The coherence gate is a floor, not an eval. lm-evaluation-harness
+  is v2.
+- **35B families beyond Phase 4's single cached artifact**, pending disk.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-14*
+*Last updated: 2026-09-15*
