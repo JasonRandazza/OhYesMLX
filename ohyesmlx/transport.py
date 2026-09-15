@@ -376,6 +376,16 @@ def chat(
             )
         joined = "".join(content)
         reasoning_text = "".join(reasoning_parts)
+        # oMLX 0.6.4 mirrors its reasoning text into the content channel: the same string
+        # arrives twice and the two accumulations come out identical. That is one stream
+        # read twice, not two channels, so accounting sees an empty reasoning channel and
+        # the visible count reconciles against usage.completion_tokens exactly as it does
+        # when a runtime emits content alone. Comparing the accumulations is what holds when
+        # the duplicate arrives non-adjacently or in chunks of a different size. The
+        # duplicate itself stays in ``reasoning_text``: the record keeps what was sent.
+        accounting_reasoning_text = (
+            "" if reasoning_text and reasoning_text == joined else reasoning_text
+        )
         if (
             usage_reasoning_tokens is not None
             and completion_tokens is not None
@@ -396,7 +406,7 @@ def chat(
             token_source = "usage"
         else:
             _, content_tokens, accounting_status = resolve_token_accounting(
-                reasoning_text=reasoning_text,
+                reasoning_text=accounting_reasoning_text,
                 visible_text=joined,
                 completion_tokens=completion_tokens,
                 usage_reasoning_tokens=None,

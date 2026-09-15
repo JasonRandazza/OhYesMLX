@@ -22,6 +22,10 @@ from ohyesmlx.transport import Observation, chat
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 DONE = b"data: [DONE]\n\n"
+# Captured verbatim from oMLX 0.6.4: one request at max_tokens=8, eight tokens generated,
+# and the same eight-token string arriving twice — once as reasoning_content, then again in
+# content. The harness counted both copies and could publish no tok/s figure for oMLX.
+OMLX_MIRRORED = "\nThinking Process:\n\n1.  **"
 
 
 class SseHandler(BaseHTTPRequestHandler):
@@ -387,6 +391,94 @@ def test_token_source_is_none_when_the_local_count_contradicts_usage(server):
     assert observation.ok, observation.error
     assert observation.token_source == "none"
     assert observation.completion_tokens is None
+
+
+def test_a_mirrored_reasoning_stream_reconciles_against_usage(server):
+    """The oMLX capture: the same string in both channels is one stream, counted once.
+
+    Eight tokens were generated and usage says eight. Counting the reasoning copy and the
+    content copy gave sixteen, and resolve_token_accounting rejected 8 != 16, which is why
+    no decode tok/s figure could be published for oMLX.
+    """
+    server.respond(
+        (0.0, _reasoning(OMLX_MIRRORED)),
+        (0.0, _content(OMLX_MIRRORED)),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=13, completion_tokens=8)),
+        (0.0, DONE),
+    )
+
+    observation = chat(
+        server.base_url,
+        "model",
+        MESSAGES,
+        max_tokens=8,
+        token_counter=FixedMapTokenCounter({OMLX_MIRRORED: 8}),
+    )
+
+    assert observation.ok, observation.error
+    assert observation.prompt_tokens == 13
+    assert observation.completion_tokens == 8
+    assert observation.token_source == "local_tokenizer"
+    # The runtime did send a reasoning channel, so the record still carries it; only the
+    # accounting drops the duplicate.
+    assert observation.reasoning_text == OMLX_MIRRORED
+    assert observation.text == OMLX_MIRRORED
+    assert observation.content_event_count == 1
+
+
+def test_a_mirrored_stream_is_caught_across_unequal_non_adjacent_chunks(server):
+    """The comparison is over the accumulations, not over any two deltas."""
+    server.respond(
+        (0.0, _reasoning("\nThinking ")),
+        (0.0, _content("\nThinking ")),
+        (0.0, _reasoning("Process:\n\n1.  **")),
+        (0.0, _content("Process:")),
+        (0.0, _content("\n\n1.  **")),
+        (0.0, _stop()),
+        (0.0, _usage(prompt_tokens=13, completion_tokens=8)),
+        (0.0, DONE),
+    )
+
+    observation = chat(
+        server.base_url,
+        "model",
+        MESSAGES,
+        max_tokens=8,
+        token_counter=FixedMapTokenCounter({OMLX_MIRRORED: 8}),
+    )
+
+    assert observation.ok, observation.error
+    assert observation.token_source == "local_tokenizer"
+    assert observation.completion_tokens == 8
+    assert observation.reasoning_text == OMLX_MIRRORED
+    assert observation.text == OMLX_MIRRORED
+    assert observation.content_event_count == 3
+
+
+def test_a_reasoning_channel_that_differs_from_content_is_still_counted(server):
+    """Deduplication is equality, not containment: a real second channel survives it."""
+    server.respond(
+        (0.0, _reasoning("think")),
+        (0.0, _content("think harder")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=7)),
+        (0.0, DONE),
+    )
+
+    observation = chat(
+        server.base_url,
+        "model",
+        MESSAGES,
+        max_tokens=16,
+        token_counter=FixedMapTokenCounter({"think": 2, "think harder": 5}),
+    )
+
+    assert observation.ok, observation.error
+    assert observation.token_source == "local_tokenizer"
+    assert observation.completion_tokens == 5
+    assert observation.reasoning_text == "think"
+    assert observation.text == "think harder"
 
 
 def test_usage_is_requested_and_the_sampling_constants_are_pinned(server):
