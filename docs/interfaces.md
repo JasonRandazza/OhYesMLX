@@ -131,11 +131,50 @@ class CellResult:
     runtime_version: str | None
     disk_bytes: int | None
 
-def run_cells(cells: list[Cell], workload: dict, *,
+def run_cells(cells: list[Cell], workloads: list[Workload], *,
               warmup: int = 3, measured: int = 5,
               max_tokens: int = 256, cooldown_s: float = 30.0,
               results_dir: str) -> list[CellResult]: ...
 ```
+
+### Workloads — the three shapes, pinned
+
+```python
+@dataclass(frozen=True)
+class Workload:
+    id: str                  # "chat" | "prefill" | "decode" — the column key in every report
+    messages: list[dict]
+    max_tokens: int
+```
+
+One workload measures one corner. Prefill-heavy and decode-heavy work can have **different
+winners**, so a figure from a single shape is not a ranking. v1 pins exactly three and no
+more; a richer suite is v2's.
+
+| id | prompt | max_tokens | what it exposes |
+|---|---|---|---|
+| `chat` | short | 128 | latency and per-request overhead |
+| `prefill` | long | 64 | prompt-processing throughput |
+| `decode` | short | 512 | sustained generation and memory growth |
+
+**Every cell runs every workload**, and a cell's result is per `(cell, workload)`. Figures are
+never averaged across workloads — averaging a prefill-bound number with a decode-bound one
+produces a figure describing no workload that was run. `max_tokens` moves to the workload; it
+is no longer a `run_cells` argument.
+
+### Floors and ordering — no blended score
+
+A cell is ranked only after it clears every floor, and floors are pass/fail, never weighted:
+
+1. **Coherence** — the gate in `coherence.py`. Already enforced.
+2. **Every published metric present** — already enforced by `_set_status`.
+3. **Fits** — `peak_mb` did not exceed available unified memory.
+
+Ranking then uses **one named metric**, chosen by the caller and printed in the table header.
+It is never a weighted blend of speed and memory: those weights have no objective value, and a
+single number would encode an arbitrary trade-off as though it were measured, hiding exactly
+what this project exists to show. The metric card carries every measured value behind the
+ranking, so the ordering can always be checked against the numbers that produced it.
 
 **Exactly one runtime may hold weights at any moment.** `run_cells` stops the current
 runtime and confirms its port is free before starting the next. Two resident 20 GB models
