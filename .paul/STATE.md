@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 4 of 6 (256-expert question) — answered; Phase 3 next
+Phase: 3 of 6 (the sparse grid) — 20 of 25 cells probed live; two fixes before the run
 Plan: 1 of 1 in current phase
 Status: Applying
 Last activity: 2026-09-15 — Phase 2.1 closed. Harness run against real servers for the first time; Phase 4 answered out of order because it cost no downloads.
 
 Progress:
-- Milestone: [█████░░░░░] 50%
-- Phase: [██████████] 100%
+- Milestone: [██████░░░░] 60%
+- Phase: [███████░░░] 75%
 
 ## Loop Position
 
@@ -59,6 +59,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | A grid contains both axes as its slices | Phase 3 | Rows (one format, many runtimes) are the runtime axis; columns (one runtime, many formats) are the format axis; the best cell is a recommendation. Attribute within a row or column, recommend across the whole. The two axes were never alternatives to the diagonal — they are readings of one measurement. |
 | Three workloads, never averaged | Phase 3 | chat/prefill/decode. One shape measures one corner and prefill-heavy and decode-heavy work can have different winners. A richer suite is v2's. |
 | Floors then one ordering metric, never a blended score | Phase 3 | Weighting speed against memory has no objective answer, so a single number would encode an arbitrary trade-off as though it were measured. Full metric card behind every ranking. |
+| Every runtime advertises models it cannot serve | Phase 3 | mlx-lm, oMLX and Osaurus all list a model in /v1/models and then refuse it. oMLX published a 2.15 s cold load for weights it had already failed to load. Readiness is not the port, and not the model list either. |
 | Osaurus and vMLX are two independent JANG runtimes, both kept | Phase 3 | JANG cannot be a format-axis row, but JANG-on-Osaurus vs JANG-on-vMLX is the runtime axis with format held constant. Two implementations are what make a single-variable JANG study possible at all. |
 | The 256-expert failure is runtime-specific, not format-specific | Phase 4 | oMLX 0.6.4 answers coherently from the same bytes stock mlx-lm turns into salad. The format axis is not built on a corrupting quantizer. |
 | A server's self-reported tok/s is not a measurement | Phase 4 | oMLX reports 15,286 tok/s from a generation_duration of 0.0. The harness measures; it does not relay. |
@@ -91,7 +92,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-15
 Stopped at: Phase 2.1 closed (#7). Harness driven against real servers for the first time across three runs; each exposed a defect, each fixed. Phase 4 answered: the 256-expert failure is the runtime, not the format.
-Next action: Phase 3 in five steps — (1) download Qwen3.5-4B five formats + probe loadability, (2) vMLX Runtime subclass, (3) three workloads, (4) floors/ranking/metric card, (5) run the grid. Steps 2 and 3 are in flight; 1 is downloading.
+Next action: steps 1-4 of Phase 3 are done (downloads, probe, vMLX, workloads, floors/ranking/card). Two fixes in flight before the grid run: the report/measure n=0 divergence, and Osaurus model ids + readiness. Then run the 20-cell grid.
 Resume context: **Read `.paul/HANDOFF.md` first** — it carries the three findings that redirected the project, the traps that cost time, and machine state.
 
 ---
