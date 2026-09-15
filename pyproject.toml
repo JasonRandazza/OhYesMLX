@@ -1,0 +1,17 @@
+[project]
+name = "ohyesmlx"
+version = "0.1.0"
+description = "Honest benchmarks for local LLM serving on Apple Silicon. One variable at a time."
+requires-python = ">=3.11"
+# Stdlib only. Adding a dependency requires naming, in the commit message, what it replaces.
+dependencies = []
+
+[project.scripts]
+ohyesmlx = "ohyesmlx.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
