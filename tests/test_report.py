@@ -242,6 +242,123 @@ def test_summarize_keeps_the_order_the_cells_arrived_in(rows):
     assert [row["runtime"] for row in rows] == ["mlxlm", "osaurus"]
 
 
+# --- a stream too coarse to carry a rate ----------------------------------------------------
+
+# oMLX 0.6.4 accepts "stream": true, returns correct SSE framing, and then delivers the whole
+# completion in ONE content delta. Transcribed from results/20260915T151218Z-runtime — the run
+# that published 1,532,954,517 tok/s and called the cell PASS. Each tuple is one measured
+# request: ttft_s, last_content_s, total_s. The window is last_content_s - ttft_s: not zero,
+# just float noise, which is exactly why the rate looked like a rate.
+OMLX_RUN = (
+    (5.353212750007515, 5.353212916001212, 5.353684625006281),
+    (5.182277416999568, 5.1822776250046445, 5.182759209012147),
+    (5.498635957992519, 5.498636124990298, 5.499060916990857),
+    (5.904398707993096, 5.904398792001302, 5.904995167002198),
+    (6.583833500000765, 6.583833666998544, 6.584281499992358),
+)
+
+
+def whole_response(ttft, last, total, *, prompt=34, completion=256):
+    """One request whose entire completion arrived in a single content delta."""
+    return dataclasses.replace(
+        obs(ttft=ttft, last=last, total=total, prompt=prompt, completion=completion),
+        content_event_count=1,
+    )
+
+
+def one_delta_cell():
+    return cell_result(
+        [whole_response(*observation) for observation in OMLX_RUN],
+        cell_id="oq4__omlx",
+        runtime="omlx",
+        runtime_version="oMLX 0.6.4",
+    )
+
+
+def test_a_one_delta_cell_omits_the_rates_its_stream_cannot_support():
+    row = report.summarize([one_delta_cell()])[0]
+    window = OMLX_RUN[0][1] - OMLX_RUN[0][0]
+
+    assert 0 < window < 1e-6, "the window is float noise, not a decode window"
+    assert 256 / window > 1e9, "256 tokens over that noise is the number that got published"
+    assert row["decode_tps"] is None
+    assert row["itl_s"] is None
+
+
+def test_a_one_delta_cell_keeps_aggregate_throughput_and_its_ttft_value():
+    row = report.summarize([one_delta_cell()])[0]
+
+    # Every completion token over the wall time the measured requests took: 44.9 tok/s, the
+    # only rate this stream supports, and it needs no per-delta timing to exist.
+    assert row["aggregate_tps"] == pytest.approx(5 * 256 / sum(o[2] for o in OMLX_RUN))
+    assert row["aggregate_tps"] == pytest.approx(44.9, abs=0.1)
+    # TTFT is labelled, never suppressed: 5.5 s is a real measurement of a real thing.
+    assert row["ttft_p50_s"] == pytest.approx(5.498635957992519)
+    assert row["status"] == "PASS"
+
+
+def test_a_one_delta_row_says_why_the_rates_are_gone_and_labels_its_ttft():
+    row = report.summarize([one_delta_cell()])[0]
+
+    assert row["delta_note"].startswith("n=0: decode tok/s, ITL and prefill tok/s omitted")
+    assert "fewer than 2 content deltas" in row["delta_note"]
+    assert "5 of 5 measured requests" in row["delta_note"]
+    assert "time-to-completion" in row["ttft_note"]
+    assert "not time-to-first-token" in row["ttft_note"]
+
+
+def test_the_leaderboard_prints_no_rate_for_a_one_delta_cell():
+    table = report.render_markdown(report.summarize([one_delta_cell()]), axis="runtime")
+    header = next(line for line in table.splitlines() if line.startswith("| cell |"))
+    body = next(line for line in table.splitlines() if line.startswith("| oq4__omlx |"))
+    columns = [cell.strip() for cell in header.strip("|").split("|")]
+    cells = [cell.strip() for cell in body.strip("|").split("|")]
+
+    assert cells[columns.index("decode tok/s")] == "—"
+    assert cells[columns.index("ITL s")] == "—"
+    assert cells[columns.index("aggregate tok/s")] == "44.9"
+    assert cells[columns.index("TTFT p50 s")] == "5.499"
+    assert "decode tok/s, ITL and prefill tok/s omitted" in cells[columns.index("notes")]
+    assert "time-to-completion" in cells[columns.index("notes")]
+
+
+def test_a_multi_delta_cell_is_unchanged_by_the_delta_rule():
+    """A stream that streamed keeps every number it had, and grows no note."""
+    row = report.summarize([cell_result([obs(), obs(), obs()])])[0]
+
+    assert row["decode_tps"] == pytest.approx(101 / 2.0)
+    assert row["itl_s"] == pytest.approx(2.0 / 100)
+    assert row["aggregate_tps"] == pytest.approx(3 * 101 / (3 * 3.0))
+    assert row["prefill_tps"] == pytest.approx(250 / 0.5)
+    assert row["ttft_p50_s"] == pytest.approx(0.5)
+    assert row["delta_note"] is None
+    assert row["ttft_note"] is None
+
+
+def test_two_content_deltas_are_enough_for_a_rate():
+    """The boundary: two deltas is the least a stream can carry an interval in."""
+    two = dataclasses.replace(obs(ttft=1.0, last=3.0), content_event_count=2)
+    row = report.summarize([cell_result([two])])[0]
+
+    assert row["decode_tps"] == pytest.approx(101 / 2.0)
+    assert row["itl_s"] == pytest.approx(2.0 / 100)
+    assert row["delta_note"] is None
+    assert row["ttft_note"] is None
+
+
+def test_one_whole_response_among_streamed_ones_is_omitted_and_noted():
+    """The rule is per request: the requests that streamed still carry their rate."""
+    row = report.summarize([cell_result([obs(), obs(), whole_response(*OMLX_RUN[0])])])[0]
+
+    assert row["decode_tps"] == pytest.approx(101 / 2.0)
+    assert row["delta_note"].startswith("n=2: decode tok/s, ITL and prefill tok/s omitted")
+    assert "in 1 of 3 measured requests" in row["delta_note"]
+    assert "1 of 3 measured requests" in row["ttft_note"]
+    assert row["aggregate_tps"] == pytest.approx(
+        (2 * 101 + 256) / (3.0 + 3.0 + 5.353684625006281)
+    )
+
+
 # --- disk size -----------------------------------------------------------------------------
 
 

@@ -14,6 +14,16 @@ Percentiles need samples to be percentiles. Below five, ``ttft_p90_s`` and ``ttf
 are ``None`` and the row carries an ``n=<k>`` note, because a p95 built from two values is
 not a p95.
 
+A rate needs an interval to be a rate. ``decode_tps`` and ``itl_s`` are ``None`` for a
+request whose stream delivered fewer than two content deltas, and ``delta_note`` says so:
+with one delta the first content delta *is* the whole response, so there is no inter-token
+interval and the rate is undefined rather than merely large. That same single delta makes
+the request's ``ttft_s`` a time-to-completion rather than a time-to-first-token, which
+``ttft_note`` says. The TTFT value is kept — it is a real measurement, of a different thing,
+and the row's label is what keeps a reader from comparing it against a streaming runtime's
+first-token latency. ``aggregate_tps`` is unaffected either way: it divides every completion
+token by the wall time the requests took and needs no per-delta timing at all.
+
 Every raw observation goes into ``results.jsonl``, so every number here stays recomputable
 from the file.
 """
@@ -30,6 +40,11 @@ if TYPE_CHECKING:  # measure.py is written against the same contract; report onl
 AXES = ("runtime", "format")
 
 MIN_PERCENTILE_N = 5
+
+# A rate needs an interval. A runtime that returns the entire completion in a single content
+# delta has none, and dividing by the float noise between two identical timestamps is how 256
+# tokens were published at 1.5 billion tok/s.
+MIN_CONTENT_DELTAS = 2
 
 # Each axis holds one variable and varies the other, which is the whole point of the split.
 HELD_CONSTANT = {"runtime": "format", "format": "runtime"}
@@ -93,7 +108,9 @@ def summarize(results: list[CellResult]) -> list[dict]:
     Rows keep the order the cells came in. Observations are used exactly as measure
     recorded them — this module has no warmup marker to filter on, so keeping warmups out
     of a cell's summary is measure's job. Percentiles below ``MIN_PERCENTILE_N`` samples
-    are omitted rather than guessed, and ``percentile_note`` says so.
+    are omitted rather than guessed, and ``percentile_note`` says so; a request that
+    streamed fewer than ``MIN_CONTENT_DELTAS`` content deltas carries no rate to report, and
+    ``delta_note`` and ``ttft_note`` say that instead.
     """
     return [_row(result) for result in results]
 
@@ -135,6 +152,9 @@ def _row(result: CellResult) -> dict:
             itl.append(per_request["itl_s"])
 
     n = len(ttft)
+    deltas = [_content_deltas(observation) for observation in measured]
+    single_delta = deltas.count(1)
+    too_few = sum(1 for count in deltas if count < MIN_CONTENT_DELTAS)
     return {
         "cell_id": cell.id,
         "runtime": cell.runtime,
@@ -160,14 +180,33 @@ def _row(result: CellResult) -> dict:
         "percentile_note": None
         if n >= MIN_PERCENTILE_N
         else f"n={n}: p90/p99 omitted (fewer than {MIN_PERCENTILE_N} samples)",
+        "delta_note": None
+        if not too_few
+        else f"n={len(decode)}: decode tok/s, ITL and prefill tok/s omitted (fewer than "
+        f"{MIN_CONTENT_DELTAS} content deltas in {too_few} of {len(measured)} measured "
+        "requests)",
+        "ttft_note": None
+        if not single_delta
+        else f"TTFT is time-to-completion, not time-to-first-token: {single_delta} of "
+        f"{len(measured)} measured requests arrived whole in one content delta",
     }
+
+
+def _content_deltas(observation) -> int:
+    """How many content deltas this request's stream delivered.
+
+    One delta means the first content delta was the whole response, so the two timestamps a
+    rate is built from are the same instant.
+    """
+    return observation.content_event_count or 0
 
 
 def _per_request(observation) -> dict:
     """One observation's three per-request metrics, exactly as the contract defines them.
 
-    A metric whose inputs are missing — no token count, a decode window of zero length —
-    is ``None``. It is never faked from a leftover number.
+    A metric whose inputs are missing — no token count, a decode window of zero length, a
+    stream with no inter-token interval — is ``None``. It is never faked from a leftover
+    number.
     """
     ttft = observation.ttft_s
     last = observation.last_content_s
@@ -175,12 +214,25 @@ def _per_request(observation) -> dict:
     prompt = observation.prompt_tokens
     span = last - ttft if last is not None and ttft is not None else None
     counted = tokens is not None
+    streamed = _content_deltas(observation) >= MIN_CONTENT_DELTAS
 
-    decode_tps = tokens / span if counted and span is not None and span > 0 else None
-    prefill_tps = (
-        prompt / ttft if prompt is not None and ttft is not None and ttft > 0 else None
+    decode_tps = (
+        tokens / span if counted and streamed and span is not None and span > 0 else None
     )
-    itl_s = span / max(1, tokens - 1) if counted and span is not None and span >= 0 else None
+    # prefill_tps divides the prompt by TTFT, which is only prefill time when TTFT is a
+    # first-token latency. In a one-delta stream TTFT spans the whole generation, so the
+    # same arithmetic reports a prefill rate several times slower than the runtime's real
+    # one — wrong in the believable direction, which is worse than wrong absurdly.
+    prefill_tps = (
+        prompt / ttft
+        if prompt is not None and streamed and ttft is not None and ttft > 0
+        else None
+    )
+    itl_s = (
+        span / max(1, tokens - 1)
+        if counted and streamed and span is not None and span >= 0
+        else None
+    )
     return {"decode_tps": decode_tps, "prefill_tps": prefill_tps, "itl_s": itl_s}
 
 
@@ -245,7 +297,16 @@ def _table(rows: list[dict]) -> str:
 
 def _cells(row: dict) -> list[str]:
     n, total = row.get("n_measured"), row.get("n_requests")
-    notes = [part for part in (row.get("reason"), row.get("percentile_note")) if part]
+    notes = [
+        part
+        for part in (
+            row.get("reason"),
+            row.get("percentile_note"),
+            row.get("ttft_note"),
+            row.get("delta_note"),
+        )
+        if part
+    ]
     return [
         _text(row.get("cell_id")),
         _text(row.get("runtime")),
@@ -280,6 +341,12 @@ def _footnotes() -> list[str]:
         "",
         f"p90 and p99 need at least {MIN_PERCENTILE_N} samples; below that the cell shows "
         "`—` and the row says `n=<k>` rather than inventing a percentile.",
+        "",
+        f"decode tok/s, ITL and prefill tok/s need at least {MIN_CONTENT_DELTAS} content deltas in the "
+        "stream: a runtime that returns the whole completion in one delta has no inter-token "
+        "interval, so the cell shows `—` and the row says why. A response that arrived whole "
+        "in one delta also makes that cell's TTFT a time-to-completion rather than a "
+        "time-to-first-token; the value is kept, and the row's notes label it.",
     ]
 
 

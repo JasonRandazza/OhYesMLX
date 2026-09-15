@@ -178,6 +178,27 @@ claim. A table that does not say which variable it held constant is not a result
 decode_tps  = completion_tokens / (last_content_s - ttft_s)
 prefill_tps = prompt_tokens / ttft_s
 itl_s       = (last_content_s - ttft_s) / max(1, completion_tokens - 1)
+
+# DOMAIN: all three require content_event_count >= 2.
+```
+
+All three formulas are only defined for a stream that delivered **at least two content
+deltas**. With one delta the first content delta *is* the whole response, so `ttft_s` and
+`last_content_s` are the same instant: `decode_tps` divides by float noise, `itl_s` collapses
+to zero, and `prefill_tps` divides the prompt by a span that covers the entire generation.
+Outside that domain all three are `None` and the row says why — they are never computed and
+clamped, and no epsilon is added to the window.
+
+`ttft_s` itself stays a real number in that case, but it measures **time-to-completion, not
+time-to-first-token**, and the row must label it. It is not comparable against a streaming
+runtime's first-token latency.
+
+Measured — oMLX 0.6.4 accepts `"stream": true` and returns the whole completion in one
+content delta. Before this domain was pinned the harness published 1,532,954,517 tok/s, an
+ITL of 0.0000, and a `PASS`:
+
+```
+events=1  ctok=256  ttft=5.3532  last_content=5.3532  window=1.66e-07
 ```
 
 `completion_tokens` comes from `token_source` in priority order. Two ways to be exact,
