@@ -86,6 +86,7 @@ class Handle:
     model_id: str                  # what THIS runtime calls the model
     version: str                   # runtime version, recorded as provenance
     cold_load_s: float             # spawn -> ready. Its own metric, never folded in.
+    first_request_s: float | None  # the cold visit's FIRST warmup latency. See below.
     def stop(self) -> None: ...    # must not return until the port is free
 
 RUNTIMES: dict[str, Runtime]       # keyed by name
@@ -127,6 +128,7 @@ class CellResult:
     reason: str | None
     observations: list[Observation]   # EVERY raw sample. Never truncated.
     cold_load_s: float | None
+    first_request_s: float | None
     memory: dict                   # the sample.py result dict
     runtime_version: str | None
     disk_bytes: int | None
@@ -136,6 +138,28 @@ def run_cells(cells: list[Cell], workloads: list[Workload], *,
               max_tokens: int = 256, cooldown_s: float = 30.0,
               results_dir: str) -> list[CellResult]: ...
 ```
+
+### `cold_load_s` alone cannot be compared across runtimes
+
+`cold_load_s` is spawn until `await_ready` returns. For a runtime that loads weights at
+startup that is a load time. For one that loads them **lazily on the first request** it is a
+time-to-listening, and the load is charged to request #1 instead.
+
+`first_request_s` is the latency of the **first warmup request of the cold visit** — the same
+visit that sets `cold_load_s`, and `None` on every later visit. It is already made and already
+timed; only the record discarded it.
+
+Measured — oMLX 0.6.4 reports ~2.2-3.1 s ready, then spends 3.08-3.85 s inside request #1
+against ~0.42 s for requests 2 and 3, on three different artifacts. mlx-lm, mlx-optiq and vMLX
+differ by 0.04-0.10 s between first and later requests. Ranking on `cold_load_s` alone named
+oMLX the fastest loader when it is the second slowest to a first useful token.
+
+**Any cross-runtime load comparison uses `cold_load_s + first_request_s`.** A large gap between
+`first_request_s` and the measured requests is a load the runtime deferred, and the report says
+so rather than leaving a reader to assume warm-up noise.
+
+Excluding a JIT warm-up from the measured figures is correct — it is an artifact of
+benchmarking. Excluding the weight load is not: the user pays it on every cold start.
 
 ### Workloads — the three shapes, pinned
 
