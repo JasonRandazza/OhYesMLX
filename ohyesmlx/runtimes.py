@@ -1,8 +1,9 @@
-"""Uniform lifecycle over four heterogeneous local runtimes.
+"""Uniform lifecycle over five heterogeneous local runtimes.
 
 One dataclass per runtime behind one interface, because nothing else about them is alike:
 ``mlx_lm.server`` is Python, Osaurus is a Swift app behind a launcher, oMLX is a CLI shim
-that execs an app binary, ``optiq serve`` is an MLX-optimised fork of mlx-lm. All four
+that execs an app binary, ``optiq serve`` is an MLX-optimised fork of mlx-lm, and vMLX is an
+Electron app whose CLI is one entry point into the engine that app bundles. All five
 speak OpenAI-compatible HTTP on loopback; beyond that, each names the same weights
 differently and each starts with flags the others would choke on.
 
@@ -66,6 +67,15 @@ OMLX_CATALOG_TOKEN = "{OHYESMLX_OMLX_CATALOG}"
 OMLX_CATALOG_DIRNAME = "catalog"
 OMLX_BASE_DIRNAME = "base"
 SAFE_CATALOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+# vMLX's engine source ships inside the app bundle the ``vmlx`` wrapper on PATH execs, and
+# the constant in it is the version the running server reports: server.py passes it as the
+# FastAPI app version (docs/runtimes/vmlx.md §9.4). There is no version subcommand and
+# ``vmlx --version`` exits 2, so this file is where the provenance is.
+VMLX_ENGINE_INIT = (
+    "/Applications/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine/__init__.py"
+)
+VMLX_VERSION_SED = r's/^__version__ = "\([^"]*\)".*$/\1/p'
 
 # A line that means the runtime will never answer, whatever the port says. Kept narrow
 # on purpose: this gate fails a run, so a pattern that matches ordinary startup chatter
@@ -731,9 +741,100 @@ class Optiq(Runtime):
         )
 
 
+def vmlx_served_name(artifact_dir: str) -> str:
+    """The name vMLX will expose these weights under.
+
+    Ported from its ``_normalize_model_name`` (docs/runtimes/vmlx.md §9.5): an HF cache path
+    collapses to ``org/repo``, any other path to its last two components, and a name with no
+    separator is left alone. ``name_forms`` cannot spell the first of those, so the start
+    command pins the served name to this rather than leaving readiness to a guess.
+    """
+    if os.path.sep not in artifact_dir and not artifact_dir.startswith("/"):
+        return artifact_dir
+    parts = artifact_dir.rstrip("/").split("/")
+    for part in parts:
+        if part.startswith("models--") and "--" in part[len("models--") :]:
+            organization, _, repository = part[len("models--") :].partition("--")
+            if organization and repository:
+                return f"{organization}/{repository}"
+    if len(parts) >= 2:
+        return f"{parts[-2]}/{parts[-1]}"
+    return parts[-1]
+
+
+class Vmlx(Runtime):
+    """The only runtime here that loads JANG, and the one whose real settings are 438
+    environment variables no start command mentions.
+
+    Deliberately absent from the command line: ``--api-key`` (unset means no authentication
+    at all), ``--enable-disk-cache`` and ``--use-paged-cache`` (both off by default, both
+    would make request 1 differ from requests 2+), and ``--kv-cache-quantization`` — omitting
+    it selects production auto mode while passing it *disables* loader-level TurboQuant, so
+    neither choice is neutral and this omission is the recorded one.
+    """
+
+    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+        return (
+            "vmlx",
+            "serve",
+            # Positional and first, which is the one interface difference from every other
+            # runtime here: there is no --model flag to pass.
+            artifact_dir,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self.port),
+            # /v1/models answers to this, so readiness resolves a name this run chose
+            # instead of one derived from the path. It leads model_id_candidates.
+            "--served-model-name",
+            vmlx_served_name(artifact_dir),
+            # 8 is the default, and it batches tokens before the harness can count deltas.
+            # Pinning the interval only means anything with batching on: without it the
+            # runtime forces the interval to 1 and the command would say otherwise.
+            "--stream-interval",
+            "1",
+            "--continuous-batching",
+            "--max-num-seqs",
+            "1",
+            # Both of these are decided by the artifact when left alone — JIT turns itself on
+            # for a JANG affine bundle, MTP for a bundle carrying MTP heads — and MTP re-tunes
+            # its own depth mid-request. Either would make two cells of this runtime differ by
+            # something that is not the variable being measured.
+            "--no-jit",
+            "--disable-native-mtp",
+            # A cache hit is invisible to Observation, which carries no cached_tokens, so it
+            # would publish as prefill throughput. The block disk cache also survives restarts
+            # and is trimmed synchronously inside cold load, on a 22 GB cache that is not ours.
+            "--disable-prefix-cache",
+            "--disable-block-disk-cache",
+        )
+
+    def stop_command(self) -> tuple[str, ...]:
+        # No stop subcommand exists, so SIGTERM to the spawned pid is the stop. Shutdown may
+        # take up to ~10s to flush disk caches; _shutdown already waits that out.
+        return ()
+
+    def version_command(self) -> tuple[str, ...]:
+        # `vmlx --version` is not a flag: the parser rejects it and exits 2. Read the engine's
+        # own constant out of the shipped source instead of importing it — the import pulls in
+        # the whole engine and measured 9.2s, which start() times as part of cold load, and
+        # cold load is a published metric that must not carry harness overhead.
+        return ("sed", "-n", VMLX_VERSION_SED, VMLX_ENGINE_INIT)
+
+    def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+        # vMLX strips a path to its last two components, or to org/repo for an HF cache path.
+        return _ordered((vmlx_served_name(artifact_dir), model_id), name_forms(artifact_dir))
+
+    def api_key(self) -> str | None:
+        # No --api-key means verify_api_key returns True for everyone, so measured requests
+        # need no credential. The opposite of oMLX, where an unauthenticated request 401s.
+        return None
+
+
 RUNTIMES: dict[str, Runtime] = {
     "mlxlm": MlxLm(name="mlxlm", port=8081),
     "osaurus": Osaurus(name="osaurus", port=1337),
     "omlx": Omlx(name="omlx", port=8100),
     "optiq": Optiq(name="optiq", port=8080),
+    "vmlx": Vmlx(name="vmlx", port=8000),
 }

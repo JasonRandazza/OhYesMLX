@@ -1,9 +1,10 @@
 """Checks for ohyesmlx.runtimes.
 
 No model server is started here. Every runtime is exercised through fakes for the seams
-this module reaches outside itself with -- spawn, inventory, signals, clock -- plus two
-checks that run the real `/usr/sbin/lsof` against a real listening socket, because the
-port-free rule is the one thing a fake cannot be trusted to prove.
+this module reaches outside itself with -- spawn, inventory, signals, clock -- plus checks
+that run the real binaries those rules rest on: `/usr/sbin/lsof` against a real listening
+socket, because the port-free rule is the one thing a fake cannot be trusted to prove, and
+`sed` against a module shaped like the one vMLX ships.
 
 The load-failure text below is captured verbatim from mlx-lm 0.31.3 on this host; see
 docs/research/2026-09-14-oq-portability-spike.md.
@@ -227,9 +228,12 @@ def test_runtimes_are_registered_by_name_on_the_ports_the_ticket_pins():
         "osaurus": 1337,
         "omlx": 8100,
         "optiq": 8080,
+        "vmlx": 8000,
     }
     assert all(name == runtime.name for name, runtime in RUNTIMES.items())
     assert RUNTIMES["omlx"].base_url == "http://127.0.0.1:8100/v1"
+    ports = [runtime.port for runtime in RUNTIMES.values()]
+    assert len(ports) == len(set(ports)), "two runtimes on one port is a run that cannot happen"
 
 
 def test_module_imports_nothing_outside_the_standard_library():
@@ -348,6 +352,61 @@ def test_omlx_link_name_avoids_the_slash_the_hf_id_has(artifact):
     assert link_name == "gemma-4-12B-it-qat-4bit"
 
 
+def test_vmlx_start_command_is_pinned():
+    assert RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID) == (
+        "vmlx",
+        "serve",
+        ARTIFACT,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--served-model-name",
+        HF_ID,
+        "--stream-interval",
+        "1",
+        "--continuous-batching",
+        "--max-num-seqs",
+        "1",
+        "--no-jit",
+        "--disable-native-mtp",
+        "--disable-prefix-cache",
+        "--disable-block-disk-cache",
+    )
+
+
+def test_vmlx_takes_the_model_as_a_positional_argument_not_a_flag():
+    """The one interface difference from every other runtime here
+    (docs/runtimes/vmlx.md §2.2.1)."""
+    command = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID)
+    assert command[:2] == ("vmlx", "serve")
+    assert command[2] == ARTIFACT
+    assert "--model" not in command
+
+
+def test_vmlx_pins_off_the_two_things_a_bundle_turns_on_by_itself():
+    """JIT defaults on for a JANG affine bundle and MTP for a bundle carrying MTP heads."""
+    command = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID)
+    assert "--no-jit" in command and "--enable-jit" not in command
+    assert "--disable-native-mtp" in command
+    assert "--speculative-model" not in command
+
+
+def test_vmlx_pins_the_stream_interval_the_batching_flag_would_otherwise_overrule():
+    """Without --continuous-batching the runtime forces the interval to 1 (cli.py:2892)."""
+    command = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID)
+    assert command[command.index("--stream-interval") + 1] == "1"
+    assert "--continuous-batching" in command
+    assert "--no-continuous-batching" not in command
+
+
+def test_vmlx_pins_the_caches_off_so_a_hit_cannot_publish_as_prefill():
+    command = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID)
+    assert "--disable-prefix-cache" in command
+    assert "--disable-block-disk-cache" in command
+    assert "--enable-disk-cache" not in command
+
+
 def test_no_pinned_command_carries_a_predecessor_placeholder():
     for runtime in RUNTIMES.values():
         command = " ".join(runtime.start_command(ARTIFACT, HF_ID))
@@ -378,6 +437,22 @@ def test_each_runtime_asks_for_the_name_it_actually_serves_under():
     assert RUNTIMES["optiq"].model_id_candidates(ARTIFACT, HF_ID)[0] == (
         f"{ARTIFACT}:no-think"
     )
+    assert RUNTIMES["vmlx"].model_id_candidates(ARTIFACT, HF_ID)[0] == HF_ID
+
+
+def test_vmlx_strips_a_path_to_the_name_it_actually_serves_under():
+    """The three cases of its own normaliser (docs/runtimes/vmlx.md §9.5), including the one
+    name_forms cannot spell: the flat hub layout, which is how an artifact is really cached."""
+    hub = (
+        "/Users/jrazz/.cache/huggingface/hub/"
+        "models--JANGQ-AI--Qwen3.5-27B-JANG_4S/snapshots/3f9c1a2b"
+    )
+    candidates = RUNTIMES["vmlx"].model_id_candidates(hub, "Qwen3.5-27B-JANG_4S")
+
+    assert candidates[0] == "JANGQ-AI/Qwen3.5-27B-JANG_4S"
+    assert hub in candidates
+    assert runtimes.vmlx_served_name("qwen3-4bit") == "qwen3-4bit"
+    assert runtimes.vmlx_served_name("/Users/jrazz/models/qwen3-4bit") == "models/qwen3-4bit"
 
 
 def test_every_runtimes_candidates_include_all_four_spellings():
@@ -541,6 +616,36 @@ def test_start_reports_the_servers_error_and_still_frees_the_port(rig):
     assert rig.free_after[8081] == 0
 
 
+def test_vmlx_readiness_is_gated_on_the_log_and_not_on_the_model_list(rig):
+    """The shared gate, and the reason it is shared: a load that died is fatal however
+    healthy the inventory looks. vMLX's own readiness marker is on stderr, which _spawn
+    merges into the same log, so a traceback here is read the same way as anywhere else."""
+    rig.log = "Traceback (most recent call last):\nOSError: weights missing at ...\n"
+    rig.inventory = (HF_ID,)
+
+    with pytest.raises(RuntimeStartError) as raised:
+        RUNTIMES["vmlx"].start(ARTIFACT, HF_ID)
+
+    assert "OSError: weights missing at ..." in str(raised.value)
+    assert rig.inventory_calls == 0
+
+
+def test_vmlx_starts_without_a_key_and_records_the_version_it_read(rig):
+    rig.inventory = (HF_ID,)
+    rig.results[RUNTIMES["vmlx"].version_command()] = _completed(stdout="1.6.59\n")
+
+    handle = RUNTIMES["vmlx"].start(ARTIFACT, HF_ID)
+
+    assert handle.model_id == HF_ID
+    assert handle.version == "1.6.59"
+    assert handle.port == 8000
+    assert handle.base_url == "http://127.0.0.1:8000/v1"
+    # No --api-key in the start command, so the readiness poll and the measurement both
+    # send nothing and the server accepts both.
+    assert handle.api_key is None
+    assert rig.api_keys == [None]
+
+
 # --------------------------------------------------------------------------------------
 # Stop, and the port-free rule
 # --------------------------------------------------------------------------------------
@@ -598,6 +703,25 @@ def test_stop_runs_the_runtimes_own_stop_command(rig):
     handle.stop()
 
     assert rig.ran[0] == ("osaurus", "stop")
+
+
+def test_vmlx_stop_is_a_signal_because_there_is_no_stop_subcommand(rig):
+    assert RUNTIMES["vmlx"].stop_command() == ()
+    handle = Handle(
+        pid=777,
+        port=8000,
+        base_url="http://127.0.0.1:8000/v1",
+        model_id=HF_ID,
+        version="1.6.59",
+        cold_load_s=1.0,
+        stop_command=RUNTIMES["vmlx"].stop_command(),
+    )
+    rig.alive[777] = True
+
+    handle.stop()
+
+    assert rig.ran == []
+    assert rig.signals == [(777, signal.SIGTERM)]
 
 
 def test_stop_raises_when_the_port_never_comes_free(rig):
@@ -862,6 +986,48 @@ def test_osaurus_version_prefers_the_bundle_that_is_serving():
 def test_version_absence_says_why(rig):
     rig.results[("omlx", "--version")] = _completed(returncode=2, stdout="")
     assert RUNTIMES["omlx"].version() == "unknown: exited with code 2"
+
+
+def test_vmlx_version_does_not_come_from_a_flag_that_errors(rig):
+    """`vmlx --version` exits 2 with 'unrecognized arguments', so provenance is the engine's
+    own constant read out of the source the bundle ships (docs/runtimes/vmlx.md §9.4)."""
+    command = RUNTIMES["vmlx"].version_command()
+    assert "--version" not in command
+    rig.results[command] = _completed(stdout="1.6.59\n")
+    assert RUNTIMES["vmlx"].version() == "1.6.59"
+
+
+def test_vmlx_reads_the_constant_instead_of_importing_the_engine():
+    """start() times cold load across version(), and importing the engine measured 9.2s.
+    That would have been published as vMLX's cold load, which is a harness artifact."""
+    command = RUNTIMES["vmlx"].version_command()
+    assert command[:2] == ("sed", "-n")
+    assert command[-1] == runtimes.VMLX_ENGINE_INIT
+    assert "python" not in " ".join(command)
+
+
+def test_vmlx_version_sed_reads_the_constant_and_nothing_else(tmp_path):
+    """The real sed program, against a module shaped like the one in the bundle."""
+    module = tmp_path / "__init__.py"
+    module.write_text('"""vMLX engine."""\n\n__version__ = "1.6.59"\nOTHER = "0.0.0"\n')
+
+    result = subprocess.run(
+        ("sed", "-n", runtimes.VMLX_VERSION_SED, str(module)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "1.6.59\n"
+
+
+def test_vmlx_version_absence_says_which_way_it_was_absent(rig):
+    command = RUNTIMES["vmlx"].version_command()
+    rig.results[command] = _completed(returncode=2, stdout="")
+    assert RUNTIMES["vmlx"].version() == "unknown: exited with code 2"
+    rig.results[command] = _completed(stdout="")
+    assert RUNTIMES["vmlx"].version() == "unknown: empty version output"
 
 
 def test_omlx_polls_with_its_own_key(rig):
