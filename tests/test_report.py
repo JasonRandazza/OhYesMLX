@@ -61,6 +61,8 @@ class FakeCellResult:
     # Defaulted here only so the many single-workload fixtures below stay readable.
     workload_id: str = "chat"
     warmup_observations: list = dataclasses.field(default_factory=list)
+    # The cold visit's first warmup latency: the load a lazy loader deferred past readiness.
+    first_request_s: float | None = None
 
 
 def obs(
@@ -104,6 +106,7 @@ def cell_result(
     runtime_version="mlx-lm 0.31.3",
     disk_bytes=None,
     workload_id="chat",
+    first_request_s=None,
 ):
     """A cell as measure.py will hand it over: one result per (cell, workload)."""
     return FakeCellResult(
@@ -116,6 +119,7 @@ def cell_result(
         runtime_version=runtime_version,
         disk_bytes=disk_bytes,
         workload_id=workload_id,
+        first_request_s=first_request_s,
     )
 
 
@@ -486,6 +490,86 @@ def test_one_whole_response_among_streamed_ones_is_omitted_and_noted():
     assert row["aggregate_tps"] == pytest.approx(
         (2 * 101 + 256) / (3.0 + 3.0 + 5.353684625006281)
     )
+
+
+# --- the cold visit's first request ---------------------------------------------------------
+
+# The probe the contract was written against (scripts/probe_lazy.py, three requests, no
+# warmups): oMLX 0.6.4 reports ~3.1 s ready, then spends 3.08-3.93 s inside request #1 against
+# ~0.42 s for the two after it, on three artifacts. mlx-lm, mlx-optiq and vMLX stayed within
+# 0.04-0.10 s of their own later requests.
+DEFERRED_FIRST_S = 3.93
+ORDINARY_S = 0.42
+
+
+def first_request_cell(first_request_s, *, request_seconds=ORDINARY_S, **kwargs):
+    """One cell whose cold visit's first request took *first_request_s*."""
+    return cell_result(
+        [obs(total=request_seconds) for _ in range(5)],
+        first_request_s=first_request_s,
+        **kwargs,
+    )
+
+
+def test_first_request_is_its_own_column_and_the_cold_load_is_not_summed_into_it():
+    """The contract compares on the sum; the harness publishes the two halves, not a third."""
+    row = report.summarize(
+        [cell_result([obs()], cold_load_s=3.12, first_request_s=DEFERRED_FIRST_S)]
+    )[0]
+    table = report.render_markdown([row], axis="runtime")
+    printed = leaderboard_rows(table)[0]
+
+    assert printed["cold load s"] == "3.12"
+    assert printed["first request s"] == "3.93"
+    assert "7.05" not in table, "the sum is a comparison rule, not a published column"
+    # The cold load keeps its own value: nothing was folded into it.
+    assert row["cold_load_s"] == pytest.approx(3.12)
+    assert row["first_request_s"] == pytest.approx(DEFERRED_FIRST_S)
+
+
+def test_the_deferred_load_note_fires_above_the_threshold_and_not_below():
+    """5x is the named threshold, and both sides of it are checked."""
+    above = report.summarize([first_request_cell(2.5, request_seconds=0.5)])[0]
+    below = report.summarize([first_request_cell(2.49, request_seconds=0.5)])[0]
+
+    assert report.DEFERRED_LOAD_FACTOR == 5.0
+    assert above["first_request_note"] is not None, "exactly at the threshold still fires"
+    assert below["first_request_note"] is None
+
+
+def test_a_deferred_load_is_named_as_one_in_the_row_notes():
+    """oMLX's first request is 9.4x the requests that followed: a load, not warm-up noise."""
+    row = report.summarize([first_request_cell(DEFERRED_FIRST_S)])[0]
+
+    assert "deferred past readiness" in row["first_request_note"]
+    assert "not warm-up noise" in row["first_request_note"]
+    # Both numbers, so the factor can be checked rather than trusted.
+    assert "3.93 s" in row["first_request_note"]
+    assert "0.42 s" in row["first_request_note"]
+    assert "9.4x" in row["first_request_note"]
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert "deferred past readiness" in printed["notes"]
+    card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+    assert "deferred past readiness" in card
+
+
+def test_a_first_request_in_line_with_the_measured_ones_gets_no_note():
+    """vMLX: 0.51 s first against 0.43 s after. An ordinary request, and a row that said
+    otherwise on every runtime would be crying wolf."""
+    row = report.summarize([first_request_cell(0.51, request_seconds=0.43)])[0]
+
+    assert row["first_request_s"] == pytest.approx(0.51)
+    assert row["first_request_note"] is None
+
+
+def test_a_cell_with_no_first_request_on_the_record_carries_none_and_claims_nothing():
+    row = report.summarize([cell_result([obs()], first_request_s=None)])[0]
+
+    assert row["first_request_s"] is None
+    assert row["first_request_note"] is None
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert printed["first request s"] == "—"
 
 
 # --- disk size -----------------------------------------------------------------------------
@@ -1176,6 +1260,7 @@ def test_the_row_carries_no_blended_or_normalised_figure(rows):
         "aggregate_tps",
         "prefill_tps",
         "cold_load_s",
+        "first_request_s",
         "peak_mb",
         "disk_bytes",
     }
@@ -1211,6 +1296,7 @@ def test_the_card_carries_every_metric_for_every_cell_and_workload():
             "aggregate_tps",
             "prefill_tps",
             "cold_load_s",
+            "first_request_s",
             "peak_mb",
             "disk_bytes",
         ):

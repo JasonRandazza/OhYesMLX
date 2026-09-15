@@ -88,6 +88,9 @@ class FakeHandle:
         self.model_id = model_id
         self.version = version
         self.cold_load_s = cold_load_s
+        # The seventh pinned field, filled in by the loop when the cold visit's first
+        # warmup comes back -- which is a request the loop makes, not the runtime.
+        self.first_request_s = None
         self.runtime = runtime
         self.recorder = recorder
         self.api_key = api_key
@@ -677,6 +680,87 @@ def test_the_runtime_version_is_recorded(harness):
     assert results[0].runtime_version == "0.25.3"
 
 
+# ------------------------------------------------------- the cold visit's first request
+
+# The lazy loader's cost, from the live probe the contract was written against: oMLX reports
+# ~3.1 s ready, then spends 3.08-3.93 s inside request #1 against ~0.42 s for the requests
+# after it. The request is made either way; the record used to throw its latency away.
+FIRST_REQUEST_S = 3.93
+ORDINARY_REQUEST_S = 0.42
+
+
+def first_request_responder(first_request_s=FIRST_REQUEST_S, ordinary_s=ORDINARY_REQUEST_S):
+    """Every request at *ordinary_s*, except the first one the loop ever makes."""
+
+    def responder(call):
+        return FakeObservation(total_s=first_request_s if call.index == 0 else ordinary_s)
+
+    return responder
+
+
+def test_first_request_s_is_the_cold_visits_first_warmup(harness):
+    harness.transport.responder = first_request_responder()
+    runtime = harness.add_runtime("mlxlm", cold_load_s=3.12)
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    # The first warmup of the visit that set the cold load, not the first measured request,
+    # and not a number built from either: the request's own latency, as it was measured.
+    assert results[0].cold_load_s == pytest.approx(3.12)
+    assert results[0].first_request_s == pytest.approx(FIRST_REQUEST_S)
+    assert results[0].first_request_s != pytest.approx(results[0].observations[0].total_s)
+    assert harness.transport.calls[0].visit_index == 0, "call 0 is a warmup of the cold visit"
+
+    # The second visit's first request is an ordinary one and does not overwrite the cold
+    # visit's figure -- the visit that recorded the load is the visit that carries it.
+    assert [handle.first_request_s for handle in runtime.handles] == [
+        pytest.approx(FIRST_REQUEST_S),
+        None,
+    ]
+
+
+def test_every_workload_row_carries_the_visits_first_request(harness):
+    """One load is shared by the cell's workloads, so the request that paid for it is too."""
+    harness.transport.responder = first_request_responder()
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    assert len(results) == 3
+    assert [result.first_request_s for result in results] == [pytest.approx(FIRST_REQUEST_S)] * 3
+
+
+def test_a_cell_with_no_warmups_records_none_first_request_s(harness):
+    """No visit ever reached this cell, so no request was made and none can be charged."""
+    harness.add_runtime("omlx", start_error=RuntimeError("model type not supported"))
+
+    results = harness.run([harness.cell("oq__omlx", "omlx")])
+
+    assert results[0].status == "N/A"
+    assert results[0].warmup_observations == []
+    assert results[0].first_request_s is None
+
+
+def test_a_first_request_that_never_came_back_records_none(harness):
+    """Its duration is how long it waited for the failure, not what the runtime charged for
+    the load -- and the load is the only thing this number is for."""
+    def responder(call):
+        if call.index == 0:
+            return FakeObservation(ok=False, error="TimeoutError: read timed out",
+                                   ttft_s=None, last_content_s=None, total_s=600.0)
+        return FakeObservation()
+
+    harness.transport.responder = responder
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert results[0].first_request_s is None
+    # The failed first request is still a raw observation, on the record with its duration.
+    assert results[0].warmup_observations[0].total_s == pytest.approx(600.0)
+    assert results[0].status == "PASS", "a failed warmup is not a failed cell"
+
+
 def test_the_handle_is_stopped_after_every_visit_even_when_requests_fail(harness):
     def explode(call):
         raise RuntimeError("server died")
@@ -866,6 +950,7 @@ def test_the_persisted_record_carries_raw_observations_and_the_pins(harness):
                               "artifact_dir": cells[0].artifact_dir, "label": "affine-4bit"}
     assert record["status"] == "PASS"
     assert record["cold_load_s"] == pytest.approx(7.5)
+    assert record["first_request_s"] == pytest.approx(2.6)
     assert record["runtime_version"] == "0.31.3"
 
     assert len(record["observations"]) == MEASURED
@@ -917,7 +1002,8 @@ def test_a_second_run_overwrites_rather_than_appends(harness):
 
 
 def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
-                runtime_version="mlx-lm 0.31.3", disk_bytes=123, workload_id="chat"):
+                runtime_version="mlx-lm 0.31.3", disk_bytes=123, workload_id="chat",
+                first_request_s=None):
     """A CellResult to hand straight to write_jsonl, with no run behind it."""
     return measure.CellResult(
         cell=measure.Cell(id=cell_id, runtime=runtime, artifact_dir="/models/oq4", label="oq4"),
@@ -927,6 +1013,7 @@ def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
         observations=list(observations),
         warmup_observations=[],
         cold_load_s=12.5,
+        first_request_s=first_request_s,
         memory={"peak_mb": 9150.0},
         runtime_version=runtime_version,
         disk_bytes=disk_bytes,
@@ -1004,6 +1091,7 @@ def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
             observations=[FakeObservation(**raw) for raw in record["observations"]],
             warmup_observations=[FakeObservation(**raw) for raw in record["warmup_observations"]],
             cold_load_s=record["cold_load_s"],
+            first_request_s=record["first_request_s"],
             memory=record["memory"],
             runtime_version=record["runtime_version"],
             disk_bytes=record["disk_bytes"],

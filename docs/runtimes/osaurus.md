@@ -479,6 +479,54 @@ The OpenResponses (`/responses`) event vocabulary is present in full: `response.
 
 ---
 
+### 4.4 The `model` field names a catalogue entry, and the entry is the repo name
+
+**A path never resolves.** Osaurus serves from its own catalogue, and the id it answers to is
+the model's **repository name, lowercased**. An artifact handed over as an HF-cache snapshot
+path — `~/.cache/huggingface/hub/models--JANGQ-AI--Qwen3.5-4B-JANG_4S/snapshots/4567967a…` —
+must be requested as `qwen3.5-4b-jang_4s`. The last path component is a commit hash, and none
+of the spellings a harness derives from the path (the absolute path, `parent/child`, the
+`omlx/…` form) is a name this runtime answers to.
+
+Observed 2026-09-15 (E4), one `GET /v1/models` against the running app:
+
+| id returned | HF-cache repo it names |
+|---|---|
+| `qwen3.5-4b-4bit` | `Qwen3.5-4B-4bit` |
+| `qwen3.5-4b-oq4` | `Qwen3.5-4B-oQ4` |
+| `qwen3.5-4b-oq4e` | `Qwen3.5-4B-oQ4e` |
+| `qwen3.5-4b-optiq-4bit` | `Qwen3.5-4B-OptiQ-4bit` |
+| `qwen3.5-4b-jang_4s` | `Qwen3.5-4B-JANG_4S` |
+
+Every entry is a repo name lowercased, and the repo's name survives only above `snapshots/`
+in the hub layout — which is why `ohyesmlx/runtimes.py:hub_repo_name` exists and why it leads
+`Osaurus.model_id_candidates`. Read it as the rule: **strip the path to the repo, lowercase
+it, and that is the id**, for a catalogue entry as much as for a snapshot.
+
+#### 4.4.1 Osaurus finds the Hugging Face cache by itself
+
+All five ids above appeared in the inventory **without being copied into `~/MLXModels`**
+(E4). The app imports the cache it finds on the host: `ExternalModelImportHFCache` is `1` and
+`ExternalModelCustomHFCachePath` is `""` (E2,
+`~/Library/Preferences/com.dinoki.osaurus.plist`) — empty meaning the default location,
+`~/.cache/huggingface/hub`.
+
+Two consequences for a harness. Serving an artifact here is not a matter of placing it in the
+model root, and the inventory depends on a cache this project does not own and another tool
+can refill between runs. An artifact's appearance in the list says nothing about where its
+files are.
+
+#### 4.4.2 Listed is not servable
+
+`qwen3.5-4b-4bit` was returned by `/v1/models` and then answered **`not installed or
+registered with any provider`** when it was named in a request (E4). So the inventory is not
+a readiness signal on this runtime — the same trap every runtime here has in one form or
+another. Readiness needs the model id **and** a log with no load failure in it, because a
+start that returns on the listing alone can publish a cold load for weights that were never
+in memory, which is exactly what oMLX did for a JANG artifact it had already failed to load.
+
+---
+
 ## 5. Streaming behaviour
 
 **This section could not be measured, and that is the honest headline.** The dispatch
@@ -899,6 +947,10 @@ The three things a cell must pin, none of which is expressible on the command li
 The fourth pin is state rather than configuration: **`~/.osaurus/cache/kv_v2` is holding
 8.2 GB of warm KV blocks that survive restarts.** A grid that does not clear it is measuring
 a cache, not a runtime.
+
+And one thing that is not a pin but a name: **the id a cell requests is the repo name,
+lowercased** (§4.4). A hub-cache path ends in a commit hash as far as this runtime is
+concerned, and it will never resolve.
 
 And the operational rule from §0.1: **never run `osaurus <subcommand> --help`.** For most
 subcommands that is a state-mutating command, not a documentation lookup.

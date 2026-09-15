@@ -9,7 +9,7 @@ differently and each starts with flags the others would choke on.
 
     handle = RUNTIMES["osaurus"].start(artifact_dir, "ornith-1.0-35b-jang_4m")
     ...measure...
-    handle.stop()          # does not return until the port is free
+    handle.stop()          # does not return while the port is held or the process lives
 
 **Readiness is not the port, and for no runtime here is it the model list.**
 On a load failure mlx-lm 0.31.3 binds 8081 and logs ``Starting httpd at 127.0.0.1 on port
@@ -198,6 +198,22 @@ def _signal_tree(pid: int, sig: int) -> None:
         ) from error
 
 
+def _signal_process(pid: int, sig: int) -> None:
+    """Signal one pid, and only it.
+
+    Deliberately not the process group. A pid recovered from the port belongs to a runtime's
+    own launcher, whose grouping this harness never established -- ``osaurus serve`` hands
+    the port to an app process by a mechanism of its own -- and a group signal could reach
+    something this run has no claim on.
+    """
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError as error:
+        raise RuntimeStopError(f"permission denied signalling process {pid}") from error
+
+
 def _port_is_free(port: int) -> bool:
     """Whether nothing is listening on *port*, per ``lsof``.
 
@@ -209,6 +225,30 @@ def _port_is_free(port: int) -> bool:
     if result is None:
         return False
     return not result.stdout.strip()
+
+
+def _listener_pids(port: int) -> tuple[int, ...]:
+    """The pids listening on *port* right now, per ``lsof -t``.
+
+    This is how a process a runtime's launcher handed off to is named. ``osaurus serve``
+    starts the app, prints ``listening on http://127.0.0.1:1337`` and exits, so the pid this
+    run spawned is not the one holding the weights -- and once ``osaurus stop`` has freed the
+    port there is nothing left to find it by. So it is read while the port is still held.
+
+    Reading it is only ever a claim about a process this run started: :meth:`Runtime.start`
+    refuses to spawn over a listener it did not create, so anything listening on the port
+    after that check appeared because this run spawned a runtime onto it.
+    """
+    result = _run((LSOF, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"), STOP_TIMEOUT_S)
+    if result is None:
+        # Unverifiable is "no process named", not "nothing is running": the port check every
+        # stop also makes refuses to treat an unanswerable lsof as free.
+        return ()
+    return tuple(
+        dict.fromkeys(
+            int(line) for line in result.stdout.split() if line.strip().isdigit()
+        )
+    )
 
 
 def _read_log(path: Path) -> str:
@@ -414,6 +454,27 @@ def _await_exit(pid: int, timeout_s: float) -> bool:
     return True
 
 
+def _kill_resident(pids: tuple[int, ...]) -> None:
+    """Kill what a runtime's own stop command left behind, and wait for it to go.
+
+    ``osaurus stop`` frees port 1337 and leaves the app process resident, still holding the
+    weights: a freed port satisfies the one-runtime-holds-weights rule's letter and breaks
+    its substance, and a grid run would leak about one such process per cell into the memory
+    it is trying to measure. SIGTERM is ignored by these instances, so the escalation ladder
+    that :func:`_shutdown` walks for a spawned pid would only be ten seconds of waiting for
+    the same outcome.
+    """
+    for pid in pids:
+        if not _process_alive(pid):
+            continue
+        _signal_process(pid, signal.SIGKILL)
+        if not _await_exit(pid, KILL_GRACE_S):
+            raise RuntimeStopError(
+                f"process {pid} was still listening on this runtime's port and is alive "
+                f"{KILL_GRACE_S:g}s after SIGKILL"
+            )
+
+
 def await_port_free(port: int, timeout_s: float = STOP_TIMEOUT_S) -> None:
     """Block until nothing is listening on *port*, or raise.
 
@@ -433,7 +494,15 @@ def await_port_free(port: int, timeout_s: float = STOP_TIMEOUT_S) -> None:
 
 
 def _shutdown(pid: int, port: int, stop_command: tuple[str, ...] = ()) -> None:
-    """Take a runtime down and do not return until its port is free."""
+    """Take a runtime down and do not return until its port is free and its processes gone.
+
+    The listeners are read *before* the stop command runs, because the stop command is what
+    frees the port and a process it leaves behind can no longer be named by that port
+    afterwards. The pid this run spawned is one candidate; every other pid listening on the
+    port is a process the runtime's launcher started out of this run's spawn, and is killed
+    on its own pid rather than as a group (see :func:`_signal_process`).
+    """
+    listeners = _listener_pids(port)
     if stop_command:
         _run(stop_command, STOP_TIMEOUT_S)
     if _process_alive(pid):
@@ -441,6 +510,7 @@ def _shutdown(pid: int, port: int, stop_command: tuple[str, ...] = ()) -> None:
         if not _await_exit(pid, TERM_GRACE_S):
             _signal_tree(pid, signal.SIGKILL)
             _await_exit(pid, KILL_GRACE_S)
+    _kill_resident(tuple(other for other in listeners if other != pid))
     await_port_free(port)
 
 
@@ -448,9 +518,13 @@ def _shutdown(pid: int, port: int, stop_command: tuple[str, ...] = ()) -> None:
 class Handle:
     """One running runtime.
 
-    The first six fields are the pinned interface. ``stop_command`` and ``scratch`` are
-    lifecycle state the handle needs to release its own port, and carry the same defaults
-    an interface-shaped construction would give them.
+    The pinned fields come first, and ``first_request_s`` is the last of them: the latency of
+    the cold visit's first warmup request, which is where a runtime that loads its weights
+    lazily pays for them. ``cold_load_s`` is only a time-to-listening for one of those, so a
+    cross-runtime load comparison uses the sum. The measurement loop fills it in when that
+    request lands, because the request is its to make. Everything after it is lifecycle state
+    the handle needs to release its own port and to be addressed to, and carries the same
+    defaults an interface-shaped construction would give it.
     """
 
     pid: int
@@ -459,6 +533,7 @@ class Handle:
     model_id: str
     version: str
     cold_load_s: float
+    first_request_s: float | None = None
     stop_command: tuple[str, ...] = ()
     scratch: str | None = None
     # The credential the runtime was started with. Measured requests must send it: oMLX

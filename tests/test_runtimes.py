@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import shutil
 import signal
 import socket
@@ -97,6 +98,11 @@ def _completed(returncode=0, stdout="", stderr=""):
     )
 
 
+def listener_probe(port):
+    """The lsof invocation a stop makes to name the process holding the port."""
+    return (runtimes.LSOF, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t")
+
+
 class FakeClock:
     """Monotonic time that only moves when something sleeps or spawns."""
 
@@ -136,6 +142,7 @@ class Rig:
         self.probes = {}
         self.alive = {}
         self.signals = []
+        self.killed = []
         self.commands = []
         self.ran = []
         self.results = {}
@@ -144,6 +151,7 @@ class Rig:
         self.spawn_seconds = 0.0
         self.spawn_alive = True
         self.term_kills = True
+        self.kill_works = True
         self.run_unavailable = False
         self.next_pid = 4242
         self.tmp_path = tmp_path
@@ -155,6 +163,7 @@ class Rig:
         monkeypatch.setattr(runtimes, "_port_is_free", self.port_is_free)
         monkeypatch.setattr(runtimes, "_process_alive", self.process_is_alive)
         monkeypatch.setattr(runtimes, "_signal_tree", self.signal_tree)
+        monkeypatch.setattr(runtimes, "_signal_process", self.signal_process)
         monkeypatch.setattr(runtimes, "_run", self.run)
         monkeypatch.setattr(runtimes, "_log_path", lambda name: self.log_file)
 
@@ -196,6 +205,12 @@ class Rig:
         if sig == signal.SIGKILL or self.term_kills:
             self.alive[pid] = False
 
+    def signal_process(self, pid, sig):
+        """The single-pid signal a recovered listener gets, never the process group."""
+        self.killed.append((pid, sig))
+        if self.kill_works:
+            self.alive[pid] = False
+
     def run(self, command, timeout_s):
         self.ran.append(command)
         if self.run_unavailable:
@@ -233,8 +248,8 @@ def hub_artifact(tmp_path):
 # --------------------------------------------------------------------------------------
 
 
-def test_handle_carries_the_six_pinned_fields_in_order():
-    names = [field for field in Handle.__dataclass_fields__][:6]
+def test_handle_carries_the_seven_pinned_fields_in_order():
+    names = [field for field in Handle.__dataclass_fields__][:7]
     assert names == [
         "pid",
         "port",
@@ -242,6 +257,7 @@ def test_handle_carries_the_six_pinned_fields_in_order():
         "model_id",
         "version",
         "cold_load_s",
+        "first_request_s",
     ]
     handle = Handle(
         pid=1,
@@ -252,6 +268,9 @@ def test_handle_carries_the_six_pinned_fields_in_order():
         cold_load_s=12.5,
     )
     assert handle.stop_command == () and handle.scratch is None
+    # Nothing here makes a request, so nothing here can fill this in: the cold visit's first
+    # warmup is the measurement loop's request to make and to time.
+    assert handle.first_request_s is None
 
 
 def test_runtimes_are_registered_by_name_on_the_ports_the_ticket_pins():
@@ -795,7 +814,9 @@ def test_stop_runs_the_runtimes_own_stop_command(rig):
 
     handle.stop()
 
-    assert rig.ran[0] == ("osaurus", "stop")
+    # The listeners are read first: the stop command is what frees the port, and a process it
+    # leaves behind can no longer be named by that port afterwards.
+    assert rig.ran == [listener_probe(1337), ("osaurus", "stop")]
 
 
 def test_vmlx_stop_is_a_signal_because_there_is_no_stop_subcommand(rig):
@@ -813,7 +834,7 @@ def test_vmlx_stop_is_a_signal_because_there_is_no_stop_subcommand(rig):
 
     handle.stop()
 
-    assert rig.ran == []
+    assert rig.ran == [listener_probe(8000)], "nothing to run: the signal is the stop"
     assert rig.signals == [(777, signal.SIGTERM)]
 
 
@@ -847,6 +868,96 @@ def test_stop_verifies_the_port_even_when_the_process_already_exited(rig):
     handle.stop()
 
     assert rig.signals == []
+
+
+# --- the process a stop command leaves behind ---------------------------------------------
+
+# Live 2026-09-15: `osaurus stop` frees port 1337, the app process the launcher started keeps
+# running, and a five-format probe plus two manual tests left seven of them resident for ~50
+# minutes -- each holding weights and contending for the memory a run is trying to measure.
+OSAURUS_APP_PID = 93777
+
+
+def listener_probe(port):
+    """The lsof invocation a stop makes to name the process holding the port."""
+    return (runtimes.LSOF, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t")
+
+
+def launcher_handed_off(rig, *, port=1337, app_pid=OSAURUS_APP_PID):
+    """The live shape: the launcher exits once the app answers, and the app holds the port."""
+    rig.alive[app_pid] = True
+    rig.results[listener_probe(port)] = _completed(stdout=f"{app_pid}\n")
+
+
+def osaurus_handle(**kwargs):
+    fields = {
+        "pid": 777,
+        "port": 1337,
+        "base_url": "http://127.0.0.1:1337/v1",
+        "model_id": "ornith-1.0-35b-jang_4m",
+        "version": "0.25.3",
+        "cold_load_s": 90.0,
+        "stop_command": ("osaurus", "stop"),
+    }
+    fields.update(kwargs)
+    return Handle(**fields)
+
+
+def test_stop_kills_the_process_the_launcher_left_holding_the_weights(rig):
+    """A freed port is not a stopped runtime: the launcher is gone, the app is not."""
+    handle = osaurus_handle()
+    launcher_handed_off(rig)
+
+    handle.stop()
+
+    assert rig.ran == [listener_probe(1337), ("osaurus", "stop")]
+    # One pid, killed directly -- never its process group, and never anything found by name:
+    # `osaurus mcp` is a long-running user process on this machine.
+    assert rig.killed == [(OSAURUS_APP_PID, signal.SIGKILL)]
+    assert rig.alive[OSAURUS_APP_PID] is False
+    assert rig.signals == [], "the launcher was already gone; it is not signalled again"
+
+
+def test_stop_does_not_return_while_that_process_still_lives(rig):
+    rig.kill_works = False
+    handle = osaurus_handle()
+    launcher_handed_off(rig)
+
+    with pytest.raises(RuntimeStopError) as raised:
+        handle.stop()
+
+    assert str(OSAURUS_APP_PID) in str(raised.value)
+    assert "still listening on this runtime's port" in str(raised.value)
+    assert rig.alive[OSAURUS_APP_PID] is True
+
+
+def test_a_listener_that_is_the_spawned_pid_is_not_signalled_twice(rig):
+    """mlx-lm's server *is* the pid this run spawned, so the group signal owns it already."""
+    rig.alive[777] = True
+    rig.results[listener_probe(8081)] = _completed(stdout="777\n")
+    handle = osaurus_handle(port=8081, stop_command=())
+
+    handle.stop()
+
+    assert rig.signals == [(777, signal.SIGTERM)]
+    assert rig.killed == []
+
+
+def test_listener_pids_name_the_process_holding_the_port():
+    """Against the real lsof, because this is the one thing a fake cannot be trusted to
+    prove: the pid it names is what a stop has to kill."""
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        assert os.getpid() in runtimes._listener_pids(port)
+
+    assert runtimes._listener_pids(port) == ()
+
+
+def test_listener_pids_of_an_unrunnable_lsof_is_empty_rather_than_a_guess(monkeypatch):
+    monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: None)
+    assert runtimes._listener_pids(8081) == ()
 
 
 def test_await_port_free_returns_immediately_when_nothing_listens(rig):

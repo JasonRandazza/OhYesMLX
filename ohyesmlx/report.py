@@ -10,6 +10,12 @@ The metric formulas are the ones pinned in ``docs/interfaces.md``, not re-derive
 separate fields because continuous batching wins one and loses the other, and one number
 cannot say both.
 
+``first_request_s`` is the cold visit's first warmup latency, and it stays a column of its
+own. It is where a runtime that loads its weights lazily pays for them — ``cold_load_s`` is
+only a time-to-listening for one of those — so a reader who cannot see it reads a whole load
+as warm-up noise. It is never added to ``cold_load_s`` here either: the contract says a
+cross-runtime load comparison uses the sum, not that the harness publishes it.
+
 Percentiles need samples to be percentiles. Below five, ``ttft_p90_s`` and ``ttft_p99_s``
 are ``None`` and the row carries an ``n=<k>`` note, because a p95 built from two values is
 not a p95.
@@ -59,6 +65,17 @@ MIN_PERCENTILE_N = 5
 # delta has none, and dividing by the float noise between two identical timestamps is how 256
 # tokens were published at 1.5 billion tok/s.
 MIN_CONTENT_DELTAS = 2
+
+# How far above the median measured request the cold visit's first request has to sit before
+# the row says a load was deferred into it. Measured (scripts/probe_lazy.py: three requests,
+# no warmups, same artifact): oMLX 0.6.4 spent 3.08-3.93 s in request #1 against ~0.42 s for
+# the two after it, on three artifacts -- a 7.3x-9.4x gap -- while mlx-lm, mlx-optiq and vMLX
+# stayed within 0.04-0.10 s of their own later requests, at worst 1.2x. 5x sits between those
+# two populations with room on both sides, which is what a wide margin means here: below it a
+# first request is warm-up-shaped, above it the runtime has moved a load into the request. It
+# is a note and not a metric -- the row prints both numbers, so a reader can disagree with the
+# factor without disagreeing with the finding.
+DEFERRED_LOAD_FACTOR = 5.0
 
 # Each axis holds one variable and varies the other, which is the whole point of the split.
 HELD_CONSTANT = {"runtime": "format", "format": "runtime"}
@@ -123,17 +140,20 @@ CARD_FIELDS = (
     ("aggregate_tps", 1),
     ("prefill_tps", 1),
     ("cold_load_s", 2),
+    ("first_request_s", 2),
     ("peak_mb", 1),
     ("disk_bytes", 0),
 )
 
-# The caveat a value carries once it exists: a rate's is the delta rule's, and TTFT's is the
-# channel the stream delivered it in.
+# The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
+# channel the stream delivered it in, and a cold visit's first request carries the load a
+# runtime deferred into it.
 _METRIC_CAVEAT = {
     "decode_tps": "delta_note",
     "prefill_tps": "delta_note",
     "itl_s": "delta_note",
     "ttft_p50_s": "ttft_note",
+    "first_request_s": "first_request_note",
 }
 
 # The note that explains a missing value instead: a rate's absence is the delta rule's, and a
@@ -453,6 +473,7 @@ def _row(result: CellResult) -> dict:
         "aggregate_tps": _aggregate_tps(measured),
         "prefill_tps": median(prefill),
         "cold_load_s": result.cold_load_s,
+        "first_request_s": result.first_request_s,
         "peak_mb": (result.memory or {}).get("peak_mb"),
         "disk_bytes": result.disk_bytes
         if result.disk_bytes is not None
@@ -470,9 +491,34 @@ def _row(result: CellResult) -> dict:
         if not single_delta
         else f"TTFT is time-to-completion, not time-to-first-token: {single_delta} of "
         f"{len(measured)} measured requests arrived whole in one content delta",
+        "first_request_note": _deferred_load_note(
+            result.first_request_s, [observation.total_s for observation in measured]
+        ),
     }
     row.update(_floor_verdicts(row["status"], row["reason"]))
     return row
+
+
+def _deferred_load_note(first_request_s, request_seconds) -> str | None:
+    """The note a first request far above the measured ones earns, or ``None``.
+
+    The cold visit's first request is the one that carries whatever the runtime did not do
+    before it was ready, so for a lazy loader it is a whole model load wearing a request's
+    name. Above ``DEFERRED_LOAD_FACTOR`` times the median measured request the row says so,
+    and prints both numbers: the load is the reason the user's first prompt is slow, and a
+    reader left to guess would file it as warm-up.
+    """
+    median_s = median(request_seconds)
+    if first_request_s is None or not median_s or median_s <= 0:
+        return None
+    factor = first_request_s / median_s
+    if factor < DEFERRED_LOAD_FACTOR:
+        return None
+    return (
+        f"the cold visit's first request took {first_request_s:.2f} s against a median "
+        f"measured request of {median_s:.2f} s ({factor:.1f}x): a load this runtime deferred "
+        "past readiness, not warm-up noise"
+    )
 
 
 def _floor_verdicts(status, reason) -> dict:
@@ -651,7 +697,8 @@ def _table(rows: list[dict], rank: str) -> str:
     header = (
         f"| cell | runtime | format | workload | rank by {rank} | status | n "
         "| TTFT p50 s | TTFT p90 s | TTFT p99 s "
-        "| ITL s | decode tok/s | aggregate tok/s | prefill tok/s | cold load s | peak MB "
+        "| ITL s | decode tok/s | aggregate tok/s | prefill tok/s | cold load s "
+        "| first request s | peak MB "
         "| disk bytes | runtime version | notes |"
     )
     divider = "|" + "---|" * (header.count("|") - 1)
@@ -672,6 +719,7 @@ def _cells(row: dict) -> list[str]:
                 row.get("percentile_note"),
                 row.get("ttft_note"),
                 row.get("delta_note"),
+                row.get("first_request_note"),
             )
             if part
         ]
@@ -692,6 +740,7 @@ def _cells(row: dict) -> list[str]:
         _number(row.get("aggregate_tps"), 1),
         _number(row.get("prefill_tps"), 1),
         _number(row.get("cold_load_s"), 2),
+        _number(row.get("first_request_s"), 2),
         _number(row.get("peak_mb"), 1),
         _bytes(row.get("disk_bytes")),
         _text(row.get("runtime_version")),
@@ -736,6 +785,13 @@ def _footnotes() -> list[str]:
         "",
         "peak MB is Apple's `phys_footprint` from `footprint -p <pid>`. disk bytes counts "
         "every file under the artifact directory, sidecars included.",
+        "",
+        "first request s is the cold visit's first warmup. For a runtime that loads its "
+        "weights at startup it is an ordinary warm request; for one that loads them lazily it "
+        "is where the load landed. cold load s and first request s are the two halves of what "
+        "a cold start costs — a cross-runtime load comparison uses their sum — and a first "
+        f"request more than {DEFERRED_LOAD_FACTOR:g}x the median measured request says so in "
+        "the row's notes rather than being read as warm-up noise.",
         "",
         f"p90 and p99 need at least {MIN_PERCENTILE_N} samples; below that the cell shows "
         "`—` and the row says `n=<k>` rather than inventing a percentile.",
