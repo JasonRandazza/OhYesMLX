@@ -102,3 +102,39 @@ Traps worth keeping:
 - The collateral-deletion guard compares definition snapshots and misfires under fan-out —
   concurrent workers' files register as deletions. Verify against `git`, not the warning.
 - Pin interfaces in `docs/interfaces.md` before fanning out. Shapes are the coupling.
+
+## Never infer a capability from the absence of a flag
+
+`--help` documents a command line. It does not document a runtime. Every serving runtime here
+is a GUI application that ships a CLI as one entry point among several, and its real
+configuration surface spans four places:
+
+1. the command-line flags,
+2. a settings file with keys that have no flag (`~/.omlx/settings.json`, `~/.osaurus/`),
+3. per-request fields the OpenAI-compatible endpoint honours,
+4. behaviour decided only in the shipped source.
+
+All four ship readable Python inside their app bundles. The source is the authority when it
+disagrees with the documentation.
+
+**A claim that a tool CANNOT do something needs evidence from the source or the settings, not
+the absence of a flag.** A negative claim closes off investigation; a positive one invites it,
+so the negative deserves the higher standard. If all you have is "there is no flag for it",
+write exactly that — do not promote it to "it cannot".
+
+This rule was bought at a real price. The harness published that oMLX "does not stream", on
+the true observation that `omlx serve --help` exposes no streaming-granularity flag. oMLX
+streams 15 deltas per response in its `reasoning_content` channel. One grep of its own bundle
+finds `stream_interval: int = 1  # Tokens to batch before streaming (1=every token)`. The
+reported TTFT was 5.499 s against a real 0.685 s — wrong by 8x, against the runtime, and it
+would have shipped as a published claim.
+
+Two habits that would have caught it, both cheap:
+
+- **Probe with a large enough `max_tokens`.** The original probe used 8, small enough that one
+  content delta looked like proof of non-streaming rather than a sample size of one.
+- **Read the field you already record.** `content_event_count` was in every observation from
+  the first live run onward and nothing consulted it.
+
+`docs/runtimes/<name>.md` holds the per-runtime capability reference. Read it before claiming
+a runtime cannot do something, and update it when you learn otherwise.
