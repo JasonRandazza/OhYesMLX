@@ -7,7 +7,8 @@ socket, because the port-free rule is the one thing a fake cannot be trusted to 
 `sed` against a module shaped like the one vMLX ships.
 
 The load-failure text below is captured verbatim from mlx-lm 0.31.3 on this host; see
-docs/research/2026-09-14-oq-portability-spike.md.
+docs/research/2026-09-14-oq-portability-spike.md. The oMLX text is captured the same way
+from this repo's own results/logs, which is where a probe's runtime output lands.
 """
 
 from __future__ import annotations
@@ -64,6 +65,26 @@ ValueError: Model type gemma4_unified not supported.
 MLX_LM_HEALTHY_LOG = """\
 Fetching 12 files: 100%|##########| 12/12 [00:19<00:00,  1.62s/it]
 Starting httpd at 127.0.0.1 on port 8081...
+"""
+
+# oMLX 0.6.4, from results/logs/omlx-20260915T135626-71559.log. It serves /v1/models from
+# a scan of its catalog and only then starts loading, so a start logs the load it began and
+# then either the load it finished -- or the failure, which is what this JANG artifact got
+# while a 2.15 s cold load was being recorded for it.
+OMLX_HASH = "4567967a46cd9e9bf26d3bb491ddd422ad607775"
+
+OMLX_STARTING_LOG = """\
+2026-09-15 13:56:28,838 - omlx.server - INFO - Application startup complete.
+2026-09-15 13:56:28,967 - omlx.engine_pool - INFO - Loading model: {model_id}
+"""
+
+OMLX_FAILED_LOAD_LOG = """\
+2026-09-15 13:56:29,130 - omlx.engine_pool - WARNING - VLM loading failed for {model_id}, falling back to LLM: Received 1221 parameters not in model:
+model.language_model.embed_tokens.biases,
+model.language_model.embed_tokens.scales,
+model.language_model.embed_tokens.weight,
+Traceback (most recent call last):
+RuntimeError: VLM load failed: Received 1221 parameters not in model: 
 """
 
 ARTIFACT = "/Users/jrazz/.cache/huggingface/hub/mlx-community/gemma-4-12B-it-qat-OptiQ-4bit"
@@ -194,6 +215,17 @@ def artifact(tmp_path):
     model.mkdir(parents=True)
     (model / "config.json").write_text("{}")
     return str(model)
+
+
+@pytest.fixture
+def hub_artifact(tmp_path):
+    """A real artifact in hub layout, which is how a downloaded model is actually stored."""
+    snapshot = (
+        tmp_path / "hub" / "models--JANGQ-AI--Qwen3.5-4B-JANG_4S" / "snapshots" / OMLX_HASH
+    )
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}")
+    return str(snapshot)
 
 
 # --------------------------------------------------------------------------------------
@@ -440,6 +472,28 @@ def test_each_runtime_asks_for_the_name_it_actually_serves_under():
     assert RUNTIMES["vmlx"].model_id_candidates(ARTIFACT, HF_ID)[0] == HF_ID
 
 
+def test_osaurus_asks_for_the_name_the_hub_hides_the_repo_behind(hub_artifact):
+    """Osaurus names a model after its repo, lowercased, and every spelling name_forms
+    derives from a cache path is the commit hash -- which Osaurus never answers to. Its
+    live inventory lists `qwen3.5-4b-jang_4s`, not `4567967a...`."""
+    candidates = RUNTIMES["osaurus"].model_id_candidates(hub_artifact, "osaurus/stock4bit")
+
+    assert candidates[0] == "qwen3.5-4b-jang_4s"
+    assert runtimes.hub_repo_name(hub_artifact) == "qwen3.5-4b-jang_4s"
+    # Every candidate the list had before, one place further back and none dropped.
+    assert candidates[1:] == ("osaurus/stock4bit", *runtimes.name_forms(hub_artifact))
+
+
+def test_a_path_that_is_not_a_hub_cache_is_unchanged(artifact):
+    """A plain directory still leads with the model id the caller gave it."""
+    assert runtimes.hub_repo_name(artifact) is None
+    assert runtimes.hub_repo_name(ARTIFACT) is None
+    assert RUNTIMES["osaurus"].model_id_candidates(artifact, HF_ID) == (
+        HF_ID,
+        *runtimes.name_forms(artifact),
+    )
+
+
 def test_vmlx_strips_a_path_to_the_name_it_actually_serves_under():
     """The three cases of its own normaliser (docs/runtimes/vmlx.md §9.5), including the one
     name_forms cannot spell: the flat hub layout, which is how an artifact is really cached."""
@@ -614,6 +668,45 @@ def test_start_reports_the_servers_error_and_still_frees_the_port(rig):
 
     assert rig.signals and rig.signals[0][1] == signal.SIGTERM
     assert rig.free_after[8081] == 0
+
+
+def test_a_model_that_failed_to_load_as_the_list_answered_is_not_a_started_runtime(
+    rig, hub_artifact
+):
+    """Live: oMLX served /v1/models from a scan of its catalog, listed this JANG artifact,
+    and the VLM path had already failed on it when the list answered
+    (results/logs/omlx-20260915T135626-71559.log). The harness returned a handle and
+    published cold_load_s = 2.15 for weights that were never in memory."""
+    rig.log = OMLX_STARTING_LOG.format(model_id=OMLX_HASH)
+
+    def listed_as_the_load_died():
+        rig.log_file.write_text(OMLX_FAILED_LOAD_LOG.format(model_id=OMLX_HASH))
+        return (OMLX_HASH,)
+
+    rig.inventory = listed_as_the_load_died
+
+    with pytest.raises(RuntimeStartError) as raised:
+        RUNTIMES["omlx"].start(hub_artifact, "osaurus/stock4bit")
+
+    assert "RuntimeError: VLM load failed" in str(raised.value)
+    assert str(rig.log_file) in str(raised.value)
+    assert rig.clock.t == pytest.approx(1000.0), "the log failed it, not the 900 s budget"
+    assert rig.inventory_calls == 1
+    assert rig.signals == [(rig.next_pid, signal.SIGTERM)]
+
+
+def test_a_failure_is_still_visible_behind_the_parameter_dump_that_explains_it(tmp_path):
+    """The dump is one parameter name per line and oMLX prints it three times. Live, a
+    4B dump put the fatal line 1.4 KB inside a 64 KB tail -- and past it by the next read
+    (results/logs/omlx-20260915T135626-71559.log)."""
+    log = tmp_path / "omlx.log"
+    dump = "".join(f"model.language_model.layers.{index}.weight,\n" for index in range(8000))
+    log.write_text(OMLX_FAILED_LOAD_LOG.format(model_id=OMLX_HASH) + dump)
+
+    assert log.stat().st_size > 256 * 1024, "the dump has to outgrow a 64 KB tail"
+    assert log_load_error(runtimes._read_log(log)) == (
+        "RuntimeError: VLM load failed: Received 1221 parameters not in model:"
+    )
 
 
 def test_vmlx_readiness_is_gated_on_the_log_and_not_on_the_model_list(rig):

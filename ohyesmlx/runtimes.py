@@ -11,14 +11,18 @@ differently and each starts with flags the others would choke on.
     ...measure...
     handle.stop()          # does not return until the port is free
 
-**Readiness is not the port, and for ``mlx_lm.server`` it is not the model list either.**
+**Readiness is not the port, and for no runtime here is it the model list.**
 On a load failure mlx-lm 0.31.3 binds 8081 and logs ``Starting httpd at 127.0.0.1 on port
 8081...`` after the load thread has already raised, so a client POST connects and then
 hangs forever with zero bytes received. Its ``/v1/models`` handler cannot be believed
 either: it lists ``str(Path(--model).resolve())`` straight off disk, so the inventory
-returns the right id even when the model was never loaded. Both signals are therefore
-required -- the model id *and* a log with no load failure in it
-(docs/research/2026-09-14-oq-portability-spike.md).
+returns the right id even when the model was never loaded. oMLX lists every directory it
+finds in its catalog the same way, and Osaurus lists a model it then answers ``not
+installed or registered with any provider`` for. Both signals are therefore required --
+the model id *and* a log with no load failure in it -- and the log is read again once the
+id appears, because a runtime writes the failure while it is answering the model list
+(docs/research/2026-09-14-oq-portability-spike.md,
+docs/research/2026-09-15-grid-loadability-probe.md).
 
 The flag tuples below are ported verbatim from LMRE's ``runtime_adapters``. They are not
 defaults, they are pins, and each one costs something when it is left to the runtime.
@@ -56,7 +60,14 @@ STOP_TIMEOUT_S = 30.0
 STOP_POLL_S = 0.25
 TERM_GRACE_S = 10.0
 KILL_GRACE_S = 5.0
-LOG_TAIL_BYTES = 64 * 1024
+# How much of a runtime's log a readiness poll reads. 64 KB was not enough to hold a
+# failure: a shape mismatch prints one parameter name per line, so oMLX's fatal line sat
+# 1.4 KB inside the 64 KB window on the read that mattered and had scrolled out of it by
+# the next one -- the same log reaches 266 KB with its parameter dump printed three times
+# (results/logs/omlx-20260915T135626-71559.log: line 2530 at byte 136,891 of 201,042).
+# ponytail: a dump longer than this hides the fatal line again; the upgrade path is a
+# forward scan that stops at the first failure line instead of reading a window.
+LOG_TAIL_BYTES = 1024 * 1024
 
 LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
@@ -232,6 +243,21 @@ def log_load_error(text: str) -> str | None:
     return found
 
 
+def _raise_on_log_error(name: str, log_path: Path) -> None:
+    """Raise when the runtime's log reports a load failure, and only then.
+
+    Called before the model list is polled and again after it has answered with one of our
+    ids. The second read is what catches a runtime that lists a model it cannot serve, and
+    it has to happen second: the failure is written *while* the model list is being
+    answered -- live, oMLX answered ``GET /v1/models`` with a JANG artifact at 13:56:29,1xx
+    and the VLM path had failed on it at 13:56:29,130
+    (results/logs/omlx-20260915T135626-71559.log).
+    """
+    error = log_load_error(_read_log(log_path))
+    if error is not None:
+        raise RuntimeStartError(f"{name} failed to load: {error} (log: {log_path})")
+
+
 def _inventory(base_url: str, *, api_key: str | None = None) -> tuple[str, ...]:
     """The model ids a runtime is currently offering."""
     request = urllib.request.Request(f"{base_url}/models")
@@ -247,6 +273,24 @@ def _inventory(base_url: str, *, api_key: str | None = None) -> tuple[str, ...]:
         for entry in data
         if isinstance(entry, dict) and isinstance(entry.get("id"), str)
     )
+
+
+def hub_repo_name(artifact_dir: str) -> str | None:
+    """The repo an HF-cache artifact belongs to, lowercased, or ``None`` if it is not one.
+
+    The hub lays a repo out as ``models--<org>--<name>/snapshots/<commit>``, so the
+    directory a cell is handed is the commit hash and ``name_forms`` can derive nothing
+    but hashes from it. The repo's name survives only in the ``models--<org>--<name>``
+    directory above ``snapshots/``, and Osaurus serves every model under it, lowercased:
+    the live inventory reads ``qwen3.5-4b-oq4``, ``ornith-1.0-35b-jang_4m``, and so on.
+    """
+    for part in Path(os.path.abspath(artifact_dir)).parts:
+        if not part.startswith("models--"):
+            continue
+        organization, _, repository = part[len("models--") :].partition("--")
+        if organization and repository:
+            return repository.lower()
+    return None
 
 
 def name_forms(artifact_dir: str) -> tuple[str, ...]:
@@ -491,18 +535,17 @@ class Runtime:
         """Hold until the runtime answers for its model, or raise.
 
         The log is read before the inventory on every pass because the inventory can lie
-        -- mlx-lm lists the ``--model`` path whether or not it ever loaded -- while a
-        traceback cannot. Readiness needs both.
+        -- mlx-lm lists the ``--model`` path whether or not it ever loaded, oMLX lists its
+        whole catalog, Osaurus lists models it refuses -- while a traceback cannot. The
+        log is then read *again* once the id is there: a load that fails writes its cause
+        while the model list is being answered, so a handle returned on the listing alone
+        is how oMLX published a cold load for a model it had already failed to load.
         """
         candidates = self.model_id_candidates(artifact_dir, model_id)
         deadline = _now() + timeout_s
         complaint = "no inventory yet"
         while True:
-            error = log_load_error(_read_log(log_path))
-            if error is not None:
-                raise RuntimeStartError(
-                    f"{self.name} failed to load: {error} (log: {log_path})"
-                )
+            _raise_on_log_error(self.name, log_path)
             if not _process_alive(pid):
                 raise RuntimeStartError(
                     f"{self.name} exited before it served {candidates[0]!r} "
@@ -523,6 +566,7 @@ class Runtime:
             else:
                 resolved = resolve_model_id(candidates, inventory)
                 if resolved is not None:
+                    _raise_on_log_error(self.name, log_path)
                     return resolved
                 complaint = f"inventory has {len(inventory)} models, none of them ours"
             if _now() >= deadline:
@@ -627,8 +671,12 @@ class Osaurus(Runtime):
 
     def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
         # Osaurus serves from its own library, so the name a user typed need not look
-        # anything like the artifact's path.
-        return _ordered((model_id,), name_forms(artifact_dir))
+        # anything like the artifact's path. It names each model after the repo,
+        # lowercased, and for an artifact in hub layout that name is the only candidate
+        # that is not a commit hash -- so it leads, and every other candidate follows.
+        return _ordered(
+            (hub_repo_name(artifact_dir),), (model_id,), name_forms(artifact_dir)
+        )
 
     def check_host_state(self) -> None:
         """Refuse to start when the host drifted from the recorded baseline.
