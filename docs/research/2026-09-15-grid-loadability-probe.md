@@ -88,6 +88,13 @@ cannot read OptiQ", which is false.
 
 ## Cold load, four formats, runtime held constant
 
+> **CORRECTED — this section's ranking is wrong.** See
+> `2026-09-15-cold-load-is-not-one-quantity.md`. oMLX loads its weights lazily on the first
+> request, so its `cold_load_s` is a time-to-listening, not a load time, and it hides
+> 3.08-3.85 s in request #1. True time-to-first-token puts mlx-lm first at 3.39 s and oMLX
+> third at 6.63 s — the runtime named fastest below is second slowest. The figures in the
+> table are accurate as `cold_load_s`; the comparison drawn from them is not.
+
 The first genuinely comparable figure this project has produced. Each runtime loaded the same
 four artifacts; the runtime is the only thing that varies within a column.
 
