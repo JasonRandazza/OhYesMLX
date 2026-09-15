@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from ohyesmlx import cli, report
+from ohyesmlx import cli, measure, report
 
 # --- stand-ins for docs/interfaces.md (measure.py, issue #5) -------------------------------
 
@@ -35,6 +35,8 @@ class FakeObservation:
     content_event_count: int
     text: str
     token_source: str
+    # The channel a response that never left the reasoning channel answers in.
+    reasoning_text: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -246,6 +248,127 @@ def test_peak_memory_comes_from_the_sampler_dict():
 
 def test_summarize_keeps_the_order_the_cells_arrived_in(rows):
     assert [row["runtime"] for row in rows] == ["mlxlm", "osaurus"]
+
+
+# --- what came back -------------------------------------------------------------------------
+
+# The transport reports a stream that closed with no content delta as its empty-content
+# failure, and stock mlx-lm and vMLX answer entirely in the reasoning channel on a thinking
+# model. Those responses are samples. measure owns that definition and report asks for it;
+# counting `observation.ok` here instead is how one cell was published as `n = 0/5` beside the
+# five samples that had answered.
+
+
+def reasoning_only():
+    """One response with nothing in the content channel: it all arrived as reasoning."""
+    return dataclasses.replace(
+        obs(
+            ok=False,
+            error=measure.EMPTY_CONTENT_ERROR,
+            ttft=None,
+            last=None,
+            prompt=None,
+            completion=None,
+            token_source="none",
+        ),
+        text="",
+        reasoning_text="an answer, spelled in the reasoning channel",
+    )
+
+
+def streamed_ok():
+    """One ordinary content-streaming response: a real decode window and a token count."""
+    return obs(ttft=0.5, last=1.5)
+
+
+def test_a_reasoning_only_response_counts_as_a_sample():
+    """Every request answered; only the channel it answered in was different."""
+    result = cell_result(
+        [reasoning_only() for _ in range(5)],
+        status="FAIL",
+        reason="no content-delta timing, so decode tok/s is undefined",
+    )
+    row = report.summarize([result])[0]
+
+    assert row["n_measured"] == 5
+    assert row["n_requests"] == 5
+    assert leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]["n"] == "5"
+    assert "| n measured | 5 |" in card_blocks(report.render_cards([row]))[
+        ("chat", "oq4__mlxlm")
+    ]
+    # And the row no longer says nothing was measured while five samples sit beside it.
+    assert "nothing was measured" not in report.render_markdown([row], axis="runtime")
+
+
+def test_a_genuine_transport_failure_is_not_a_sample():
+    """The other side of the definition: a request that never reached the model is no sample,
+    and the row prints what came back beside what was attempted."""
+    timed_out = obs(
+        ok=False,
+        error="TimeoutError: read timed out",
+        ttft=None,
+        last=None,
+        prompt=None,
+        completion=None,
+        token_source="none",
+    )
+    row = report.summarize([cell_result([streamed_ok(), streamed_ok(), timed_out, timed_out])])[0]
+
+    assert row["n_measured"] == 2
+    assert row["n_requests"] == 4
+    assert leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]["n"] == "2/4"
+
+
+def test_a_reasoning_only_sample_leaves_every_rate_where_it_was():
+    """It carries no content window, so it contributes no rate: the rates stay the rates of
+    the requests that streamed."""
+    streamed = [streamed_ok() for _ in range(3)]
+    mixed = report.summarize([cell_result(streamed + [reasoning_only()] * 2)])[0]
+    alone = report.summarize([cell_result(streamed)])[0]
+
+    for metric in ("decode_tps", "itl_s", "prefill_tps", "aggregate_tps", "ttft_p50_s"):
+        assert mixed[metric] == pytest.approx(alone[metric])
+    assert (mixed["n_measured"], mixed["n_requests"]) == (5, 5)
+    assert (alone["n_measured"], alone["n_requests"]) == (3, 3)
+
+    reasoning_only_cell = report.summarize([cell_result([reasoning_only()] * 5)])[0]
+    assert reasoning_only_cell["decode_tps"] is None
+    assert reasoning_only_cell["itl_s"] is None
+    assert reasoning_only_cell["prefill_tps"] is None
+
+
+def test_an_ordinary_content_streaming_cell_counts_and_publishes_what_it_always_did():
+    """Where every response came back ok the two definitions agree, so nothing on this row
+    moved: n is every request and every rate is present."""
+    observations = [streamed_ok() for _ in range(5)]
+    row = report.summarize([cell_result(observations)])[0]
+
+    # The old spelling, side by side: where every request came back ok, it agrees.
+    assert row["n_measured"] == sum(o.ok for o in observations) == len(observations) == 5
+    assert row["n_requests"] == 5
+    assert row["decode_tps"] == pytest.approx(101 / (1.5 - 0.5))
+    assert row["itl_s"] == pytest.approx((1.5 - 0.5) / (101 - 1))
+    assert row["prefill_tps"] == pytest.approx(250 / 0.5)
+    assert row["aggregate_tps"] == pytest.approx(5 * 101 / (5 * 3.0))
+    assert row["delta_note"] is None
+    assert row["ttft_note"] is None
+    assert leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]["n"] == "5"
+
+
+def test_report_asks_measure_what_came_back_rather_than_respelling_it(monkeypatch):
+    """One definition, in one module. A second copy here is how the two drifted apart."""
+    asked = []
+
+    def spy(observation):
+        asked.append(observation)
+        return observation.ok
+
+    monkeypatch.setattr(measure, "came_back", spy)
+    observations = [streamed_ok(), reasoning_only()]
+    row = report.summarize([cell_result(observations)])[0]
+
+    assert asked == observations, "report counted samples without asking measure"
+    assert row["n_measured"] == 1, "report ignored the answer it was given"
 
 
 # --- a stream too coarse to carry a rate ----------------------------------------------------

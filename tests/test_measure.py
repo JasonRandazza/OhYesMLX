@@ -1274,6 +1274,38 @@ def test_reasoning_that_is_language_is_no_longer_still_thinking(harness):
     assert measure.STILL_THINKING not in results[0].reason
 
 
+def test_a_reasoning_only_cell_publishes_the_sample_count_measure_recorded(harness):
+    """The divergence, on the record: measure wrote ``measured_count: 5`` while the leaderboard
+    printed ``n = 0/5`` for the same cell, because report counted samples with ``ok`` and
+    measure counted them with ``came_back``. There is one definition now, and it is measure's."""
+    harness.transport.responder = measured_responses(*[reasoning_only(COHERENT)] * MEASURED)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    record, = harness.lines()
+    assert record["measured_count"] == MEASURED
+
+    row = report.summarize(results)[0]
+    assert row["n_measured"] == MEASURED
+    assert row["n_requests"] == MEASURED
+
+
+def test_the_shared_predicate_is_ok_or_the_empty_content_stream_and_nothing_else():
+    """It is public because report counts a cell's samples with it, and its one exception is a
+    response that answered in the reasoning channel — every other failure is the transport's."""
+    assert measure.came_back(FakeObservation()) is True
+    assert measure.came_back(reasoning_only(COHERENT)) is True
+    assert measure.came_back(reasoning_only(COHERENT, ok=True, error=None)) is True
+    assert measure.came_back(
+        FakeObservation(ok=False, error="TimeoutError: read timed out")
+    ) is False
+    assert measure.came_back(FakeObservation(ok=False, error="HTTPError: 500")) is False
+    assert measure.came_back(
+        FakeObservation(ok=False, error="chat stream content timing is unavailable")
+    ) is False
+
+
 def test_incoherent_reasoning_counts_in_the_same_majority_as_content(harness):
     """The denominator stays the responses that were judged, not the requests that were
     made: a reasoning-only salad is one judged response among five, content or not."""

@@ -548,7 +548,7 @@ def _set_status(result: CellResult) -> None:
         return
 
     failures = [
-        observation for observation in result.observations if not _came_back(observation)
+        observation for observation in result.observations if not came_back(observation)
     ]
     if failures:
         result.status = "FAIL"
@@ -596,13 +596,18 @@ def _judged_text(observation) -> str:
     return observation.reasoning_text
 
 
-def _came_back(observation) -> bool:
+def came_back(observation) -> bool:
     """The request reached the model, and the model answered in whichever channel.
 
     The transport reports a stream with no content delta as its empty-content failure. That
     is not a request that failed: it is a model that spent its budget in the reasoning
     channel, and what it wrote there is judged like any other output. Every other failure is
     the transport's, and :func:`_set_status` reports it as one.
+
+    This is the definition ``report.py`` counts a cell's samples with. It is public for that
+    reason and for that reason only: report respelling the condition as ``observation.ok`` is
+    how a cell whose five requests all answered in the reasoning channel was published as
+    ``n = 0/5`` beside the five samples that answered.
     """
     return observation.ok or observation.error == EMPTY_CONTENT_ERROR
 
@@ -614,7 +619,7 @@ def _still_thinking(observation) -> bool:
     answered in the reasoning channel is not an empty one: token salad there is token salad.
     Only a response with nothing in either channel is still thinking.
     """
-    return _came_back(observation) and not _judged_text(observation).strip()
+    return came_back(observation) and not _judged_text(observation).strip()
 
 
 def _incoherent(observations) -> str | None:
@@ -636,7 +641,7 @@ def _incoherent(observations) -> str | None:
     failures = 0
     first: str | None = None
     for observation in observations:
-        if not _came_back(observation):
+        if not came_back(observation):
             continue
         text = _judged_text(observation)
         if not text.strip():

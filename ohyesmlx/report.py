@@ -413,7 +413,10 @@ def _rank_error(metric) -> str:
 def _row(result: CellResult) -> dict:
     cell = result.cell
     observations = list(result.observations)
-    measured = [o for o in observations if o.ok]
+    # Who came back is measure's question, and its answer is asked for rather than respelled:
+    # ``observation.ok`` is a second definition of it, and the two drifted apart — a cell whose
+    # five requests all answered in the reasoning channel was published as ``n = 0/5``.
+    measured = [o for o in observations if measure.came_back(o)]
 
     ttft = [o.ttft_s for o in measured if o.ttft_s is not None]
     decode, prefill, itl = [], [], []
