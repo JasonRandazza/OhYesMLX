@@ -1,4 +1,14 @@
-# Phase 5 — the joined grid, and why its runtime axis cannot be published yet
+# Phase 5 — the joined grid, and the runtime axis it made publishable
+
+> **Status, 2026-09-16 06:45Z.** Everything below the line "The finding" was written against
+> the first grid, measured with a fixed warmup of three requests. That grid's runtime axis was
+> not publishable, and the reason it was not is recorded here in full because it is the finding
+> that produced plan 05-02. The grid was then re-measured under a per-runtime warmup rule and
+> **the axis is now publishable**; the new numbers and what changed are in "The re-measured
+> grid" at the end. Nothing in the original sections has been edited to look better in
+> hindsight.
+
+# The original write-up, against the fixed-warmup grid
 
 Date: 2026-09-16. Machine: MacBook Pro, M2 Max, 64 GiB unified memory, macOS 26.6.2.
 Run directories (gitignored): `results/grid/20260916T004734Z-format` (mlx-lm),
@@ -224,3 +234,147 @@ second reading of the same measurement, offered as corroboration.
   cannot be disabled from any command line — and Osaurus rises in the prefill rows in a way
   it does not in chat or decode. Phase 3 isolated that as an 8.3× cache effect on prefill.
   Nothing in this phase re-examined it.
+
+---
+
+# The re-measured grid, 2026-09-16
+
+Everything above this line stands as written. This section is what changed when the grid was
+re-measured under plan 05-02's per-runtime warmup rule, and it is the version that should be
+read as the result.
+
+Run directories: `results/grid/20260916T034308Z-format` (mlx-lm), `…T061309Z` (oMLX),
+`…T044750Z` (mlx-optiq), `…T051603Z` (vMLX), `…T054434Z` (Osaurus). Pins:
+`warmup {mode: plateau, window: 5, floor: 10, cap: 20, plateau_pct: 3.0}`, `measured 9`,
+`temperature 0.0`, `seed 0`, `cooldown_s 30.0`. **60 of 60 PASS, 59 of 60 settled**, one cell
+reaching the cap.
+
+## What the warmup rule did to the drift
+
+The whole phase turned on one number. mlx-lm's measured windows were still climbing under a
+fixed budget of three requests, which made the cross-runtime ordering a ranking of warmup
+speed:
+
+| column | drift median, fixed warmup=3 | drift median, plateau rule | rows over 5% |
+|---|---|---|---|
+| mlx-lm | **+17.0%** | **−2.2%** | 11 → 2 of 12 |
+| oMLX | +2.6% | +0.5% | 1 → 1 |
+| mlx-optiq | −0.0% | +0.0% | 2 → 0 |
+| vMLX | +0.5% | −0.7% | 0 → 1 |
+| Osaurus | +1.0% | −0.6% | 4 → 0 |
+
+Every column's drift is now inside ±2.2% and **the signs are mixed**. Under the fixed budget
+every large value was positive, which is the signature of a window closing before the cell
+finished warming. Mixed signs at this magnitude are what noise looks like.
+
+The cost: warmup went from 3 requests per window to 10–32, chosen per cell by the rule rather
+than pinned, and the grid went from 67 minutes to 2 h 28 m. `warmup_count` publishes what each
+cell actually needed, so the budget is now a measurement instead of a constant in a source
+file.
+
+## Is the ordering stable now? The same test that failed before
+
+The original section rejected the runtime axis because re-ranking each row on its late-window
+median moved mlx-lm from last in every decode row to first in one — a 16.2% swing on
+`stock4bit`. Applying that identical test to the re-measured grid:
+
+**10 of 15 runtime-axis orderings are identical under the late window.** The five that differ
+are all adjacent swaps between cells that are not meaningfully apart:
+
+| workload | format | the swapped pair | gap |
+|---|---|---|---|
+| chat | oq4 | mlx-lm 75.8 vs Osaurus 74.3 | 2.0% |
+| prefill | oq4 | vMLX 76.7 vs mlx-lm 76.4 | 0.4% |
+| prefill | optiq | mlx-optiq 83.5 vs Osaurus 83.0 | 0.6% |
+| decode | stock4bit | mlx-optiq 77.8 vs oMLX 75.9 | 2.5% |
+| decode | oq4e | mlx-optiq 69.5 vs oMLX 69.3 | 0.3% |
+
+Compare the flip that made the first grid unpublishable: **16.2%**, in one direction, on the
+column that was systematically under-warmed. What remains is pairs separated by less than the
+measurement resolves, changing places when the window moves. That is a **tie**, and it is a
+different fact from an ordering.
+
+**So the runtime axis is publishable, with one rule attached: adjacent cells within a few
+percent are ties, not a ranking.** The grid prints the numbers and the order; a reader
+treating a 0.3% gap as "mlx-optiq beats oMLX" is reading precision the measurement does not
+have. Making the renderer mark unresolvable ties explicitly is the obvious next improvement
+and is not built yet.
+
+## The runtime axis
+
+Decode, 512 tokens, the sustained shape:
+
+- `stock4bit`: mlx-optiq 77.8 > oMLX 75.9 > vMLX 75.6 > mlx-lm 70.1
+- `oq4`: mlx-optiq 76.2 > oMLX 75.5 > vMLX 73.3 > Osaurus 68.7 > mlx-lm 67.0
+- `oq4e`: mlx-optiq 69.5 > oMLX 69.3 > vMLX 66.7 > Osaurus 64.7 > mlx-lm 64.1
+- `optiq`: oMLX 67.3 > mlx-optiq 66.6 > Osaurus 63.5 > mlx-lm 59.6
+- `jang4s`: vMLX 77.3 > Osaurus 69.5
+
+Chat, 128 tokens:
+
+- `stock4bit`: oMLX 88.9 > mlx-optiq 84.0 > vMLX 77.1 > mlx-lm 70.8
+- `oq4`: oMLX 86.1 > mlx-optiq 81.6 > mlx-lm 75.8 > vMLX 74.4 > Osaurus 74.3
+- `oq4e`: oMLX 78.6 > mlx-optiq 74.3 > Osaurus 71.5 > vMLX 67.3 > mlx-lm 64.6
+- `optiq`: oMLX 74.4 > mlx-optiq 70.5 > Osaurus 70.1 > mlx-lm 62.2
+- `jang4s`: Osaurus 77.8 > vMLX 76.9
+
+**The workload still changes the winner, and now it is a clean result rather than a suspicion.**
+mlx-optiq leads four of five decode rows; oMLX leads every chat and every prefill row. Same
+cells, same session, same pins — the only difference between chat and decode is a 128-token
+cap against a 512-token one. A blended score would have hidden that behind one number
+describing neither, which is why the three workloads are never averaged.
+
+**mlx-lm is last in every decode row, and that now means something.** Under the fixed budget
+this was an artifact; measured warm, it holds on the sustained shape while *not* holding on
+chat, where mlx-lm ranks third on `oq4` and ahead of two runtimes. The control arm is slowest
+at sustained generation and mid-pack on short requests.
+
+## The format axis is unchanged, which is the point
+
+`stock4bit > oq4 > oq4e > OptiQ` on decode, identically in mlx-lm, oMLX and mlx-optiq — three
+codebases that share nothing — exactly as the fixed-warmup grid reported it. The warmup defect
+never touched the format axis, because within a column the runtime is held constant and the
+shortfall landed on every format equally. A measurement defect that invalidates one axis and
+leaves the other intact is the single-variable discipline doing its job.
+
+## The column this project had to throw away, and why
+
+The oMLX column was measured twice. The first run, `…T041544Z`, is **discarded** — not for its
+numbers, but because the machine was not quiet while it ran. The coordinator was pushing
+commits, creating a git worktree and running pytest inside that column's window, which is a
+protocol violation regardless of what it produced.
+
+It produced this, on `stock4bit` decode:
+
+```
+warmup : 73 66 70 68 69 69 68 69 68 67 | 82 76 75 76 77 76 75 75 76 76
+measured: 40.7 55.8 54.9 52.6 60.7      | 75.6 73.1 75.6 75.5
+          ^ visit 1, machine busy          ^ visit 2, machine quiet
+```
+
+A cell whose warmup window held 68–73 and whose measured window then collapsed to 40–60 is not
+a slow cell; it is a cell measured next to something else. The published median came out 60.7
+with +40.6% drift, and it would have **inverted the format ordering** that replicated across
+three independent codebases — the single most load-bearing result this project has.
+
+Re-measured on a quiet machine, the same cell reads **75.9 at +4.9% drift** and the ordering
+is restored: 75.9 > 75.5 > 69.3 > 67.3. The other four columns ran after the coordinator
+stopped touching the machine and stand as measured.
+
+Both directories are kept. The discarded one is named here with its reason, because a run
+thrown away without a stated defect in its conditions is a run thrown away for its number, and
+that is a different and much worse thing. The rule this cost: **nothing else runs on this
+machine while a cell is being measured** — not a test suite, not a git operation, not
+"lightweight" background work. The harness cannot detect it, so the discipline has to hold
+without enforcement.
+
+## Still open
+
+- **Ties are printed as orderings.** Five runtime-axis pairs sit within 2.5% and swap places
+  when the window moves. The renderer should say so rather than leaving a reader to infer
+  precision from a rank number.
+- **`peak_mb` is still not one quantity across runtimes** — the eighth defect, unprobed. A
+  runtime-axis ordering by it prints the reason it cannot be read as a ranking.
+- **The column-entry effect** from the first handoff was not re-examined here.
+- **One cell reached the warmup cap** rather than settling, and carries `warmup_plateau=False`
+  saying so.
