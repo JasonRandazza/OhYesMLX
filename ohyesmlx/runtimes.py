@@ -880,6 +880,24 @@ class Optiq(Runtime):
     def version_command(self) -> tuple[str, ...]:
         return ("optiq", "--version")
 
+    def parse_version(self, output: str) -> str:
+        """`optiq --version` answers `mlx-optiq, version 0.5.6`, not a bare `0.5.6`.
+
+        The recorded string is what the grid's join guard compares across run directories to
+        decide whether one runtime appeared at two versions, and it compares it exactly. The
+        prose is uniform today, so the guard does not misfire -- but it is the runtime's
+        phrasing rather than its version, and a release that reworded its own `--version`
+        output would read as a version change and refuse a legal join. The version is the
+        part that means something, so the version is what gets recorded.
+
+        Anything that does not look like `..., version X` is passed through whole rather than
+        guessed at: an unrecognised shape is better recorded verbatim than parsed into
+        something that looks like a version and is not.
+        """
+        first = super().parse_version(output)
+        _, separator, version = first.rpartition(", version ")
+        return version.strip() if separator and version.strip() else first
+
     def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
         # OptiQ lists the absolute --model path. The :no-think variant is the one whose
         # streams put visible text in delta.content instead of delta.reasoning.

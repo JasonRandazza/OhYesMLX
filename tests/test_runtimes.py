@@ -1283,3 +1283,21 @@ def test_mlxlm_polls_without_a_key(rig):
         pid=1, log_path=rig.log_file, artifact_dir=ARTIFACT, model_id=HF_ID
     )
     assert rig.api_keys == [None]
+
+
+def test_optiq_records_the_version_and_not_the_sentence_around_it():
+    """`optiq --version` answers `mlx-optiq, version 0.5.6`.
+
+    The grid's join guard compares this string exactly across run directories to decide
+    whether one runtime appeared at two versions. Recording the runtime's phrasing rather
+    than its version means a release that reworded its own --version output would read as a
+    version change and refuse a legal join.
+    """
+    optiq = runtimes.RUNTIMES["optiq"]
+
+    assert optiq.parse_version("mlx-optiq, version 0.5.6\n") == "0.5.6"
+    assert optiq.parse_version("mlx-optiq, version 0.6.0") == "0.6.0"
+    # An unrecognised shape is recorded verbatim rather than parsed into a plausible lie.
+    assert optiq.parse_version("0.5.6") == "0.5.6"
+    assert optiq.parse_version("optiq v0.5.6") == "optiq v0.5.6"
+    assert optiq.parse_version("") == "unknown: empty version output"
