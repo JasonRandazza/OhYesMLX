@@ -81,9 +81,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: both hero models fit in 36 GiB without deleting anything |
 | ~~LMRE's rubric/ruling design not ported~~ **PULLED FORWARD 2026-09-15** | Pre-phase | — | Floors + one ordering metric now pinned in docs/interfaces.md. The accuracy axis stays in v2; only the honest half moved. |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
-| Tokenizer-unavailable should make a cell N/A, not 5 transport failures | Phase 4 | S | measure.py's docstring promises visible N/A; behaviour gives FAIL with a server-shaped reason |
+| ~~Tokenizer-unavailable should make a cell N/A~~ **ALREADY FIXED, entry was stale** | Phase 4 | — | `_visit` checks the counter before starting the runtime and writes N/A with the reason; `test_an_unavailable_tokenizer_is_na_rather_than_a_silent_fallback` covers it. Verified 2026-09-16. |
 | Eight pre-`first_request_workload_id` run dirs cannot be loaded | Phase 5 | S | `load_run` refuses them by line number rather than defaulting the field. A schema migration, only if those columns are ever wanted |
-| mlx-optiq reports `"mlx-optiq, version 0.5.6"`, not a bare version | Phase 3 | S | Join guard 4 compares the exact string. Normalise when that guard is next touched |
+| ~~mlx-optiq reports `"mlx-optiq, version 0.5.6"`~~ **FIXED on branch `defects`** | Phase 3 | — | `OptiqRuntime.parse_version` records the version and passes an unrecognised shape through whole. Merges to main once the in-flight grid lands. |
 | `footprint` vs resident on Osaurus is inferred, not probed | Phase 5 | S | The file-backed-pages explanation needs a probe before any memory ranking is published |
 | ~~`mlx-lm` 0.31.3 lives only in `/tmp/mlxspike`~~ **RESOLVED 2026-09-15** | Phase 4 | — | Reinstalled at `~/.local/share/ohyesmlx/mlx-lm-0.31.3` with the spike's exact pins (mlx 0.32.2, transformers 5.17.0, tokenizers 0.23.2, numpy 2.5.3). |
 
