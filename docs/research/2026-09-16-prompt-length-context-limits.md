@@ -129,3 +129,39 @@ it has to be deterministic, committed, free of downloads, and real prose.
 - vMLX: the startup estimate, read from its log line `Max prompt/context tokens`.
 - mlx-lm and OptiQ: that TTFT stays flat across repeated long prompts. The 1.3k evidence above
   does not prove a 32k prompt behaves the same.
+
+---
+
+## Measured: four of five serve 32k whole, and none of them caches it
+
+2026-09-16 11:42–11:57 local, `scripts/probe_context.py <runtime> 16384 32768`, oQ4 cell, one
+runtime resident at a time, nothing else running. Each prompt sent twice. Not a published
+figure: one request per point, no warmup.
+
+| runtime | sent | `prompt_tokens` | TTFT #1 s | TTFT #2 s | output |
+|---|---|---|---|---|---|
+| mlx-lm | 16,384 | 16,394 | 32.12 | 32.53 | coherent |
+| mlx-lm | 32,765 | 32,775 | 72.95 | 72.03 | coherent |
+| oMLX | 16,384 | 16,394 | 36.99 | 33.09 | coherent |
+| oMLX | 32,765 | 32,775 | 75.78 | 73.90 | coherent |
+| OptiQ (`--max-context off`) | 16,384 | 16,396 | 34.92 | 31.99 | coherent |
+| OptiQ | 32,765 | 32,777 | 69.22 | 69.24 | coherent |
+| vMLX | 16,384 | 16,389 | 28.07 | 29.21 | coherent |
+| vMLX | 32,765 | 32,770 | 67.02 | 66.98 | coherent |
+
+- **No refusal and no truncation.** Every runtime reports the prompt it was sent plus its chat
+  template (+5 to +12 tokens, constant per runtime across lengths), so nothing was cut or
+  windowed. The per-runtime template overhead is why `prompt_tokens` is recorded beside the
+  locally counted `achieved` and never replaces it.
+- **No prefix-cache hit on a repeated 32k prompt**, in any of the four: the second TTFT is
+  within 5% of the first. The flat-TTFT reading of the 1.3k grid holds at 32k. oMLX's 16k pair
+  is the widest (−10.5%) and is one pair — the sweep's own warmup-vs-measured check is what
+  decides it.
+- Every answer is on-topic: each model summarised the document it was sent (the 16k and 32k
+  cuts end in different research notes, and the answers name them differently).
+- **Prefill is ~500 tok/s at 16k and ~450 at 32k** across all four, so a 32k request costs
+  ~70 s. Under the plateau warmup rule a 32k cell makes at least 20 requests: ~25 minutes per
+  cell before loads and cooldowns. Budget the sweep at 4–5 hours.
+
+**Osaurus not yet probed:** an Osaurus app instance of unknown origin (pid 24495, launched by
+CLI during this session) held port 1337, and a probe does not start a runtime on a held port.
