@@ -20,9 +20,11 @@ What this module refuses to do:
   243.5 tok/s one run and 57.2 the next. There is no second path here to re-enable later.
 
 * **Fold model load into the first request.** ``Handle.cold_load_s`` is its own number on
-  the ``CellResult`` and is never added to a request's timing. ``warmup`` is enforced at a
-  floor of 3 so Metal shader compilation and lazy mmap land before the first measured
-  request.
+  the ``CellResult`` and is never added to a request's timing. A warmup window opens with a
+  floor of ``MIN_WARMUP`` so Metal shader compilation and lazy mmap land before the first
+  measured request, and then runs until the cell's decode rate stops moving, because one
+  budget applied to five runtimes ranks them by how fast they warm up and calls it how fast
+  they serve.
 
 * **Let a lazy loader's load hide in a warmup.** ``cold_load_s`` is spawn until readiness,
   which is a load time for a runtime that loads at startup and only a time-to-listening for
@@ -106,7 +108,26 @@ try:
 except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
     transport = None
 
-MIN_WARMUP = 3
+# Warmup is measured, not pinned: a workload's window keeps issuing requests until its decode
+# rate stops moving. The 2026-09-15 grid, per-column median ``change_pct`` across the MEASURED
+# window on the decode workload -- every sign positive, cells still getting faster when their
+# window closed:
+#
+#     mlx-lm +17.0% (11 of its 12 rows over 5%)   oMLX +2.6%   mlx-optiq -0.0%
+#     vMLX +0.5%                                  Osaurus +1.0%
+#
+# Three requests leaves mlx-lm climbing and the other four settled, so one budget applied to
+# five runtimes ranked them by warmup speed and called it serving speed: mlx-lm is last in 11
+# of 14 decode orderings on the published median and 1st/3rd/3rd/4th on the late-window one.
+# Raising the budget would pay mlx-lm's cost on four runtimes that do not need it, so the
+# budget becomes a measured property of the cell and ``warmup_count`` publishes what it took.
+MIN_WARMUP = 3            # the floor: load, Metal shader compilation, lazy mmap
+WARMUP_CAP = 16           # the window closes here whether or not it settled
+WARMUP_PLATEAU_PCT = 3.0  # (max - min) / median over the last three rates, percent
+
+# The header's ``warmup`` is the rule rather than a count when this is asked for.
+WARMUP_MODE = "plateau"
+
 VISIT_ROUNDS = 2
 TEMPERATURE = 0.0
 SEED = 0
@@ -168,6 +189,12 @@ class CellResult:
     reason: str | None
     observations: list[Observation]
     warmup_observations: list[Observation]
+    # How the warmup window ended. ``True`` when every window on this row reached the plateau,
+    # ``False`` when any ran to ``WARMUP_CAP`` still climbing, ``None`` when no plateau window
+    # ran at all -- no visit reached the row, or the budget was fixed and the rule was never in
+    # force. A row that hit the cap was still climbing, and rendering it like one that settled
+    # is the defect this field exists to prevent.
+    warmup_plateau: bool | None
     cold_load_s: float | None
     # The cold visit's first warmup latency: the load a runtime that loads lazily deferred
     # past readiness, charged to request #1. Never added to a request's timing and never
@@ -278,12 +305,39 @@ def artifact_bytes(path: str) -> int | None:
     return total
 
 
+def _warmup_pin(warmup: int | str) -> int | dict:
+    """The run header's ``warmup``, and the validation that goes with it.
+
+    The rule in force is the pin, not a count: one header naming one budget for five runtimes
+    is the reading this phase exists to stop publishing. A fixed budget is the caller's to
+    name and stays an integer, because the rule did not run and the header must not claim it
+    did.
+    """
+    if isinstance(warmup, int):
+        if warmup < MIN_WARMUP:
+            raise ValueError(
+                f"warmup must be >= {MIN_WARMUP}: model load, Metal shader compilation and "
+                "lazy mmap all have to land outside the measurement"
+            )
+        return warmup
+    if warmup != WARMUP_MODE:
+        raise ValueError(
+            f"warmup must be {WARMUP_MODE!r} or an int >= {MIN_WARMUP}, not {warmup!r}"
+        )
+    return {
+        "mode": WARMUP_MODE,
+        "floor": MIN_WARMUP,
+        "cap": WARMUP_CAP,
+        "plateau_pct": WARMUP_PLATEAU_PCT,
+    }
+
+
 def run_cells(
     cells: list[Cell],
     workloads: list[Workload],
     *,
-    warmup: int = 3,
-    measured: int = 5,
+    warmup: int | str = WARMUP_MODE,
+    measured: int = 9,
     cooldown_s: float = 30.0,
     results_dir: str,
 ) -> list[CellResult]:
@@ -292,8 +346,10 @@ def run_cells(
     A visit starts the cell's runtime **once** and runs every workload under that one load,
     so the model is loaded twice per cell however many workloads there are. ``measured``
     requests are made per (cell, workload) in total, split across the visits the plan calls
-    for (five becomes three then two), and every workload gets its own warmups because a long
-    prompt compiles a different set of kernels than a short one does. Results are written to
+    for (nine becomes five then four), and every workload gets its own warmup window because a
+    long prompt compiles a different set of kernels than a short one does. ``warmup`` is the
+    plateau rule by default and an ``int`` for a fixed budget of that many requests; either
+    way the budget each cell needed is published as ``warmup_count``. Results are written to
     ``<results_dir>/results.jsonl`` after every visit, so a run that dies still has
     everything it had measured up to that point.
 
@@ -301,11 +357,7 @@ def run_cells(
     order they were given. Figures are never averaged across workloads: a prefill-bound number
     blended with a decode-bound one describes no workload that was run.
     """
-    if warmup < MIN_WARMUP:
-        raise ValueError(
-            f"warmup must be >= {MIN_WARMUP}: model load, Metal shader compilation and "
-            "lazy mmap all have to land outside the measurement"
-        )
+    warmup_pin = _warmup_pin(warmup)
     if measured < 1:
         raise ValueError("measured must be >= 1")
     if cooldown_s < 0:
@@ -326,7 +378,7 @@ def run_cells(
         ],
         "temperature": TEMPERATURE,
         "seed": SEED,
-        "warmup": warmup,
+        "warmup": warmup_pin,
         "measured": measured,
         "cooldown_s": cooldown_s,
     }
@@ -385,6 +437,7 @@ def _results_for(
                 reason=None,
                 observations=[],
                 warmup_observations=[],
+                warmup_plateau=None,
                 cold_load_s=None,
                 first_request_s=None,
                 first_request_workload_id=None,
@@ -421,7 +474,7 @@ def _visit(
     cell: Cell,
     workloads: list[Workload],
     *,
-    warmup: int,
+    warmup: int | str,
     quota: int,
     counters: dict,
 ) -> str:
@@ -523,7 +576,7 @@ def _first_warmup_latency(results: list[CellResult]) -> float | None:
 
 
 def _workload_visit(
-    handle, result: CellResult, workload: Workload, *, warmup: int, quota: int, counter
+    handle, result: CellResult, workload: Workload, *, warmup: int | str, quota: int, counter
 ) -> dict:
     """One workload's requests inside a visit, sampled over that workload's own window.
 
@@ -536,11 +589,10 @@ def _workload_visit(
     sampler = sample.Sampler(handle.memory_pid).start()
     memory = None
     try:
-        for _ in range(warmup):
-            result.warmup_observations.append(
-                _request(handle, workload.messages, max_tokens=workload.max_tokens,
-                         counter=counter)
-            )
+        result.warmup_plateau = _plateau_verdict(
+            result.warmup_plateau,
+            _warmup_window(handle, result, workload, warmup=warmup, counter=counter),
+        )
         for _ in range(quota):
             result.observations.append(
                 _request(handle, workload.messages, max_tokens=workload.max_tokens,
@@ -549,6 +601,68 @@ def _workload_visit(
     finally:
         memory = sampler.stop()
     return memory
+
+
+def _warmup_window(
+    handle, result: CellResult, workload: Workload, *, warmup: int | str, counter
+) -> bool | None:
+    """One workload's warmup window, ending when the cell is warm or its budget is spent.
+
+    A fixed ``int`` issues exactly that many requests and returns ``None``: the rule never
+    ran, so there is no plateau for the window to report. ``"plateau"`` issues the floor of
+    ``MIN_WARMUP`` requests and then keeps going until the rate stops moving -- after the
+    floor the last three warmup rates are compared by ``(max - min) / median``, and the
+    measured window opens as soon as that spread is within ``WARMUP_PLATEAU_PCT``. The rates
+    come from :func:`decode_tps`, the same function every published figure uses, so a warmup
+    observation carrying no rate -- a failed request, or a stream with no decode window -- is
+    not evidence that the cell stopped moving and cannot settle the window; only
+    ``WARMUP_CAP`` ends it.
+
+    ``True`` for a window the rule closed, ``False`` for one that ran to the cap still
+    climbing. Every request made is kept on ``result.warmup_observations`` as it is made,
+    whether it settled anything or not.
+    """
+    fixed = isinstance(warmup, int)
+    rates: list[float | None] = []
+    while True:
+        result.warmup_observations.append(
+            _request(handle, workload.messages, max_tokens=workload.max_tokens, counter=counter)
+        )
+        rates.append(decode_tps(result.warmup_observations[-1]))
+        if fixed:
+            if len(rates) >= warmup:
+                return None
+            continue
+        if len(rates) >= MIN_WARMUP and _within_plateau(rates[-3:]):
+            return True
+        if len(rates) >= WARMUP_CAP:
+            return False
+
+
+def _within_plateau(rates: list[float | None]) -> bool:
+    """Whether three warmup rates have stopped moving, within ``WARMUP_PLATEAU_PCT``.
+
+    ``(max - min) / median`` over the three, in percent. A rate the cell did not produce is
+    not a measurement three of them can agree on, so a window holding one cannot settle.
+    """
+    if any(rate is None for rate in rates):
+        return False
+    middle = statistics.median(rates)
+    return (max(rates) - min(rates)) / middle * 100.0 <= WARMUP_PLATEAU_PCT
+
+
+def _plateau_verdict(current: bool | None, window: bool | None) -> bool | None:
+    """What one more warmup window makes of the row's verdict.
+
+    ``False`` is sticky: a row that ran to the cap on any visit did not settle, whatever the
+    other visit's window did. ``None`` is what both sides being ``None`` leaves -- a row no
+    visit reached, or one measured under a fixed budget.
+    """
+    if current is False or window is False:
+        return False
+    if current is True or window is True:
+        return True
+    return None
 
 
 def _request(handle, messages: list[dict], *, max_tokens: int, counter) -> Observation:
@@ -802,6 +916,8 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     Line 1 is the run header — temperature, seed, warmup, measured, cooldown_s and every
     workload that was measured, each with the messages it sent and its own max_tokens (a
     single run-level cap would be a half-truth once three workloads carry three of them).
+    ``warmup`` is the rule that was in force, as a dict, or the integer budget a caller pinned
+    instead; which one it is is what tells a reader how to read ``warmup_count``.
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything
     it measured and no reader sees half a file.
@@ -834,6 +950,10 @@ def _record(result: CellResult) -> dict:
         "disk_bytes": result.disk_bytes,
         "measured_count": len(result.observations),
         "warmup_count": len(result.warmup_observations),
+        # How the warmup window ended, beside how long it ran. A row that hit the cap was
+        # still climbing, and a reader who cannot tell it from one that settled is reading a
+        # budget as if it were a warm cell.
+        "warmup_plateau": result.warmup_plateau,
         "drift": measured_drift(result.observations),
         "observations": [_observation_record(observation) for observation in result.observations],
         # Warmups are not samples of the measured quantity — averaging a cold-start TTFT
@@ -914,6 +1034,15 @@ def _cell_result(record: dict, path: Path, number: int) -> CellResult:
             warmup_observations=[
                 Observation(**raw) for raw in record["warmup_observations"]
             ],
+            # Read leniently, and only this field. A record written before the plateau rule
+            # existed was measured under a fixed budget, so the rule did not run on it and
+            # `None` -- "no plateau verdict" -- is exactly true of those rows rather than a
+            # default standing in for something unknown. That is what separates it from
+            # `first_request_workload_id`, which is refused on a missing key: defaulting that
+            # one would claim the cold visit made no request, which is false about rows whose
+            # visit did. A default is honest when the absence is the fact; the 2026-09-16
+            # columns stay readable by the tool that published them.
+            warmup_plateau=record.get("warmup_plateau"),
             cold_load_s=record["cold_load_s"],
             first_request_s=record["first_request_s"],
             first_request_workload_id=record["first_request_workload_id"],

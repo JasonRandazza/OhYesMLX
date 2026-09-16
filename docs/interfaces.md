@@ -426,3 +426,83 @@ ohyesmlx grid <run-dir> [<run-dir> ...] [--rank decode_tps] [--out FILE]
 Explicit directories, never a glob over `results/grid/` — that directory holds thirteen
 run dirs from three sessions, and a grid assembled by wildcard would silently join columns
 that never belonged together. `--out` defaults to stdout only.
+
+---
+
+## Phase 5 plan 05-02 — warmup is measured, not pinned
+
+The joined grid's runtime axis ordered the five runtimes by how long each takes to warm up
+and called it how fast each one serves. mlx-lm is last in 11 of 14 orderings on the
+published median and 1st/3rd/3rd/4th on the late-window median — see
+`docs/research/2026-09-16-phase5-joined-grid.md`. One warmup budget applied to five
+runtimes is the cause: three requests leaves mlx-lm still climbing and the other four
+settled.
+
+Raising the global budget is the wrong fix. It pays mlx-lm's cost on four runtimes that do
+not need it and lengthens a 67-minute grid for nothing, and it replaces one guessed constant
+with a larger guessed constant. **Warmup stops being a pin and becomes a measured property
+of the cell.**
+
+### The plateau rule
+
+A workload's warmup window keeps issuing requests until its decode rate stops moving:
+
+```python
+MIN_WARMUP = 3            # unchanged: load, Metal shader compilation, lazy mmap
+WARMUP_CAP = 16           # the window closes here whether or not it settled
+WARMUP_PLATEAU_PCT = 3.0  # (max - min) / median over the last three rates
+```
+
+After the floor, the last three warmup rates are compared: when their spread is within
+`WARMUP_PLATEAU_PCT` of their median, the cell is warm and the measured window opens. A
+rate comes from `decode_tps`, the same function every published figure uses; a warmup
+observation that carries none cannot settle the window and the cap is what ends it.
+
+`3.0%` sits between the two populations the grid measured — four runtimes settle their whole
+*measured* window inside `+2.6 / −0.0 / +0.5 / +1.0%`, and mlx-lm moves `+17.0%` across its.
+A plateau tolerance below that spread would chase noise; one above it would call mlx-lm warm
+while it was still climbing.
+
+The cap is not a fallback that quietly substitutes for the rule. A window that hit it did
+**not** settle, and that is a finding about the cell:
+
+```python
+warmup_plateau: bool | None   # new CellResult field, new record field
+```
+
+`True` when every warmup window on this row reached the plateau, `False` when any hit the
+cap, `None` when no warmup ran. A capped cell that rendered identically to a settled one
+would be this project's own recurring defect — a quantity recorded and unread — committed
+one more time.
+
+`warmup_count` already records how many requests it took, so the budget each runtime needed
+becomes a published number rather than a constant in a source file.
+
+`load_run` reads `warmup_plateau` **leniently** — the only field it does. A record written
+before the rule existed was measured under a fixed budget, so the rule did not run on it and
+`None` is exactly true of those rows rather than a default standing in for something unknown.
+That is what separates it from `first_request_workload_id`, whose absence is refused: a
+default there would claim the cold visit made no request, which is false about rows whose
+visit did. A default is honest when the absence is the fact, and the five 2026-09-16 columns
+the Phase 5 write-up published stay readable by the tool that published them.
+
+### The pins change, so every column re-runs
+
+The run header's `warmup` becomes the rule rather than a count:
+
+```python
+{"mode": "plateau", "floor": MIN_WARMUP, "cap": WARMUP_CAP, "plateau_pct": WARMUP_PLATEAU_PCT}
+```
+
+and `measured` goes `5 → 9`. At 5, `measured_drift` compares a median of two against a
+median of two and throws the middle sample away, which is why the drift threshold cannot be
+tightened and why a single row's magnitude is untrustworthy. At 9 it compares medians of
+four.
+
+Join guard 1 compares both fields, so **a column measured under the new pins cannot join one
+measured under the old**. This is not a mlx-lm re-run; it is a full grid re-run, and the
+five 2026-09-16 directories become history the moment it starts.
+
+`run_cells(warmup=...)` still accepts an `int` for a fixed budget — a quick run pinning three
+requests is still a legal thing to ask for, and it is what most tests want. `"plateau"` is
+the default and is what the grid runs.

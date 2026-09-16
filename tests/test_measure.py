@@ -264,10 +264,20 @@ class Harness:
             label=label,
         )
 
-    def run(self, cells, *, workloads=None, results_dir=None, **kwargs):
+    def run(self, cells, *, workloads=None, results_dir=None, warmup=WARMUPS,
+            measured=MEASURED, **kwargs):
+        """One run under a fixed budget of three warmups and five samples.
+
+        The loop's real defaults are the plateau rule and nine samples, and a run that does
+        not name them gets them; the tests about visits, quotas, persistence and the gate are
+        about neither, so they pin the budget they were written against. The tests that are
+        about the rule and the nine say so by passing them.
+        """
         return measure.run_cells(
             cells,
             [DEFAULT_WORKLOAD] if workloads is None else workloads,
+            warmup=warmup,
+            measured=measured,
             results_dir=str(results_dir if results_dir is not None else self.tmp_path / "results"),
             **kwargs,
         )
@@ -449,6 +459,219 @@ def test_a_missing_module_is_named_rather_than_measured(harness, monkeypatch):
 
     with pytest.raises(measure.MeasureError, match="transport.py"):
         harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+
+# ---------------------------------------------------------------------- the warmup window
+
+# The rule, from docs/interfaces.md: a window opens with the floor of three, the last three
+# rates have to stop moving within 3% of their median, and the cap of sixteen ends it either
+# way. The rates below are built by solving `decode_tps` for timestamps, so a test's warmup
+# population is exactly the one a real stream would have produced.
+
+
+def rate_observation(rate: float, **overrides) -> FakeObservation:
+    """One response whose decode rate is *rate* tok/s: the published formula, inverted."""
+    return FakeObservation(
+        ttft_s=0.5, last_content_s=0.5 + 100.0 / rate, completion_tokens=100, **overrides
+    )
+
+
+def rate_responder(rates):
+    """A responder handing the k-th request of a visit the k-th rate, the last one repeating.
+
+    The loop decides how long a window runs, so the sequence has to carry the answer: rates
+    that stop moving have settled, rates that keep climbing have not.
+    """
+    def responder(call):
+        return rate_observation(rates[min(call.visit_index, len(rates) - 1)])
+
+    return responder
+
+
+def test_a_stream_that_plateaus_immediately_stops_at_the_floor(harness):
+    """A cell warm by request three does not pay for a budget it does not need."""
+    harness.transport.responder = rate_responder([8.0, 8.0, 8.0])
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+
+    assert len(results[0].warmup_observations) == measure.MIN_WARMUP == 3
+    assert results[0].warmup_plateau is True
+
+
+def test_a_window_that_keeps_climbing_runs_to_the_cap_and_says_so(harness):
+    """The cap is not a fallback that quietly substitutes for the rule. A window that ran to
+    it was still climbing, and a row that renders like a settled one is the defect the field
+    exists to prevent."""
+    harness.transport.responder = rate_responder([float(k) for k in range(1, 64)])
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+
+    assert len(results[0].warmup_observations) == measure.WARMUP_CAP == 16
+    assert results[0].warmup_plateau is False
+    record, = harness.lines()
+    assert record["warmup_count"] == 16
+    assert record["warmup_plateau"] is False
+    assert measure._record(results[0]) == record
+
+
+def test_a_window_that_settles_at_seven_stops_there(harness):
+    """The budget a cell needed becomes a published number: three would have been too few
+    here, sixteen would have been five too many."""
+    harness.transport.responder = rate_responder([1.0, 2.0, 3.0, 5.0, 7.0, 7.0, 7.0])
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+
+    assert len(results[0].warmup_observations) == 7
+    assert results[0].warmup_plateau is True
+    assert harness.lines()[0]["warmup_count"] == 7
+
+
+def test_a_warmup_with_no_decode_rate_cannot_settle_the_window(harness):
+    """Rates come from ``decode_tps``, the same function every published figure uses. A window
+    can hold three rates that agree and still not have settled: they have to be the last
+    three, and a request that came back with no decode window is not one of them."""
+    def responder(call):
+        if call.visit_index % 3 == 2:
+            return FakeObservation(ttft_s=None, last_content_s=None, completion_tokens=None)
+        return rate_observation(5.0)
+
+    harness.transport.responder = responder
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+    warmups = results[0].warmup_observations
+
+    assert sum(measure.decode_tps(observation) is not None for observation in warmups) >= 3
+    assert len(warmups) == measure.WARMUP_CAP
+    assert results[0].warmup_plateau is False
+    assert results[0].status == "PASS", "the measured requests were healthy throughout"
+
+
+def test_a_row_settles_only_when_every_visit_s_window_settled(harness):
+    """Both visits' windows are this row's windows: a cell still climbing in its second one
+    has not settled, and the first visit's settle does not cover for it."""
+    def responder(call):
+        if call.visit == 1:
+            return rate_observation(5.0)
+        return rate_observation(5.0 + call.visit_index)
+
+    harness.transport.responder = responder
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=2)
+
+    assert len(results[0].warmup_observations) == measure.MIN_WARMUP + measure.WARMUP_CAP
+    assert results[0].warmup_plateau is False
+
+
+def test_a_fixed_budget_is_still_exactly_that_many_requests(harness):
+    """An int is a caller pinning a count, and it still refuses below the floor. The rule
+    never runs, so there is no plateau for the row to report and the header stays the number
+    that was asked for."""
+    harness.transport.responder = rate_responder([9.0, 8.0, 7.0, 6.0])
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup=3, measured=1)
+
+    assert len(results[0].warmup_observations) == 3
+    assert harness.header()["warmup"] == 3
+    assert results[0].warmup_plateau is None
+    assert measure._record(results[0]) == harness.lines()[0]
+
+
+def test_a_row_no_visit_reached_has_no_plateau_verdict(harness):
+    """No warmup ran, so no window settled and none hit the cap — which is a different thing
+    from a window that settled, and is written as its own value rather than left out."""
+    harness.add_runtime("omlx", start_error=RuntimeError("model type not supported"))
+
+    results = harness.run([harness.cell("oq__omlx", "omlx")], warmup="plateau")
+
+    assert results[0].warmup_plateau is None
+    assert harness.lines()[0]["warmup_plateau"] is None
+
+
+def test_a_run_that_names_no_warmup_gets_the_rule_and_nine_samples(harness):
+    """What the grid runs and what the header pins: the rule rather than a count, and nine
+    samples so the drift compares medians of four."""
+    harness.add_runtime("mlxlm")
+
+    results = measure.run_cells(
+        [harness.cell("oq__mlxlm", "mlxlm")],
+        [DEFAULT_WORKLOAD],
+        results_dir=str(harness.tmp_path / "results"),
+    )
+
+    assert harness.header()["warmup"] == {
+        "mode": "plateau",
+        "floor": measure.MIN_WARMUP,
+        "cap": measure.WARMUP_CAP,
+        "plateau_pct": measure.WARMUP_PLATEAU_PCT,
+    }
+    assert harness.header()["measured"] == 9
+    assert len(results[0].observations) == 9
+    assert [len(calls) - measure.MIN_WARMUP for calls in harness.transport.calls_by_visit().values()] == [5, 4]
+    assert harness.lines()[0]["drift"]["n"] == 9
+    assert results[0].warmup_plateau is True
+
+
+def test_the_plateau_pins_round_trip_through_load_run(harness):
+    """Join guard 1 compares the warmup pin across columns, so the header a reader gets back
+    has to be the one the run wrote, dict and all — and the record's verdict comes back with
+    it rather than being re-derived on read."""
+    harness.add_runtime("mlxlm")
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+
+    header, results = measure.load_run(harness.results_file())
+
+    assert header["warmup"] == harness.header()["warmup"] == {
+        "mode": "plateau",
+        "floor": measure.MIN_WARMUP,
+        "cap": measure.WARMUP_CAP,
+        "plateau_pct": measure.WARMUP_PLATEAU_PCT,
+    }
+    assert results[0].warmup_plateau is True
+    assert measure._record(results[0]) == harness.lines()[0]
+
+
+def test_the_warmup_window_contributes_no_sample_to_a_published_figure(harness):
+    """The assertion that matters most. Two runs of one cell, identical in every measured
+    request and different only in how long they warmed up — one settled at the floor, one ran
+    to the cap — publish the same row, field for field.
+
+    The warmups are a different population on purpose: at 2 tok/s against 40 for every
+    measured request, a warmup that reached a figure would move it by a factor, not by a
+    rounding."""
+    def settling(call):
+        return rate_observation(2.0 if call.visit_index < measure.MIN_WARMUP else 40.0)
+
+    def climbing(call):
+        return rate_observation(2.0 + call.visit_index if call.visit_index < measure.WARMUP_CAP
+                                else 40.0)
+
+    harness.add_runtime("mlxlm")
+    harness.sample.peaks = [128.0] * 8
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.transport.responder = settling
+    from_floor = harness.run([cell], warmup="plateau", measured=9,
+                             results_dir=harness.tmp_path / "floor")
+    harness.transport.responder = climbing
+    from_cap = harness.run([cell], warmup="plateau", measured=9,
+                           results_dir=harness.tmp_path / "cap")
+
+    # A window per visit — nine samples are two visits — and both rows warmed up their own.
+    assert len(from_floor[0].warmup_observations) == measure.VISIT_ROUNDS * measure.MIN_WARMUP
+    assert from_floor[0].warmup_plateau is True
+    assert len(from_cap[0].warmup_observations) == measure.VISIT_ROUNDS * measure.WARMUP_CAP
+    assert from_cap[0].warmup_plateau is False
+
+    assert [measure.decode_tps(observation) for observation in from_floor[0].observations] == (
+        [40.0] * 9
+    )
+    assert report.summarize(from_floor) == report.summarize(from_cap)
 
 
 # ------------------------------------------------------------------- the three workloads
@@ -1100,7 +1323,7 @@ def test_a_second_run_overwrites_rather_than_appends(harness):
 
 def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
                 runtime_version="mlx-lm 0.31.3", disk_bytes=123, workload_id="chat",
-                first_request_s=None, first_request_workload_id=None):
+                first_request_s=None, first_request_workload_id=None, warmup_plateau=None):
     """A CellResult to hand straight to write_jsonl, with no run behind it."""
     return measure.CellResult(
         cell=measure.Cell(id=cell_id, runtime=runtime, artifact_dir="/models/oq4", label="oq4"),
@@ -1109,6 +1332,7 @@ def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
         reason=None,
         observations=list(observations),
         warmup_observations=[],
+        warmup_plateau=warmup_plateau,
         cold_load_s=12.5,
         first_request_s=first_request_s,
         first_request_workload_id=first_request_workload_id,
@@ -1213,6 +1437,7 @@ def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
             reason=record["reason"],
             observations=[FakeObservation(**raw) for raw in record["observations"]],
             warmup_observations=[FakeObservation(**raw) for raw in record["warmup_observations"]],
+            warmup_plateau=record["warmup_plateau"],
             cold_load_s=record["cold_load_s"],
             first_request_s=record["first_request_s"],
             first_request_workload_id=record["first_request_workload_id"],
@@ -1250,7 +1475,6 @@ def test_load_run_round_trips_every_record_of_a_real_run():
     lists -- which is the only way to know a reader agrees with the writer about the shape."""
     if not REAL_GRID_RUN.exists():
         pytest.skip(f"no grid run in this checkout: {REAL_GRID_RUN}")
-
     header, results = measure.load_run(REAL_GRID_RUN)
     lines = parsed_lines(REAL_GRID_RUN)
 
@@ -1259,7 +1483,11 @@ def test_load_run_round_trips_every_record_of_a_real_run():
     assert len(results) == len(lines) - 1
     assert [result.workload_id for result in results[:3]] == ["chat", "prefill", "decode"]
     for index, result in enumerate(results):
-        assert measure._record(result) == lines[index + 1]
+        line = lines[index + 1]
+        # A column written before the plateau rule carries no `warmup_plateau`, and the loader
+        # reads that absence as the `None` it honestly is. The round trip is otherwise exact:
+        # every other field has to come back byte for byte.
+        assert measure._record(result) == {**line, "warmup_plateau": line.get("warmup_plateau")}
 
 
 def test_the_run_directory_and_its_file_read_the_same(tmp_path):
@@ -1772,3 +2000,25 @@ def test_the_gate_pins_no_expected_answer(harness, monkeypatch):
     assert expectations, "the gate never ran"
     assert set(expectations) == {None}
     assert "4" not in COHERENT
+
+
+def test_a_column_written_before_the_plateau_rule_still_loads_and_claims_no_verdict():
+    """The five 2026-09-16 columns are what the Phase 5 write-up published, and the tool that
+    published them has to keep being able to read them.
+
+    `warmup_plateau` is the one field read leniently, because for those rows the absence IS
+    the fact: they ran a fixed budget of three, the plateau rule never ran, and `None` -- no
+    verdict -- is true of them. It must not come back as `False`, which would claim their
+    warmup window hit a cap that did not exist yet.
+    """
+    if not REAL_GRID_RUN.exists():
+        pytest.skip(f"no grid run in this checkout: {REAL_GRID_RUN}")
+    lines = parsed_lines(REAL_GRID_RUN)
+    if "warmup_plateau" in lines[1]:
+        pytest.skip(f"{REAL_GRID_RUN.parent.name} was written under the plateau rule")
+
+    header, results = measure.load_run(REAL_GRID_RUN)
+
+    assert results, "a pre-plateau column still loads"
+    assert all(result.warmup_plateau is None for result in results)
+    assert header["warmup"] == 3, "and its header still names the fixed budget it ran"
