@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import threading
 import time
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
@@ -2284,26 +2285,76 @@ def test_a_concurrent_cells_requests_are_judged_one_at_a_time(harness):
 
 
 # The two series a warmup window can read. This cell's per-request decode rates climb forever --
-# what a 3% trend test can never call settled -- while every request takes the same wall time and
+# what a 3% trend test can never call settled -- while every request is charged the same span and
 # reports the same 100 tokens, so a batch's aggregate throughput is flat. Whichever series the
 # window reads decides whether the cell settles or pays the cap, at the same constants.
 CLIMBING_SLEEP_S = 0.02
 
 
-def climbing_per_request_responder(seconds=CLIMBING_SLEEP_S):
+class FakeClock:
+    """``measure``'s monotonic clock, moved by the responder instead of by the wall.
+
+    A batch's span is the one number in this file a responder cannot fake: ``_batch`` reads it
+    off ``time.monotonic`` itself. On a shared runner the four threads of one 20 ms batch finish
+    far enough apart that the two window medians miss the 3% plateau, and the cell runs to the
+    cap. That is how this file failed on GitHub CI run 35128400486 -- ``warmup_plateau=False``,
+    "the window closed", about a cell whose aggregate never moved. Moving the clock one step per
+    request, inside the responder that used to sleep it, makes every batch of ``concurrency``
+    requests span exactly ``concurrency * CLIMBING_SLEEP_S`` on any machine under any load.
+
+    Only ``measure`` sees it: the patch goes on that module's name for the clock, so the pool,
+    the runner and the rest of the process keep the real one, and any other view of ``time``
+    ``measure`` reaches for is delegated rather than invented.
+    """
+
+    def __init__(self):
+        self.seconds = 0.0
+        self._lock = threading.Lock()
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def monotonic(self):
+        return self.seconds
+
+    def advance(self, seconds):
+        """One request's step, under a lock: the batch's four call it from four threads."""
+        with self._lock:
+            self.seconds += seconds
+
+
+def climbing_per_request_responder(seconds=CLIMBING_SLEEP_S, *, clock=None):
+    """One request's step *seconds* long, on *clock* when it is given and on the wall otherwise.
+
+    Sleeping is the honest default, for a test that reads only the requests' own rates. A test
+    whose verdict comes out of the batch span has to pass a clock instead, or it is measuring
+    the runner's scheduler -- see :class:`FakeClock`.
+    """
     def responder(call):
-        time.sleep(seconds)
+        if clock is None:
+            time.sleep(seconds)
+        else:
+            clock.advance(seconds)
         return rate_observation(20.0 + next(calls))
 
     calls = itertools.count()
     return responder
 
 
-def test_a_concurrent_warmup_settles_on_the_batchs_aggregate_throughput(harness):
+def test_a_concurrent_warmup_settles_on_the_batchs_aggregate_throughput(harness, monkeypatch):
     """Plan 06-01a, applied: at N>1 the per-request series swings without trend and never
     settles, while the quantity the sweep publishes does. Same rule, same constants, other
-    series -- so the window closes instead of running every concurrent cell to the cap."""
-    harness.transport.responder = climbing_per_request_responder()
+    series -- so the window closes instead of running every concurrent cell to the cap.
+
+    Off the wall clock: a batch span is the one number here a responder cannot fake, and on a
+    shared runner it is four threads wide. GitHub CI run 35128400486 closed this window as
+    ``warmup_plateau=False`` about a cell whose aggregate had not moved, which is the runner's
+    scheduler being read as the cell's trend. The responder now moves the clock the batch is
+    timed against, so the span is the same 80 ms wherever this runs.
+    """
+    clock = FakeClock()
+    monkeypatch.setattr(measure, "time", clock)
+    harness.transport.responder = climbing_per_request_responder(clock=clock)
     harness.add_runtime("mlxlm")
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1,
@@ -2312,6 +2363,10 @@ def test_a_concurrent_warmup_settles_on_the_batchs_aggregate_throughput(harness)
     warmups = results[0].warmup_observations
     assert results[0].warmup_plateau is True, "the window closed"
     assert len(warmups) < measure.WARMUP_CAP * 4, "and it closed before the cap"
+    spans = results[0].batch_spans
+    assert spans == pytest.approx([4 * CLIMBING_SLEEP_S] * len(spans)), (
+        "every batch of four costs the same 80 ms, so the series the window read is flat"
+    )
     assert not measure._settled([measure.decode_tps(observation) for observation in warmups]), (
         "the per-request series it did not read was still climbing"
     )
