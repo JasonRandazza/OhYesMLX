@@ -30,7 +30,7 @@ Phases: 5 of 7 complete
 | 2.1 | Coherence gate [INSERTED] | 1 | **Complete** | 2026-09-15 |
 | 3 | The sparse grid — format axis per runtime | 2 | **Complete** | 2026-09-15 |
 | 4 | The 256-expert question | 1 | **Complete** | 2026-09-15 |
-| 5 | The joined grid (runtime axis falls out of it) | 1 | In progress | - |
+| 5 | The joined grid (runtime axis falls out of it) | 2 | In progress | - |
 | 6 | Sweeps | 2 | Not started | - |
 
 ## Phase Details
@@ -133,7 +133,12 @@ entry states, four join guards refuse a grid whose columns never belonged togeth
 `ohyesmlx grid <run-dir>...` takes explicit directories rather than a glob.
 
 **Plans:**
-- [ ] 05-01: `load_run`, `render_grid`, the `grid` command, and the write-up
+- [x] 05-01: `load_run`, `render_grid`, the `grid` command, and the write-up —
+      `docs/research/2026-09-16-phase5-joined-grid.md`
+- [ ] 05-02: per-runtime warmup, re-run the mlx-lm column, re-join. **The runtime axis is
+      not publishable until this lands**: mlx-lm is last in 11 of 14 orderings on the
+      published median and 1st/3rd/3rd/4th on the late-window one, so the ordering is
+      measuring warmup rather than serving speed. The format axis is unaffected.
 
 ### Phase 6: Sweeps
 

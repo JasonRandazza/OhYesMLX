@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 3 of 6 (the sparse grid) — COMPLETE. Full grid re-run 60/60 PASS.
+Phase: 5 of 7 (the joined grid) — built and reviewed. Phases 1, 2, 2.1, 3, 4 complete.
 Plan: 1 of 1 in current phase
-Status: Applying (Phase 3 closed; Phase 5 report is the next build)
-Last activity: 2026-09-15 evening — the grid re-ran clean. 60/60 cells PASS across 5 columns, 353 tests. The format ordering replicated in every runtime that can read it. A seventh measurement-validity defect found and fixed: measured_drift was recorded and unread.
+Status: Applying (Phase 5 code and write-up landed; the warmup decision is the gate on publishing the runtime axis)
+Last activity: 2026-09-16 — the five columns joined. `measure.load_run` reads a run back, `report.render_grid` draws the grid, `ohyesmlx grid <dir>...` renders it, 389 tests. Reading the rows for the first time found the runtime-axis ordering to be the warmup budget rather than the runtimes, and an eighth measurement-validity defect: `footprint` is not one quantity across runtimes.
 
 Progress:
-- Milestone: [████████░░] 80%
-- Phase: [██████████] 100%
+- Milestone: [█████████░] 90%
+- Phase: [█████████░] 90%
 
 ## Loop Position
 
@@ -68,6 +68,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Drift annotates, never fails | Phase 3 | A cell still moving is a result, and the row saying the window was too short is the row that must not be dropped. DRIFT_ANNOTATION_PCT=5.0 separates the columns, not every row. |
 | Warmup is a per-runtime property, not a universal constant | Phase 3 | mlx-lm drifts +17.0% median across a whole column; oMLX, mlx-optiq, vMLX and Osaurus settle at +2.6/-0.0/+0.5/+1.0%. One warmup budget cannot be right for all five. |
 | A server's self-reported tok/s is not a measurement | Phase 4 | oMLX reports 15,286 tok/s from a generation_duration of 0.0. The harness measures; it does not relay. |
+| Phase 5 is a join, not a measurement campaign | Phase 5 | The runtime axis was measured in full by Phase 3's five columns and read by nobody. Re-measuring it would have re-run 67 minutes of data already on disk. |
+| A grid is assembled from named directories, never a glob | Phase 5 | `results/grid/` holds thirteen run dirs from three sessions; a wildcard would silently join columns that never belonged together. |
+| The runtime axis is not publishable until warmup is per-runtime | Phase 5 | mlx-lm is last in 11 of 14 orderings on the published median and 1st/3rd/3rd/4th on the late-window median. The cross-runtime ordering is measuring warmup and calling it speed. The format axis is unaffected — within a column the shortfall lands on every format equally. |
+| `peak_mb` and `cold_load_s` carry no runtime-axis ranking | Phase 5 | `footprint` counts different pages per runtime: four columns report within a few percent of their weight bytes, Osaurus roughly half of its. `CROSS_RUNTIME_UNCOMPARABLE` prints the reason above any runtime-axis ordering by them. Format-axis orderings are untouched. |
 
 ### Deferred Issues
 
@@ -78,6 +82,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | ~~LMRE's rubric/ruling design not ported~~ **PULLED FORWARD 2026-09-15** | Pre-phase | — | Floors + one ordering metric now pinned in docs/interfaces.md. The accuracy axis stays in v2; only the honest half moved. |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
 | Tokenizer-unavailable should make a cell N/A, not 5 transport failures | Phase 4 | S | measure.py's docstring promises visible N/A; behaviour gives FAIL with a server-shaped reason |
+| Eight pre-`first_request_workload_id` run dirs cannot be loaded | Phase 5 | S | `load_run` refuses them by line number rather than defaulting the field. A schema migration, only if those columns are ever wanted |
+| mlx-optiq reports `"mlx-optiq, version 0.5.6"`, not a bare version | Phase 3 | S | Join guard 4 compares the exact string. Normalise when that guard is next touched |
+| `footprint` vs resident on Osaurus is inferred, not probed | Phase 5 | S | The file-backed-pages explanation needs a probe before any memory ranking is published |
 | ~~`mlx-lm` 0.31.3 lives only in `/tmp/mlxspike`~~ **RESOLVED 2026-09-15** | Phase 4 | — | Reinstalled at `~/.local/share/ohyesmlx/mlx-lm-0.31.3` with the spike's exact pins (mlx 0.32.2, transformers 5.17.0, tokenizers 0.23.2, numpy 2.5.3). |
 
 ### Blockers/Concerns
@@ -95,10 +102,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-15 (evening)
-Stopped at: Phase 3 closed. Tasks #3, #4 and #6 all done and verified live; the deferred-load threshold was re-attributed. Four commits unpushed.
-Next action: push the four commits, then Phase 5 — the report that joins the five run directories under results/grid/. Two open questions carried forward, both recorded in HANDOFF.md: the per-runtime warmup budget, and the column-entry drift effect.
-Resume context: **Read `.paul/HANDOFF.md` first** — it carries the grid result, the drift finding, and machine state.
+Last session: 2026-09-16
+Stopped at: Phase 5's code, guards and write-up landed in `a92fe11` and `fe371e9`, 389 tests, reviewed and re-verified personally. `docs/research/2026-09-16-phase5-joined-grid.md` is the phase's document.
+Next action: the per-runtime warmup budget. It stopped being a nice-to-have when the join showed the runtime-axis ordering flips under it. Then re-run the mlx-lm column (and raise `measured` above 5 while doing so) and re-join.
+Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-phase5-joined-grid.md`.
 
 ---
 *STATE.md — Updated after every significant action*
