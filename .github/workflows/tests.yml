@@ -1,0 +1,31 @@
+# The suite, on the platform the project measures.
+#
+# macOS, not ubuntu: sample.py shells out to `footprint` and `vmmap` and runtimes.py drives
+# four macOS-only servers, so a Linux runner would be testing a different program. The
+# runners are Apple Silicon, which is the hardware this project exists to measure on.
+#
+# Two dependencies and no more: pytest, and `tokenizers` because token_counter.py reconciles
+# a runtime's reported token split against a local tokenizer. The package itself declares no
+# dependencies and adding one requires naming what it replaces.
+#
+# Nothing here starts a runtime, loads a model or takes a measurement. The tests that read a
+# real run directory skip when `results/` is absent, which it always is in CI -- results are
+# gitignored, and a benchmark number produced by a shared CI runner would be worthless anyway.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install pytest tokenizers
+      - run: python -m pytest -q
