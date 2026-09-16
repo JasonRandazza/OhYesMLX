@@ -17,9 +17,9 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
 Phase: 6 of 7 (sweeps) — in progress. Phases 1, 2, 2.1, 3 (**both** halves), 4, 5 complete.
-Plan: 06-01b of 06-01a/b/c + 06-02
+Plan: 06-01c of 06-01a/b/c + 06-02 — pin built and probed; the sweep itself has not run
 Status: Applying (v1's measurement work is done; Phase 6 is the remaining milestone content)
-Last activity: 2026-09-16 13:50Z — **none of the five runtimes batch.** N=8 against each one's own N=1 row: gains 0.99–1.15x, every batch span ~8x a single request's. mlx-lm's 1.15x is run variation, not batching — its per-request rate went UP, which real batching cannot do. Earlier: MoE format axis (59/60 PASS), the eighth defect probed and its first explanation killed, 06-01a and 06-01b done. Re-measured under the plateau warmup rule: 60/60 PASS, 59/60 settled, mlx-lm's drift +17.0% → −2.2% with signs mixed. The late-window stability test that rejected the first grid now leaves 10 of 15 orderings identical and the five that differ are ties 0.3–2.5% apart. `docs/research/2026-09-16-phase5-joined-grid.md` carries both the original finding and the re-measured result.
+Last activity: 2026-09-16 ~12:00 local — **06-01c's pin is built and four runtimes serve 32k whole.** `--prompt-tokens N` sizes one prefill prompt against the serving tokenizer (achieved 128/1024/4096/16384/32765). Live probe: mlx-lm, oMLX, OptiQ, vMLX all accept 16k and 32k untruncated, none prefix-caches a repeat, ~70 s TTFT at 32k. Join guard 1 now compares `concurrency` and `prompt_tokens` (06-01b had left concurrency out). OptiQ pinned `--max-context off`. Osaurus not yet probed. See `docs/research/2026-09-16-prompt-length-context-limits.md`. Earlier: none of the five runtimes batch (N=8 gains 0.99–1.15x).
 
 Progress:
 - Milestone: [█████████░] 97%
@@ -82,6 +82,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | A grid is assembled from named directories, never a glob | Phase 5 | `results/grid/` holds thirteen run dirs from three sessions; a wildcard would silently join columns that never belonged together. |
 | The runtime axis is not publishable until warmup is per-runtime | Phase 5 | mlx-lm is last in 11 of 14 orderings on the published median and 1st/3rd/3rd/4th on the late-window median. The cross-runtime ordering is measuring warmup and calling it speed. The format axis is unaffected — within a column the shortfall lands on every format equally. |
 | `peak_mb` and `cold_load_s` carry no runtime-axis ranking | Phase 5 | `footprint` counts different pages per runtime: four columns report within a few percent of their weight bytes, Osaurus roughly half of its. `CROSS_RUNTIME_UNCOMPARABLE` prints the reason above any runtime-axis ordering by them. Format-axis orderings are untouched. |
+| Sweep prompts are cut from a frozen fixture, `ohyesmlx/longtext.md` | Phase 6 | The 09-14/09-15 research docs concatenated once (60,701 tokens, sha256 3ed2c160…a8a3), after the MS-7 excerpt. Chosen by Jason over a downloaded book and authored text. Never regenerated from `docs/`. |
+| Osaurus runs the prompt-length sweep with its prefix and block-disk caches off | Phase 6 | With them on every repeat is a 0.27 s lookup. Authorised by Jason 2026-09-16; `scripts/run_sweep_prompt.sh` toggles, restores byte-exact and requires drift NONE. |
+| OptiQ is started with `--max-context off` | Phase 6 | An integer cap rotates the KV window instead of refusing. No-op on Qwen3.5/LFM2 (both define `make_cache`), so no grid number moves. Jason's call, 2026-09-16. |
 
 ### Deferred Issues
 
