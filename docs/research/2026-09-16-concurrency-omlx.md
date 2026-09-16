@@ -68,3 +68,71 @@ sentence next to it.
 - **Nothing about a batching runtime's quality.** A server that batches trades per-request
   latency for total throughput, and which of those a reader wants is theirs to decide. This
   measures which trade each server is actually making, not which is better.
+
+---
+
+# All five, at N=8: none of them batch
+
+Measured 2026-09-16 10:44–13:44Z. Run directories (gitignored):
+`results/sweep-conc8/` holds Osaurus, mlx-optiq, vMLX and mlx-lm at N=8;
+`results/sweep-conc/20260916T095351Z-format` is oMLX's. One cell each,
+`oq4` = Qwen3.5-4B-oQ4, the one format all five runtimes serve. All 60 rows PASS.
+
+The N=1 reference is each runtime's `oq4` row from the dense grid measured earlier the same
+night — identical pins, identical workloads, `measured 9` sequential requests. The runs are
+compared rather than joined: the grid's headers predate the `concurrency` pin, so join guard 1
+would refuse them, correctly. This is a research comparison and says so.
+
+| runtime | N=1 per-req | N=1 agg | N=8 per-req | **N=8 agg** | **gain** |
+|---|---|---|---|---|---|
+| mlx-lm | 67.0 | 64.2 | 77.1 | 73.9 | **1.15×** |
+| oMLX | 75.5 | 71.2 | 73.0 | 72.5 | **1.02×** |
+| mlx-optiq | 76.2 | 72.1 | 77.1 | 73.0 | **1.01×** |
+| vMLX | 73.3 | 71.1 | 73.9 | 72.1 | **1.01×** |
+| Osaurus | 68.7 | 66.4 | 69.3 | 67.0 | **1.01×** |
+
+(decode workload, 512 tokens. The chat workload gives the same picture: 1.09, 0.99, 0.99,
+1.00, 0.99.)
+
+**Not one of the five gains throughput from eight simultaneous requests.** Four are flat to
+within 2%. Every batch span is ~8× a single request's, and TTFT grows in proportion.
+
+## mlx-lm's 1.15× is not batching, and the per-request column is how you can tell
+
+mlx-lm is the only one showing a gain worth a second look, and the second look kills it.
+**Its per-request decode rate went *up*, 67.0 → 77.1.**
+
+That is impossible under real batching. Eight requests sharing one GPU must each decode more
+slowly; batching trades exactly that per-request slowdown for total throughput. A runtime whose
+per-request rate *rises* while its aggregate rises is not batching — it is a runtime that
+happened to run faster in this measurement than in the one it is being compared against.
+
+mlx-lm is also the column that needed the longest warmup and whose drift was the whole subject
+of plan 05-02, so run-to-run variation is exactly where it would show up. Reading 1.15× as
+"mlx-lm batches a little" would be the same error this project has caught four other times: a
+number that moved for a reason nobody checked.
+
+## What this means for someone choosing a server
+
+On any of these five, **concurrency is pure latency cost.** Eight simultaneous users get the
+total throughput of one and each waits roughly eight times as long for a first token. The
+useful move is to queue work yourself and send it sequentially; sending it in parallel buys
+nothing and makes every user's experience worse.
+
+That is a genuinely useful thing to know and it is not what the MLX ecosystem's framing
+suggests — "server" implies concurrent serving, and all five of these expose an
+OpenAI-compatible endpoint that accepts parallel requests without complaint. They accept them
+and then serve them one at a time.
+
+## What this does not say
+
+- **One cell, one model, one concurrency level.** Qwen3.5-4B-oQ4 at N=8. Whether any of them
+  batches at N=2 with a smaller model, or under a build flag not used here, is unmeasured. The
+  oMLX ladder (N=1/2/4/8) is the only place the *shape* was checked, and there it was linear.
+- **Nothing about correctness under load.** Every row PASSed the coherence gate at N=8, which
+  says the outputs were language, not that they were identical to the sequential ones.
+- **Nothing about a batching server being better.** Batching trades per-request latency for
+  throughput. This measures which trade each server actually makes — and the answer is that
+  none of them makes it.
+- **The drift caveat above applies to every row here.** At N>1 a positive `measured_drift`
+  means per-request rate was still moving, not that the cell was under-warmed.
