@@ -136,6 +136,7 @@ class CellResult:
     observations: list[Observation]   # EVERY raw sample. Never truncated.
     cold_load_s: float | None
     first_request_s: float | None
+    first_request_workload_id: str | None   # which shape made it. See below.
     memory: dict                   # the sample.py result dict
     runtime_version: str | None
     disk_bytes: int | None
@@ -164,6 +165,14 @@ oMLX the fastest loader when it is the second slowest to a first useful token.
 **Any cross-runtime load comparison uses `cold_load_s + first_request_s`.** A large gap between
 `first_request_s` and the measured requests is a load the runtime deferred, and the report says
 so rather than leaving a reader to assume warm-up noise.
+
+That gap is only a gap when both sides come from the same workload. A visit runs its shapes in
+order, so request #1 belongs to exactly one of them, and `first_request_workload_id` records
+which. `first_request_s` is the visit's fact and every row of the cell prints it; the
+deferred-load **note** is made only on the row that owns it. Read against another shape's
+requests the comparison is between two workloads: on the recorded corpus the note fired on 27
+rows and 13 of those were an eager loader's honest chat request measured against prefill's
+shorter median. Attributed, 14 remain, all of them the shape that paid.
 
 Excluding a JIT warm-up from the measured figures is correct — it is an artifact of
 benchmarking. Excluding the weight load is not: the user pays it on every cold start.

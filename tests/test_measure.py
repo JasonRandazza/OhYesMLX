@@ -688,6 +688,9 @@ def test_the_runtime_version_is_recorded(harness):
 # after it. The request is made either way; the record used to throw its latency away.
 FIRST_REQUEST_S = 3.93
 ORDINARY_REQUEST_S = 0.42
+# The second visit's first request. Nothing was deferred into it -- the load was paid in the
+# cold visit -- so a slow one must not overwrite the cold visit's figure or earn a note.
+WARM_VISIT_FIRST_S = 9.5
 
 
 def first_request_responder(first_request_s=FIRST_REQUEST_S, ordinary_s=ORDINARY_REQUEST_S):
@@ -731,6 +734,98 @@ def test_every_workload_row_carries_the_visits_first_request(harness):
     assert [result.first_request_s for result in results] == [pytest.approx(FIRST_REQUEST_S)] * 3
 
 
+def test_the_cold_visit_records_which_workload_made_that_request(harness):
+    """One request has one owner. WHICH shape paid for the load is recorded on every row of the
+    cell, beside the latency that is the visit's fact, so a row can be asked whether the visit's
+    first request was its own."""
+    harness.transport.responder = first_request_responder()
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    assert [result.first_request_workload_id for result in results] == ["chat"] * 3
+    # The other two shapes were in the same visit and made ordinary requests in it: the load
+    # landed in chat's request #1, and neither of theirs.
+    assert [result.warmup_observations[0].total_s for result in results] == [
+        pytest.approx(FIRST_REQUEST_S),
+        pytest.approx(ORDINARY_REQUEST_S),
+        pytest.approx(ORDINARY_REQUEST_S),
+    ]
+
+
+def deferred_rows(harness):
+    """One cell's three workload rows, its cold visit's request #1 charged to `chat`."""
+    harness.transport.responder = first_request_responder()
+    harness.add_runtime("mlxlm")
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+    return {row["workload_id"]: row for row in report.summarize(results)}
+
+
+def test_the_workload_that_made_the_first_request_earns_the_note(harness):
+    """The claim is still made where it is true: chat made request #1, and its own requests
+    after it came back in 0.42 s."""
+    rows = deferred_rows(harness)
+
+    assert rows["chat"]["first_request_s"] == pytest.approx(FIRST_REQUEST_S)
+    assert rows["chat"]["first_request_note"] is not None
+    assert f"{FIRST_REQUEST_S:.2f} s" in rows["chat"]["first_request_note"]
+    assert f"{ORDINARY_REQUEST_S:.2f} s" in rows["chat"]["first_request_note"]
+
+
+def test_a_sibling_workload_claims_nothing_from_the_visits_first_request(harness):
+    """The defect. prefill and decode measured 0.42 s requests in that same visit, so read
+    against their own medians the visit's 3.93 s is +3.51 s of deferral that never happened --
+    and they did not make that request, so the claim is not theirs to make."""
+    rows = deferred_rows(harness)
+
+    for workload_id in ("prefill", "decode"):
+        assert rows[workload_id]["first_request_s"] == pytest.approx(FIRST_REQUEST_S), (
+            "the column is the visit's fact and every row of the cell keeps it"
+        )
+        assert rows[workload_id]["first_request_note"] is None
+
+
+def test_a_cold_visit_that_made_no_request_credits_no_workload(harness):
+    """No warmup observation means no request #1, so nothing is recorded and every row of the
+    cell stays silent."""
+    harness.add_runtime("omlx", start_error=RuntimeError("model type not supported"))
+
+    results = harness.run([harness.cell("oq__omlx", "omlx")], workloads=THREE)
+
+    assert [result.status for result in results] == ["N/A"] * 3
+    assert [result.first_request_workload_id for result in results] == [None] * 3
+    assert [row["first_request_note"] for row in report.summarize(results)] == [None] * 3
+
+
+def test_a_warm_visit_records_no_first_request_of_its_own(harness):
+    """The load was paid in the cold visit. The second visit's first request is an ordinary one
+    however long it took, and it overwrites nothing, credits no workload and earns no note: a
+    visit that did not record the cold load is not where a load can have landed."""
+    def responder(call):
+        if call.visit == 2 and call.visit_index == 0:
+            return FakeObservation(total_s=WARM_VISIT_FIRST_S)
+        return FakeObservation(total_s=FIRST_REQUEST_S if call.index == 0 else ORDINARY_REQUEST_S)
+
+    harness.transport.responder = responder
+    runtime = harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], workloads=THREE)
+
+    # The slow second visit really happened: it is a raw observation, on the record like every
+    # other warmup, and it is not the visit's first request.
+    assert results[0].warmup_observations[WARMUPS].total_s == pytest.approx(WARM_VISIT_FIRST_S)
+    assert [handle.first_request_s for handle in runtime.handles] == [
+        pytest.approx(FIRST_REQUEST_S),
+        None,
+    ]
+    assert [result.first_request_s for result in results] == [pytest.approx(FIRST_REQUEST_S)] * 3
+    assert [result.first_request_workload_id for result in results] == ["chat"] * 3
+
+    notes = {row["workload_id"]: row["first_request_note"] for row in report.summarize(results)}
+    assert notes["chat"] is not None
+    assert f"{WARM_VISIT_FIRST_S:.2f} s" not in notes["chat"], "the warm visit carries no note"
+
+
 def test_a_cell_with_no_warmups_records_none_first_request_s(harness):
     """No visit ever reached this cell, so no request was made and none can be charged."""
     harness.add_runtime("omlx", start_error=RuntimeError("model type not supported"))
@@ -740,6 +835,7 @@ def test_a_cell_with_no_warmups_records_none_first_request_s(harness):
     assert results[0].status == "N/A"
     assert results[0].warmup_observations == []
     assert results[0].first_request_s is None
+    assert results[0].first_request_workload_id is None
 
 
 def test_a_first_request_that_never_came_back_records_none(harness):
@@ -1004,7 +1100,7 @@ def test_a_second_run_overwrites_rather_than_appends(harness):
 
 def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
                 runtime_version="mlx-lm 0.31.3", disk_bytes=123, workload_id="chat",
-                first_request_s=None):
+                first_request_s=None, first_request_workload_id=None):
     """A CellResult to hand straight to write_jsonl, with no run behind it."""
     return measure.CellResult(
         cell=measure.Cell(id=cell_id, runtime=runtime, artifact_dir="/models/oq4", label="oq4"),
@@ -1015,6 +1111,7 @@ def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
         warmup_observations=[],
         cold_load_s=12.5,
         first_request_s=first_request_s,
+        first_request_workload_id=first_request_workload_id,
         memory={"peak_mb": 9150.0},
         runtime_version=runtime_version,
         disk_bytes=disk_bytes,
@@ -1075,6 +1172,31 @@ def test_write_jsonl_writes_a_header_and_one_object_per_result(tmp_path):
     assert lines[0]["observations"][2]["error"] == "boom"
 
 
+def test_the_deferred_load_note_stays_recomputable_from_the_jsonl(tmp_path):
+    """The note is decided from which workload made the visit's first request, so the file has
+    to say which one that was: a reader re-deriving the row from disk gets the same claim."""
+    results = [
+        cell_result([FakeObservation(total_s=ORDINARY_REQUEST_S)] * MEASURED,
+                    first_request_s=FIRST_REQUEST_S, first_request_workload_id="chat")
+    ]
+    path = tmp_path / "results.jsonl"
+
+    measure.write_jsonl(results, str(path), run={"temperature": 0.0})
+
+    record, = [json.loads(line) for line in path.read_text().splitlines()[1:]]
+    assert record["first_request_s"] == pytest.approx(FIRST_REQUEST_S)
+    assert record["first_request_workload_id"] == "chat"
+
+    rebuilt = cell_result(
+        [FakeObservation(**raw) for raw in record["observations"]],
+        first_request_s=record["first_request_s"],
+        first_request_workload_id=record["first_request_workload_id"],
+    )
+    assert report.summarize([rebuilt])[0]["first_request_note"] == (
+        report.summarize(results)[0]["first_request_note"]
+    )
+
+
 def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
     results = [cell_result([FakeObservation(ttft_s=t) for t in (0.4, 0.5, 0.6, 0.7, 0.8)])]
     path = tmp_path / "results.jsonl"
@@ -1093,6 +1215,7 @@ def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
             warmup_observations=[FakeObservation(**raw) for raw in record["warmup_observations"]],
             cold_load_s=record["cold_load_s"],
             first_request_s=record["first_request_s"],
+            first_request_workload_id=record["first_request_workload_id"],
             memory=record["memory"],
             runtime_version=record["runtime_version"],
             disk_bytes=record["disk_bytes"],

@@ -14,7 +14,10 @@ cannot say both.
 own. It is where a runtime that loads its weights lazily pays for them — ``cold_load_s`` is
 only a time-to-listening for one of those — so a reader who cannot see it reads a whole load
 as warm-up noise. It is never added to ``cold_load_s`` here either: the contract says a
-cross-runtime load comparison uses the sum, not that the harness publishes it.
+cross-runtime load comparison uses the sum, not that the harness publishes it. The column is
+the visit's and every row of the cell prints it; the deferred-load note is not, because it
+reads that one number against the requests *this row* measured, and one request belongs to
+one workload. Only the shape that ran first can say the gap is a load.
 
 Percentiles need samples to be percentiles. Below five, ``ttft_p90_s`` and ``ttft_p99_s``
 are ``None`` and the row carries an ``n=<k>`` note, because a p95 built from two values is
@@ -501,11 +504,27 @@ def _row(result: CellResult) -> dict:
         else f"TTFT is time-to-completion, not time-to-first-token: {single_delta} of "
         f"{len(measured)} measured requests arrived whole in one content delta",
         "first_request_note": _deferred_load_note(
-            result.first_request_s, [observation.total_s for observation in measured]
+            result.first_request_s if _made_the_first_request(result) else None,
+            [observation.total_s for observation in measured],
         ),
     }
     row.update(_floor_verdicts(row["status"], row["reason"]))
     return row
+
+
+def _made_the_first_request(result: CellResult) -> bool:
+    """Whether this row's workload is the one that made the cold visit's first request.
+
+    A visit runs its workloads in order, so that request belongs to the shape that ran first,
+    and measure records which one on every row of the cell. The latency is still the visit's
+    fact and every row prints it; the note is a different claim — that the gap between it and
+    the requests measured here is a load the runtime deferred — and only the row that paid it
+    has the population to make that claim from. On any other row the two sides are different
+    workloads: an eager loader's honest 3.6-5.0 s chat request read against prefill's ~1.0 s
+    median is +2.6-4.0 s of deferral that never happened. A row that did not make that request
+    claims nothing, and a visit that made none leaves every row of the cell silent.
+    """
+    return result.first_request_workload_id == result.workload_id
 
 
 def _deferred_load_note(first_request_s, request_seconds) -> str | None:
@@ -807,12 +826,16 @@ def _footnotes() -> list[str]:
         "peak MB is Apple's `phys_footprint` from `footprint -p <pid>`. disk bytes counts "
         "every file under the artifact directory, sidecars included.",
         "",
-        "first request s is the cold visit's first warmup. For a runtime that loads its "
-        "weights at startup it is an ordinary warm request; for one that loads them lazily it "
-        "is where the load landed. cold load s and first request s are the two halves of what "
-        "a cold start costs — a cross-runtime load comparison uses their sum — and a first "
-        f"request more than {DEFERRED_LOAD_EXCESS_S:g} s above the median measured request "
-        "says so in the row's notes rather than being read as warm-up noise.",
+        "first request s is the cold visit's first warmup, and every row of a cell carries it "
+        "because the visit is the cell's. For a runtime that loads its weights at startup it "
+        "is an ordinary warm request; for one that loads them lazily it is where the load "
+        "landed. cold load s and first request s are the two halves of what a cold start "
+        "costs — a cross-runtime load comparison uses their sum — and a first request more "
+        f"than {DEFERRED_LOAD_EXCESS_S:g} s above the median of the requests the workload that "
+        "made it went on to measure says so in that row's notes rather than being read as "
+        "warm-up noise. A row that did not make that request says nothing about it: the two "
+        "numbers would come from different workloads, and the gap between them would be this "
+        "harness comparing two shapes.",
         "",
         f"p90 and p99 need at least {MIN_PERCENTILE_N} samples; below that the cell shows "
         "`—` and the row says `n=<k>` rather than inventing a percentile.",

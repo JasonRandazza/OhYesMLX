@@ -28,9 +28,11 @@ What this module refuses to do:
   which is a load time for a runtime that loads at startup and only a time-to-listening for
   one that loads on the first request. That runtime's load lands inside warmup #1, so the
   cold visit's first warmup latency is recorded too — as ``first_request_s``, its own
-  number, never folded into ``cold_load_s``. Ranking on ``cold_load_s`` alone named oMLX the
-  fastest loader when it is the second slowest to a first useful token; a comparison across
-  runtimes uses the sum.
+  number, never folded into ``cold_load_s`` — and with it the workload that made that
+  request, because the latency is the visit's while the claim that reads it as a deferred
+  load belongs to the one row whose own requests it was measured against. Ranking on
+  ``cold_load_s`` alone named oMLX the fastest loader when it is the second slowest to a
+  first useful token; a comparison across runtimes uses the sum.
 
 * **Compare different generation lengths.** ``max_tokens`` belongs to the workload, and every
   request in a workload uses that workload's value, so decode tok/s is never a ratio between
@@ -172,6 +174,11 @@ class CellResult:
     # folded into cold_load_s; ``None`` when this cell was never visited, or when that first
     # request did not come back.
     first_request_s: float | None
+    # Which workload made that request. One request has one owner -- the shape that ran first
+    # -- and it is recorded on every row of the cell beside the latency, the way the latency
+    # itself is, because the visit's number stays the visit's fact while the note that reads
+    # it as a deferred load is a claim only the row that paid it can make.
+    first_request_workload_id: str | None
     memory: dict
     runtime_version: str | None
     disk_bytes: int | None
@@ -375,6 +382,7 @@ def _results_for(
                 warmup_observations=[],
                 cold_load_s=None,
                 first_request_s=None,
+                first_request_workload_id=None,
                 memory={},
                 runtime_version=None,
                 disk_bytes=artifact_bytes(cell.artifact_dir),
@@ -472,27 +480,41 @@ def _visit(
     if cold_visit:
         # Warmup #1 is where a lazy loader pays for its weights. One load is shared by the
         # cell's workloads, so the cost is recorded on the handle and on every one of their
-        # rows rather than on whichever shape happened to run first.
+        # rows rather than on whichever shape happened to run first -- and beside it the one
+        # shape that made that request, because a row that did not make it has no latency of
+        # its own to read against its own measured requests.
+        carrier = _first_warmup_result(results)
         handle.first_request_s = _first_warmup_latency(results)
         for result in results:
             result.first_request_s = handle.first_request_s
+            result.first_request_workload_id = None if carrier is None else carrier.workload_id
 
     return "measured"
+
+
+def _first_warmup_result(results: list[CellResult]) -> CellResult | None:
+    """The workload that made the cold visit's first request, or ``None`` when none did.
+
+    A visit's requests are made workload by workload and recorded in that order, so the first
+    workload holding a warmup observation is request #1's owner. One request has one owner: the
+    shape that ran first answers for it, not all three of them. A visit that made no request
+    has no such row, and nothing is recorded for it.
+    """
+    return next((result for result in results if result.warmup_observations), None)
 
 
 def _first_warmup_latency(results: list[CellResult]) -> float | None:
     """The cold visit's first warmup latency: what request #1 cost, load included.
 
-    A visit's requests are made workload by workload and recorded in that order, so the first
-    warmup of the first workload that ran one is the visit's first request. ``None`` when that
-    request did not come back: a failed request's duration is how long it waited for the
-    failure, not what the runtime charged for the load, and the load is what this is for.
+    The request is the first warmup of the workload :func:`_first_warmup_result` names.
+    ``None`` when it did not come back: a failed request's duration is how long it waited for
+    the failure, not what the runtime charged for the load, and the load is what this is for.
     """
-    for result in results:
-        if result.warmup_observations:
-            first = result.warmup_observations[0]
-            return first.total_s if came_back(first) else None
-    return None
+    result = _first_warmup_result(results)
+    if result is None:
+        return None
+    first = result.warmup_observations[0]
+    return first.total_s if came_back(first) else None
 
 
 def _workload_visit(
@@ -799,6 +821,9 @@ def _record(result: CellResult) -> dict:
         "reason": result.reason,
         "cold_load_s": result.cold_load_s,
         "first_request_s": result.first_request_s,
+        # Which workload that request belonged to, so the report's deferred-load note stays
+        # recomputable from the file rather than from the order the shapes happened to run in.
+        "first_request_workload_id": result.first_request_workload_id,
         "memory": result.memory,
         "runtime_version": result.runtime_version,
         "disk_bytes": result.disk_bytes,

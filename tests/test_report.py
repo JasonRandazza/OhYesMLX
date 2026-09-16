@@ -63,6 +63,8 @@ class FakeCellResult:
     warmup_observations: list = dataclasses.field(default_factory=list)
     # The cold visit's first warmup latency: the load a lazy loader deferred past readiness.
     first_request_s: float | None = None
+    # Which workload made that request, as measure records it on every row of the cell.
+    first_request_workload_id: str | None = None
 
 
 def obs(
@@ -107,6 +109,7 @@ def cell_result(
     disk_bytes=None,
     workload_id="chat",
     first_request_s=None,
+    first_request_workload_id=None,
 ):
     """A cell as measure.py will hand it over: one result per (cell, workload)."""
     return FakeCellResult(
@@ -120,6 +123,7 @@ def cell_result(
         disk_bytes=disk_bytes,
         workload_id=workload_id,
         first_request_s=first_request_s,
+        first_request_workload_id=first_request_workload_id,
     )
 
 
@@ -502,11 +506,18 @@ DEFERRED_FIRST_S = 3.93
 ORDINARY_S = 0.42
 
 
-def first_request_cell(first_request_s, *, request_seconds=ORDINARY_S, **kwargs):
-    """One cell whose cold visit's first request took *first_request_s*."""
+def first_request_cell(first_request_s, *, request_seconds=ORDINARY_S, workload_id="chat",
+                       **kwargs):
+    """One cell whose cold visit's first request took *first_request_s*.
+
+    The row *is* the workload that made it: request #1 belongs to whichever shape ran first,
+    and a cell with a single workload has no other row for it to belong to.
+    """
     return cell_result(
         [obs(total=request_seconds) for _ in range(5)],
+        workload_id=workload_id,
         first_request_s=first_request_s,
+        first_request_workload_id=workload_id,
         **kwargs,
     )
 
@@ -554,6 +565,80 @@ def test_a_deferred_load_is_named_as_one_in_the_row_notes():
     assert "deferred past readiness" in printed["notes"]
     card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
     assert "deferred past readiness" in card
+
+
+# The defect: a visit runs chat, then prefill, then decode, and request #1 belongs to whichever
+# ran first. Every row of the cell carries the visit's first request -- that column is the
+# visit's fact -- but only the shape that made it measured that latency.
+VISIT_SECONDS = {"chat": 1.00, "prefill": 0.95, "decode": 1.15}
+
+
+def visit_rows(first_request_s, *, made_by="chat", seconds=None):
+    """One cell's three workload rows, its cold visit's first request owned by *made_by*.
+
+    `chat` runs first, so the visit's number sits 2.93 s above chat's own median measured
+    request and 2.98 s above prefill's: the same latency reads as a deferral against either
+    one, and only one of them paid it.
+    """
+    seconds = VISIT_SECONDS if seconds is None else seconds
+    return report.summarize(
+        [
+            cell_result(
+                [obs(total=seconds[workload_id]) for _ in range(5)],
+                workload_id=workload_id,
+                first_request_s=first_request_s,
+                first_request_workload_id=made_by,
+            )
+            for workload_id in ("chat", "prefill", "decode")
+        ]
+    )
+
+
+def test_the_workload_that_made_the_first_request_earns_the_note():
+    rows = visit_rows(DEFERRED_FIRST_S)
+    chat = next(row for row in rows if row["workload_id"] == "chat")
+
+    assert chat["first_request_note"] is not None
+    assert "3.93 s" in chat["first_request_note"]
+    assert "1.00 s" in chat["first_request_note"]
+    assert "+2.93 s over it" in chat["first_request_note"]
+
+    printed = {row["workload"]: row for row in leaderboard_rows(report.render_markdown(rows, axis="runtime"))}
+    assert "deferred past readiness" in printed["chat"]["notes"]
+
+
+def test_a_sibling_workload_claims_nothing_from_the_visits_first_request():
+    """prefill measured 0.95 s requests and did not make the visit's first request, so the
+    visit's 3.93 s is not a deferral in prefill's column: it is another workload's population,
+    and the harness has no reading that crosses the two."""
+    rows = visit_rows(DEFERRED_FIRST_S)
+    by_workload = {row["workload_id"]: row for row in rows}
+
+    for workload_id in ("prefill", "decode"):
+        assert by_workload[workload_id]["first_request_s"] == pytest.approx(DEFERRED_FIRST_S), (
+            "the column is the visit's fact and every row of the cell keeps it"
+        )
+        assert by_workload[workload_id]["first_request_note"] is None
+
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+    assert {row["first request s"] for row in printed} == {"3.93"}
+    for row in printed:
+        if row["workload"] == "chat":
+            continue
+        assert "deferred" not in row["notes"], "a row that did not pay the load claimed it"
+
+
+def test_a_visit_that_recorded_no_first_request_leaves_every_row_silent():
+    """A cold visit that made no warmup and a visit that was not the cold one record nothing,
+    and their rows claim nothing however short their own requests are."""
+    rows = visit_rows(None, made_by=None, seconds={"chat": 0.05, "prefill": 0.05, "decode": 0.05})
+
+    assert [row["first_request_s"] for row in rows] == [None] * 3
+    assert [row["first_request_note"] for row in rows] == [None] * 3
+
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+    assert {row["first request s"] for row in printed} == {"—"}
+    assert all("deferred" not in row["notes"] for row in printed)
 
 
 # The four columns of the runtime-axis grid: cold_load_s, first_request_s and the median
