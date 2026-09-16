@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 5 of 7 (the joined grid) — built and reviewed. Phases 1, 2, 2.1, 3, 4 complete.
-Plan: 1 of 1 in current phase
-Status: Applying (Phase 5 code and write-up landed; the warmup decision is the gate on publishing the runtime axis)
-Last activity: 2026-09-16 — the five columns joined. `measure.load_run` reads a run back, `report.render_grid` draws the grid, `ohyesmlx grid <dir>...` renders it, 389 tests. Reading the rows for the first time found the runtime-axis ordering to be the warmup budget rather than the runtimes, and an eighth measurement-validity defect: `footprint` is not one quantity across runtimes.
+Phase: 5 of 7 (the joined grid) — **COMPLETE**. Phases 1, 2, 2.1, 3 (dense half), 4, 5 done.
+Plan: 2 of 2 in current phase
+Status: Applying (Phase 5 closed; Phase 3 plan 03-02, the MoE column, is the open half of v1)
+Last activity: 2026-09-16 06:46Z — the runtime axis is publishable. Re-measured under the plateau warmup rule: 60/60 PASS, 59/60 settled, mlx-lm's drift +17.0% → −2.2% with signs mixed. The late-window stability test that rejected the first grid now leaves 10 of 15 orderings identical and the five that differ are ties 0.3–2.5% apart. `docs/research/2026-09-16-phase5-joined-grid.md` carries both the original finding and the re-measured result.
 
 Progress:
-- Milestone: [█████████░] 90%
-- Phase: [█████████░] 90%
+- Milestone: [█████████░] 92%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
@@ -68,6 +68,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Drift annotates, never fails | Phase 3 | A cell still moving is a result, and the row saying the window was too short is the row that must not be dropped. DRIFT_ANNOTATION_PCT=5.0 separates the columns, not every row. |
 | Warmup is a per-runtime property, not a universal constant | Phase 3 | mlx-lm drifts +17.0% median across a whole column; oMLX, mlx-optiq, vMLX and Osaurus settle at +2.6/-0.0/+0.5/+1.0%. One warmup budget cannot be right for all five. |
 | A server's self-reported tok/s is not a measurement | Phase 4 | oMLX reports 15,286 tok/s from a generation_duration of 0.0. The harness measures; it does not relay. |
+| Warmup is measured per cell, not pinned per run | Phase 5 | Two windows of five rates, medians compared at 3%, floor 10, cap 20. A trend test and never a variance test: a noisy workload is not an unwarmed one. `warmup_count` publishes what each cell needed. |
+| A run is discarded only for a stated defect in its conditions | Phase 5 | The first oMLX column was thrown away because the machine was not quiet while it ran, and is kept and named with that reason. A run discarded without such a defect is discarded for its number. |
+| Nothing else runs on this machine while a cell is measured | Phase 5 | Not a test suite, not a git operation, not "lightweight" background work. It cost one column: a cell warmed at 68-73 measured 40-60 and would have inverted the format ordering. The harness cannot detect this, so the discipline holds without enforcement. |
+| Adjacent cells within a few percent are ties, not a ranking | Phase 5 | Five runtime-axis pairs sit within 2.5% and swap under a late-window re-rank. The renderer still prints them as an order; marking unresolvable ties is the next improvement. |
 | Phase 5 is a join, not a measurement campaign | Phase 5 | The runtime axis was measured in full by Phase 3's five columns and read by nobody. Re-measuring it would have re-run 67 minutes of data already on disk. |
 | A grid is assembled from named directories, never a glob | Phase 5 | `results/grid/` holds thirteen run dirs from three sessions; a wildcard would silently join columns that never belonged together. |
 | The runtime axis is not publishable until warmup is per-runtime | Phase 5 | mlx-lm is last in 11 of 14 orderings on the published median and 1st/3rd/3rd/4th on the late-window median. The cross-runtime ordering is measuring warmup and calling it speed. The format axis is unaffected — within a column the shortfall lands on every format equally. |
@@ -102,9 +106,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-16
-Stopped at: Phase 5's code, guards and write-up landed in `a92fe11` and `fe371e9`, 389 tests, reviewed and re-verified personally. `docs/research/2026-09-16-phase5-joined-grid.md` is the phase's document.
-Next action: the grid re-run launched 2026-09-16 03:43Z under the 05-02 pins is in flight (~2.5-3 h, run dir `results/grid/20260916T034308Z-format` and its four siblings). When it lands: re-join with `ohyesmlx grid <the five dirs>`, update `docs/research/2026-09-16-phase5-joined-grid.md` with the clean runtime axis, then **commit AND push** — Jason asked for the push explicitly and it is part of landing Phase 5, not a separate step.
+Last session: 2026-09-16 (overnight, unattended)
+Stopped at: Phase 5 complete and pushed. The publishable grid is the five dirs `20260916T034308Z` (mlx-lm), `061309Z` (oMLX, the quiet re-run), `044750Z` (mlx-optiq), `051603Z` (vMLX), `054434Z` (Osaurus). 403 tests. CI exists and is green.
+Next action: Phase 3 plan 03-02 — the MoE format axis on LFM2.5-8B-A1B. Artifacts downloading via `scripts/fetch_moe.sh`, cells in `scripts/gridspec-moe.sh`. Then the two probes in `scripts/` (footprint, concurrency warmup), then Phase 6 plan 06-01b.
 Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-phase5-joined-grid.md`.
 
 ---

@@ -19,7 +19,7 @@ us.
 
 **v1 — Format axis on small models** (0.1.0)
 Status: In progress
-Phases: 5 of 7 complete
+Phases: 6 of 7 complete
 
 ## Phases
 
@@ -30,7 +30,7 @@ Phases: 5 of 7 complete
 | 2.1 | Coherence gate [INSERTED] | 1 | **Complete** | 2026-09-15 |
 | 3 | The sparse grid — format axis per runtime | 2 | **Complete** | 2026-09-15 |
 | 4 | The 256-expert question | 1 | **Complete** | 2026-09-15 |
-| 5 | The joined grid (runtime axis falls out of it) | 2 | In progress | - |
+| 5 | The joined grid (runtime axis falls out of it) | 2 | **Complete** | 2026-09-16 |
 | 6 | Sweeps | 2 | Not started | - |
 
 ## Phase Details
