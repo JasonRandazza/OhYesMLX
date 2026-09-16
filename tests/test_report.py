@@ -2444,3 +2444,32 @@ def test_a_rankable_row_with_no_value_for_the_metric_is_not_a_ragged_cell():
     assert report._entry(ran, "decode_tps") == "no value"
     assert report._entry(never_ran, "decode_tps") == "—"
     assert report._entry(failed, "decode_tps") == "FAIL"
+
+
+def test_the_runtime_axis_refuses_to_rank_a_metric_that_is_not_one_quantity():
+    """A row ordered by peak_mb or cold_load_s says so before it prints the order.
+
+    The grid is where this bites: within a column the runtime is held constant, so whatever
+    `footprint` leaves out it leaves out identically and the format-axis ordering is sound.
+    Across a row the runtime is the variable, and Osaurus's footprint lands below the weight
+    bytes it is serving while its resident size sits at them. An ordering printed without
+    that line reads as "Osaurus uses half the memory", which is a claim about the sampler.
+    """
+    rows = [
+        {"cell_id": "oq4__osaurus", "runtime": "osaurus", "label": "oq4", "workload": "decode",
+         "status": "PASS", "rankable": True, "peak_mb": 1792.0, "cold_load_s": 1.27,
+         "decode_tps": 66.9, "drift": None},
+        {"cell_id": "oq4__omlx", "runtime": "omlx", "label": "oq4", "workload": "decode",
+         "status": "PASS", "rankable": True, "peak_mb": 4200.0, "cold_load_s": 1.69,
+         "decode_tps": 75.5, "drift": None},
+    ]
+    runs = [("run-a", {}, [rows[0]]), ("run-b", {}, [rows[1]])]
+
+    for metric in report.CROSS_RUNTIME_UNCOMPARABLE:
+        rendered = report.render_grid(runs, rank=metric)
+        assert f"`{metric}` is not one quantity across runtimes" in rendered, metric
+        # the ordering is still printed: the reader is warned, not denied the numbers
+        assert "Runtime axis" in rendered and "osaurus" in rendered
+
+    speed = report.render_grid(runs, rank="decode_tps")
+    assert "is not one quantity across runtimes" not in speed

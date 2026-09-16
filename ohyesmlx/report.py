@@ -220,6 +220,41 @@ PIN_FIELDS = ("temperature", "seed", "warmup", "measured", "cooldown_s")
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
 # channel the stream delivered it in, and a cold visit's first request carries the load a
 # runtime deferred into it.
+# Metrics that are not one quantity across runtimes, and so cannot carry a runtime-axis
+# ordering on their own. A format-axis ordering of them is fine: within one column the
+# runtime is held constant, so whatever the number leaves out, it leaves out identically.
+#
+# `cold_load_s` was the first: oMLX loads lazily and hides 3.08-3.85 s of it inside request
+# #1, which is why `first_request_s` exists and why a cross-runtime load comparison uses the
+# sum of the two.
+#
+# `peak_mb` is the second, and the joined grid is what exposed it. Measured, decode workload,
+# `footprint` against `vmmap`'s resident size and the weights on disk:
+#
+#   runtime      footprint MB   resident MB   weights MB
+#   mlx-lm          2867-3789     3379-4198    3061-4044
+#   oMLX            3686-4198     4403-4813    3061-4044
+#   mlx-optiq       2970-3789     3379-4198    3061-4044
+#   vMLX            3686          4096-4301    3061-3207
+#   Osaurus         1331-2560     2867-3994    3161-4044
+#
+# In four columns footprint lands within a few percent of the weight bytes. In the Osaurus
+# column it lands at roughly half them -- below the size of the weights the process is
+# serving, which a process holding them in anonymous memory cannot do -- while that column's
+# resident number sits right at the weights. The direction is that Osaurus's weight pages are
+# file-backed and clean and `footprint` does not count them. Until that is probed rather than
+# inferred, "Osaurus uses half the memory" is a claim about the sampler, not the runtime.
+CROSS_RUNTIME_UNCOMPARABLE = {
+    "peak_mb": "`footprint` does not measure the same pages in every runtime: in the "
+    "2026-09-16 grid four columns report a footprint within a few percent of their weight "
+    "bytes and Osaurus reports roughly half of its, below the weights it is serving, while "
+    "its resident size sits at them. Read this row as five numbers, not as a ranking, until "
+    "the sampler is probed against a runtime that maps its weights file-backed.",
+    "cold_load_s": "a lazy loader defers part of its load past readiness and into request #1, "
+    "where `first_request_s` records it. A cross-runtime load comparison is the sum of the "
+    "two, not this column alone.",
+}
+
 _METRIC_CAVEAT = {
     "decode_tps": "delta_note",
     "prefill_tps": "delta_note",
@@ -1370,6 +1405,12 @@ def _readings(groups: list[tuple], columns: list[dict], labels: list[str], rank:
             lines.append(f"- `{_text(column['runtime'])}`: {_ordering(group, rank, 'label')}")
         lines.append("")
         lines += [f"**Runtime axis — one format, its runtimes ordered.** {CAVEAT['runtime']}.", ""]
+        if rank in CROSS_RUNTIME_UNCOMPARABLE:
+            lines += [
+                f"> **`{rank}` is not one quantity across runtimes.** "
+                f"{CROSS_RUNTIME_UNCOMPARABLE[rank]}",
+                "",
+            ]
         for label in labels:
             group = [row for row in rows if row.get("label") == label]
             lines.append(f"- `{_text(label)}`: {_ordering(group, rank, 'runtime')}")
