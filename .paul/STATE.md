@@ -19,11 +19,11 @@ Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
 Phase: 6 of 7 (sweeps) — in progress. Phases 1, 2, 2.1, 3 (**both** halves), 4, 5 complete.
 Plan: 06-01b of 06-01a/b/c + 06-02
 Status: Applying (v1's measurement work is done; Phase 6 is the remaining milestone content)
-Last activity: 2026-09-16 09:00Z — MoE format axis measured (59/60 PASS), the eighth defect probed and its first explanation killed, 06-01a answered. Earlier: the runtime axis is publishable. Re-measured under the plateau warmup rule: 60/60 PASS, 59/60 settled, mlx-lm's drift +17.0% → −2.2% with signs mixed. The late-window stability test that rejected the first grid now leaves 10 of 15 orderings identical and the five that differ are ties 0.3–2.5% apart. `docs/research/2026-09-16-phase5-joined-grid.md` carries both the original finding and the re-measured result.
+Last activity: 2026-09-16 13:50Z — **none of the five runtimes batch.** N=8 against each one's own N=1 row: gains 0.99–1.15x, every batch span ~8x a single request's. mlx-lm's 1.15x is run variation, not batching — its per-request rate went UP, which real batching cannot do. Earlier: MoE format axis (59/60 PASS), the eighth defect probed and its first explanation killed, 06-01a and 06-01b done. Re-measured under the plateau warmup rule: 60/60 PASS, 59/60 settled, mlx-lm's drift +17.0% → −2.2% with signs mixed. The late-window stability test that rejected the first grid now leaves 10 of 15 orderings identical and the five that differ are ties 0.3–2.5% apart. `docs/research/2026-09-16-phase5-joined-grid.md` carries both the original finding and the re-measured result.
 
 Progress:
-- Milestone: [█████████░] 95%
-- Phase: [██░░░░░░░░] 20%
+- Milestone: [█████████░] 97%
+- Phase: [████░░░░░░] 40%
 
 ## Loop Position
 
@@ -73,6 +73,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Nothing else runs on this machine while a cell is measured | Phase 5 | Not a test suite, not a git operation, not "lightweight" background work. It cost one column: a cell warmed at 68-73 measured 40-60 and would have inverted the format ordering. The harness cannot detect this, so the discipline holds without enforcement. |
 | A sweep is a run pin, never a third `--study` axis | Phase 6 | `--study` names which of a *cell's* two variables may vary, and a cell is (format, runtime). Concurrency, prompt length and cache state are properties of how the run drove the cells. Each sweep is N runs differing in one header pin, joined with Phase 5's machinery. |
 | `measured` counts batches, not requests | Phase 6 | At concurrency 1 a batch is one request, so every number measured so far stays comparable. |
+| None of the five runtimes batch | Phase 6 | Measured at N=8 on the one format all five serve: aggregate gains 0.99–1.15x, spans ~8x, TTFT in proportion. Concurrency on any of them is pure latency cost. A gain without a per-request *slowdown* is not batching. |
+| At N>1, positive drift means per-request rate was still moving | Phase 6 | Not "under-warmed" — the warmup window closed on aggregate. `measured_drift` is unchanged and correct about what it computes; the diagnosis a reader draws is what changes. Any sweep table printing drift needs that sentence beside it. |
 | A concurrency sweep warms on aggregate throughput | Phase 6 | Measured at N=8: the per-request series swings ±11% with no trend and never settles; aggregate settles at batch 12. Same rule, same constants, different series. |
 | `footprint` counts different page classes, measured | Phase 5/6 | Osaurus's weights are wired GPU pages (+1064 MB wired on load, IOAccelerator 581 MB); oMLX's are anonymous (+752 MB active, IOAccelerator 3334 MB). The file-backed explanation was wrong and is deleted. |
 | Adjacent cells within a few percent are ties, not a ranking | Phase 5 | Five runtime-axis pairs sit within 2.5% and swap under a late-window re-rank. The renderer still prints them as an order; marking unresolvable ties is the next improvement. |
@@ -112,7 +114,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-16 (overnight, unattended)
 Stopped at: v1's measurement work complete. Dense grid (5 columns, 60/60 PASS) and MoE grid (5 columns, 59/60 PASS) both joined; all eight measurement-validity defects found, fixed or recorded. Phase 5 complete and pushed. The publishable grid is the five dirs `20260916T034308Z` (mlx-lm), `061309Z` (oMLX, the quiet re-run), `044750Z` (mlx-optiq), `051603Z` (vMLX), `054434Z` (Osaurus). 403 tests. CI exists and is green.
-Next action: Phase 6 plan 06-01b — the concurrency pin, dispatched 08:55Z. Then a small sweep (N=1/2/4/8) on one cell, `render_sweep(varying=...)`, and 06-01c's prompt lengths. Signal to chase first: oMLX may be serializing concurrent requests rather than batching them.
+Next action: Phase 6 plan 06-01c — prompt-length sweeps (128/1k/4k/16k/32k, token counts verified against the serving tokenizer, over-context cells rendered `—` with the refusal recorded). Then `render_sweep(varying=...)`, which is designed and pinned but NOT built — the concurrency results were compared by hand, not joined. Then 06-02, the cold/warm KV split; Jason authorised toggling `~/.osaurus/config/server-runtime.json` provided it is restored and the drift verified back to NONE.
 Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-phase5-joined-grid.md`.
 
 ---
