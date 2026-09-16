@@ -158,3 +158,43 @@ the property the whole project is built to keep.
 - **No self-reported throughput.** oMLX reports 15,286 tok/s from a `generation_duration` of
   0.0; at concurrency the temptation to trust a server's own batch counters will be stronger
   and the answer is the same one.
+
+---
+
+## Plan 06-01a, answered: a concurrency sweep warms on aggregate throughput
+
+Measured 2026-09-16 08:47Z, `scripts/probe_concurrency_warmup.py omlx 8 16`. oMLX serving
+Qwen3.5-4B-oQ4, workload `chat`, sixteen batches of eight concurrent requests, all 8/8 coming
+back every batch.
+
+| batch | per-request median | aggregate tok/s | span s |
+|---|---|---|---|
+| 1 | 80.2 | 62.3 | 16.45 |
+| 2–6 | 71.2 → 65.3 | 68.3 → 65.1 | ~15.5 |
+| 7–13 | 72.3, 80.7, 74.4, 75.1, 71.0, 81.0, 78.8 | 63.9 → 62.6 | ~16.2 |
+| 14–16 | 65.7, 66.3, 68.3 | 65.2, 66.2, 65.9 | ~15.6 |
+
+Under the existing two-window 3% rule: **per-request median never settles in sixteen batches;
+aggregate throughput settles at batch 12.**
+
+The per-request series swings 65.3–81.0 with no trend — queueing variance, since which of
+eight simultaneous requests gets served first is not a property of how warm the model is. That
+is the prefill-noise problem again, in a new place: a variance-sensitive test reads a noisy
+quantity as an unwarmed one. The aggregate series sits in a 62–68 band and settles.
+
+**So the rule keeps its shape and changes its series.** Two windows of five, medians compared
+at 3%, floor 10, cap 20 — over `_aggregate_tps` per batch instead of per-request decode rates.
+Sequential runs are untouched: one batch of one is not the same measurement as one request, and
+nothing in the existing grid changes.
+
+### A signal to test, not a finding
+
+Eight concurrent requests take ~16 s, and each one's decode rate (65–81) is close to what the
+same runtime delivers at N=1 (~88 on this workload). If oMLX were batching, per-request rate
+should fall sharply while aggregate rose; instead aggregate (≈64) sits near per-request and the
+span scales with N. That is what serialization looks like.
+
+It is **one runtime at one concurrency on one workload**, measured by a probe that publishes
+nothing, so it is recorded as the first thing plan 06-01b should look for and not as a result.
+If it holds across runtimes, "which of these actually batches" is the most useful question
+Phase 6 can answer for a reader choosing a server.

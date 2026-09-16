@@ -586,10 +586,26 @@ read a throughput result as a latency result. Per-request rate stays recorded, T
 queueing measurement whose percentiles matter more than its median, and `_aggregate_tps` —
 which already exists — is what the sweep is ordered by.
 
-**The warmup rule is not assumed to carry over to concurrency.** `_settled` compares medians
-of per-request decode rates, and at N>1 those carry queueing variance on top of the runtime's
-own. Whether a concurrency sweep must warm on aggregate throughput instead is a question to
-be measured (plan 06-01a) before any rule is pinned.
+**The warmup rule does not carry over to concurrency — measured, plan 06-01a.** oMLX, N=8,
+workload `chat`, 16 batches:
+
+```
+per-request median   65.3 - 81.0   NEVER settles in 16 batches
+aggregate tok/s      62.1 - 68.3   settles at batch 12
+```
+
+Per-request decode rate at N>1 carries queueing variance of about ±11% with no trend, which a
+3% trend test can never satisfy — the same shape as the noisy prefill workload at N=1, and the
+same wrong answer: it would run every concurrent cell to the cap and report "did not settle"
+about a cell with nothing left to warm.
+
+So **a concurrency sweep warms on aggregate throughput**, which is also the quantity it
+publishes. `_settled` takes a second form for it: the same two-window median comparison at the
+same tolerance, over `_aggregate_tps` per batch rather than per-request rates. The rule's shape
+is unchanged; only the series it reads changes.
+
+A sequential run (N=1) keeps warming on per-request decode rate. One batch of one is not the
+same measurement as one request, and nothing about the existing grid changes.
 
 Prompt lengths are **token** counts verified against the tokenizer that will serve them, with
 the achieved count recorded beside the target. A prompt that exceeds a runtime's context is
