@@ -497,7 +497,7 @@ def test_a_stream_that_plateaus_immediately_stops_at_the_floor(harness):
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
 
-    assert len(results[0].warmup_observations) == 2 * measure.WARMUP_WINDOW == 6
+    assert len(results[0].warmup_observations) == 2 * measure.WARMUP_WINDOW == 10
     assert results[0].warmup_plateau is True
 
 
@@ -510,10 +510,10 @@ def test_a_window_that_keeps_climbing_runs_to_the_cap_and_says_so(harness):
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
 
-    assert len(results[0].warmup_observations) == measure.WARMUP_CAP == 16
+    assert len(results[0].warmup_observations) == measure.WARMUP_CAP == 20
     assert results[0].warmup_plateau is False
     record, = harness.lines()
-    assert record["warmup_count"] == 16
+    assert record["warmup_count"] == 20
     assert record["warmup_plateau"] is False
     assert measure._record(results[0]) == record
 
@@ -528,9 +528,9 @@ def test_a_climbing_window_settles_where_the_climb_stops(harness):
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
 
-    assert len(results[0].warmup_observations) == 9
+    assert len(results[0].warmup_observations) == 12
     assert results[0].warmup_plateau is True
-    assert harness.lines()[0]["warmup_count"] == 9
+    assert harness.lines()[0]["warmup_count"] == 12
 
 
 def test_a_warmup_with_no_decode_rate_cannot_settle_the_window(harness):
@@ -538,7 +538,9 @@ def test_a_warmup_with_no_decode_rate_cannot_settle_the_window(harness):
     can hold three rates that agree and still not have settled: they have to be the last
     three, and a request that came back with no decode window is not one of them."""
     def responder(call):
-        if call.visit_index % 3 == 2:
+        # Only the warmup window: a rate-less request among the MEASURED ones is a FAILed cell,
+        # which is a different test. This one is about what can close a warmup window.
+        if call.visit_index < measure.WARMUP_CAP and call.visit_index % 3 == 2:
             return FakeObservation(ttft_s=None, last_content_s=None, completion_tokens=None)
         return rate_observation(5.0)
 
@@ -2050,6 +2052,30 @@ def test_a_flat_boost_phase_does_not_count_as_warm(harness):
     warmups = [measure.decode_tps(o) for o in results[0].warmup_observations]
 
     assert not measure._settled(measured[:3]), "the boost phase alone is not warmth"
-    assert len(warmups) == 8, "the window closes on the sustained rate, not the boost rate"
+    assert len(warmups) == 11, "the window closes on the sustained rate, not the boost rate"
     assert results[0].warmup_plateau is True
     assert warmups[-1] < 80.0, f"warmed to the sustained rate, not the boost rate: {warmups}"
+
+
+def test_a_noisy_workload_with_no_trend_is_warm_not_unsettled(harness):
+    """Variance is not warmth, measured.
+
+    mlx-lm serving stock-4bit, the prefill workload's warmup rates in the aborted 03:30Z
+    column: 70.3 74.7 72.5 77.1 71.9 78.6 77.5 73.6 70.2 70.9 75.2 64.8 72.5 71.3 76.8 75.4.
+    No trend at all -- the cell is warm from request one and simply swings +/-8% per request.
+    A rule that asked neighbouring rates to agree ran it to the cap, spent sixteen requests
+    learning nothing, and reported "did not settle" about a cell with nothing left to warm.
+    Noise is a property of the workload; reading it as unfinished warmup is the conflation the
+    rule exists to undo.
+    """
+    noisy = [70.3, 74.7, 72.5, 77.1, 71.9, 78.6, 77.5, 73.6, 70.2, 70.9,
+             75.2, 64.8, 72.5, 71.3, 76.8, 75.4]
+    harness.transport.responder = rate_responder(noisy)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+
+    assert results[0].warmup_plateau is True, "a noisy cell with no trend is warm"
+    assert len(results[0].warmup_observations) < measure.WARMUP_CAP, (
+        "and it must not pay the cap to be told so"
+    )

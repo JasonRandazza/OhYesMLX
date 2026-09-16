@@ -448,15 +448,15 @@ of the cell.**
 A workload's warmup window keeps issuing requests until its decode rate stops moving:
 
 ```python
-MIN_WARMUP = 3            # unchanged: load, Metal shader compilation, lazy mmap
-WARMUP_WINDOW = 3         # rates per window; the rule compares two of them
-WARMUP_CAP = 16           # the window closes here whether or not it settled
-WARMUP_PLATEAU_PCT = 3.0  # spread within a window, and the step between two
+MIN_WARMUP = 3            # the floor a caller pinning a fixed budget may not go below
+WARMUP_WINDOW = 5         # rates per window; the rule compares the medians of two
+WARMUP_CAP = 20           # the window closes here whether or not it settled
+WARMUP_PLATEAU_PCT = 3.0  # the step between two window medians
 ```
 
-The cell is warm when the last `WARMUP_WINDOW` rates agree within `WARMUP_PLATEAU_PCT`
-**and** their median agrees with the median of the window before them, to the same
-tolerance. A rate comes from `decode_tps`, the same function every published figure uses; a
+The cell is warm when the median of the last `WARMUP_WINDOW` rates is within
+`WARMUP_PLATEAU_PCT` of the median of the `WARMUP_WINDOW` before them. It is a **trend test
+and never a variance test** — see "Noise is not unfinished warmup" below. A rate comes from `decode_tps`, the same function every published figure uses; a
 warmup observation that carries none cannot settle the window, and the cap is what ends it.
 
 **One window is not enough, measured.** oMLX serving Qwen3.5-4B-oQ4, fourteen identical chat
@@ -479,6 +479,33 @@ fixed budget already used while claiming to have verified something. Live, befor
 | two windows | 77.0 | 76.1 (−1%) |
 
 So the floor is `2 * WARMUP_WINDOW`, not `MIN_WARMUP`.
+
+**Noise is not unfinished warmup, also measured.** The first cell of the aborted 03:30Z
+column — mlx-lm serving stock-4bit, the prefill workload's warmup rates:
+
+```
+70.3 74.7 72.5 77.1 71.9 78.6 77.5 73.6 70.2 70.9 75.2 64.8 72.5 71.3 76.8 75.4
+```
+
+No trend at all. That cell is warm from request one and simply swings ±8% per request, and a
+rule requiring neighbouring rates to agree within 3% can never be satisfied by it: it ran to
+the cap, spent sixteen requests learning nothing, and reported "did not settle" about a cell
+with nothing left to warm. Per-request noise is a property of the workload — a 128-token chat
+varies far more than a 512-token decode — and reading it as unfinished warmup conflates two
+different things, which is the conflation this rule exists to undo.
+
+So the test compares **window medians only**, never the spread inside a window, and the window
+is five rather than three because a median of three of those rates is itself noise. Live, on
+the cell that had capped twice:
+
+| workload | warmups | settled | warm rate | first measured |
+|---|---|---|---|---|
+| chat | 12 | yes | 77.5 | 78.0 |
+| prefill | 10 | yes | 85.1 | 78.2 |
+| decode | 11 | yes | 67.0 | 66.8 |
+
+The floor of ten also caught a third thing: under the old floor of six, the decode workload
+settled while it was still climbing (measured 64.7 → 66.7 across its window).
 
 `3.0%` sits between the two populations the grid measured — four runtimes settle their whole
 *measured* window inside `+2.6 / −0.0 / +0.5 / +1.0%`, and mlx-lm moves `+17.0%` across its.
@@ -513,8 +540,7 @@ the Phase 5 write-up published stay readable by the tool that published them.
 The run header's `warmup` becomes the rule rather than a count:
 
 ```python
-{"mode": "plateau", "window": WARMUP_WINDOW, "floor": 2 * WARMUP_WINDOW,
- "cap": WARMUP_CAP, "plateau_pct": WARMUP_PLATEAU_PCT}
+{"mode": "plateau", "window": 5, "floor": 10, "cap": 20, "plateau_pct": 3.0}
 ```
 
 and `measured` goes `5 → 9`. At 5, `measured_drift` compares a median of two against a
