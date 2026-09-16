@@ -698,6 +698,290 @@ def test_a_cell_with_no_first_request_on_the_record_carries_none_and_claims_noth
     assert printed["first request s"] == "—"
 
 
+# --- drift across the measurement window ----------------------------------------------------
+
+# ``measure.measured_drift`` splits the measured samples in half in the order they were taken
+# and compares the medians, so five requests put two rates in each half and discard the middle
+# one. On the 2026-09-15 grid the per-column median change was +17.0% (mlx-lm), +2.6% (oMLX),
+# -0.0% (mlx-optiq) and +0.5% (vMLX): the mlx-lm column was still climbing while the other three
+# had settled, and a row that cannot show that difference renders the two identically. In the
+# mlx-lm column the runtime is held constant and drift still ranges -1.3% to +28.4% between
+# formats, so it lands on the rows instead of cancelling as a common-mode offset.
+
+
+def drift_cell(windows, **kwargs):
+    """One cell whose measured requests decode over *windows*, in the order they were taken.
+
+    101 completion tokens over a 1.0 s window is 101 tok/s, so a 0.5 s window is 202.
+    """
+    return cell_result([obs(ttft=0.5, last=0.5 + window) for window in windows], **kwargs)
+
+
+# An early half at 101.0 tok/s and a late half at 202.0: +100%, the mlx-lm column's shape.
+CLIMBING = (1.0, 1.0, 1.0, 0.5, 0.5)
+# The same rate in both halves: nothing to say about it.
+FLAT = (1.0,) * 5
+
+
+def test_a_cell_still_climbing_across_its_window_is_annotated_and_still_ranks():
+    """The mlx-lm column: 12 of 12 rows over 5%, up to +28.4%. The row says so — and it is
+    still a result, because the annotation is a note and never a floor."""
+    row = report.summarize([drift_cell(CLIMBING)])[0]
+
+    assert row["status"] == "PASS"
+    assert row["rankable"] is True
+    assert row["excluded_by"] is None
+    assert row["decode_tps"] == 101.0
+    assert row["drift"]["change_pct"] == pytest.approx(100.0)
+    # The medians it compared and the count it compared them over, so the call can be checked
+    # rather than taken.
+    assert "drift +100.0%" in row["drift_note"]
+    assert "early median 101.0 tok/s" in row["drift_note"]
+    assert "202.0 tok/s" in row["drift_note"]
+    assert "n=5" in row["drift_note"]
+    # Direction, and no more than direction: a median of two rates against a median of two.
+    assert "still warming up" in row["drift_note"]
+    assert "insufficient warmup" in row["drift_note"]
+    assert "fixes the direction, not the magnitude" in row["drift_note"]
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert printed["drift %"] == "+100.0"
+    assert "still warming up" in printed["notes"]
+
+
+def test_a_cell_that_held_still_across_its_window_is_not_annotated():
+    """A note printed on every row separates none of them: 0.0% is not a finding."""
+    row = report.summarize([drift_cell(FLAT)])[0]
+
+    assert row["drift"]["change_pct"] == pytest.approx(0.0)
+    assert row["drift_note"] is None
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert printed["drift %"] == "+0.0"
+    assert "drift" not in printed["notes"]
+
+
+def test_a_cell_that_slowed_across_its_window_is_annotated_as_a_thermal_one():
+    """The other sign, which no row of the grid produced: slower late than early is the thermal
+    curve the interleave exists to expose, and the row says that rather than 'warming up'."""
+    row = report.summarize([drift_cell((0.5, 0.5, 0.5, 1.0, 1.0))])[0]
+
+    assert row["drift"]["change_pct"] == pytest.approx(-50.0)
+    assert "drift -50.0%" in row["drift_note"]
+    assert "slowing down" in row["drift_note"]
+    assert "thermal curve" in row["drift_note"]
+    assert "warming up" not in row["drift_note"]
+
+
+# The 2026-09-15 grid's per-column medians, as rows: the threshold has exactly that split to
+# make, between the column that was still climbing and the three that had settled.
+GRID_DRIFT_PCT = (
+    ("mlxlm", "mlx-lm 0.31.3", 17.0),
+    ("omlx", "oMLX 0.6.4", 2.6),
+    ("optiq", "mlx-optiq 0.5.6", -0.0),
+    ("vmlx", "vMLX 1.6.59", 0.5),
+)
+
+
+def grid_drift_row(change_pct, *, runtime, runtime_version):
+    """One grid column as a row whose window moved by *change_pct*, the median it measured."""
+    late = 1.0 / (1.0 + change_pct / 100.0)
+    return report.summarize(
+        [
+            drift_cell(
+                (1.0, 1.0, 1.0, late, late),
+                cell_id=f"oq4__{runtime}",
+                runtime=runtime,
+                runtime_version=runtime_version,
+            )
+        ]
+    )[0]
+
+
+def test_the_drift_annotation_fires_on_the_mlx_lm_column_and_not_the_settled_three():
+    rows = {
+        runtime: grid_drift_row(pct, runtime=runtime, runtime_version=version)
+        for runtime, version, pct in GRID_DRIFT_PCT
+    }
+
+    assert rows["mlxlm"]["drift_note"] is not None, "the column that was still climbing went unremarked"
+    assert "drift +17.0%" in rows["mlxlm"]["drift_note"]
+    for runtime in ("omlx", "optiq", "vmlx"):
+        assert rows[runtime]["drift_note"] is None, (
+            f"{runtime}'s column settled inside the threshold and has nothing to report"
+        )
+
+
+def test_the_drift_annotation_fires_above_the_threshold_and_not_below():
+    """5% is the named threshold, and both sides of it are checked: +5.3% is annotated."""
+    above = report.summarize([drift_cell((1.0, 1.0, 1.0, 0.95, 0.95))])[0]
+    below = report.summarize([drift_cell((1.0, 1.0, 1.0, 0.96, 0.96))])[0]
+
+    assert report.DRIFT_ANNOTATION_PCT == 5.0
+    assert above["drift"]["change_pct"] == pytest.approx(5.26, abs=0.01)
+    assert above["drift_note"] is not None
+    assert below["drift"]["change_pct"] == pytest.approx(4.17, abs=0.01)
+    assert below["drift_note"] is None
+
+
+def test_a_row_with_no_drift_to_report_renders_without_raising():
+    """Fewer than two rates to compare: one sample, or samples whose requests carry no rate."""
+    thin = report.summarize([cell_result([obs()])])[0]
+    rateless = report.summarize(
+        [cell_result([obs(completion=None, token_source="none")] * 5)]
+    )[0]
+
+    for row in (thin, rateless):
+        assert row["drift"] is None
+        assert "no drift figure" in row["drift_note"]
+
+        printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+        assert printed["drift %"] == "—"
+        assert "no drift figure" in printed["notes"]
+
+        card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+        assert "| drift_pct | — | no drift figure" in card
+
+
+def test_a_drift_dict_without_a_percentage_renders_without_raising(monkeypatch):
+    """measure reports ``change_pct`` as None rather than dividing by an early median of zero,
+    and the row prints a dash and says why, the way it does for every other empty value."""
+    monkeypatch.setattr(
+        measure,
+        "measured_drift",
+        lambda observations: {
+            "early_median_tps": 0.0,
+            "late_median_tps": 101.0,
+            "change_pct": None,
+            "n": 5,
+        },
+    )
+    row = report.summarize([cell_result([obs() for _ in range(5)])])[0]
+
+    assert row["drift"]["change_pct"] is None
+    assert "no drift figure" in row["drift_note"]
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert printed["drift %"] == "—"
+    assert "no drift figure" in printed["notes"]
+
+
+def test_a_cell_that_never_ran_is_not_told_drift_is_why_its_row_is_empty():
+    """n=0 already says nothing was measured, and that is the reason. Drift is not."""
+    row = report.summarize(
+        [cell_result([], status="N/A", reason="port 8100 never opened")]
+    )[0]
+
+    assert row["drift"] is None
+    assert row["drift_note"] is None
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert printed["drift %"] == "—"
+    assert "drift" not in printed["notes"]
+
+
+def test_two_cells_at_the_same_rate_render_differently_when_one_is_still_climbing():
+    """The defect itself: same decode rate, same everything but the note, and a reader
+    comparing them has to be able to see that one of the two was still moving."""
+    rows = report.summarize(
+        [
+            drift_cell(CLIMBING, cell_id="oq4__mlxlm", runtime="mlxlm"),
+            drift_cell(
+                FLAT,
+                cell_id="oq4__osaurus",
+                runtime="osaurus",
+                runtime_version="Osaurus 0.25.3",
+            ),
+        ]
+    )
+    printed = {
+        row["cell"]: row for row in leaderboard_rows(report.render_markdown(rows, axis="runtime"))
+    }
+
+    assert printed["oq4__mlxlm"]["decode tok/s"] == "101.0"
+    assert printed["oq4__osaurus"]["decode tok/s"] == "101.0"
+    assert printed["oq4__mlxlm"]["drift %"] == "+100.0"
+    assert printed["oq4__osaurus"]["drift %"] == "+0.0"
+    assert "still warming up" in printed["oq4__mlxlm"]["notes"]
+    assert "drift" not in printed["oq4__osaurus"]["notes"]
+
+
+def test_the_card_prints_the_drift_line_beside_the_decode_rate_it_qualifies():
+    card = card_blocks(report.render_cards(report.summarize([drift_cell(CLIMBING)])))[
+        ("chat", "oq4__mlxlm")
+    ]
+    lines = card.splitlines()
+    decode = next(index for index, line in enumerate(lines) if line.startswith("| decode_tps |"))
+    drift = next(index for index, line in enumerate(lines) if line.startswith("| drift_pct |"))
+
+    assert drift == decode + 1, "the drift line belongs beside the decode rate it qualifies"
+    assert "| drift_pct | +100.0 |" in lines[drift]
+    assert "still warming up" in lines[drift]
+
+
+def test_report_asks_measure_for_the_drift_rather_than_recomputing_it(monkeypatch):
+    """One definition, in one module — the rule ``came_back`` is held to, and what makes this
+    row's percentage the one ``results.jsonl`` recorded for it."""
+    asked = []
+
+    def spy(observations):
+        asked.append(observations)
+        return {"early_median_tps": 101.0, "late_median_tps": 202.0, "change_pct": 100.0, "n": 5}
+
+    monkeypatch.setattr(measure, "measured_drift", spy)
+    observations = [obs() for _ in range(5)]
+    row = report.summarize([cell_result(observations)])[0]
+
+    assert asked == [observations], "report computed the drift instead of asking measure"
+    assert row["drift"]["late_median_tps"] == 202.0
+
+
+def test_surfacing_drift_moves_no_published_figure():
+    """The order's own acceptance: a column was added and no other number changed. Read back
+    off the printed row, so the assertion is on the bytes a reader sees."""
+    # All three decode 101 tokens over the same 1.0 s window, so the figures they publish are
+    # the same figures: a single sample has no p90, which is the percentile rule and not drift.
+    cases = (
+        ("climbing", drift_cell(CLIMBING), "0.500"),
+        ("flat", drift_cell(FLAT), "0.500"),
+        ("no drift to report", drift_cell((1.0,)), "—"),
+    )
+
+    for name, result, p90 in cases:
+        row = report.summarize([result])[0]
+        printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+
+        assert row["decode_tps"] == 101.0, name
+        assert row["itl_s"] == pytest.approx(0.01), name
+        for column, expected in (
+            ("decode tok/s", "101.0"),
+            ("ITL s", "0.0100"),
+            ("aggregate tok/s", "33.7"),
+            ("prefill tok/s", "500.0"),
+            ("TTFT p50 s", "0.500"),
+            ("TTFT p90 s", p90),
+            ("peak MB", "9150.0"),
+        ):
+            assert printed[column] == expected, f"{name}: {column} moved"
+
+
+def test_the_drift_column_is_the_only_column_added():
+    """Every other column is exactly where it was, and the new one sits beside the decode rate."""
+    row = report.summarize([drift_cell(CLIMBING)])[0]
+    header = next(
+        line
+        for line in report.render_markdown([row], axis="runtime").splitlines()
+        if line.startswith("| cell |")
+    )
+
+    assert header == (
+        "| cell | runtime | format | workload | rank by decode_tps | status | n "
+        "| TTFT p50 s | TTFT p90 s | TTFT p99 s | ITL s | decode tok/s | drift % "
+        "| aggregate tok/s | prefill tok/s | cold load s | first request s | peak MB "
+        "| disk bytes | runtime version | notes |"
+    )
+
+
 # --- disk size -----------------------------------------------------------------------------
 
 
@@ -840,7 +1124,9 @@ def test_render_markdown_keeps_the_two_throughputs_in_separate_columns(rows):
     header = next(line for line in table.splitlines() if line.startswith("| cell |"))
     body = next(line for line in table.splitlines() if line.startswith("| oq4__mlxlm |"))
 
-    assert "| decode tok/s | aggregate tok/s |" in header
+    # Separate columns, and the drift percentage sits between them because it qualifies the
+    # decode rate; the ordering is not a blend of the two.
+    assert "| decode tok/s | drift % | aggregate tok/s |" in header
     assert rows[0]["decode_tps"] != rows[0]["aggregate_tps"]
     assert f"{rows[0]['decode_tps']:.1f}" in body
     assert f"{rows[0]['aggregate_tps']:.1f}" in body

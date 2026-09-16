@@ -216,12 +216,17 @@ def itl_s(observation) -> float | None:
 
 
 def measured_drift(observations) -> dict | None:
-    """How far the cell moved across its own measurement window.
+    """How far the cell moved across its own measurement window, and in which direction.
 
     The measured samples are split in half in the order they were taken — the first half
     is the cell's cool visit, the second half its hot one — and the medians are compared.
-    A cell whose late samples are slower than its early ones is the thermal curve the
-    interleave exists to expose. ``None`` when there are not two rates to compare.
+    Both signs are readings, and they mean different things. A **negative** change is the
+    thermal curve the interleave exists to expose: the cell ran slower late than early. A
+    **positive** one is not the cell speeding up for free — it had not finished warming up
+    when its window closed, so the rate it published is an early-window rate and the warmup
+    budget was too short for it. That is the direction every column of the 2026-09-15 grid
+    leaned, which makes it the ordinary reading here rather than the surprising one.
+    ``None`` when there are not two rates to compare.
     """
     rates = [rate for observation in observations if (rate := decode_tps(observation)) is not None]
     if len(rates) < 2:

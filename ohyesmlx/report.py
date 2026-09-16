@@ -19,6 +19,17 @@ the visit's and every row of the cell prints it; the deferred-load note is not, 
 reads that one number against the requests *this row* measured, and one request belongs to
 one workload. Only the shape that ran first can say the gap is a load.
 
+``drift`` is the counterweight to the ordering the tables print. ``measure.measured_drift``
+compares the median decode rate of the first half of a cell's measured requests against the
+second half's, and the row prints the change beside the decode rate it qualifies — a cell that
+moved 28% across its own window and one that moved 0.5% are otherwise indistinguishable, and
+on the format axis that difference lands on the formats rather than on the run. Both signs are
+findings: a negative one is a cell that slowed as it ran, the thermal curve the interleave
+exists to expose, and a positive one is a cell that had not finished warming up, so the rate
+it published is an early-window rate. Neither is a floor — a still-moving cell is ranked with
+the rest and annotated — because the row that says the window was too short is the row that
+must not be thrown away.
+
 Percentiles need samples to be percentiles. Below five, ``ttft_p90_s`` and ``ttft_p99_s``
 are ``None`` and the row carries an ``n=<k>`` note, because a p95 built from two values is
 not a p95.
@@ -88,6 +99,45 @@ MIN_CONTENT_DELTAS = 2
 # a note and not a metric -- the row prints both numbers and the excess -- so a reader can
 # disagree with the threshold without disagreeing with the finding.
 DEFERRED_LOAD_EXCESS_S = 1.0
+
+# How far a cell may move across its own measurement window before the row says so, in PERCENT
+# of the early median decode rate and in either direction. A named threshold rather than one of
+# the pass/fail FLOORS below: a drifting cell is a result, it is a result that had not finished
+# moving, and excluding it would delete the only evidence that the window was too short for it.
+#
+# Measured, full grid re-run 2026-09-15 evening, all 60 cells, ``change_pct`` per column:
+#
+#     mlx-lm      median +17.0%   range  -1.3% .. +28.4%   11 of 12 rows over 5%
+#     oMLX        median  +2.6%   range  -0.2% .. +14.9%    1 of 12
+#     mlx-optiq   median  -0.0%   range  -1.7% .. +14.9%    2 of 12
+#     vMLX        median  +0.5%   range  -3.0% ..  +4.6%    0 of 12
+#     Osaurus     median  +1.0%   range  -5.7% .. +16.9%    4 of 12
+#
+# 5% separates the COLUMNS, not every row: mlx-lm's median is 3.4x the threshold while no other
+# column's reaches it, and that is the split that has to be visible. It does not cleanly split
+# the rows, and the constant is not chosen as though it did — mlx-lm's own `optiq/chat` sits at
+# -1.3% and goes unannotated, and 7 rows across the four settled columns are over 5% and are
+# annotated. Both are correct: the threshold reports what a row did, and a settled column is
+# allowed to contain a row that moved. 4 of those 7 are the first cell measured in their column
+# (oMLX and mlx-optiq at +14.9% each, Osaurus at +15.4% and +16.9%) — a column-entry effect that
+# is its own finding and not this constant's to fix. The other 3 are ordinary rows.
+#
+# On the format axis the spread is the whole point: there the runtime is held constant and
+# drift still ranges -1.3% to +28.4% *between formats*, so it lands differently on each row and
+# nothing cancels it as a common-mode offset. 5% is also about as fine as this comparison can be
+# read. With ``measured=5``, ``measured_drift`` puts a median of two rates against a median of
+# two and discards the middle sample, so a single row's magnitude is noisy; a lower threshold
+# would annotate that noise instead of the unanimous direction.
+DRIFT_ANNOTATION_PCT = 5.0
+
+# A row that was measured but has no percentage to print says why, the way every other empty
+# value here does. Drift needs two rates to compare, and a cell whose measured requests carry
+# fewer has no window to compare: a dash beside a decode rate with no word about it is how the
+# cell that was still climbing went unremarked in the first place.
+_DRIFT_ABSENCE = (
+    "no drift figure: fewer than two decode rates across the measured requests, and drift "
+    "compares the first half of the cell's own window against the second"
+)
 
 # Each axis holds one variable and varies the other, which is the whole point of the split.
 HELD_CONSTANT = {"runtime": "format", "format": "runtime"}
@@ -395,6 +445,11 @@ def _card(row: dict, rank: str) -> list[str]:
         value = row.get(field)
         shown = _bytes(value) if field == "disk_bytes" else _number(value, places)
         lines.append(_card_row(field, shown, _card_note(row, field, rank)))
+        if field == "decode_tps":
+            # Beside the rate it qualifies: whether the cell had settled by the time its window
+            # closed is part of reading that rate, and a card that listed the rate alone would
+            # print a cell still climbing exactly as it prints one that held still.
+            lines.append(_drift_card_row(row))
     lines += [
         _card_row("runtime_version", _text(row.get("runtime_version"))),
         _card_row("artifact_dir", _text(row.get("artifact_dir"))),
@@ -465,6 +520,9 @@ def _row(result: CellResult) -> dict:
     deltas = [_content_deltas(observation) for observation in measured]
     single_delta = deltas.count(1)
     too_few = sum(1 for count in deltas if count < MIN_CONTENT_DELTAS)
+    # measure's own dict off the raw observations, which is what ``results.jsonl`` recorded for
+    # this row: asking for it rather than recomputing it here is what keeps the two in step.
+    drift = measure.measured_drift(result.observations)
     row = {
         "cell_id": cell.id,
         "runtime": cell.runtime,
@@ -482,6 +540,7 @@ def _row(result: CellResult) -> dict:
         "ttft_p99_s": percentile(ttft, 99) if n >= MIN_PERCENTILE_N else None,
         "itl_s": median(itl),
         "decode_tps": median(decode),
+        "drift": drift,
         "aggregate_tps": _aggregate_tps(measured),
         "prefill_tps": median(prefill),
         "cold_load_s": result.cold_load_s,
@@ -503,6 +562,7 @@ def _row(result: CellResult) -> dict:
         if not single_delta
         else f"TTFT is time-to-completion, not time-to-first-token: {single_delta} of "
         f"{len(measured)} measured requests arrived whole in one content delta",
+        "drift_note": _drift_note(drift, len(measured)),
         "first_request_note": _deferred_load_note(
             result.first_request_s if _made_the_first_request(result) else None,
             [observation.total_s for observation in measured],
@@ -547,6 +607,67 @@ def _deferred_load_note(first_request_s, request_seconds) -> str | None:
         f"measured request of {median_s:.2f} s ({excess:+.2f} s over it): a load this "
         "runtime deferred past readiness, not warm-up noise"
     )
+
+
+def _drift_note(drift, n_measured: int) -> str | None:
+    """What the row has to say about its own drift, or ``None`` when there is nothing to say.
+
+    Three cases and no fourth. Above ``DRIFT_ANNOTATION_PCT`` in either direction the row says
+    which way it moved and prints the medians it compared, so the call can be checked rather
+    than taken. Below it there is nothing to report: a cell that held still is not a finding,
+    and a note on every row would separate none of them. And a cell that was measured but whose
+    requests carry fewer than two rates has no window to compare, which the row says instead of
+    printing a dash for; a cell that was never measured says nothing here at all, because drift
+    is not the reason its row is empty and the row already carries the reason that is.
+
+    Direction is the finding and the only part a two-against-two comparison of medians
+    supports, so the note names the direction and says outright that the magnitude is not what
+    it is claiming: a slower late half is the thermal curve the interleave exists to expose, and
+    a faster one is a cell still warming up, whose published rate is an early-window rate.
+    """
+    if drift is None:
+        return _DRIFT_ABSENCE if n_measured else None
+    change = drift["change_pct"]
+    if change is None:
+        # An early median of zero: the ratio is undefined rather than infinite, and measure
+        # reports it as no percentage rather than as one.
+        return _DRIFT_ABSENCE
+    if abs(change) <= DRIFT_ANNOTATION_PCT:
+        return None
+    direction = (
+        "it was still warming up as it was measured, so its decode rate is an early-window "
+        "figure rather than a settled one — insufficient warmup, not a thermal effect"
+        if change > 0
+        else "it was slowing down as it was measured — the thermal curve the interleave "
+        "exists to expose"
+    )
+    half = drift["n"] // 2
+    return (
+        f"drift {change:+.1f}% across the cell's own measurement window (early median "
+        f"{drift['early_median_tps']:.1f} tok/s against a late median of "
+        f"{drift['late_median_tps']:.1f} tok/s, n={drift['n']}): {direction}. A median of "
+        f"{half} rates against a median of {half} fixes the direction, not the magnitude"
+    )
+
+
+def _drift_cell(row: dict) -> str:
+    """The drift column: the signed percentage, or ``—`` when there is nothing to compare.
+
+    The sign is carried rather than left to the reader, because it is the whole difference
+    between a cell that slowed under its own window and one that had not finished warming up.
+    """
+    drift = row.get("drift") or {}
+    change = drift.get("change_pct")
+    return "—" if change is None else f"{change:+.1f}"
+
+
+def _drift_card_row(row: dict) -> str:
+    """The card's drift line, beside the decode rate it qualifies.
+
+    A reader comparing two cells needs to see that one of them was still climbing while the
+    other had settled, and a card that printed the rate alone would render the two identically.
+    """
+    return _card_row("drift_pct", _drift_cell(row), row.get("drift_note"))
 
 
 def _floor_verdicts(status, reason) -> dict:
@@ -737,7 +858,7 @@ def _table(rows: list[dict], rank: str) -> str:
     header = (
         f"| cell | runtime | format | workload | rank by {rank} | status | n "
         "| TTFT p50 s | TTFT p90 s | TTFT p99 s "
-        "| ITL s | decode tok/s | aggregate tok/s | prefill tok/s | cold load s "
+        "| ITL s | decode tok/s | drift % | aggregate tok/s | prefill tok/s | cold load s "
         "| first request s | peak MB "
         "| disk bytes | runtime version | notes |"
     )
@@ -759,6 +880,7 @@ def _cells(row: dict) -> list[str]:
                 row.get("percentile_note"),
                 row.get("ttft_note"),
                 row.get("delta_note"),
+                row.get("drift_note"),
                 row.get("first_request_note"),
             )
             if part
@@ -777,6 +899,7 @@ def _cells(row: dict) -> list[str]:
         _number(row.get("ttft_p99_s"), 3),
         _number(row.get("itl_s"), 4),
         _number(row.get("decode_tps"), 1),
+        _drift_cell(row),
         _number(row.get("aggregate_tps"), 1),
         _number(row.get("prefill_tps"), 1),
         _number(row.get("cold_load_s"), 2),
@@ -836,6 +959,19 @@ def _footnotes() -> list[str]:
         "warm-up noise. A row that did not make that request says nothing about it: the two "
         "numbers would come from different workloads, and the gap between them would be this "
         "harness comparing two shapes.",
+        "",
+        "drift % is how far the cell moved across its own measurement window: the median decode "
+        "rate of the first half of its measured requests against the second half's. Both signs "
+        "are readings. A negative one is a cell that ran slower late than early — the thermal "
+        "curve the interleave exists to expose. A positive one is a cell that had not finished "
+        "warming up, so its decode rate is an early-window rate; that is the direction every "
+        "column of the 2026-09-15 grid leaned, and in the mlx-lm column it ranged -1.3% to "
+        "+28.4% between formats, which is not a common-mode offset a reader can subtract out. "
+        f"Above {DRIFT_ANNOTATION_PCT:g}% either way the row says which of the two it was. It is "
+        "not a floor: a cell that was still moving is ranked with the rest and annotated, "
+        "because dropping it would delete the only row that says the window was too short. With "
+        "the window split two rates against two, the direction is the finding and the magnitude "
+        "is noisy.",
         "",
         f"p90 and p99 need at least {MIN_PERCENTILE_N} samples; below that the cell shows "
         "`—` and the row says `n=<k>` rather than inventing a percentile.",

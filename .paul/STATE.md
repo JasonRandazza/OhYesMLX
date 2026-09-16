@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 3 of 6 (the sparse grid) — 20 of 25 cells probed live; two fixes before the run
+Phase: 3 of 6 (the sparse grid) — COMPLETE. Full grid re-run 60/60 PASS.
 Plan: 1 of 1 in current phase
-Status: Applying
-Last activity: 2026-09-15 — the grid ran. All 20 cells measured across 5 columns; 325 tests. Six measurement-validity defects found and fixed, all found by running rather than by testing.
+Status: Applying (Phase 3 closed; Phase 5 report is the next build)
+Last activity: 2026-09-15 evening — the grid re-ran clean. 60/60 cells PASS across 5 columns, 353 tests. The format ordering replicated in every runtime that can read it. A seventh measurement-validity defect found and fixed: measured_drift was recorded and unread.
 
 Progress:
-- Milestone: [███████░░░] 70%
-- Phase: [█████████░] 90%
+- Milestone: [████████░░] 80%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
@@ -65,6 +65,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Every runtime advertises models it cannot serve | Phase 3 | mlx-lm, oMLX and Osaurus all list a model in /v1/models and then refuse it. oMLX published a 2.15 s cold load for weights it had already failed to load. Readiness is not the port, and not the model list either. |
 | Osaurus and vMLX are two independent JANG runtimes, both kept | Phase 3 | JANG cannot be a format-axis row, but JANG-on-Osaurus vs JANG-on-vMLX is the runtime axis with format held constant. Two implementations are what make a single-variable JANG study possible at all. |
 | The 256-expert failure is runtime-specific, not format-specific | Phase 4 | oMLX 0.6.4 answers coherently from the same bytes stock mlx-lm turns into salad. The format axis is not built on a corrupting quantizer. |
+| Drift annotates, never fails | Phase 3 | A cell still moving is a result, and the row saying the window was too short is the row that must not be dropped. DRIFT_ANNOTATION_PCT=5.0 separates the columns, not every row. |
+| Warmup is a per-runtime property, not a universal constant | Phase 3 | mlx-lm drifts +17.0% median across a whole column; oMLX, mlx-optiq, vMLX and Osaurus settle at +2.6/-0.0/+0.5/+1.0%. One warmup budget cannot be right for all five. |
 | A server's self-reported tok/s is not a measurement | Phase 4 | oMLX reports 15,286 tok/s from a generation_duration of 0.0. The harness measures; it does not relay. |
 
 ### Deferred Issues
@@ -93,10 +95,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-15
-Stopped at: Phase 2.1 closed (#7). Harness driven against real servers for the first time across three runs; each exposed a defect, each fixed. Phase 4 answered: the 256-expert failure is the runtime, not the format.
-Next action: re-run the full grid (task #6). The first grid exposed three column-level defects, two now fixed unverified-live (reasoning-only output stream) and one open (Osaurus peak_mb samples the launcher, task #3). Open tasks are in the session task list, mirrored in .paul/HANDOFF.md.
-Resume context: **Read `.paul/HANDOFF.md` first** — it carries the three findings that redirected the project, the traps that cost time, and machine state.
+Last session: 2026-09-15 (evening)
+Stopped at: Phase 3 closed. Tasks #3, #4 and #6 all done and verified live; the deferred-load threshold was re-attributed. Four commits unpushed.
+Next action: push the four commits, then Phase 5 — the report that joins the five run directories under results/grid/. Two open questions carried forward, both recorded in HANDOFF.md: the per-runtime warmup budget, and the column-entry drift effect.
+Resume context: **Read `.paul/HANDOFF.md` first** — it carries the grid result, the drift finding, and machine state.
 
 ---
 *STATE.md — Updated after every significant action*
