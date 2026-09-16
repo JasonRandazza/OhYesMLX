@@ -21,6 +21,13 @@ for r in mlxlm omlx optiq vmlx osaurus; do
   for p in 8081 1337 8100 8080 8000; do
     h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
   done
+  # Osaurus releases its port on `stop` and leaves the app running, so a port sweep misses it
+  # and the leftovers accumulate at ~900 MB each -- three of them, aged 5-7 h, were resident
+  # through both grids on 2026-09-16. Swept by FULL EXECUTABLE PATH, never by the name
+  # `osaurus`: `osaurus mcp` is a long-running user process and must not be touched.
+  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
+    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
+  done
   sleep 5
 done
 echo "MOEGRIDDONE $(date +%H:%M:%S)"
