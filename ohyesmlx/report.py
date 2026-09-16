@@ -207,6 +207,16 @@ CARD_FIELDS = (
     ("disk_bytes", 0),
 )
 
+# The decimals every metric is printed with, so a grid entry is the same string the table and
+# the card print for the same number: the grid rearranges published rows rather than re-deriving
+# them, and two renderings of one number that disagree are two numbers.
+_RANK_PLACES = dict(CARD_FIELDS)
+
+# The run-header pins the grid's first join guard compares across columns. A header carries
+# these five and the workloads it measured, and nothing else -- a sixth pin belongs here on the
+# day one exists.
+PIN_FIELDS = ("temperature", "seed", "warmup", "measured", "cooldown_s")
+
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
 # channel the stream delivered it in, and a cold visit's first request carries the load a
 # runtime deferred into it.
@@ -335,6 +345,94 @@ def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) ->
         ]
     lines += _footnotes()
     lines += ["", render_cards(rows, rank=rank).rstrip("\n"), ""]
+    return "\n".join(lines) + "\n"
+
+
+def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT_RANK) -> str:
+    """The joined grid: one table per workload, formats down and runtimes across.
+
+    *runs* is one ``(run label, run header, rows)`` per run directory, where *rows* is
+    ``summarize``'s output. No file is read and no figure is re-derived here: the grid
+    rearranges the numbers five leaderboards already published, so a cell's entry is the
+    string its row prints there.
+
+    Phase 3 measured the grid one column at a time, which makes joining the columns the one
+    place this project could vary two things without noticing. Four disagreements refuse the
+    join before a table is drawn — pins that differ, a cell in two run directories, one
+    format label at two artifacts, one runtime at two versions — and each names both run
+    directories and the field that disagreed, because a grid that refuses has to say which
+    two files disagreed and on what. It refuses rather than picks: which run is newer is not
+    which run is right.
+
+    A **column** is one runtime across many formats and is the format axis; a **row** is one
+    format across many runtimes and is the runtime axis. Both readings are printed below the
+    tables and neither is a blend of the other. The best cell across the whole grid is a
+    recommendation and never an attribution: it won under one format and one runtime at once,
+    and nothing in the number can apportion the win between them. No figure is averaged
+    across workloads, and there is no combined score.
+    """
+    if rank not in RANK_METRICS:
+        raise ValueError(_rank_error(rank))
+    runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
+    _check_pins(runs)
+    _check_cells_appear_once(runs)
+    _check_one_artifact_per_label(runs)
+    _check_one_version_per_runtime(runs)
+
+    columns = _columns(runs)
+    labels = _format_labels(runs)
+    lines = [
+        f"# Grid — {len(runs)} run directories joined",
+        "",
+        "Two axes, one set of cells, and they are read apart from each other. **A column is "
+        "one runtime across many formats — the format axis.** **A row is one format across "
+        "many runtimes — the runtime axis.** Nothing here blends them: no figure is averaged "
+        "across workloads and no ordering puts the two axes on one scale.",
+        "",
+    ]
+    if not columns:
+        lines += ["No run directories were named, so there was nothing to join.", ""]
+        return "\n".join(lines) + "\n"
+
+    lines += [
+        f"Each table is one workload and carries one metric: `{rank}` "
+        f"({_direction(rank)}).",
+        "",
+        "| entry | means |",
+        "|---|---|",
+        "| a number | a measured cell that cleared every floor |",
+        "| `no value` | a cell that cleared every floor and has no value for this metric; "
+        "its run's leaderboard carries the note saying why |",
+        "| `FAIL` | a measured cell that did not clear one |",
+        "| `—` | a combination no run measured |",
+        "",
+        "The matrix is ragged by design — no runtime loads every format — so `—` is ordinary "
+        "and does not read as a failure. A cell whose drift moved more than "
+        f"{DRIFT_ANNOTATION_PCT:g}% across its own window carries its marker beside its "
+        "number, the same marker the leaderboard prints beside the rate it qualifies.",
+        "",
+    ]
+    lines += _provenance(runs, columns)
+
+    groups = _by_workload([row for _label, _header, rows in runs for row in rows])
+    for workload, rows in groups:
+        lines += [
+            f"## Workload `{workload}` — entries are `{rank}` ({_direction(rank)})",
+            "",
+            _grid_table(rows, labels, columns, rank),
+            "",
+        ]
+    lines += _readings(groups, columns, labels, rank)
+    lines += [
+        "## Notes",
+        "",
+        "The notes below are the leaderboard's own, unchanged, and govern every figure here. "
+        "Where one refers to the metric card, that card is in each run's own "
+        "`leaderboard.md`: the grid joins published rows and re-renders none of their "
+        "numbers.",
+        "",
+    ]
+    lines += _footnotes()
     return "\n".join(lines) + "\n"
 
 
@@ -982,6 +1080,347 @@ def _footnotes() -> list[str]:
         "in one delta also makes that cell's TTFT a time-to-completion rather than a "
         "time-to-first-token; the value is kept, and the row's notes label it.",
     ]
+
+
+# --- the joined grid ------------------------------------------------------------------------
+
+
+def _check_pins(runs: list[tuple]) -> None:
+    """Guard 1: every column was measured under the same pins, down to the prompts.
+
+    The header's five pins are compared one by one and so is every workload's ``messages`` and
+    ``max_tokens``, because columns that answered different prompts are not one grid. No
+    prompt is printed in the refusal: the prefill prompt is 6.5 kB of prose, and naming the
+    field is what a reader needs to find the difference themselves.
+    """
+    if len(runs) < 2:
+        return
+    reference_label, reference = runs[0][0], runs[0][1]
+    for label, header, _rows in runs[1:]:
+        for field in PIN_FIELDS:
+            if header.get(field) != reference.get(field):
+                raise ValueError(
+                    f"the pins disagree: {reference_label} pinned {field}="
+                    f"{reference.get(field)!r} and {label} pinned {field}="
+                    f"{header.get(field)!r}; columns measured under different pins are not "
+                    "one grid"
+                )
+        _check_workload_pins(reference_label, reference, label, header)
+
+
+def _check_workload_pins(label_a: str, header_a: dict, label_b: str, header_b: dict) -> None:
+    """The workload half of guard 1: the same shapes, with the same prompts and caps."""
+    shapes_a, shapes_b = _shapes(header_a), _shapes(header_b)
+    if set(shapes_a) != set(shapes_b):
+        raise ValueError(
+            f"the pins disagree: the workloads differ between {label_a} "
+            f"({sorted(shapes_a)}) and {label_b} ({sorted(shapes_b)}); columns that measured "
+            "a different set of shapes are not one grid"
+        )
+    for workload_id, shape in shapes_a.items():
+        for field in ("messages", "max_tokens"):
+            if shape.get(field) != shapes_b[workload_id].get(field):
+                raise ValueError(
+                    f"the pins disagree: workload `{workload_id}` pinned a different "
+                    f"{field} in {label_a} and {label_b}; columns that answered different "
+                    "prompts are not one grid"
+                )
+
+
+def _shapes(header: dict) -> dict:
+    """A header's workloads by id, which is how one run's shapes are matched to another's."""
+    return {shape.get("id"): shape for shape in header.get("workloads") or ()}
+
+
+def _check_cells_appear_once(runs: list[tuple]) -> None:
+    """Guard 2: no ``(label, runtime, workload_id)`` measured by two run directories.
+
+    There is no "latest wins" rule: which run is newer is not which run is right, so a cell
+    measured twice is ambiguous rather than superseded and the join refuses instead of
+    choosing one of the two.
+    """
+    seen: dict[tuple, str] = {}
+    for label, _header, rows in runs:
+        for row in rows:
+            key = (row.get("label"), row.get("runtime"), row.get("workload_id"))
+            if key in seen:
+                raise ValueError(
+                    f"duplicate cell: (label, runtime, workload_id) = {key!r} appears in both "
+                    f"{seen[key]} and {label}; two run directories measured one cell, and "
+                    "there is no latest-wins rule because which run is newer is not which run "
+                    "is right"
+                )
+            seen[key] = label
+
+
+def _check_one_artifact_per_label(runs: list[tuple]) -> None:
+    """Guard 3: one format label, one artifact — across columns as well as inside a table.
+
+    Two rows agreeing on the format's name and pointing at different bytes are two formats.
+    ``_held_constant`` makes that check within one table; this makes it across the grid.
+    """
+    seen: dict[str, tuple] = {}
+    for label, _header, rows in runs:
+        for row in rows:
+            name, artifact = row.get("label"), row.get("artifact_dir")
+            if not name or not artifact:
+                continue
+            if name in seen and seen[name][0] != artifact:
+                previous, previous_run = seen[name]
+                raise ValueError(
+                    f"artifact_dir disagrees for format `{name}`: {previous_run} measured "
+                    f"{previous} and {label} measured {artifact}; one format name pointing at "
+                    "two artifacts is two formats"
+                )
+            seen.setdefault(name, (artifact, label))
+
+
+def _check_one_version_per_runtime(runs: list[tuple]) -> None:
+    """Guard 4: one runtime, one version, across columns.
+
+    Two *different* runtimes at different versions is the grid working as intended. The same
+    runtime at 0.25.3 in one directory and 0.25.4 in another is the grid's held-constant
+    variable moving — Osaurus measured 1.15x across exactly that step — so it is refused
+    rather than joined. A row carrying no version never started a runtime, and a cell that
+    never ran cannot disagree about which build the others ran on.
+    """
+    seen: dict[str, tuple] = {}
+    for label, _header, rows in runs:
+        for row in rows:
+            runtime, version = row.get("runtime"), row.get("runtime_version")
+            if not runtime or not version:
+                continue
+            if runtime in seen and seen[runtime][0] != version:
+                previous, previous_run = seen[runtime]
+                raise ValueError(
+                    f"runtime_version disagrees for runtime `{runtime}`: {previous_run} ran "
+                    f"{previous} and {label} ran {version}; the same runtime at two versions "
+                    "means the column's held-constant variable moved"
+                )
+            seen.setdefault(runtime, (version, label))
+
+
+def _columns(runs: list[tuple]) -> list[dict]:
+    """The grid's columns: one per runtime name, in the order the runs arrived.
+
+    A column is a runtime, and it records the run directory (or directories) that measured it
+    so the provenance block can name them. A run that measured two runtimes contributes to two
+    columns; two runs that measured the same one share it, which guard 2 has already refused
+    where they measured the same cell.
+    """
+    columns: dict[str, dict] = {}
+    for run_label, _header, rows in runs:
+        for row in rows:
+            runtime = row.get("runtime")
+            if not runtime:
+                continue
+            column = columns.setdefault(runtime, {"runtime": runtime, "runs": [], "version": None})
+            if run_label not in column["runs"]:
+                column["runs"].append(run_label)
+            if column["version"] is None and row.get("runtime_version"):
+                column["version"] = row["runtime_version"]
+    return list(columns.values())
+
+
+def _format_labels(runs: list[tuple]) -> list[str]:
+    """The grid's rows: the format labels any run measured, in the order they arrived.
+
+    The whole grid shares one set of rows and one set of columns, so a reader who has found a
+    format in one table finds it in the same place in the next. A label nothing measured never
+    becomes a row: a row of `—` says a combination does not exist, and a format no runtime
+    loaded is not a combination.
+    """
+    labels: list[str] = []
+    for _run_label, _header, rows in runs:
+        for row in rows:
+            label = row.get("label")
+            if label and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _provenance(runs: list[tuple], columns: list[dict]) -> list[str]:
+    """Per column its run directory, runtime and version, then the pins they all share.
+
+    This is the block that makes the join legal rather than assumed: it names the directory
+    behind every column and the fields guard 1 compared them on, so a reader holding the same
+    ``results.jsonl`` files can rebuild the grid and check the refusals were not needed.
+    """
+    lines = [
+        "## Provenance",
+        "",
+        "A column in the tables below is one runtime, and each is one run directory named here "
+        "with the version it measured. The lines under the table are the pins every column "
+        "shared; the join guard compared them field by field, and the workload line names the "
+        "shapes whose prompts were compared with them.",
+        "",
+        "| runtime | run directory | version |",
+        "|---|---|---|",
+    ]
+    for column in columns:
+        lines.append(
+            f"| {_text(column['runtime'])} | {', '.join(column['runs'])} | "
+            f"{_text(column['version'])} |"
+        )
+    lines.append("")
+    if runs:
+        header = runs[0][1]
+        pins = ", ".join(f"{field} `{_text(header.get(field))}`" for field in PIN_FIELDS)
+        lines.append(f"Pins all columns share: {pins}.")
+        lines.append("")
+        shapes = ", ".join(
+            f"`{_text(shape.get('id'))}` (max_tokens {_text(shape.get('max_tokens'))})"
+            for shape in header.get("workloads") or ()
+        )
+        lines.append(f"Workloads all columns ran, with identical messages: {shapes}.")
+        lines.append("")
+    return lines
+
+
+def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: str) -> str:
+    """One workload's grid: format labels down, runtime names across, one entry per cell."""
+    index = {}
+    for row in rows:
+        index.setdefault((row.get("label"), row.get("runtime")), row)
+
+    header = "| format | " + " | ".join(_text(c["runtime"]) for c in columns) + " |"
+    divider = "|" + "---|" * (header.count("|") - 1)
+    lines = [header, divider]
+    for label in labels:
+        cells = [_text(label)]
+        cells += [_entry(index.get((label, column["runtime"])), rank) for column in columns]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _entry(row: dict | None, rank: str) -> str:
+    """One grid entry, in one of the four states a cell can be in.
+
+    A combination no run measured is ``—`` and a cell that ran without clearing a floor is
+    ``FAIL``: they are different facts about a cell, and rendering them alike is how a rag
+    comes to read as a failure. ``N/A`` is measure's word for a cell that never ran here, the
+    same state the floors print as "not measured"; anything else that is not PASS ran and did
+    not clear one. A PASS entry carries its number, and a drifting one carries its marker
+    beside it.
+
+    A cell that cleared every floor and still has no value for *this* metric is the fourth
+    state and gets its own word. ``_number`` renders ``None`` as ``—``, which would file it
+    with the combinations nobody ran — but it did run, it produced language, and it cleared
+    the floors; what is missing is one metric's domain, not the cell. `order_rows` already
+    holds that distinction and ranks such a row last with a note rather than excluding it,
+    and the grid would be the one place it collapsed.
+    """
+    if row is None or row.get("status") == "N/A":
+        return "—"
+    if row.get("status") != "PASS":
+        return "FAIL"
+    if row.get(rank) is None:
+        return "no value"
+    number = _rank_number(row, rank)
+    marker = _drift_marker(row)
+    return number if marker is None else f"{number} (drift {marker}%)"
+
+
+def _rank_number(row: dict, rank: str) -> str:
+    """The row's ``rank`` metric, formatted exactly as the table and the card format it."""
+    if rank == "disk_bytes":
+        return _bytes(row.get(rank))
+    return _number(row.get(rank), _RANK_PLACES[rank])
+
+
+def _drift_marker(row: dict) -> str | None:
+    """The marker an annotated entry carries, or ``None`` when the cell is not annotated.
+
+    The threshold is ``_drift_note``'s to apply, not this function's: it makes the
+    ``DRIFT_ANNOTATION_PCT`` call from the same drift measure recorded, so the grid cannot
+    annotate a cell the leaderboard leaves alone. The absence a measured cell with no window
+    to compare gets is not a finding, and neither is a cell that held still.
+    """
+    note = _drift_note(row.get("drift"), row.get("n_measured") or 0)
+    if note is None or note == _DRIFT_ABSENCE:
+        return None
+    return _drift_cell(row)
+
+
+def _readings(groups: list[tuple], columns: list[dict], labels: list[str], rank: str) -> list[str]:
+    """The two axis readings, one block per workload, and the recommendation that closes it.
+
+    Each entry is one column's formats or one row's runtimes, ordered by ``rank`` and by
+    ``order_rows`` — the same function the leaderboard orders its tables with, so a reading
+    and a table cannot disagree about which cell came first. A column compares quantization
+    under one runtime, a row compares serving under one format, and neither says anything
+    about the other; that is what keeps the two axes from being read as one comparison. The
+    recommendation is the single line that spans both, and it is labelled as what that makes
+    it.
+    """
+    lines = [
+        "## Axis readings",
+        "",
+        "Both axes are in the tables above and are read apart from each other. A column is one "
+        "runtime across many formats — the format axis. A row is one format across many "
+        "runtimes — the runtime axis. Every line below is one workload's ordering by "
+        f"`{rank}` ({_direction(rank)}), and no line mixes the two.",
+        "",
+    ]
+    for workload, rows in groups:
+        lines += [f"### Workload `{workload}`", ""]
+        lines += [f"**Format axis — one runtime, its formats ordered.** {CAVEAT['format']}.", ""]
+        for column in columns:
+            group = [row for row in rows if row.get("runtime") == column["runtime"]]
+            lines.append(f"- `{_text(column['runtime'])}`: {_ordering(group, rank, 'label')}")
+        lines.append("")
+        lines += [f"**Runtime axis — one format, its runtimes ordered.** {CAVEAT['runtime']}.", ""]
+        for label in labels:
+            group = [row for row in rows if row.get("label") == label]
+            lines.append(f"- `{_text(label)}`: {_ordering(group, rank, 'runtime')}")
+        lines += ["", _recommendation(rows, rank), ""]
+    return lines
+
+
+def _ordering(rows: list[dict], rank: str, key: str) -> str:
+    """One axis reading's ordering, with what kept each unranked cell out of it.
+
+    The position is the row's own ``rank``, so the reading is checkable against the table.
+    A cell that failed a floor or carries no value for the metric is named rather than
+    dropped: it is a result, and it is the one the ordering could not include.
+    """
+    if not rows:
+        return "—"
+    parts = []
+    for row in order_rows(rows, rank):
+        name = f"`{_text(row.get(key))}`"
+        if row.get("rank") is not None:
+            parts.append(f"{name} ({row['rank']})")
+        elif row.get("rankable"):
+            parts.append(f"{name} (no {rank})")
+        else:
+            parts.append(f"{name} ({_text(row.get('exclusion'))})")
+    return " > ".join(parts)
+
+
+def _recommendation(rows: list[dict], rank: str) -> str:
+    """The best cell in one workload's grid, labelled as a recommendation.
+
+    It is the one line in the document that spans both axes, and that is exactly why it cannot
+    be read as an attribution: the cell that won won under one format and one runtime at once,
+    and the number carries no way to split the win between them. Which of the two earned it is
+    what the column and the row above this line are for.
+    """
+    ranked = [row for row in order_rows(rows, rank) if row.get("rank") is not None]
+    if not ranked:
+        return (
+            f"**Recommendation — none.** No cell in this grid cleared every floor at `{rank}`, "
+            "so there is no best cell to name."
+        )
+    best = ranked[0]
+    return (
+        "**Recommendation — the best cell across this grid, and a recommendation rather than "
+        f"an attribution.** `{_text(best.get('cell_id'))}` ({_text(best.get('runtime'))} / "
+        f"{_text(best.get('label'))}) leads all {len(ranked)} ranked cells at `{rank}` = "
+        f"{_rank_number(best, rank)}. The cell won under one format and one runtime together, "
+        "so this says which pair came first and not which of the two earned it — the format "
+        "axis is its column above and the runtime axis is its row."
+    )
 
 
 def _number(value, places: int) -> str:

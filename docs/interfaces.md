@@ -318,3 +318,111 @@ token or two away. Measured — oMLX 0.6.4 generated 256, the local counter re-r
 text as 257, and five coherent responses published no tok/s at all. The reconciliation in
 case 3 validates a *derived split*; where nothing is derived there is nothing to validate,
 and demanding the round-trip makes the metric unreachable rather than more honest.
+
+---
+
+## Phase 5 — the joined grid
+
+Phase 3 measured the grid one column at a time: five invocations of `ohyesmlx run --study
+format`, five run directories, each holding one runtime's twelve rows. The grid exists only
+as five files that nobody joins. Phase 5 joins them.
+
+The reading is the one Phase 3 pinned: a **column** (one runtime, many formats) is the
+format axis, a **row** (one format, many runtimes) is the runtime axis, and the best cell
+across the whole grid is a *recommendation*, never an attribution. Nothing in this phase
+re-measures anything.
+
+### `ohyesmlx/measure.py` — reading a run back
+
+```python
+def load_run(path) -> tuple[dict, list[CellResult]]: ...
+# path: a run directory or its results.jsonl.
+# Returns (run_header, results) — line 1 of the file, then one CellResult per line after it.
+```
+
+The exact inverse of `write_results`/`_record`. `Cell(**record["cell"])` and
+`Observation(**obs)` round-trip by construction, which is why the record was written with
+`asdict` and no derived fields inside those two objects.
+
+The three **derived** fields in a record — `measured_count`, `warmup_count`, `drift` — are
+*not* read back onto the object. They are recomputed from the observations that carry them.
+A loader that read them would let a hand-edited file publish a drift that its own samples do
+not support. Their presence in the file is for a reader with `jq`, not for this function.
+
+The round-trip is testable and must be tested: `_record(load_run(p)[1][i])` equals the i-th
+record on disk, byte for byte, for a real grid run dir.
+
+### `ohyesmlx/report.py` — the grid
+
+```python
+def render_grid(runs, *, rank: str = DEFAULT_RANK) -> str: ...
+# runs: list[tuple[str, dict, list[dict]]] — (run label, run header, summarize()'d rows)
+```
+
+One grid per workload, never averaged across them — the same rule that governs the
+leaderboard. Rows are format labels, columns are runtime names, and each entry is the
+`rank` metric for that cell.
+
+**Four entry states, and they must not render alike:**
+
+| state | renders | means |
+|---|---|---|
+| measured, PASS | the number | a result |
+| PASS, no value for *this* metric | `no value` | the cell cleared every floor; the metric has no domain on this stream |
+| measured, not PASS | `FAIL` | the cell ran and did not clear a floor |
+| never measured | `—` | that combination does not exist |
+
+The second state exists because `_number` renders `None` as the same em dash as the
+fourth. A cell that produced language, cleared the floors, and streamed its whole
+completion in one content delta has no decode rate — `order_rows` already ranks such a row
+last with a note rather than excluding it, and the grid must not be the one place that
+distinction collapses back into "does not exist".
+
+The matrix is ragged by nature — no runtime loads JANG and the other formats both — so
+`—` is the ordinary case, and a reader who cannot tell it from `FAIL` is reading a
+different grid. A drift-annotated cell (`DRIFT_ANNOTATION_PCT`) carries its marker into the
+entry beside the number, because a grid that hides what the leaderboard shows is a
+downgrade of the same data.
+
+### The join guards
+
+Joining five separately-invoked runs is the one place this project can vary two things
+without noticing, so the join refuses rather than renders when:
+
+1. **The pins disagree.** Every run header field — `temperature`, `seed`, `warmup`,
+   `measured`, `cooldown_s` — and every workload's `messages` and `max_tokens` must be
+   identical across all runs. Columns that answered different prompts are not one grid.
+2. **A cell appears twice.** The same `(label, runtime, workload_id)` from two run
+   directories is ambiguous; name both directories and refuse. There is no "latest wins"
+   rule, because which run is newer is not which run is right.
+3. **One format label points at two artifacts.** Same name, different bytes, across
+   columns — the runtime-axis row guard `_held_constant` already makes within a table.
+4. **One runtime appears at two versions.** Across columns two *different* runtimes at
+   different versions is the grid working as intended; the *same* runtime at 0.25.3 in one
+   directory and 0.25.4 in another is the held-constant variable moving, and Osaurus
+   measured 1.15x across exactly that step.
+
+Guard 4 compares `runtime_version` as an exact string. mlx-optiq reports
+`"mlx-optiq, version 0.5.6"` rather than a bare `0.5.6` — uniform within its column today,
+so the guard does not misfire, but a runtime that rephrases its `--version` output would
+read as a version change. Normalise here if it ever does.
+
+Every guard names both run directories in its message. A grid that refuses must say which
+two files disagreed and on what.
+
+### Provenance
+
+The rendered grid states, above the tables: each column's run directory, runtime and
+version, and the pins all columns share. That block is the evidence the join was legal, and
+it is what makes the grid recomputable by someone holding only the five `results.jsonl`
+files.
+
+### `ohyesmlx/cli.py`
+
+```
+ohyesmlx grid <run-dir> [<run-dir> ...] [--rank decode_tps] [--out FILE]
+```
+
+Explicit directories, never a glob over `results/grid/` — that directory holds thirteen
+run dirs from three sessions, and a grid assembled by wildcard would silently join columns
+that never belonged together. `--out` defaults to stdout only.

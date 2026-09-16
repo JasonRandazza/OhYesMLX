@@ -19,7 +19,7 @@ us.
 
 **v1 — Format axis on small models** (0.1.0)
 Status: In progress
-Phases: 2 of 6 complete
+Phases: 5 of 7 complete
 
 ## Phases
 
@@ -27,10 +27,10 @@ Phases: 2 of 6 complete
 |-------|------|-------|--------|-----------|
 | 1 | Portability spike | 1 | **Complete** | 2026-09-15 |
 | 2 | Measurement core | 5 | **Complete** | 2026-09-15 |
-| 2.1 | Coherence gate [INSERTED] | 1 | In progress | - |
-| 3 | Format axis — dense and MoE | 2 | Not started | - |
-| 4 | The 256-expert question | 1 | Not started | - |
-| 5 | Runtime axis | 1 | Not started | - |
+| 2.1 | Coherence gate [INSERTED] | 1 | **Complete** | 2026-09-15 |
+| 3 | The sparse grid — format axis per runtime | 2 | **Complete** | 2026-09-15 |
+| 4 | The 256-expert question | 1 | **Complete** | 2026-09-15 |
+| 5 | The joined grid (runtime axis falls out of it) | 1 | In progress | - |
 | 6 | Sweeps | 2 | Not started | - |
 
 ## Phase Details
@@ -53,7 +53,7 @@ and Phase 4.
 `measure.py`, `report.py`, `cli.py`. 183 tests. Built by five concurrent Command Code
 sessions against `docs/interfaces.md`.
 
-### Phase 2.1: Coherence gate [INSERTED]
+### Phase 2.1: Coherence gate [INSERTED] — COMPLETE
 
 **Goal:** a cell that emits garbage fails, however fast it was.
 **Reason for insertion:** Phase 1 proved a runtime can load, answer HTTP 200, hit full
@@ -61,59 +61,79 @@ throughput, and return unusable text with nothing raised anywhere. Every speed n
 this project is worthless without this gate, so it precedes all measurement.
 
 **Plans:**
-- [ ] 02.1-01: `coherence.py` and its call site in `measure.py` — issue #7
+- [x] 02.1-01: `coherence.py` and its call site in `measure.py` — issue #7
 
-### Phase 3: Format axis — dense and MoE
+### Phase 3: The sparse grid — COMPLETE
 
-**Goal:** the project's headline contribution. Hold the runtime constant at oMLX, vary the
-quantization format, and publish the first properly controlled format comparison.
-**Depends on:** Phase 2.1 (no format result means anything without the gate)
-**Research:** Complete — see `docs/research/2026-09-15-small-model-candidates.md`
+**Goal, as built:** the grid, not a single column. `ohyesmlx run --study format` was invoked
+once per runtime, five times, holding that runtime constant and varying the format. Five run
+directories, twelve cells each: **60 of 60 PASS**, 353 tests.
 
-**Subjects.** Both fit on a 36 GiB disk at 33.7 GB combined, with every format present:
+The grid contains both axes as its slices — columns (one runtime, many formats) are the format
+axis, rows (one format, many runtimes) are the runtime axis. That is why Phase 5 became the
+join rather than a separate runtime-axis measurement campaign: the runtime-axis data already
+exists, unread.
 
-| | Model | Formats | GB |
-|---|---|---|---|
-| Dense | `Qwen3.5-4B` | stock-4bit, oQ4, oQ4e, OptiQ | 13.4 |
-| MoE | `LFM2.5-8B-A1B` (8B/1B active, 32 experts) | stock-4bit, oQ4, oQ4e, OptiQ | 20.2 |
+**Subject:** `Qwen3.5-4B` at stock-4bit, oQ4, oQ4e, OptiQ, plus JANG_4S where the runtime
+loads it. `LFM2.5-8B-A1B` (MoE) is not yet run and carries into v1's remaining work.
+
+**What it answered.** `stock4bit > oQ4 > oQ4e > OptiQ` on decode tok/s, identically in mlx-lm,
+oMLX and mlx-optiq — three codebases that share nothing — with zero inversions in five columns.
+OptiQ is last in every column that carries it and largest on disk (4.04 GB against stock-4bit's
+3.06 GB). JANG_4S is fastest in both runtimes that can load it, which is a legal reading only
+because two independent runtimes agree with the format held constant.
+
+**Seven measurement-validity defects were found and fixed across this phase**, the last being
+`measured_drift` — computed into every row and read by nothing. Drift now annotates and never
+fails: a cell still moving is a result, and the row saying the window was too short is the row
+that must not be dropped.
+
+**Open, carried into Phase 5's write-up:** warmup is a per-runtime property and the harness
+treats it as universal (mlx-lm drifts +17.0% median across a whole column; the other four
+settle at +2.6/-0.0/+0.5/+1.0%), and a column-entry effect puts ~+15% on the first cell
+measured in 3 of 5 columns. Both are recorded in `.paul/HANDOFF.md`.
 
 **Standing caveat, carried in every table this phase produces:** LFM2.5 has 32 experts; the
 checkpoint that failed has 256. A clean result here validates the machinery and does **not**
-exonerate stock mlx-lm on high-expert-count MoE. That is Phase 4's job, and no format
-matrix on this machine can do it — all formats of a 256-expert model would need ~52 GiB.
+exonerate stock mlx-lm on high-expert-count MoE.
 
 **Plans:**
-- [ ] 03-01: Format axis, dense (`Qwen3.5-4B`)
+- [x] 03-01: Format axis, dense (`Qwen3.5-4B`) — five columns, 60/60 PASS
 - [ ] 03-02: Format axis, MoE (`LFM2.5-8B-A1B`)
 
-### Phase 4: The 256-expert question
+### Phase 4: The 256-expert question — COMPLETE
 
-**Goal:** settle whether stock mlx-lm is broken on high-expert-count MoE, as a clean
-single-variable result.
-**Depends on:** Phase 2.1
-**Research:** Unlikely — the artifact is already on disk
+One format (`Jundot/Qwen3.6-35B-A3B-oQ4-mtp`, already cached), two runtimes, coherence as the
+measured outcome, zero downloads.
 
-One format (`Jundot/Qwen3.6-35B-A3B-oQ4-mtp`, already cached), two runtimes
-(`mlx_lm.server` and oMLX), coherence as the measured outcome. **Zero downloads.**
-
-If identical weights yield English from one runtime and salad from the other, that is a
-publishable single-variable result — and it approaches the JANG vendor's "MLX is broken on
-MiniMax at ALL bit levels" claim from an independent direction, with no vendor involved.
+**Answered: the failure is runtime-specific, not format-specific.** oMLX 0.6.4 answers
+coherently from the same bytes stock mlx-lm turns into token salad. The format axis is not
+built on a corrupting quantizer, and the gate catches the failure.
+See `docs/research/2026-09-15-phase4-256-expert.md`.
 
 **Plans:**
-- [ ] 04-01: Two-runtime coherence comparison on 256 experts
+- [x] 04-01: Two-runtime coherence comparison on 256 experts
 
-### Phase 5: Runtime axis
+### Phase 5: The joined grid
 
-**Goal:** hold the format constant, vary the serving runtime.
+**Goal:** the five Phase 3 run directories become one grid, and the runtime axis — which was
+measured and never read — falls out of it as the grid's rows.
 **Depends on:** Phase 3
-**Research:** Likely — prior art exists and must be cited, not duplicated
+**Scope change from the original plan:** this phase was written as a separate runtime-axis
+measurement campaign. Phase 3 built the grid instead of a single column, so the runtime-axis
+data already exists in `results/grid/`. Phase 5 is therefore a **join, not a measurement** —
+nothing here starts a server.
 
-`mlx-Chronos` already publishes a protocol for this axis. Our contribution is the specific
+`mlx-Chronos` already publishes a runtime-axis protocol. Our contribution is the specific
 runtime set and the format-held-constant discipline, not the idea. Say so in the write-up.
 
+Shapes pinned in `docs/interfaces.md`, section "Phase 5 — the joined grid": `measure.load_run`
+reads a `results.jsonl` back, `report.render_grid` renders the grid with three distinguishable
+entry states, four join guards refuse a grid whose columns never belonged together, and
+`ohyesmlx grid <run-dir>...` takes explicit directories rather than a glob.
+
 **Plans:**
-- [ ] 05-01: Runtime axis on the portable format
+- [ ] 05-01: `load_run`, `render_grid`, the `grid` command, and the write-up
 
 ### Phase 6: Sweeps
 
@@ -141,4 +161,4 @@ caches cleared between.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-15*
+*Last updated: 2026-09-15 (Phase 5 opened)*

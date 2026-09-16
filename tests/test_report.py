@@ -1318,7 +1318,10 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
     }
 
     assert flags == {"-h", "--help", "--study", "--cells", "--results-dir", "--rank"}
-    assert set(subcommands.choices) == {"run"}
+    # `run` says which cells to measure with --cells and nothing else. `grid` is not a second
+    # way to say that: it joins run directories that already exist, starts no runtime and
+    # measures nothing, so the selector count for a *run* is still one.
+    assert set(subcommands.choices) == {"run", "grid"}
 
 
 def test_modules_stay_on_the_standard_library():
@@ -1915,3 +1918,529 @@ def test_run_refuses_a_metric_that_is_not_one_a_row_carries(tmp_path, capsys):
         )
 
     assert list(tmp_path.iterdir()) == []
+
+
+# --- the joined grid (Phase 5) --------------------------------------------------------------
+#
+# Phase 3 measured the grid one column at a time: five run directories, one runtime each. The
+# join is the only place this project could vary two things without noticing, so the tests below
+# are in three groups — a legal five-column join renders, each of the four guards refuses, and
+# the three entry states stay distinguishable in the text.
+
+# The formats, and where each one's bytes live. A label that points at two artifacts is two
+# formats, which is guard 3's whole subject.
+ARTIFACTS = {
+    "oq4": "/models/oq4",
+    "jang": "/models/jang",
+    "jangtq": "/models/jangtq",
+    "mxfp4": "/models/mxfp4",
+    "mlx4": "/models/mlx4",
+}
+
+TOKENS = {"chat": 128, "prefill": 64, "decode": 512}
+
+# Five run directories, one per runtime, each holding its own formats. The formats are ragged on
+# purpose — mlx-lm and Osaurus both load `jang` and nothing loads everything — so the joined grid
+# contains `—` as its ordinary case, exactly as the five Phase 3 runs did. Each entry is
+# ``(run label, runtime, version, the formats that runtime loaded)``.
+GRID_PLAN = (
+    ("20260915T200320Z-format", "mlxlm", "mlx-lm 0.31.3", ("oq4", "jang")),
+    ("20260915T201803Z-format", "omlx", "oMLX 0.6.4", ("oq4", "jangtq")),
+    ("20260915T203336Z-format", "optiq", "mlx-optiq 0.5.6", ("oq4", "mxfp4")),
+    ("20260915T204833Z-format", "vmlx", "vMLX 1.6.59", ("oq4", "mlx4")),
+    ("20260915T210312Z-format", "osaurus", "Osaurus 0.25.4", ("oq4", "jang")),
+)
+
+RUN_A = "20260915T200320Z-format"
+RUN_B = "20260915T201803Z-format"
+
+
+def run_header(workload_ids=("chat", "prefill", "decode"), **pins):
+    """A run header shaped the way ``measure.write_jsonl`` writes one."""
+    header = {"temperature": 0.0, "seed": 0, "warmup": 3, "measured": 5, "cooldown_s": 30.0}
+    header.update(pins)
+    header["workloads"] = [
+        {
+            "id": workload_id,
+            "messages": [{"role": "user", "content": f"the {workload_id} prompt"}],
+            "max_tokens": TOKENS[workload_id],
+        }
+        for workload_id in workload_ids
+    ]
+    return header
+
+
+def grid_run(
+    run_label,
+    runtime,
+    version,
+    labels,
+    *,
+    workload_ids=("chat", "prefill", "decode"),
+    rate_of=None,
+    status="PASS",
+    reason=None,
+    header=None,
+    artifacts=None,
+):
+    """One run directory as the ``(run label, header, rows)`` tuple ``render_grid`` takes.
+
+    The rows are ``summarize``'s, because that is what the caller has: the grid joins five
+    published run directories, not five sets of observations. Each cell decodes at the same rate
+    on every request, so no cell is drift-annotated unless a test asks for it by name.
+    """
+    artifacts = ARTIFACTS if artifacts is None else artifacts
+
+    def rate(label, workload_id):
+        return 100.0 if rate_of is None else rate_of(label, workload_id)
+
+    rows = [
+        cell_result(
+            [obs(ttft=0.5, last=0.5 + 101 / rate(label, workload_id)) for _ in range(5)],
+            cell_id=f"{label}__{runtime}",
+            runtime=runtime,
+            artifact_dir=artifacts[label],
+            label=label,
+            runtime_version=version,
+            workload_id=workload_id,
+            status=status,
+            reason=reason,
+            disk_bytes=1_000_000,
+        )
+        for label in labels
+        for workload_id in workload_ids
+    ]
+    return (
+        run_label,
+        run_header(workload_ids) if header is None else header,
+        report.summarize(rows),
+    )
+
+
+def grid_runs(plan=GRID_PLAN, **kwargs):
+    """The run directories of *plan*, as the ``(label, header, rows)`` tuples ``render_grid``
+    takes: what ``ohyesmlx grid <run-dir> ...`` hands over after reading each one back."""
+    return [
+        grid_run(run_label, runtime, version, labels, **kwargs)
+        for run_label, runtime, version, labels in plan
+    ]
+
+
+def grid_tables(markdown):
+    """The grid's tables as ``{workload: {format: {runtime: entry}}}``, in printed order.
+
+    Read off the rendered text rather than from the rows behind it: what a reader can tell
+    apart is the question here, and a helper that went back to the dicts would not answer it.
+    """
+    tables, workload = {}, None
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("## Workload ") and line.count("`") >= 2:
+            workload = line.split("`")[1]
+        if workload is None or not line.startswith("| format |"):
+            continue
+        header = [cell.strip() for cell in line.strip("|").split("|")][1:]
+        table = {}
+        for body in lines[index + 2:]:
+            if not body.startswith("|"):
+                break
+            cells = [cell.strip() for cell in body.strip("|").split("|")]
+            table[cells[0]] = dict(zip(header, cells[1:]))
+        tables[workload] = table
+    return tables
+
+
+def assert_refused(runs, *fragments):
+    """The join refused, and its message carried every fragment the interface requires."""
+    with pytest.raises(ValueError) as raised:
+        report.render_grid(runs)
+    message = str(raised.value)
+    for fragment in fragments:
+        assert fragment in message, f"{fragment!r} is missing from the refusal: {message}"
+    return message
+
+
+def test_a_legal_five_column_join_renders_one_table_per_workload():
+    grid = report.render_grid(grid_runs())
+    tables = grid_tables(grid)
+
+    # One table per workload, ordered on its own. Never one table over a figure averaged across
+    # the three shapes: a prefill-bound number blended with a decode-bound one describes neither.
+    assert set(tables) == {"chat", "prefill", "decode"}
+    assert "no figure is averaged across workloads" in grid
+
+    # Every table carries every column, in run order, so a format sits in the same place in each.
+    for table in tables.values():
+        assert list(table["oq4"]) == ["mlxlm", "omlx", "optiq", "vmlx", "osaurus"]
+        assert set(table) == {"oq4", "jang", "jangtq", "mxfp4", "mlx4"}
+
+    # The one row every run measured: five numbers, no rag and no failure.
+    assert all(entry == "100.0" for entry in tables["chat"]["oq4"].values())
+
+
+def test_the_join_states_the_pins_and_every_run_directory_it_joined():
+    grid = report.render_grid(grid_runs())
+
+    for run_label, runtime, version, _labels in GRID_PLAN:
+        assert run_label in grid, f"{run_label} is not in the provenance block"
+        assert version in grid, f"{version} is not in the provenance block"
+        assert runtime in grid
+
+    assert (
+        "Pins all columns share: temperature `0.0`, seed `0`, warmup `3`, measured `5`, "
+        "cooldown_s `30.0`." in grid
+    )
+    assert "Workloads all columns ran, with identical messages: `chat` (max_tokens 128)" in grid
+
+
+def test_a_ragged_cell_and_a_failed_cell_and_a_missing_cell_are_three_entries():
+    """`—` is the ordinary case in a ragged grid; FAIL is a result. A reader who cannot tell
+    them apart is reading a different grid."""
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4", "jang"), workload_ids=("chat",)),
+        grid_run(RUN_B, "omlx", "oMLX 0.6.4", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            "20260915T203336Z-format",
+            "optiq",
+            "mlx-optiq 0.5.6",
+            ("jangtq",),
+            workload_ids=("chat",),
+            status="FAIL",
+            reason="incoherent output: replacement characters",
+        ),
+    ]
+    grid = report.render_grid(runs)
+    table = grid_tables(grid)["chat"]
+
+    assert table["oq4"]["mlxlm"] == "100.0"  # measured and cleared every floor
+    assert table["oq4"]["omlx"] == "100.0"
+    assert table["jang"]["mlxlm"] == "100.0"
+    assert table["jang"]["omlx"] == "—"  # omlx never loaded jang: a rag, not a failure
+    assert table["jangtq"]["optiq"] == "FAIL"  # optiq loaded it and the output was not language
+    assert table["jang"]["optiq"] == "—"
+
+    assert table["jang"]["omlx"] != table["jangtq"]["optiq"]
+    assert "| `—` | a combination no run measured |" in grid
+    assert "| `FAIL` | a measured cell that did not clear one |" in grid
+
+
+def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure():
+    """`N/A` is measure's word for a cell that never ran here — the state the floors print as
+    "not measured" — so its entry is the same `—` a combination that was never on the plan gets.
+    """
+    rows = report.summarize(
+        [cell_result([], status="N/A", reason="unknown runtime 'nope'", label="oq4")]
+    )
+    run = (RUN_A, run_header(("chat",)), rows)
+
+    table = grid_tables(report.render_grid([run]))["chat"]
+
+    assert table["oq4"]["mlxlm"] == "—"
+    assert table["oq4"]["mlxlm"] != "FAIL"
+
+
+def test_a_drift_annotated_cell_carries_its_marker_into_its_entry():
+    """A grid that hid what the leaderboard shows is a downgrade of the same data: the marker
+    the row already earned travels with the number."""
+    climbing = report.summarize(
+        [
+            drift_cell(
+                CLIMBING,
+                cell_id="oq4__mlxlm",
+                runtime="mlxlm",
+                label="oq4",
+                artifact_dir=ARTIFACTS["oq4"],
+                runtime_version="mlx-lm 0.31.3",
+                disk_bytes=1_000_000,
+            )
+        ]
+    )[0]
+    settled = report.summarize(
+        [
+            drift_cell(
+                FLAT,
+                cell_id="oq4__osaurus",
+                runtime="osaurus",
+                label="oq4",
+                artifact_dir=ARTIFACTS["oq4"],
+                runtime_version="Osaurus 0.25.4",
+                disk_bytes=1_000_000,
+            )
+        ]
+    )[0]
+
+    assert climbing["drift_note"] is not None, "the fixture has to be an annotated cell"
+    assert settled["drift_note"] is None
+
+    grid = report.render_grid(
+        [(RUN_A, run_header(("chat",)), [climbing]), (RUN_B, run_header(("chat",)), [settled])]
+    )
+    table = grid_tables(grid)["chat"]
+
+    assert table["oq4"]["mlxlm"] == "101.0 (drift +100.0%)"
+    assert table["oq4"]["osaurus"] == "101.0"
+    assert "51.0" not in grid, "the marker is the percentage, not a second number"
+
+
+RANK_COLUMNS = {
+    "decode_tps": "decode tok/s",
+    "aggregate_tps": "aggregate tok/s",
+    "prefill_tps": "prefill tok/s",
+    "ttft_p50_s": "TTFT p50 s",
+    "itl_s": "ITL s",
+    "peak_mb": "peak MB",
+    "cold_load_s": "cold load s",
+    "disk_bytes": "disk bytes",
+}
+
+
+@pytest.mark.parametrize("rank", sorted(RANK_COLUMNS))
+def test_a_grid_entry_is_the_same_string_the_leaderboard_prints(rank):
+    """The grid rearranges published rows. Two renderings of one number that disagree are two
+    numbers, so every metric the grid can be ordered by is checked against the table's own."""
+    rows = report.summarize(
+        [
+            cell_result(
+                [obs(ttft=0.5, last=2.5) for _ in range(5)],
+                disk_bytes=1_234_567,
+            )
+        ]
+    )
+    run = (RUN_A, run_header(("chat",)), rows)
+
+    printed = leaderboard_rows(report.render_markdown(rows, axis="format", rank=rank))[0]
+    entry = grid_tables(report.render_grid([run], rank=rank))["chat"]["oq4"]["mlxlm"]
+
+    assert printed["cell"] == "oq4__mlxlm"
+    assert entry not in ("—", "FAIL"), f"the {rank} entry has no number to compare"
+    assert entry == printed[RANK_COLUMNS[rank]]
+
+
+def test_the_format_axis_reading_orders_one_runtimes_formats():
+    """A column is the format axis: one runtime held constant, its formats ordered."""
+    runs = [
+        grid_run(
+            RUN_A,
+            "mlxlm",
+            "mlx-lm 0.31.3",
+            ("oq4", "jang"),
+            workload_ids=("chat",),
+            rate_of=lambda label, _workload: {"oq4": 100.0, "jang": 200.0}[label],
+        )
+    ]
+
+    grid = report.render_grid(runs)
+
+    assert "**Format axis — one runtime, its formats ordered.**" in grid
+    assert "- `mlxlm`: `jang` (1) > `oq4` (2)" in grid
+
+
+def test_the_runtime_axis_reading_orders_one_formats_runtimes():
+    """A row is the runtime axis: one format held constant, its runtimes ordered."""
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            RUN_B,
+            "osaurus",
+            "Osaurus 0.25.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            rate_of=lambda _label, _workload: 200.0,
+        ),
+    ]
+
+    grid = report.render_grid(runs)
+
+    assert "**Runtime axis — one format, its runtimes ordered.**" in grid
+    assert "- `oq4`: `osaurus` (1) > `mlxlm` (2)" in grid
+    # And the column on the same cells reads the other way round: the same cell is first in one
+    # axis and last in the other, which is why neither reading answers the other's question.
+    assert "- `osaurus`: `oq4` (1)" in grid
+    assert "- `mlxlm`: `oq4` (1)" in grid
+
+
+def test_the_best_cell_is_labelled_a_recommendation_across_the_grid():
+    """One line per workload, and the one reading that spans both axes says so: the winning
+    cell won under one format and one runtime at once, and the number cannot split them."""
+    runs = [
+        grid_run(
+            RUN_A,
+            "mlxlm",
+            "mlx-lm 0.31.3",
+            ("oq4", "jang"),
+            workload_ids=("chat",),
+            rate_of=lambda *_: 300.0,
+        ),
+        grid_run(
+            RUN_B,
+            "omlx",
+            "oMLX 0.6.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            rate_of=lambda *_: 100.0,
+        ),
+    ]
+
+    grid = report.render_grid(runs)
+
+    assert grid.count("**Recommendation —") == 1  # one per workload, never one for the grid
+    assert "a recommendation rather than an attribution" in grid
+    assert "not which of the two earned it" in grid
+    assert "`oq4__mlxlm` (mlxlm / oq4) leads all 3 ranked cells at `decode_tps` = 300.0" in grid
+
+
+def test_a_grid_workload_with_no_ranked_cell_recommends_nothing():
+    runs = [
+        grid_run(
+            RUN_A,
+            "mlxlm",
+            "mlx-lm 0.31.3",
+            ("oq4",),
+            workload_ids=("chat",),
+            status="FAIL",
+            reason="incoherent output: replacement characters",
+        )
+    ]
+
+    grid = report.render_grid(runs)
+
+    assert "**Recommendation — none.**" in grid
+    assert "no best cell to name" in grid
+    assert "`oq4`" in grid  # the excluded cell is still named in the readings, not dropped
+
+
+def test_the_grid_refuses_a_rank_metric_no_row_carries():
+    with pytest.raises(ValueError) as raised:
+        report.render_grid(grid_runs(), rank="vibes")
+
+    assert "rank must be one of" in str(raised.value)
+
+
+# --- the four join guards --------------------------------------------------------------------
+
+
+def test_guard_1_refuses_two_runs_that_pinned_a_header_field_differently():
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            RUN_B,
+            "omlx",
+            "oMLX 0.6.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            header=run_header(("chat",), temperature=0.2),
+        ),
+    ]
+
+    assert_refused(runs, RUN_A, RUN_B, "temperature")
+
+
+def test_guard_1_refuses_two_runs_that_pinned_a_different_max_tokens():
+    header = run_header(("chat",))
+    header["workloads"][0]["max_tokens"] = 256
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            RUN_B,
+            "omlx",
+            "oMLX 0.6.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            header=header,
+        ),
+    ]
+
+    assert_refused(runs, RUN_A, RUN_B, "max_tokens")
+
+
+def test_guard_1_refuses_two_runs_that_pinned_different_prompts():
+    header = run_header(("chat",))
+    header["workloads"][0]["messages"] = [{"role": "user", "content": "a different prompt"}]
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            RUN_B,
+            "omlx",
+            "oMLX 0.6.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            header=header,
+        ),
+    ]
+
+    message = assert_refused(runs, RUN_A, RUN_B, "messages")
+
+    # The prompts are 6.5 kB of prose in the real prefill column: the refusal names the field
+    # rather than reprinting it.
+    assert "a different prompt" not in message
+
+
+def test_guard_2_refuses_a_cell_two_run_directories_both_measured():
+    """There is no latest-wins rule: which run is newer is not which run is right."""
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(RUN_B, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+    ]
+
+    assert_refused(runs, RUN_A, RUN_B, "(label, runtime, workload_id)", "latest-wins")
+
+
+def test_guard_3_refuses_one_format_label_pointing_at_two_artifacts():
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            RUN_B,
+            "omlx",
+            "oMLX 0.6.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            artifacts={"oq4": "/models/oq4-other"},
+        ),
+    ]
+
+    assert_refused(runs, RUN_A, RUN_B, "artifact_dir", "/models/oq4", "/models/oq4-other")
+
+
+def test_guard_4_refuses_one_runtime_measured_at_two_versions():
+    """Osaurus measured 1.15x across exactly this step, so the held-constant variable moved.
+
+    Two directories, two formats — so this is not guard 2's duplicate — and one runtime at the
+    two builds.
+    """
+    runs = [
+        grid_run(RUN_A, "osaurus", "Osaurus 0.25.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(RUN_B, "osaurus", "Osaurus 0.25.4", ("jang",), workload_ids=("chat",)),
+    ]
+
+    assert_refused(runs, RUN_A, RUN_B, "runtime_version", "Osaurus 0.25.3", "Osaurus 0.25.4")
+
+
+def test_two_different_runtimes_at_two_versions_are_the_grid_working_as_intended():
+    """Guard 4 is about one runtime at two versions, not about versions differing at all."""
+    versions = [entry[2] for entry in GRID_PLAN]
+
+    assert len(set(versions)) == len(versions)
+    assert "mlx-lm 0.31.3" in report.render_grid(grid_runs())
+
+
+def test_a_rankable_row_with_no_value_for_the_metric_is_not_a_ragged_cell():
+    """A PASS cell with no value for this metric is its own state, not a hole in the matrix.
+
+    `_number` renders None as the same em dash the grid uses for a combination nobody ran, so
+    without a fourth state a cell that produced language and cleared every floor would file
+    beside the ones that do not exist. oMLX returned a whole completion in one content delta
+    and published no decode rate at all; that is a fact about the stream, not an absent cell.
+    """
+    ran = {"status": "PASS", "decode_tps": None, "drift": None, "rankable": True}
+    never_ran = None
+    failed = {"status": "FAIL", "decode_tps": None, "drift": None, "rankable": False}
+
+    entries = {
+        report._entry(ran, "decode_tps"),
+        report._entry(never_ran, "decode_tps"),
+        report._entry(failed, "decode_tps"),
+    }
+    assert len(entries) == 3, f"three states collapsed into {entries}"
+    assert report._entry(ran, "decode_tps") == "no value"
+    assert report._entry(never_ran, "decode_tps") == "—"
+    assert report._entry(failed, "decode_tps") == "FAIL"

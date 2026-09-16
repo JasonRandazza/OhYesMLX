@@ -139,6 +139,8 @@ PREFILL_PROMPT = (
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns the process exit code."""
     args = _parser().parse_args(argv)
+    if args.command == "grid":
+        return _grid(args)
     return _run(args)
 
 
@@ -235,7 +237,64 @@ def _parser() -> argparse.ArgumentParser:
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
     )
+
+    grid = commands.add_parser(
+        "grid",
+        help="join run directories into one grid",
+        description="Join finished run directories into one grid: formats down, runtimes "
+        "across. Measures nothing and starts no runtime -- it reads results.jsonl files "
+        "that already exist.",
+    )
+    grid.add_argument(
+        "run_dirs",
+        nargs="+",
+        metavar="RUN-DIR",
+        help="the run directories to join, named one by one. There is no glob and no "
+        "--all: results/ accumulates runs from every session, and a grid assembled by "
+        "wildcard would silently join columns that never belonged together.",
+    )
+    grid.add_argument(
+        "--rank",
+        default=report.DEFAULT_RANK,
+        choices=tuple(report.RANK_METRICS),
+        metavar="METRIC",
+        help=f"the one metric each grid entry carries (default: {report.DEFAULT_RANK})",
+    )
+    grid.add_argument(
+        "--out",
+        default=None,
+        help="also write the grid here (default: stdout only)",
+    )
     return parser
+
+
+def _grid(args) -> int:
+    """Join the named run directories and render the grid.
+
+    The join guards live in report.render_grid, not here: refusing to join two runs that
+    disagree is a statement about the data, and the CLI is not where that is decided.
+    """
+    measure = _load_measure()
+    runs = []
+    for run_dir in args.run_dirs:
+        try:
+            header, results = measure.load_run(run_dir)
+        except (OSError, ValueError) as exc:
+            print(f"ohyesmlx grid: {run_dir}: {exc}", file=sys.stderr)
+            return 2
+        runs.append((Path(run_dir).name, header, report.summarize(results)))
+
+    try:
+        grid = report.render_grid(runs, rank=args.rank)
+    except ValueError as exc:
+        print(f"ohyesmlx grid: {exc}", file=sys.stderr)
+        return 2
+
+    print(grid)
+    if args.out:
+        Path(args.out).write_text(grid, encoding="utf-8")
+        print(f"wrote {args.out}")
+    return 0
 
 
 def _run(args) -> int:

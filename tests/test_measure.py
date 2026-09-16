@@ -14,7 +14,7 @@ requests, and results that survive the process that wrote them.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1224,6 +1224,202 @@ def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
     ]
 
     assert report.summarize(rebuilt) == report.summarize(results)
+
+
+# ------------------------------------------------------------------------ reading a run
+
+# A real Phase 3 column: one runtime, twelve (cell, workload) pairs. results/ is gitignored,
+# so this is read where it lies and skipped in a checkout that does not have it -- copying it
+# in as a fixture would make the test check a copy instead of the artifact.
+REAL_GRID_RUN = (
+    Path(__file__).resolve().parents[1]
+    / "results" / "grid" / "20260916T014210Z-format" / measure.RESULTS_FILENAME
+)
+
+
+def parsed_lines(path: Path) -> list[dict]:
+    """Every line of a results.jsonl as parsed JSON: line 1 the header, the rest records."""
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_load_run_round_trips_every_record_of_a_real_run():
+    """The loader is the exact inverse of the writer, checked against a real column rather
+    than a fixture: every record on disk rebuilds into an object that ``_record`` turns back
+    into that same record, dict for dict. One assertion over a real file covers every field a
+    loader could have dropped -- the derived ones, the raw ones, the cell, both observation
+    lists -- which is the only way to know a reader agrees with the writer about the shape."""
+    if not REAL_GRID_RUN.exists():
+        pytest.skip(f"no grid run in this checkout: {REAL_GRID_RUN}")
+
+    header, results = measure.load_run(REAL_GRID_RUN)
+    lines = parsed_lines(REAL_GRID_RUN)
+
+    assert results, "the run has records to read"
+    assert header == lines[0]
+    assert len(results) == len(lines) - 1
+    assert [result.workload_id for result in results[:3]] == ["chat", "prefill", "decode"]
+    for index, result in enumerate(results):
+        assert measure._record(result) == lines[index + 1]
+
+
+def test_the_run_directory_and_its_file_read_the_same(tmp_path):
+    """Both name the same run, and the header comes back as it was written -- a reader that
+    re-derived the pins would be reporting its own guess about what was held constant."""
+    path = tmp_path / "20260916T014210Z-format" / measure.RESULTS_FILENAME
+    run = {
+        "temperature": 0.0,
+        "seed": 0,
+        "warmup": WARMUPS,
+        "measured": MEASURED,
+        "cooldown_s": 30.0,
+        "workloads": [
+            {"id": "chat", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 128}
+        ],
+    }
+    measure.write_jsonl([cell_result([FakeObservation()])], str(path), run=run)
+
+    header, results = measure.load_run(path.parent)
+
+    assert header == run
+    assert measure.load_run(path) == (header, results)
+
+
+def test_the_derived_fields_in_the_file_are_ignored_on_read(tmp_path):
+    """measured_count, warmup_count and drift are the file's own summary of its own samples.
+    A loader that read them back would let a hand-edited file publish a drift its
+    observations do not support, so all three are recomputed here and the file's copy of
+    them changes nothing -- including what the rebuilt object writes back."""
+    result = replace(
+        cell_result(
+            [FakeObservation(ttft_s=0.5, last_content_s=2.5 + 0.1 * index)
+             for index in range(MEASURED)]
+        ),
+        warmup_observations=[FakeObservation(text="warmup")] * (2 * WARMUPS),
+    )
+    honest_path = tmp_path / "honest" / measure.RESULTS_FILENAME
+    measure.write_jsonl([result], str(honest_path), run={"temperature": 0.0})
+    honest, = parsed_lines(honest_path)[1:]
+    assert honest["drift"]["n"] == MEASURED, "the run has a drift to lie about"
+
+    tampered = honest | {
+        "measured_count": 99,
+        "warmup_count": 99,
+        "drift": {"early_median_tps": 1.0, "late_median_tps": 9999.0,
+                  "change_pct": 9999.0, "n": 99},
+    }
+    edited_path = tmp_path / "hand-edited" / measure.RESULTS_FILENAME
+    edited_path.parent.mkdir(parents=True)
+    edited_path.write_text(
+        json.dumps({"temperature": 0.0}) + "\n" + json.dumps(tampered) + "\n"
+    )
+
+    loaded, = measure.load_run(edited_path)[1]
+
+    assert len(loaded.observations) == honest["measured_count"] == MEASURED
+    assert len(loaded.warmup_observations) == honest["warmup_count"] == 2 * WARMUPS
+    assert measure.measured_drift(loaded.observations) == honest["drift"]
+    assert measure._record(loaded) == honest
+
+
+def test_a_reasoning_channel_survives_the_round_trip(tmp_path):
+    """``reasoning_text`` is the field a loader can drop in silence: it has a default, so
+    rebuilding an observation without it raises nothing. The real grid column this loader is
+    round-tripped against emitted no reasoning at all in any of its observations, so it
+    cannot catch that -- this one carries the channel in both lists."""
+    result = replace(
+        cell_result([FakeObservation(reasoning_text="thinking about it", reasoning_tokens=12)]
+                    * MEASURED),
+        warmup_observations=[FakeObservation(reasoning_text="thinking")] * WARMUPS,
+    )
+    path = tmp_path / measure.RESULTS_FILENAME
+    measure.write_jsonl([result], str(path), run={"temperature": 0.0})
+    honest, = parsed_lines(path)[1:]
+
+    loaded, = measure.load_run(path)[1]
+
+    assert loaded.observations[0].reasoning_text == "thinking about it"
+    assert loaded.warmup_observations[0].reasoning_text == "thinking"
+    assert measure._record(loaded) == honest
+
+
+def test_a_record_missing_a_field_is_refused_rather_than_defaulted(tmp_path):
+    """Eight of the columns under results/grid/ were written before
+    ``first_request_workload_id`` existed, and this is what reading one of them does: the
+    field is refused, by name and by line. Filling it with None would render those columns
+    as cells whose cold visit made no request -- a false claim standing where a missing
+    field is, and the defect that field was added to fix. A schema the file predates is the
+    coordinator's call to migrate, not the loader's to guess at."""
+    path = tmp_path / measure.RESULTS_FILENAME
+    measure.write_jsonl([cell_result([FakeObservation()])], str(path),
+                        run={"temperature": 0.0})
+    lines = path.read_text().splitlines()
+    record = json.loads(lines[1])
+    del record["first_request_workload_id"]
+    path.write_text(lines[0] + "\n" + json.dumps(record) + "\n")
+
+    with pytest.raises(ValueError) as error:
+        measure.load_run(path)
+
+    assert str(path) in str(error.value)
+    assert "line 2" in str(error.value)
+    assert "first_request_workload_id" in str(error.value)
+
+
+def test_a_truncated_last_line_names_the_line_it_stopped_at(tmp_path):
+    """The ordinary corruption. write_jsonl is atomic, so a half-written file is a copy
+    interrupted in flight -- and which line it was cut at is the whole diagnosis."""
+    path = tmp_path / measure.RESULTS_FILENAME
+    measure.write_jsonl(
+        [cell_result([FakeObservation()]),
+         cell_result([FakeObservation()], workload_id="decode")],
+        str(path), run={"temperature": 0.0},
+    )
+    lines = path.read_text().splitlines()
+    cut = lines[2][: len(lines[2]) // 2]
+    path.write_text("\n".join(lines[:2]) + "\n" + cut + "\n")
+
+    with pytest.raises(ValueError) as error:
+        measure.load_run(path)
+
+    assert str(path) in str(error.value)
+    assert "line 3" in str(error.value)
+
+
+def test_an_empty_file_names_the_header_it_is_missing(tmp_path):
+    path = tmp_path / measure.RESULTS_FILENAME
+    path.write_text("")
+
+    with pytest.raises(ValueError) as error:
+        measure.load_run(path)
+
+    assert str(path) in str(error.value)
+    assert "line 1" in str(error.value)
+
+
+def test_a_first_line_that_is_not_an_object_is_refused(tmp_path):
+    path = tmp_path / measure.RESULTS_FILENAME
+    path.write_text("[1, 2, 3]\n")
+
+    with pytest.raises(ValueError) as error:
+        measure.load_run(path)
+
+    assert str(path) in str(error.value)
+    assert "line 1" in str(error.value)
+
+
+def test_a_line_that_is_not_a_record_names_itself(tmp_path):
+    """A line that parses as an object but is not a cell record -- one missing its cell, say
+    -- is refused with the line it was found on, never skipped as if it were not there."""
+    path = tmp_path / measure.RESULTS_FILENAME
+    measure.write_jsonl([cell_result([FakeObservation()])], str(path),
+                        run={"temperature": 0.0})
+    path.write_text(path.read_text() + json.dumps({"workload_id": "chat"}) + "\n")
+
+    with pytest.raises(ValueError) as error:
+        measure.load_run(path)
+
+    assert str(path) in str(error.value)
+    assert "line 3" in str(error.value)
 
 
 # ------------------------------------------------------------------------- disk bytes

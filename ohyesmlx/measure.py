@@ -81,16 +81,16 @@ import statistics
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from . import coherence, sample
 
-if TYPE_CHECKING:  # pragma: no cover - the shapes the loop is written against
-    from .transport import Observation
+# Imported at runtime, not under TYPE_CHECKING: load_run rebuilds a record with the class
+# that wrote it, from transport.py itself rather than from a re-bound module handle.
+from .transport import Observation
 
-# transport.py (issue #2), runtimes.py (issue #3) and token_counter.py are written
-# concurrently against docs/interfaces.md, so this module has to stay importable while
-# they are absent. A real run refuses to start without them; see _require_modules.
+# runtimes.py (issue #3) and token_counter.py are written concurrently against
+# docs/interfaces.md, so this module has to stay importable while they are absent. A real
+# run refuses to start without them; see _require_modules.
 try:
     from . import token_counter
 except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
@@ -848,3 +848,78 @@ def _record(result: CellResult) -> dict:
 def _observation_record(observation) -> dict:
     """The observation's own fields, and nothing derived from them."""
     return asdict(observation)
+
+
+def load_run(path: str | Path) -> tuple[dict, list[CellResult]]:
+    """Read a run's ``results.jsonl`` back: its header, then one :class:`CellResult` per line.
+
+    ``path`` is the run directory or the ``results.jsonl`` inside it; both name the same run.
+    Line 1 is the run header, returned as it was written, and every line after it is one
+    (cell, workload) pair, rebuilt with the shapes that wrote it: ``Cell(**record["cell"])``
+    and ``Observation(**obs)`` are ``asdict``'s inverse by construction.
+
+    The three **derived** fields a record also carries — ``measured_count``,
+    ``warmup_count``, ``drift`` — are deliberately not read back. They are recomputed here
+    from the observations that carry them, so a hand-edited file cannot publish a drift its
+    own samples do not support. They stay in the file for a reader with ``jq``; this
+    function ignores them.
+
+    A file that cannot be read back raises :class:`ValueError` naming the path and the line
+    number: an empty file, a first line that is not an object, a later line that is not a
+    record. A truncated final line is the ordinary case — :func:`write_jsonl` is atomic, but
+    a file copied mid-write is not — which is why the line number is the whole diagnosis.
+    """
+    target = Path(path)
+    if target.is_dir():
+        target = target / RESULTS_FILENAME
+    lines = target.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        raise ValueError(f"{target}: line 1: empty file, so there is no run header to read")
+    header = _line_object(lines[0], target, 1)
+    return header, [
+        _cell_result(_line_object(line, target, number), target, number)
+        for number, line in enumerate(lines[1:], start=2)
+    ]
+
+
+def _line_object(line: str, path: Path, number: int) -> dict:
+    """One line decoded as a JSON object, or ``ValueError`` naming the line that is not one."""
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"{path}: line {number}: not JSON ({error.msg} at column {error.colno})"
+        ) from error
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{path}: line {number}: not a JSON object but a {type(value).__name__}"
+        )
+    return value
+
+
+def _cell_result(record: dict, path: Path, number: int) -> CellResult:
+    """One record rebuilt into the ``CellResult`` that wrote it, or its line number if not.
+
+    Nothing here reads ``measured_count``, ``warmup_count`` or ``drift``: a record's derived
+    fields are its writer's summary of its own observations, and a summary is not read back
+    over the samples it summarizes.
+    """
+    try:
+        return CellResult(
+            cell=Cell(**record["cell"]),
+            workload_id=record["workload_id"],
+            status=record["status"],
+            reason=record["reason"],
+            observations=[Observation(**raw) for raw in record["observations"]],
+            warmup_observations=[
+                Observation(**raw) for raw in record["warmup_observations"]
+            ],
+            cold_load_s=record["cold_load_s"],
+            first_request_s=record["first_request_s"],
+            first_request_workload_id=record["first_request_workload_id"],
+            memory=record["memory"],
+            runtime_version=record["runtime_version"],
+            disk_bytes=record["disk_bytes"],
+        )
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"{path}: line {number}: not a cell record: {error}") from error
