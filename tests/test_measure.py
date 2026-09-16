@@ -489,13 +489,15 @@ def rate_responder(rates):
 
 
 def test_a_stream_that_plateaus_immediately_stops_at_the_floor(harness):
-    """A cell warm by request three does not pay for a budget it does not need."""
+    """A cell warm from its first request does not pay for a budget it does not need -- but
+    the floor is two windows, not one, because one window cannot tell a warm rate from a boost
+    rate holding steady."""
     harness.transport.responder = rate_responder([8.0, 8.0, 8.0])
     harness.add_runtime("mlxlm")
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
 
-    assert len(results[0].warmup_observations) == measure.MIN_WARMUP == 3
+    assert len(results[0].warmup_observations) == 2 * measure.WARMUP_WINDOW == 6
     assert results[0].warmup_plateau is True
 
 
@@ -516,17 +518,19 @@ def test_a_window_that_keeps_climbing_runs_to_the_cap_and_says_so(harness):
     assert measure._record(results[0]) == record
 
 
-def test_a_window_that_settles_at_seven_stops_there(harness):
-    """The budget a cell needed becomes a published number: three would have been too few
-    here, sixteen would have been five too many."""
+def test_a_climbing_window_settles_where_the_climb_stops(harness):
+    """The budget a cell needed becomes a published number: six would have been too few here,
+    sixteen would have been seven too many. The window closes at the request where the last
+    three rates agree AND agree with the three before them -- one request after the climb
+    flattens, never on the first flat window."""
     harness.transport.responder = rate_responder([1.0, 2.0, 3.0, 5.0, 7.0, 7.0, 7.0])
     harness.add_runtime("mlxlm")
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
 
-    assert len(results[0].warmup_observations) == 7
+    assert len(results[0].warmup_observations) == 9
     assert results[0].warmup_plateau is True
-    assert harness.lines()[0]["warmup_count"] == 7
+    assert harness.lines()[0]["warmup_count"] == 9
 
 
 def test_a_warmup_with_no_decode_rate_cannot_settle_the_window(harness):
@@ -563,7 +567,7 @@ def test_a_row_settles_only_when_every_visit_s_window_settled(harness):
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=2)
 
-    assert len(results[0].warmup_observations) == measure.MIN_WARMUP + measure.WARMUP_CAP
+    assert len(results[0].warmup_observations) == 2 * measure.WARMUP_WINDOW + measure.WARMUP_CAP
     assert results[0].warmup_plateau is False
 
 
@@ -606,13 +610,15 @@ def test_a_run_that_names_no_warmup_gets_the_rule_and_nine_samples(harness):
 
     assert harness.header()["warmup"] == {
         "mode": "plateau",
-        "floor": measure.MIN_WARMUP,
+        "window": measure.WARMUP_WINDOW,
+        "floor": 2 * measure.WARMUP_WINDOW,
         "cap": measure.WARMUP_CAP,
         "plateau_pct": measure.WARMUP_PLATEAU_PCT,
     }
     assert harness.header()["measured"] == 9
     assert len(results[0].observations) == 9
-    assert [len(calls) - measure.MIN_WARMUP for calls in harness.transport.calls_by_visit().values()] == [5, 4]
+    assert [len(calls) - 2 * measure.WARMUP_WINDOW
+            for calls in harness.transport.calls_by_visit().values()] == [5, 4]
     assert harness.lines()[0]["drift"]["n"] == 9
     assert results[0].warmup_plateau is True
 
@@ -628,7 +634,8 @@ def test_the_plateau_pins_round_trip_through_load_run(harness):
 
     assert header["warmup"] == harness.header()["warmup"] == {
         "mode": "plateau",
-        "floor": measure.MIN_WARMUP,
+        "window": measure.WARMUP_WINDOW,
+        "floor": 2 * measure.WARMUP_WINDOW,
         "cap": measure.WARMUP_CAP,
         "plateau_pct": measure.WARMUP_PLATEAU_PCT,
     }
@@ -645,7 +652,7 @@ def test_the_warmup_window_contributes_no_sample_to_a_published_figure(harness):
     measured request, a warmup that reached a figure would move it by a factor, not by a
     rounding."""
     def settling(call):
-        return rate_observation(2.0 if call.visit_index < measure.MIN_WARMUP else 40.0)
+        return rate_observation(2.0 if call.visit_index < 2 * measure.WARMUP_WINDOW else 40.0)
 
     def climbing(call):
         return rate_observation(2.0 + call.visit_index if call.visit_index < measure.WARMUP_CAP
@@ -663,7 +670,9 @@ def test_the_warmup_window_contributes_no_sample_to_a_published_figure(harness):
                            results_dir=harness.tmp_path / "cap")
 
     # A window per visit — nine samples are two visits — and both rows warmed up their own.
-    assert len(from_floor[0].warmup_observations) == measure.VISIT_ROUNDS * measure.MIN_WARMUP
+    assert len(from_floor[0].warmup_observations) == (
+        measure.VISIT_ROUNDS * 2 * measure.WARMUP_WINDOW
+    )
     assert from_floor[0].warmup_plateau is True
     assert len(from_cap[0].warmup_observations) == measure.VISIT_ROUNDS * measure.WARMUP_CAP
     assert from_cap[0].warmup_plateau is False
@@ -2022,3 +2031,25 @@ def test_a_column_written_before_the_plateau_rule_still_loads_and_claims_no_verd
     assert results, "a pre-plateau column still loads"
     assert all(result.warmup_plateau is None for result in results)
     assert header["warmup"] == 3, "and its header still names the fixed budget it ran"
+
+
+def test_a_flat_boost_phase_does_not_count_as_warm(harness):
+    """The measured sequence that made the rule compare two windows instead of one.
+
+    oMLX serving Qwen3.5-4B-oQ4, fourteen identical chat requests in a flat loop on
+    2026-09-16: 103.5, 102.8, 103.3, then a step down to ~73 that holds for eleven more. The
+    machine serves its first three requests from a boost state, and that state is FLAT -- 0.5%
+    spread. A rule reading one window would have called the cell warm at request three, at a
+    rate 40% above what it can sustain, and published the boost rate as the result.
+    """
+    measured = [103.5, 102.8, 103.3, 70.8, 73.4, 75.7, 73.6, 75.2, 75.3, 74.6, 72.0, 73.8]
+    harness.transport.responder = rate_responder(measured)
+    harness.add_runtime("omlx")
+
+    results = harness.run([harness.cell("oq__omlx", "omlx")], warmup="plateau", measured=1)
+    warmups = [measure.decode_tps(o) for o in results[0].warmup_observations]
+
+    assert not measure._settled(measured[:3]), "the boost phase alone is not warmth"
+    assert len(warmups) == 8, "the window closes on the sustained rate, not the boost rate"
+    assert results[0].warmup_plateau is True
+    assert warmups[-1] < 80.0, f"warmed to the sustained rate, not the boost rate: {warmups}"

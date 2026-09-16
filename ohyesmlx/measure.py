@@ -122,8 +122,28 @@ except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
 # Raising the budget would pay mlx-lm's cost on four runtimes that do not need it, so the
 # budget becomes a measured property of the cell and ``warmup_count`` publishes what it took.
 MIN_WARMUP = 3            # the floor: load, Metal shader compilation, lazy mmap
+WARMUP_WINDOW = 3         # rates per plateau window; the rule compares two of them
 WARMUP_CAP = 16           # the window closes here whether or not it settled
-WARMUP_PLATEAU_PCT = 3.0  # (max - min) / median over the last three rates, percent
+WARMUP_PLATEAU_PCT = 3.0  # spread within a window, and the step between two, in percent
+
+# Why the rule compares TWO windows and not one. Measured 2026-09-16, oMLX serving
+# Qwen3.5-4B-oQ4, fourteen identical chat requests in a flat loop with no harness structure
+# around them -- decode tok/s:
+#
+#   103.5  102.8  103.3 | 70.8  73.4  75.7  73.6  75.2  75.3  74.6  72.0  73.8  72.9  73.3
+#
+# The machine serves the first three requests from a boost state and then steps down ~29% to
+# the rate it holds. Total request time confirms it is the runtime and not the stream
+# re-chunking: request 1 spends 1.24 s generating, request 4 spends 1.81 s for the same 128
+# tokens.
+#
+# The boost phase is FLAT -- 0.5% spread across those three. A rule that asks only whether the
+# last three rates agree would call the cell warm at request three, at a rate 40% above what it
+# can sustain, and would certify exactly the three requests the fixed budget already used while
+# claiming to have verified something. So a window is warm only when its own rates agree AND
+# they agree with the window before them: a transient plateau followed by a step is not a
+# plateau. On the sequence above that opens the measured window at request 8, on the sustained
+# rate.
 
 # The header's ``warmup`` is the rule rather than a count when this is asked for.
 WARMUP_MODE = "plateau"
@@ -326,7 +346,10 @@ def _warmup_pin(warmup: int | str) -> int | dict:
         )
     return {
         "mode": WARMUP_MODE,
-        "floor": MIN_WARMUP,
+        "window": WARMUP_WINDOW,
+        # Two windows, so the floor is twice one: a rule that can call a cell warm inside a
+        # single window cannot tell a warm rate from a boost rate holding steady.
+        "floor": 2 * WARMUP_WINDOW,
         "cap": WARMUP_CAP,
         "plateau_pct": WARMUP_PLATEAU_PCT,
     }
@@ -609,10 +632,11 @@ def _warmup_window(
     """One workload's warmup window, ending when the cell is warm or its budget is spent.
 
     A fixed ``int`` issues exactly that many requests and returns ``None``: the rule never
-    ran, so there is no plateau for the window to report. ``"plateau"`` issues the floor of
-    ``MIN_WARMUP`` requests and then keeps going until the rate stops moving -- after the
-    floor the last three warmup rates are compared by ``(max - min) / median``, and the
-    measured window opens as soon as that spread is within ``WARMUP_PLATEAU_PCT``. The rates
+    ran, so there is no plateau for the window to report. ``"plateau"`` issues two windows of
+    ``WARMUP_WINDOW`` requests and then keeps going until the rate stops moving -- the last
+    window's spread must be within ``WARMUP_PLATEAU_PCT`` and its median must be within that
+    same tolerance of the window before it, because one flat window is a boost state holding
+    steady as often as it is a warm cell. The rates
     come from :func:`decode_tps`, the same function every published figure uses, so a warmup
     observation carrying no rate -- a failed request, or a stream with no decode window -- is
     not evidence that the cell stopped moving and cannot settle the window; only
@@ -633,22 +657,43 @@ def _warmup_window(
             if len(rates) >= warmup:
                 return None
             continue
-        if len(rates) >= MIN_WARMUP and _within_plateau(rates[-3:]):
+        if len(rates) >= 2 * WARMUP_WINDOW and _settled(rates):
             return True
         if len(rates) >= WARMUP_CAP:
             return False
 
 
 def _within_plateau(rates: list[float | None]) -> bool:
-    """Whether three warmup rates have stopped moving, within ``WARMUP_PLATEAU_PCT``.
+    """Whether one window's warmup rates have stopped moving, within ``WARMUP_PLATEAU_PCT``.
 
-    ``(max - min) / median`` over the three, in percent. A rate the cell did not produce is
-    not a measurement three of them can agree on, so a window holding one cannot settle.
+    ``(max - min) / median`` over them, in percent. A rate the cell did not produce is not a
+    measurement the others can agree on, so a window holding one cannot settle.
     """
     if any(rate is None for rate in rates):
         return False
     middle = statistics.median(rates)
     return (max(rates) - min(rates)) / middle * 100.0 <= WARMUP_PLATEAU_PCT
+
+
+def _settled(rates: list[float | None]) -> bool:
+    """Whether the cell is warm: the last window is flat, and it agrees with the one before it.
+
+    One flat window is not warmth. A machine serving its first requests from a boost state
+    holds that rate steadily and then steps off it, and a rule reading a single window calls
+    that steadiness a plateau -- see the measured sequence beside ``WARMUP_PLATEAU_PCT``.
+    Warmth is a rate the cell is still holding a window later, so the step between the two
+    window medians is tested against the same tolerance as the spread inside one.
+    """
+    if len(rates) < 2 * WARMUP_WINDOW:
+        return False  # fewer rates than the rule reads is not a settled cell, it is no answer
+    last = rates[-WARMUP_WINDOW:]
+    previous = rates[-2 * WARMUP_WINDOW:-WARMUP_WINDOW]
+    if not _within_plateau(last) or any(rate is None for rate in previous):
+        return False
+    before = statistics.median(previous)
+    if before <= 0:
+        return False
+    return abs(statistics.median(last) - before) / before * 100.0 <= WARMUP_PLATEAU_PCT
 
 
 def _plateau_verdict(current: bool | None, window: bool | None) -> bool | None:

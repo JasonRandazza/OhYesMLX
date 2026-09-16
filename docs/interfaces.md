@@ -449,14 +449,36 @@ A workload's warmup window keeps issuing requests until its decode rate stops mo
 
 ```python
 MIN_WARMUP = 3            # unchanged: load, Metal shader compilation, lazy mmap
+WARMUP_WINDOW = 3         # rates per window; the rule compares two of them
 WARMUP_CAP = 16           # the window closes here whether or not it settled
-WARMUP_PLATEAU_PCT = 3.0  # (max - min) / median over the last three rates
+WARMUP_PLATEAU_PCT = 3.0  # spread within a window, and the step between two
 ```
 
-After the floor, the last three warmup rates are compared: when their spread is within
-`WARMUP_PLATEAU_PCT` of their median, the cell is warm and the measured window opens. A
-rate comes from `decode_tps`, the same function every published figure uses; a warmup
-observation that carries none cannot settle the window and the cap is what ends it.
+The cell is warm when the last `WARMUP_WINDOW` rates agree within `WARMUP_PLATEAU_PCT`
+**and** their median agrees with the median of the window before them, to the same
+tolerance. A rate comes from `decode_tps`, the same function every published figure uses; a
+warmup observation that carries none cannot settle the window, and the cap is what ends it.
+
+**One window is not enough, measured.** oMLX serving Qwen3.5-4B-oQ4, fourteen identical chat
+requests in a flat loop with no harness structure around them, decode tok/s:
+
+```
+103.5  102.8  103.3 | 70.8  73.4  75.7  73.6  75.2  75.3  74.6  72.0  73.8  72.9  73.3
+```
+
+The machine serves the first three requests from a boost state and then steps down ~29% to
+the rate it holds — request 1 spends 1.24 s generating and request 4 spends 1.81 s for the
+same 128 tokens, so this is the runtime slowing down and not the stream re-chunking. The
+boost phase is **flat**: 0.5% spread. A single-window rule calls that warm at request three,
+at a rate 40% above what the cell can sustain, and certifies exactly the three requests the
+fixed budget already used while claiming to have verified something. Live, before and after:
+
+| rule | warm declared at | first measured request |
+|---|---|---|
+| one window | 103.3 | 75.7 (−27%) |
+| two windows | 77.0 | 76.1 (−1%) |
+
+So the floor is `2 * WARMUP_WINDOW`, not `MIN_WARMUP`.
 
 `3.0%` sits between the two populations the grid measured — four runtimes settle their whole
 *measured* window inside `+2.6 / −0.0 / +0.5 / +1.0%`, and mlx-lm moves `+17.0%` across its.
@@ -491,7 +513,8 @@ the Phase 5 write-up published stay readable by the tool that published them.
 The run header's `warmup` becomes the rule rather than a count:
 
 ```python
-{"mode": "plateau", "floor": MIN_WARMUP, "cap": WARMUP_CAP, "plateau_pct": WARMUP_PLATEAU_PCT}
+{"mode": "plateau", "window": WARMUP_WINDOW, "floor": 2 * WARMUP_WINDOW,
+ "cap": WARMUP_CAP, "plateau_pct": WARMUP_PLATEAU_PCT}
 ```
 
 and `measured` goes `5 → 9`. At 5, `measured_drift` compares a median of two against a
