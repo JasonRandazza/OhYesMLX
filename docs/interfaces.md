@@ -555,3 +555,42 @@ five 2026-09-16 directories become history the moment it starts.
 `run_cells(warmup=...)` still accepts an `int` for a fixed budget — a quick run pinning three
 requests is still a legal thing to ask for, and it is what most tests want. `"plateau"` is
 the default and is what the grid runs.
+
+---
+
+## Phase 6 — a sweep is a pin, not an axis
+
+Full reasoning in `docs/research/2026-09-16-phase6-design.md`. What is settled and pinned:
+
+`--study` names which of a **cell's** two variables a selection may vary, and a cell is
+`(format, runtime)`. Concurrency, prompt length and cache state are none of those — they are
+properties of how the run drove the cells, which is what the run header holds. So each sweep
+is N runs differing in exactly one header pin, joined afterwards, the same shape the grid
+already is.
+
+```python
+def render_sweep(runs, *, varying: str, rank: str = DEFAULT_RANK) -> str: ...
+# varying: the one header field these runs are allowed to disagree about.
+```
+
+Every other field is compared as join guard 1 compares it. `varying` must actually vary: a
+sweep whose runs all pin the same value is not a sweep, and two runs sharing a value of the
+swept pin is the duplicate case guard 2 already refuses. The swept pin is named in the title
+and the provenance block — a table that does not say what varied between its columns is the
+thing this project exists not to publish.
+
+**At concurrency N > 1 the ordering metric is aggregate throughput, not `decode_tps`.** N
+requests share one GPU, so per-request decode rate falls as N rises by construction; a reader
+who sees it drop from 75 to 30 between N=1 and N=8 and concludes the runtime got worse has
+read a throughput result as a latency result. Per-request rate stays recorded, TTFT becomes a
+queueing measurement whose percentiles matter more than its median, and `_aggregate_tps` —
+which already exists — is what the sweep is ordered by.
+
+**The warmup rule is not assumed to carry over to concurrency.** `_settled` compares medians
+of per-request decode rates, and at N>1 those carry queueing variance on top of the runtime's
+own. Whether a concurrency sweep must warm on aggregate throughput instead is a question to
+be measured (plan 06-01a) before any rule is pinned.
+
+Prompt lengths are **token** counts verified against the tokenizer that will serve them, with
+the achieved count recorded beside the target. A prompt that exceeds a runtime's context is
+`—` with the refusal recorded, never a `FAIL` and never silently truncated.
