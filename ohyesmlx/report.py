@@ -239,11 +239,24 @@ PIN_FIELDS = ("temperature", "seed", "warmup", "measured", "cooldown_s")
 #   Osaurus         1331-2560     2867-3994    3161-4044
 #
 # In four columns footprint lands within a few percent of the weight bytes. In the Osaurus
-# column it lands at roughly half them -- below the size of the weights the process is
-# serving, which a process holding them in anonymous memory cannot do -- while that column's
-# resident number sits right at the weights. The direction is that Osaurus's weight pages are
-# file-backed and clean and `footprint` does not count them. Until that is probed rather than
-# inferred, "Osaurus uses half the memory" is a claim about the sampler, not the runtime.
+# column it lands at roughly half them -- below the size of the weights the process is serving.
+#
+# PROBED 2026-09-16, and the first explanation was wrong. The standing guess was that Osaurus
+# maps its weights file-backed, so the pages would be clean and uncounted. `vmmap`'s full region
+# table says otherwise: mapped-file regions hold 34 MB in Osaurus and 2 MB in oMLX, nowhere near
+# the 3014 MB of weights either is serving. What differs is the PAGE CLASS. Loading the same
+# artifact, system-wide:
+#
+#   Osaurus   process footprint 1562 MB   wired +1064 MB   active  -66 MB
+#   oMLX      process footprint 3995 MB   wired    +1 MB   active +752 MB
+#
+# and in the region table Osaurus's `IOAccelerator (graphics)` holds 581 MB against oMLX's
+# 3334 MB for identical weights. Osaurus puts its weights in wired, GPU-pinned pages; oMLX
+# holds them as ordinary anonymous memory. `phys_footprint` charges those two differently, so
+# the number is not the same quantity in the two columns -- which is the point, and it is now
+# measured rather than inferred. Exactly how Metal attributes a wired device allocation to a
+# process is not settled here and does not need to be: what a cross-runtime ranking needs is
+# one quantity, and this is not one.
 CROSS_RUNTIME_UNCOMPARABLE = {
     "peak_mb": "`footprint` does not measure the same pages in every runtime: in the "
     "2026-09-16 grid four columns report a footprint within a few percent of their weight "
