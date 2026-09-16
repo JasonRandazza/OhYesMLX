@@ -610,3 +610,50 @@ same measurement as one request, and nothing about the existing grid changes.
 Prompt lengths are **token** counts verified against the tokenizer that will serve them, with
 the achieved count recorded beside the target. A prompt that exceeds a runtime's context is
 `—` with the refusal recorded, never a `FAIL` and never silently truncated.
+
+---
+
+## Phase 6 plan 06-01b — the concurrency pin
+
+```python
+def run_cells(cells, workloads, *, warmup="plateau", measured=9, concurrency=1,
+              cooldown_s=30.0, results_dir): ...
+```
+
+**`measured` counts batches, not requests.** At `concurrency=1` a batch is one request and
+nothing about the existing grid changes — that equivalence is what keeps every number measured
+so far comparable. At `concurrency=8`, `measured=9` means nine batches of eight, so the cell
+records 72 observations and nine batch spans.
+
+**A batch is N requests issued together under one clock.** The span is measured around the
+whole batch, because summing per-request spans would count the overlap N times and aggregate
+throughput is the quantity a concurrency sweep publishes. Threads, not processes:
+`concurrent.futures.ThreadPoolExecutor` around the existing `transport.chat`, which is blocked
+on an SSE stream. **The stream reader is not re-implemented** — one definition of TTFT, one of
+the decode window, one `Observation`.
+
+New on `CellResult` and the record:
+
+```python
+batch_spans: list[float]   # wall-clock seconds per measured batch; one entry per batch
+```
+
+`aggregate_tps` for a batch is its completion tokens over its span. Read back leniently like
+`warmup_plateau`: a record written before concurrency existed has no batch spans and `[]` is
+exactly true of it, since there were no batches. A sequential record's spans are *not*
+reconstructed from per-request totals — a gap between two sequential requests is not part of
+either one.
+
+**Warmup at concurrency > 1 reads aggregate throughput.** Same rule, same constants, different
+series: `_settled` over per-batch aggregate rather than per-request decode rates. Measured in
+plan 06-01a — at N=8 the per-request series swings ±11% with no trend and never settles, while
+aggregate settles at batch 12. At `concurrency=1` the per-request series is used exactly as
+today.
+
+**The header pin** gains `concurrency`, so join guard 1 compares it and a sweep declares it via
+`render_sweep(varying="concurrency")`.
+
+**What does not change:** the floors, the coherence gate, `measured_drift`, `decode_tps`,
+`prefill_tps`, `itl_s`, and every per-request figure. A concurrent cell's requests are judged
+one at a time exactly as a sequential cell's are — a fast cell emitting garbage is still a
+failed cell, at any concurrency.
