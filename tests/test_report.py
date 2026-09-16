@@ -1317,7 +1317,14 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
         for option in action.option_strings
     }
 
-    assert flags == {"-h", "--help", "--study", "--cells", "--results-dir", "--rank"}
+    assert flags == {
+        "-h", "--help", "--study", "--cells", "--results-dir", "--rank", "--concurrency",
+    }
+    # --concurrency is a PIN, not a selector: it says how the named cells are driven, never
+    # which cells run. That distinction is the whole reason concurrency is not a third
+    # --study axis -- if it selected cells, one --cells could vary three things at once.
+    selectors = {flag for flag in flags if flag in {"--cells"}}
+    assert selectors == {"--cells"}
     # `run` says which cells to measure with --cells and nothing else. `grid` is not a second
     # way to say that: it joins run directories that already exist, starts no runtime and
     # measures nothing, so the selector count for a *run* is still one.

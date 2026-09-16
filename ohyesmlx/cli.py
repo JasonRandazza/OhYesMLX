@@ -233,6 +233,15 @@ def _parser() -> argparse.ArgumentParser:
         f"ascending (default: {report.DEFAULT_RANK}). There is no blended score.",
     )
     run.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="requests issued together per batch (default: 1). `--measured` counts BATCHES, so "
+        "at N=8 a run of 9 makes 72 requests. A sweep is several runs differing only in this "
+        "pin, joined afterwards; it is not a second cell selector and not a third --study axis.",
+    )
+    run.add_argument(
         "--results-dir",
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
@@ -310,7 +319,7 @@ def _run(args) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     results = measure.run_cells(
-        cells, workloads(measure), results_dir=str(run_dir)
+        cells, workloads(measure), concurrency=args.concurrency, results_dir=str(run_dir)
     )
     rows = report.summarize(results)
 

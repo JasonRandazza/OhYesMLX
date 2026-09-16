@@ -13,7 +13,9 @@ requests, and results that survive the process that wrote them.
 
 from __future__ import annotations
 
+import itertools
 import json
+import time
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1334,7 +1336,8 @@ def test_a_second_run_overwrites_rather_than_appends(harness):
 
 def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
                 runtime_version="mlx-lm 0.31.3", disk_bytes=123, workload_id="chat",
-                first_request_s=None, first_request_workload_id=None, warmup_plateau=None):
+                first_request_s=None, first_request_workload_id=None, warmup_plateau=None,
+                batch_spans=()):
     """A CellResult to hand straight to write_jsonl, with no run behind it."""
     return measure.CellResult(
         cell=measure.Cell(id=cell_id, runtime=runtime, artifact_dir="/models/oq4", label="oq4"),
@@ -1342,6 +1345,7 @@ def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
         status="PASS",
         reason=None,
         observations=list(observations),
+        batch_spans=list(batch_spans),
         warmup_observations=[],
         warmup_plateau=warmup_plateau,
         cold_load_s=12.5,
@@ -1447,6 +1451,7 @@ def test_summaries_stay_recomputable_from_the_jsonl(tmp_path):
             status=record["status"],
             reason=record["reason"],
             observations=[FakeObservation(**raw) for raw in record["observations"]],
+            batch_spans=record.get("batch_spans", []),
             warmup_observations=[FakeObservation(**raw) for raw in record["warmup_observations"]],
             warmup_plateau=record["warmup_plateau"],
             cold_load_s=record["cold_load_s"],
@@ -2079,3 +2084,225 @@ def test_a_noisy_workload_with_no_trend_is_warm_not_unsettled(harness):
     assert len(results[0].warmup_observations) < measure.WARMUP_CAP, (
         "and it must not pay the cap to be told so"
     )
+
+
+# ------------------------------------------------------------------- the concurrency pin
+
+# A batch is `concurrency` requests issued together under one clock, and `measured` counts
+# batches: at 1 a batch is one request, at 8 nine batches are 72 requests and nine spans. The
+# span is what aggregate throughput divides by, so four overlapping requests take one span
+# between them -- summing theirs would count the overlap four times.
+
+
+def test_a_concurrency_one_run_is_byte_identical_to_one_that_never_heard_of_concurrency(harness):
+    """The assertion that matters most.
+
+    At concurrency 1 a batch is one request, and every column measured so far was measured that
+    way. A run pinning it has to produce the record the writer produced before batches existed --
+    the same bytes, not merely the same figures -- or the N=1 column of a sweep is not the grid
+    it is joined to.
+    """
+    harness.add_runtime("mlxlm")
+    harness.sample.peaks = [128.0] * 8  # one peak per visit per run, the same for both
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    pinned = harness.run([cell], results_dir=harness.tmp_path / "pinned", concurrency=1)
+    untouched = harness.run([cell], results_dir=harness.tmp_path / "untouched")
+
+    assert harness.results_file(harness.tmp_path / "pinned").read_text() == (
+        harness.results_file(harness.tmp_path / "untouched").read_text()
+    ), "the pin at 1 and the run that never named it are one run"
+
+    record, = harness.lines(harness.tmp_path / "pinned")
+    # And byte-identical is checked against the fields the writer emitted before there was a
+    # batch to span: nothing ran a batch, so nothing claims a span. A reader of an older column
+    # gets `[]` from the same absence.
+    assert set(record) == {
+        "cell", "workload_id", "status", "reason", "cold_load_s", "first_request_s",
+        "first_request_workload_id", "memory", "runtime_version", "disk_bytes",
+        "measured_count", "warmup_count", "warmup_plateau", "drift", "observations",
+        "warmup_observations",
+    }
+    assert pinned[0].batch_spans == []
+    assert len(pinned[0].observations) == MEASURED
+
+
+def test_a_concurrency_below_one_is_refused(harness):
+    """A batch is at least one request. Zero is not a slower run, it is no measurement, and it
+    is refused before a runtime is started for it."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    for bad in (0, -2):
+        with pytest.raises(ValueError, match="concurrency"):
+            harness.run([cell], concurrency=bad)
+
+    assert harness.transport.calls == []
+
+
+def test_the_run_header_pins_the_concurrency(harness):
+    """How the run drove the cells is not a property of a cell, so it rides in the header with
+    the sampling pins -- which is what lets a sweep vary it and a join compare it."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.run([cell], measured=1, concurrency=4)
+    assert harness.header()["concurrency"] == 4
+    assert measure.load_run(harness.results_file())[0]["concurrency"] == 4
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "sequential")
+    assert harness.header(harness.tmp_path / "sequential")["concurrency"] == 1
+
+
+def test_a_run_at_four_issues_four_requests_per_batch_and_records_one_span(harness):
+    """One batch, one clock, four requests: the observations are every request's and the span is
+    the batch's, so a row at N=4 has four observations per span."""
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=MEASURED, concurrency=4)
+
+    result = results[0]
+    assert len(result.observations) == MEASURED * 4
+    assert len(result.batch_spans) == MEASURED
+    assert all(span > 0 for span in result.batch_spans)
+    assert result.status == "PASS", "every request of every batch came back"
+    # A warmup step is a batch too, so a visit makes warmup-batches plus its quota, four
+    # requests each -- and the measured quota is still split 3 then 2 as it always was.
+    assert [len(calls) for calls in harness.transport.calls_by_visit().values()] == [
+        (WARMUPS + 3) * 4, (WARMUPS + 2) * 4
+    ]
+    assert len(result.warmup_observations) == measure.VISIT_ROUNDS * WARMUPS * 4
+
+
+def test_measured_counts_batches_not_requests(harness):
+    """The pin's arithmetic. Three batches of four are twelve requests and three spans; the
+    order's own example, nine batches of eight, is 72 observations and nine spans."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    three = harness.run([cell], measured=3, concurrency=4, results_dir=harness.tmp_path / "four")
+    nine = harness.run([cell], measured=9, concurrency=8, results_dir=harness.tmp_path / "eight")
+
+    assert (len(three[0].observations), len(three[0].batch_spans)) == (12, 3)
+    assert (len(nine[0].observations), len(nine[0].batch_spans)) == (72, 9)
+    assert harness.header(harness.tmp_path / "eight")["measured"] == 9
+    assert harness.lines(harness.tmp_path / "eight")[0]["measured_count"] == 72
+
+
+def test_a_batchs_span_is_shorter_than_the_sum_of_its_requests(harness):
+    """The whole reason the clock is around the batch.
+
+    Four requests of 20 ms each finish in about one 20 ms batch. An aggregate built from their
+    per-request wall clocks would divide the same tokens by four times the window the batch
+    actually occupied -- which is why the span is measured and not summed.
+    """
+    per_request_s = 0.02
+
+    def responder(call):
+        time.sleep(per_request_s)
+        return FakeObservation(total_s=per_request_s)
+
+    harness.transport.responder = responder
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=1, concurrency=4)
+
+    span, = results[0].batch_spans
+    totals = [observation.total_s for observation in results[0].observations]
+    assert len(totals) == 4
+    assert span >= per_request_s, "the batch waited for the requests it issued"
+    assert span < sum(totals), "the four clocks overlap: the span is not their sum"
+    assert sum(totals) > 2 * span, "and it prices the overlap rather than one request"
+
+
+def test_batch_spans_round_trip_and_a_record_without_them_loads_as_no_batches(harness):
+    """The spans are raw measurements, so they come back as they went in -- and a record written
+    before concurrency existed ran no batch, which `[]` says exactly. It is not reconstructed
+    from the per-request totals either: a gap between two sequential requests belongs to
+    neither one."""
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=3, concurrency=4)
+
+    record, = harness.lines()
+    assert len(record["batch_spans"]) == 3
+
+    _header, loaded = measure.load_run(harness.results_file())
+    assert loaded[0].batch_spans == record["batch_spans"] == results[0].batch_spans
+    assert measure._record(loaded[0]) == record
+
+    without = {key: value for key, value in record.items() if key != "batch_spans"}
+    older_path = harness.tmp_path / "older" / measure.RESULTS_FILENAME
+    older_path.parent.mkdir(parents=True)
+    older_path.write_text(json.dumps({"temperature": 0.0}) + "\n" + json.dumps(without) + "\n")
+
+    older, = measure.load_run(older_path)[1]
+
+    assert older.batch_spans == []
+    assert "batch_spans" not in measure._record(older), (
+        "a cell that ran no batch writes the record this file wrote before the field existed"
+    )
+
+
+def test_a_concurrent_cells_requests_are_judged_one_at_a_time(harness):
+    """The gate is not a batch judgement and did not move: a cell at N=4 emitting token salad is
+    the failed cell it is at N=1, however fast its batches were."""
+    harness.transport.responder = lambda call: FakeObservation(text=SALAD)
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=MEASURED, concurrency=4)
+
+    assert results[0].status == "FAIL"
+    assert results[0].reason == "incoherent output: replacement characters"
+    record, = harness.lines()
+    assert len(record["observations"]) == MEASURED * 4
+    assert record["observations"][0]["text"] == SALAD
+    assert len(results[0].batch_spans) == MEASURED
+
+
+# The two series a warmup window can read. This cell's per-request decode rates climb forever --
+# what a 3% trend test can never call settled -- while every request takes the same wall time and
+# reports the same 100 tokens, so a batch's aggregate throughput is flat. Whichever series the
+# window reads decides whether the cell settles or pays the cap, at the same constants.
+CLIMBING_SLEEP_S = 0.02
+
+
+def climbing_per_request_responder(seconds=CLIMBING_SLEEP_S):
+    def responder(call):
+        time.sleep(seconds)
+        return rate_observation(20.0 + next(calls))
+
+    calls = itertools.count()
+    return responder
+
+
+def test_a_concurrent_warmup_settles_on_the_batchs_aggregate_throughput(harness):
+    """Plan 06-01a, applied: at N>1 the per-request series swings without trend and never
+    settles, while the quantity the sweep publishes does. Same rule, same constants, other
+    series -- so the window closes instead of running every concurrent cell to the cap."""
+    harness.transport.responder = climbing_per_request_responder()
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1,
+                          concurrency=4)
+
+    warmups = results[0].warmup_observations
+    assert results[0].warmup_plateau is True, "the window closed"
+    assert len(warmups) < measure.WARMUP_CAP * 4, "and it closed before the cap"
+    assert not measure._settled([measure.decode_tps(observation) for observation in warmups]), (
+        "the per-request series it did not read was still climbing"
+    )
+
+
+def test_a_sequential_warmup_still_settles_on_the_request_s_own_rate(harness):
+    """The other half of the pin, and why nothing about the existing grid changes: at N=1 the
+    series is the request's own decode rate exactly as it always was, so this cell runs to the
+    cap and says so."""
+    harness.transport.responder = climbing_per_request_responder()
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], warmup="plateau", measured=1)
+
+    assert results[0].warmup_plateau is False
+    assert len(results[0].warmup_observations) == measure.WARMUP_CAP
+    assert results[0].batch_spans == []

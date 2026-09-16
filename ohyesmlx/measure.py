@@ -55,6 +55,17 @@ What this module refuses to do:
   whichever request happened to be answered. If the tokenizer cannot be built, the cell is
   ``N/A`` — visible — rather than quietly falling back to usage tokens.
 
+* **Issue one request at a time.** A batch is ``concurrency`` requests issued together under
+  one clock — ``concurrent.futures.ThreadPoolExecutor`` around the same :func:`_request` every
+  sequential request goes through, because the transport is blocked on an SSE stream and a
+  thread is enough to drive it. No second stream reader exists for it: one definition of TTFT,
+  one decode window, one ``Observation``, at any concurrency. ``measured`` counts batches, so at
+  ``concurrency=1`` a batch is one request and a sequential record is byte-identical to the one
+  this module wrote before batches existed; the span is the batch's whole clock, because summing
+  per-request spans would count the overlap N times and N requests share one GPU. The warmup
+  window reads the batch's aggregate throughput there instead of per-request rates, which at N=8
+  swing +/-11% with no trend and never satisfy a 3% trend test — see :func:`_warmup_rate`.
+
 * **Publish a row that is not language.** Stock ``mlx_lm.server`` loaded a 256-expert oQ4
   MoE in 4 s, answered HTTP 200, decoded 64/64 tokens at full speed — and returned
   mixed-script token salad with replacement characters. Nothing raised. Before a cell's
@@ -81,6 +92,7 @@ import json
 import os
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -224,6 +236,13 @@ class CellResult:
     status: str
     reason: str | None
     observations: list[Observation]
+    # Wall-clock seconds per measured batch, one entry per batch, in the order the batches were
+    # run. Empty for a run that had no batch to span: at ``concurrency=1`` a batch is one
+    # request, no clock is taken around it, and ``[]`` is exactly true of a sequential run
+    # rather than a default standing in for a measurement nobody made. A sequential record's
+    # spans are never reconstructed from its per-request ``total_s`` — a gap between two
+    # sequential requests belongs to neither one.
+    batch_spans: list[float]
     warmup_observations: list[Observation]
     # How the warmup window ended. ``True`` when every window on this row reached the plateau,
     # ``False`` when any ran to ``WARMUP_CAP`` still climbing, ``None`` when no plateau window
@@ -377,6 +396,7 @@ def run_cells(
     *,
     warmup: int | str = WARMUP_MODE,
     measured: int = 9,
+    concurrency: int = 1,
     cooldown_s: float = 30.0,
     results_dir: str,
 ) -> list[CellResult]:
@@ -384,21 +404,33 @@ def run_cells(
 
     A visit starts the cell's runtime **once** and runs every workload under that one load,
     so the model is loaded twice per cell however many workloads there are. ``measured``
-    requests are made per (cell, workload) in total, split across the visits the plan calls
+    **batches** are made per (cell, workload) in total, split across the visits the plan calls
     for (nine becomes five then four), and every workload gets its own warmup window because a
-    long prompt compiles a different set of kernels than a short one does. ``warmup`` is the
-    plateau rule by default and an ``int`` for a fixed budget of that many requests; either
-    way the budget each cell needed is published as ``warmup_count``. Results are written to
-    ``<results_dir>/results.jsonl`` after every visit, so a run that dies still has
-    everything it had measured up to that point.
+    long prompt compiles a different set of kernels than a short one does. Findings are
+    published per workload: a prefill-bound number blended with a decode-bound one describes no
+    workload that was run.
+
+    ``concurrency`` is how many requests a batch holds, issued together under one clock. At 1
+    — the default — a batch is one request and this is the run every column so far was measured
+    by, record for record. At 8, nine batches are 72 requests and nine spans. Concurrency is a
+    property of how the run drove the cells rather than of a cell, so it is a header pin: a
+    sweep is N runs differing in that one field, joined afterwards.
+
+    ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
+    batches; either way the budget each cell needed is published as ``warmup_count``. Results
+    are written to ``<results_dir>/results.jsonl`` after every visit, so a run that dies still
+    has everything it had measured up to that point.
 
     The returned results are in first-visit order, each cell's workloads kept together in the
-    order they were given. Figures are never averaged across workloads: a prefill-bound number
-    blended with a decode-bound one describes no workload that was run.
+    order they were given.
     """
     warmup_pin = _warmup_pin(warmup)
     if measured < 1:
         raise ValueError("measured must be >= 1")
+    if concurrency < 1:
+        raise ValueError(
+            f"concurrency must be >= 1, not {concurrency!r}: a batch is at least one request"
+        )
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
     workloads = _workloads(workloads)
@@ -419,6 +451,9 @@ def run_cells(
         "seed": SEED,
         "warmup": warmup_pin,
         "measured": measured,
+        # How the run drove the cells, pinned beside the sampling pins so a sweep declares it
+        # with one header field and a join compares it like every other hold-constant.
+        "concurrency": concurrency,
         "cooldown_s": cooldown_s,
     }
 
@@ -436,7 +471,7 @@ def run_cells(
         cell_results = _results_for(cell, workloads, by_key, results)
         measured_before = sum(len(result.observations) for result in cell_results)
         outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
-                         counters=counters)
+                         concurrency=concurrency, counters=counters)
         if outcome == "measured":
             for result in cell_results:
                 _set_status(result)
@@ -475,6 +510,7 @@ def _results_for(
                 status="N/A",
                 reason=None,
                 observations=[],
+                batch_spans=[],
                 warmup_observations=[],
                 warmup_plateau=None,
                 cold_load_s=None,
@@ -491,10 +527,12 @@ def _results_for(
 
 
 def _visits(cells: list[Cell], *, measured: int) -> list[tuple[Cell, int]]:
-    """Flatten the plan into (cell, measured-requests-this-visit) pairs.
+    """Flatten the plan into (cell, measured-batches-this-visit) pairs.
 
     Visits with a zero quota are dropped: starting a runtime to measure nothing costs a
-    full model load for no sample.
+    full model load for no sample. The quota splits batches, so a cell measured at
+    ``concurrency=8`` with ``measured=9`` takes five batches of eight on the cold visit and
+    four on the hot one — the same 5/4 imbalance in the same direction, N times the requests.
     """
     quotas = [
         measured // VISIT_ROUNDS + (1 if index < measured % VISIT_ROUNDS else 0)
@@ -515,6 +553,7 @@ def _visit(
     *,
     warmup: int | str,
     quota: int,
+    concurrency: int,
     counters: dict,
 ) -> str:
     """One visit to one cell, returning ``"measured"``, ``"retry"`` or ``"skip"``.
@@ -569,7 +608,7 @@ def _visit(
     try:
         for result, workload in zip(results, workloads):
             memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
-                                     counter=counter)
+                                     concurrency=concurrency, counter=counter)
             result.memory = _highest_peak(result.memory, memory)
     finally:
         handle.stop()
@@ -615,13 +654,24 @@ def _first_warmup_latency(results: list[CellResult]) -> float | None:
 
 
 def _workload_visit(
-    handle, result: CellResult, workload: Workload, *, warmup: int | str, quota: int, counter
+    handle,
+    result: CellResult,
+    workload: Workload,
+    *,
+    warmup: int | str,
+    quota: int,
+    concurrency: int,
+    counter,
 ) -> dict:
     """One workload's requests inside a visit, sampled over that workload's own window.
 
     The sampler covers this workload alone. A visit that ran a 512-token decode and a
     128-token chat has two different memory peaks, and publishing the visit's peak under both
     names would report decode's footprint as chat's.
+
+    ``quota`` counts batches, and every request in one is kept: a batch at ``concurrency=4``
+    leaves four observations and one span on the row, because the observations are what the
+    per-request figures and the gate are read from and the span is what aggregate throughput is.
     """
     # The handle's pid, not the one this run spawned: a runtime whose launcher handed the
     # port to an app process is measured on the process that holds the weights.
@@ -630,34 +680,44 @@ def _workload_visit(
     try:
         result.warmup_plateau = _plateau_verdict(
             result.warmup_plateau,
-            _warmup_window(handle, result, workload, warmup=warmup, counter=counter),
+            _warmup_window(handle, result, workload, warmup=warmup, concurrency=concurrency,
+                           counter=counter),
         )
         for _ in range(quota):
-            result.observations.append(
-                _request(handle, workload.messages, max_tokens=workload.max_tokens,
-                         counter=counter)
-            )
+            observations, span = _batch(handle, workload.messages,
+                                        max_tokens=workload.max_tokens, concurrency=concurrency,
+                                        counter=counter)
+            result.observations.extend(observations)
+            if span is not None:
+                result.batch_spans.append(span)
     finally:
         memory = sampler.stop()
     return memory
 
 
 def _warmup_window(
-    handle, result: CellResult, workload: Workload, *, warmup: int | str, counter
+    handle,
+    result: CellResult,
+    workload: Workload,
+    *,
+    warmup: int | str,
+    concurrency: int,
+    counter,
 ) -> bool | None:
     """One workload's warmup window, ending when the cell is warm or its budget is spent.
 
-    A fixed ``int`` issues exactly that many requests and returns ``None``: the rule never
+    A fixed ``int`` issues exactly that many batches and returns ``None``: the rule never
     ran, so there is no plateau for the window to report. ``"plateau"`` issues two windows of
-    ``WARMUP_WINDOW`` requests and then keeps going until the rate stops moving -- the median
+    ``WARMUP_WINDOW`` rates and then keeps going until the rate stops moving -- the median
     of the last window must be within ``WARMUP_PLATEAU_PCT`` of the median of the one before
     it. It is a trend test and not a variance test: one flat window is a boost state holding
-    steady as often as it is a warm cell, and a noisy workload is not an unwarmed one. The
-    rates
-    come from :func:`decode_tps`, the same function every published figure uses, so a warmup
-    observation carrying no rate -- a failed request, or a stream with no decode window -- is
-    not evidence that the cell stopped moving and cannot settle the window; only
-    ``WARMUP_CAP`` ends it.
+    steady as often as it is a warm cell, and a noisy workload is not an unwarmed one. One
+    step is one batch, so at ``concurrency=1`` that is one request and above it a batch of
+    ``concurrency`` of them; either way one rate is appended per step. The rates come from
+    :func:`_warmup_rate` -- :func:`decode_tps` at ``concurrency=1``, the batch's aggregate
+    throughput above it -- so a step carrying no rate, a failed request or a batch that did not
+    come back whole, is not evidence that the cell stopped moving and cannot settle the window;
+    only ``WARMUP_CAP`` ends it.
 
     ``True`` for a window the rule closed, ``False`` for one that ran to the cap still
     climbing. Every request made is kept on ``result.warmup_observations`` as it is made,
@@ -666,10 +726,10 @@ def _warmup_window(
     fixed = isinstance(warmup, int)
     rates: list[float | None] = []
     while True:
-        result.warmup_observations.append(
-            _request(handle, workload.messages, max_tokens=workload.max_tokens, counter=counter)
-        )
-        rates.append(decode_tps(result.warmup_observations[-1]))
+        observations, span = _batch(handle, workload.messages, max_tokens=workload.max_tokens,
+                                    concurrency=concurrency, counter=counter)
+        result.warmup_observations.extend(observations)
+        rates.append(_warmup_rate(observations, span, concurrency=concurrency))
         if fixed:
             if len(rates) >= warmup:
                 return None
@@ -678,6 +738,72 @@ def _warmup_window(
             return True
         if len(rates) >= WARMUP_CAP:
             return False
+
+
+def _warmup_rate(observations: list[Observation], span: float | None, *, concurrency: int
+                 ) -> float | None:
+    """The rate one warmup batch contributes to the window's series.
+
+    At ``concurrency=1`` it is the request's own decode rate from :func:`decode_tps` -- the
+    series every warmup window has always read, unchanged. Above 1 it is the batch's aggregate
+    throughput: every completion token the batch produced over the span of its shared clock,
+    which is also the quantity a concurrency sweep publishes, so the cell warms on the number
+    it reports.
+
+    Plan 06-01a measured why the series has to change: oMLX at N=8, sixteen batches of the
+    ``chat`` workload, the per-request median swinging between 65.3 and 81.0 tok/s with no
+    trend, which a 3% two-window rule can never satisfy, while aggregate throughput held a
+    62.1-68.3 band and settled at batch 12. Read as unfinished warmup, that is the noise the
+    prefill workload already taught this rule not to mistake for a cold cell -- except the
+    window could never close at all, so every concurrent cell would pay the cap and report
+    "did not settle" about a cell with nothing left to warm.
+
+    A batch that did not come back whole produced no rate, for the reason a failed request
+    produces none at ``concurrency=1``: the aggregate of a batch with a dead request in it is
+    not the quantity the window is watching. ``None`` cannot settle a window.
+    """
+    if concurrency == 1:
+        return decode_tps(observations[0])
+    if span <= 0 or not all(came_back(observation) for observation in observations):
+        return None
+    tokens = sum(observation.completion_tokens or 0 for observation in observations)
+    if not tokens:
+        return None
+    return tokens / span
+
+
+def _batch(
+    handle, messages: list[dict], *, max_tokens: int, concurrency: int, counter
+) -> tuple[list[Observation], float | None]:
+    """One batch: ``concurrency`` requests issued together, and the span of their clock.
+
+    Returns every request's observation in submission order, whatever it came back with, and
+    the wall-clock seconds the whole batch took. ``concurrency=1`` is the sequential case and
+    returns no span: a batch of one is issued exactly as every request was issued before
+    batches existed, and a span around a single request is not a batch span -- reconstructing
+    one from its ``total_s`` is how a record would come to claim a clock nobody took.
+
+    The clock is around the whole batch because summing per-request spans would count the
+    overlap N times, and at N requests sharing one GPU it is aggregate throughput -- their
+    tokens over the batch's span -- that says whether batching paid. Threads and not processes:
+    ``transport.chat`` is blocked on an SSE stream, so the pool drives requests rather than
+    re-implementing one -- the same :func:`_request` runs in it that runs sequentially, so
+    there is one definition of TTFT, one decode window and one failure shape at every N.
+
+    # ponytail: one pool per batch, so thread creation lands inside the span it helps measure.
+    # Ceiling: that span reads a fraction of a millisecond long and the aggregate a fraction
+    # low -- the conservative direction. Upgrade path: one pool per visit, reused per workload.
+    """
+    if concurrency == 1:
+        return [_request(handle, messages, max_tokens=max_tokens, counter=counter)], None
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [
+            pool.submit(_request, handle, messages, max_tokens=max_tokens, counter=counter)
+            for _ in range(concurrency)
+        ]
+        observations = [future.result() for future in futures]
+    return observations, time.monotonic() - started
 
 
 def _settled(rates: list[float | None]) -> bool:
@@ -694,6 +820,10 @@ def _settled(rates: list[float | None]) -> bool:
     A rate the cell did not produce -- a failed request, or a stream with no decode window --
     is not a measurement a median can be taken over, so a window holding one cannot settle and
     only ``WARMUP_CAP`` ends it.
+
+    The series is whatever :func:`_warmup_rate` appends, one rate per batch: per-request decode
+    rates at ``concurrency=1`` and per-batch aggregate throughput above it. The rule is the same
+    rule at both, and this function has no opinion about which series it was handed.
     """
     if len(rates) < 2 * WARMUP_WINDOW:
         return False  # fewer rates than the rule reads is not a settled cell, it is no answer
@@ -969,11 +1099,14 @@ def _require_modules() -> None:
 def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> None:
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
-    Line 1 is the run header — temperature, seed, warmup, measured, cooldown_s and every
-    workload that was measured, each with the messages it sent and its own max_tokens (a
+    Line 1 is the run header — temperature, seed, warmup, measured, concurrency, cooldown_s and
+    every workload that was measured, each with the messages it sent and its own max_tokens (a
     single run-level cap would be a half-truth once three workloads carry three of them).
     ``warmup`` is the rule that was in force, as a dict, or the integer budget a caller pinned
-    instead; which one it is is what tells a reader how to read ``warmup_count``.
+    instead; which one it is is what tells a reader how to read ``warmup_count``. ``measured``
+    counts batches and ``concurrency`` says how many requests are in one, so the two together
+    are how many requests a row holds — and ``concurrency`` is what a sweep varies and a join
+    guard compares, because it is a property of how the run drove the cells, not of a cell.
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything
     it measured and no reader sees half a file.
@@ -991,7 +1124,7 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
 
 
 def _record(result: CellResult) -> dict:
-    return {
+    record = {
         "cell": asdict(result.cell),
         "workload_id": result.workload_id,
         "status": result.status,
@@ -1019,6 +1152,15 @@ def _record(result: CellResult) -> dict:
             _observation_record(observation) for observation in result.warmup_observations
         ],
     }
+    # One span per measured batch, and the key is absent on a cell that ran none -- which is
+    # every sequential run: at ``concurrency=1`` a batch is one request, and a record of one is
+    # byte-identical to the record this module wrote before batches existed. That equivalence is
+    # what keeps the columns already measured comparable, and it is why no span is filled in for
+    # them from per-request ``total_s``: a gap between two sequential requests belongs to
+    # neither one. `load_run` reads the absence as the ``[]`` it exactly is.
+    if result.batch_spans:
+        record["batch_spans"] = result.batch_spans
+    return record
 
 
 def _observation_record(observation) -> dict:
@@ -1099,6 +1241,13 @@ def _cell_result(record: dict, path: Path, number: int) -> CellResult:
             # visit did. A default is honest when the absence is the fact; the 2026-09-16
             # columns stay readable by the tool that published them.
             warmup_plateau=record.get("warmup_plateau"),
+            # Read leniently for the same shape of reason. A record written before concurrency
+            # existed has no batch spans because it ran no batch, and `[]` is exactly true of it
+            # -- a sequential run's requests are issued one at a time, so there was no clock to
+            # take. It is not `[]` filled in from the per-request `total_s` either: a gap
+            # between two sequential requests belongs to neither one, and a span no clock
+            # measured is not a reader's to reconstruct.
+            batch_spans=list(record.get("batch_spans", [])),
             cold_load_s=record["cold_load_s"],
             first_request_s=record["first_request_s"],
             first_request_workload_id=record["first_request_workload_id"],
