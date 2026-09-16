@@ -104,7 +104,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-16
 Stopped at: Phase 5's code, guards and write-up landed in `a92fe11` and `fe371e9`, 389 tests, reviewed and re-verified personally. `docs/research/2026-09-16-phase5-joined-grid.md` is the phase's document.
-Next action: the per-runtime warmup budget. It stopped being a nice-to-have when the join showed the runtime-axis ordering flips under it. Then re-run the mlx-lm column (and raise `measured` above 5 while doing so) and re-join.
+Next action: the grid re-run launched 2026-09-16 03:43Z under the 05-02 pins is in flight (~2.5-3 h, run dir `results/grid/20260916T034308Z-format` and its four siblings). When it lands: re-join with `ohyesmlx grid <the five dirs>`, update `docs/research/2026-09-16-phase5-joined-grid.md` with the clean runtime axis, then **commit AND push** — Jason asked for the push explicitly and it is part of landing Phase 5, not a separate step.
 Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-phase5-joined-grid.md`.
 
 ---
