@@ -1,8 +1,8 @@
 # 06-01c, before anything is measured: where each runtime's context ends, and what it does there
 
 Date: 2026-09-16. Read from the shipped source of each installed runtime, plus the recorded
-grid. **Nothing here was measured live**; every claim cites the file it came from, and the
-claims that only a live request can settle are listed at the end as such.
+grid, with every claim citing the file it came from. The live probe that followed is the last
+section, "Measured"; where it and the source reading disagree, the measurement wins.
 
 The question the Phase 6 design asks first: *can each runtime's context be raised from its
 start command?* It turns out to be the wrong first question for this model. Qwen3.5-4B declares
