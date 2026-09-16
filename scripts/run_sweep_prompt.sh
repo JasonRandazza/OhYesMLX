@@ -63,6 +63,9 @@ order=$ASC
 for r in mlxlm omlx optiq vmlx osaurus; do
   [ "$r" = osaurus ] && osaurus_cache off
   for t in $order; do
+    # Before as well as after: an Osaurus app relaunched between runs (seen 2026-09-16, origin
+    # unknown) must not sit resident through another runtime's cell. The kill is logged.
+    [ "$r" = osaurus ] || sweep
     echo "=== $r $t starting $(date +%H:%M:%S)"
     $PY -m ohyesmlx.cli run --study format --cells "oq4__$r=$Q4" --prompt-tokens "$t" \
         --results-dir "$OUT" > "$OUT/log-$r-$t.log" 2>&1
