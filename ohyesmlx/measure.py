@@ -504,7 +504,9 @@ def _workload_visit(
     128-token chat has two different memory peaks, and publishing the visit's peak under both
     names would report decode's footprint as chat's.
     """
-    sampler = sample.Sampler(handle.pid).start()
+    # The handle's pid, not the one this run spawned: a runtime whose launcher handed the
+    # port to an app process is measured on the process that holds the weights.
+    sampler = sample.Sampler(handle.memory_pid).start()
     memory = None
     try:
         for _ in range(warmup):

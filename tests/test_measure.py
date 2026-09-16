@@ -83,6 +83,7 @@ class Recorder:
 class FakeHandle:
     def __init__(self, runtime, model_id, port, version, cold_load_s, recorder, api_key=None):
         self.pid = 40000 + port
+        self.memory_pid = self.pid
         self.port = port
         self.base_url = f"http://127.0.0.1:{port}/v1"
         self.model_id = model_id

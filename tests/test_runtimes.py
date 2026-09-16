@@ -1172,6 +1172,39 @@ def test_osaurus_starts_when_no_baseline_has_been_recorded(rig, monkeypatch):
     assert handle.version.startswith("unknown:")
 
 
+def test_osaurus_samples_the_app_the_launcher_handed_the_port_to(rig, monkeypatch):
+    """`osaurus serve` exits once the app answers: its footprint is 4.7 MB of nothing."""
+    monkeypatch.setattr(runtimes, "load_baseline", lambda: None)
+    rig.inventory = ("ornith-1.0-35b-jang_4m",)
+    rig.results[listener_probe(1337)] = _completed(stdout=f"{OSAURUS_APP_PID}\n")
+
+    handle = RUNTIMES["osaurus"].start(ARTIFACT, "ornith-1.0-35b-jang_4m")
+
+    assert handle.pid != OSAURUS_APP_PID, "the launcher is what this run spawned"
+    assert handle.memory_pid == OSAURUS_APP_PID
+    # The pid signalled on stop is still the spawned one; only the sampler moved.
+    assert handle.serving_pid == OSAURUS_APP_PID
+
+
+def test_a_port_that_names_nothing_leaves_the_sampler_on_the_spawned_pid(rig):
+    rig.inventory = (HF_ID,)
+    rig.results[("python", "-m", "mlx_lm", "--version")] = _completed(stdout="0.31.3\n")
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert handle.memory_pid == handle.pid
+
+
+def test_an_ambiguous_port_samples_the_spawned_pid_rather_than_a_stranger(rig):
+    """Two listeners is not a resolution: never publish a stranger's footprint as ours."""
+    rig.inventory = (HF_ID,)
+    rig.results[listener_probe(8081)] = _completed(stdout="900\n901\n")
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert handle.memory_pid == handle.pid
+
+
 def test_osaurus_version_prefers_the_bundle_that_is_serving():
     osaurus = RUNTIMES["osaurus"]
     output = json.dumps(

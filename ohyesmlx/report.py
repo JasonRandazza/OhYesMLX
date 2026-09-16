@@ -689,9 +689,21 @@ def _held_constant(rows: list[dict], axis: str) -> str | None:
         held = f"format `{pairs[0][0]}` at `{pairs[0][1]}`"
         distinct = [f"{label} at {artifact}" for label, artifact in pairs]
     else:
-        runtimes = sorted({str(r.get("runtime")) for r in rows})
-        held = f"runtime `{runtimes[0]}`"
-        distinct = runtimes
+        # The runtime's *version* is part of the runtime. Osaurus updated 0.25.3 -> 0.25.4
+        # mid-session and measured a 1.15x difference across it, so a format-axis table
+        # spanning two builds varies its held-constant variable as surely as one spanning
+        # two runtimes would. Rows carrying no version never started a runtime, and a cell
+        # that never ran cannot disagree about which build the others ran on.
+        names = sorted({str(r.get("runtime")) for r in rows})
+        versions = sorted(
+            {str(r.get("runtime_version")) for r in rows if r.get("runtime_version")}
+        )
+        held = f"runtime `{names[0]}`"
+        if versions:
+            held += f" at version `{versions[0]}`"
+        distinct = [f"{name} {version}".strip()
+                    for name in names
+                    for version in (versions or [""])]
 
     if len(distinct) > 1:
         raise ValueError(

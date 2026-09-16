@@ -251,6 +251,25 @@ def _listener_pids(port: int) -> tuple[int, ...]:
     )
 
 
+def _serving_pid(spawned: int, port: int) -> int:
+    """The pid actually holding the weights, which is not always the one that was spawned.
+
+    ``osaurus serve`` starts the app, prints the address it is listening on and exits, so a
+    sampler pointed at the spawned pid measures a launcher on its way out -- 4.7 MB from a
+    single sample, against 2,699-4,172 MB and 11-14 samples from every runtime that stays.
+    The port names the survivor, on the same claim :func:`_listener_pids` documents: a
+    listener that appeared after :meth:`Runtime.start` refused to spawn over one is ours.
+
+    The spawned pid is kept whenever the port cannot improve on it: nothing listening,
+    the spawned pid already listening, or more than one distinct listener. An unreadable
+    port is not a licence to sample a stranger's memory and publish it as this cell's.
+    """
+    listeners = _listener_pids(port)
+    if len(listeners) == 1 and spawned not in listeners:
+        return listeners[0]
+    return spawned
+
+
 def _read_log(path: Path) -> str:
     """The tail of a runtime's log, or ``""`` when there is nothing to read yet."""
     try:
@@ -534,12 +553,20 @@ class Handle:
     version: str
     cold_load_s: float
     first_request_s: float | None = None
+    # The pid to sample memory from, when the launcher that was spawned is not the process
+    # that ended up holding the weights. ``None`` means the spawned pid is the server.
+    serving_pid: int | None = None
     stop_command: tuple[str, ...] = ()
     scratch: str | None = None
     # The credential the runtime was started with. Measured requests must send it: oMLX
     # answers an unauthenticated /v1/chat/completions with 401, and the readiness probe
     # authenticating while the measurement did not is how that went unnoticed.
     api_key: str | None = None
+
+    @property
+    def memory_pid(self) -> int:
+        """The pid whose footprint is this runtime's. See :func:`_serving_pid`."""
+        return self.pid if self.serving_pid is None else self.serving_pid
 
     def stop(self) -> None:
         """Stop the runtime. Does not return until the port is free."""
@@ -689,6 +716,7 @@ class Runtime:
             model_id=resolved,
             version=version,
             cold_load_s=_now() - started,
+            serving_pid=_serving_pid(pid, self.port),
             stop_command=self.stop_command(),
             scratch=scratch,
             api_key=self.api_key(),

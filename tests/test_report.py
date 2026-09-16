@@ -684,6 +684,51 @@ def test_format_axis_table_states_the_other_held_constant_and_caveat(rows):
     assert "Held constant: runtime `omlx`" in table
 
 
+def test_format_axis_names_the_build_the_runtime_was_held_constant_at():
+    shared = [
+        cell_result([obs()], cell_id="oq4__osaurus", runtime="osaurus", label="oq4",
+                    runtime_version="0.25.4"),
+        cell_result([obs()], cell_id="jang4__osaurus", runtime="osaurus", label="jang4",
+                    runtime_version="0.25.4"),
+    ]
+    table = report.render_markdown(report.summarize(shared), axis="format")
+
+    assert "Held constant: runtime `osaurus` at version `0.25.4`" in table
+
+
+def test_format_axis_refuses_a_runtime_that_changed_version_mid_join():
+    """Osaurus updated 0.25.3 -> 0.25.4 mid-session; the harness never said so. Now it does."""
+    spanning = report.summarize(
+        [
+            cell_result([obs()], cell_id="oq4__osaurus", runtime="osaurus", label="oq4",
+                        runtime_version="0.25.3"),
+            cell_result([obs()], cell_id="jang4__osaurus", runtime="osaurus", label="jang4",
+                        runtime_version="0.25.4"),
+        ]
+    )
+
+    with pytest.raises(ValueError) as raised:
+        report.render_markdown(spanning, axis="format")
+
+    assert "osaurus 0.25.3" in str(raised.value) and "osaurus 0.25.4" in str(raised.value)
+
+
+def test_a_cell_that_never_started_a_runtime_does_not_count_as_a_second_build():
+    """No version means no runtime ran, and a cell that never ran cannot disagree."""
+    with_a_dead_cell = report.summarize(
+        [
+            cell_result([obs()], cell_id="oq4__osaurus", runtime="osaurus", label="oq4",
+                        runtime_version="0.25.4"),
+            cell_result([], cell_id="jang4__osaurus", runtime="osaurus", label="jang4",
+                        runtime_version=None, status="FAIL", reason="did not start"),
+        ]
+    )
+
+    table = report.render_markdown(with_a_dead_cell, axis="format")
+
+    assert "Held constant: runtime `osaurus` at version `0.25.4`" in table
+
+
 def test_render_markdown_refuses_rows_that_vary_both_variables():
     """Two things changed, so the table would be a press release. Do not render it."""
     mixed = report.summarize(
