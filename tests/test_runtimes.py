@@ -341,7 +341,7 @@ def test_optiq_start_command_is_pinned():
         "--no-responses",
         "--no-auth",
         "--max-context",
-        "8192",
+        "off",
         "--max-concurrent",
         "1",
         "--idle-timeout",

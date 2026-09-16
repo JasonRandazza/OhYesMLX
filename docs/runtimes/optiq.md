@@ -820,8 +820,10 @@ it fires (`mlx_cleanup.py:16-18` estimates 10–100 ms).
 `--max-context auto` (the default) estimates a KV token cap and installs a rotating window
 **only when the model's native context would not fit RAM** (`optiq/cli.py:2980-3024`). When it
 fires it changes the KV cache class to `RotatingKVCache`, which changes long-context behaviour
-and can change output. The harness passes `--max-context 8192` explicitly, so the auto path is
-bypassed — that is correct and should stay.
+and can change output. The harness passed `--max-context 8192` until 2026-09-16 and passes `off` since: an integer
+cap rotates rather than refuses, and on Qwen3.5 / LFM2 it was a no-op because both define
+`make_cache` (`docs/research/2026-09-16-prompt-length-context-limits.md`). Either way the auto
+path is bypassed, which is correct and should stay.
 
 ### 7.7 Fused KV path is automatic when KV quantization is on
 
@@ -973,7 +975,7 @@ weight index.
 
 The harness currently passes (`ohyesmlx/runtimes.py:694-717`):
 `--model`, `--host`, `--port`, `--no-anthropic`, `--no-responses`, `--no-auth`,
-`--max-context 8192`, `--max-concurrent 1`, `--idle-timeout 0`, `--context-scale 1.0`,
+`--max-context off` (8192 before 2026-09-16), `--max-concurrent 1`, `--idle-timeout 0`, `--context-scale 1.0`,
 `--no-stream-experts`.
 
 | Add | Why |
@@ -986,7 +988,7 @@ The harness currently passes (`ohyesmlx/runtimes.py:694-717`):
 | Record the `quantization` block | Per-layer overrides mean the headline bit-width is not the format (§8.2). |
 
 Not needed, and why: `--no-fused-kv` only matters with KV quantization (§7.7);
-`--max-context auto` is bypassed by the explicit `8192` (§7.6); `--context-scale 1.0` is a
+`--max-context auto` is bypassed by the explicit `off` (§7.6); `--context-scale 1.0` is a
 no-op (§6.3) but is worth keeping as documentation of intent.
 
 Also worth pinning in the observation, not the command: `--prompt-cache-size` stays at

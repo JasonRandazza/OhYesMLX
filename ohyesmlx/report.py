@@ -213,9 +213,19 @@ CARD_FIELDS = (
 _RANK_PLACES = dict(CARD_FIELDS)
 
 # The run-header pins the grid's first join guard compares across columns. A header carries
-# these five and the workloads it measured, and nothing else -- a sixth pin belongs here on the
-# day one exists.
-PIN_FIELDS = ("temperature", "seed", "warmup", "measured", "cooldown_s")
+# these and the workloads it measured, and nothing else -- a pin belongs here on the day one
+# exists, and two did: `concurrency` (plan 06-01b) and `prompt_tokens` (plan 06-01c). Both were
+# pinned in the header and left out of this tuple, so an N=8 run and a 32k-prompt run would each
+# have joined a grid of their opposite without a word.
+PIN_FIELDS = (
+    "temperature",
+    "seed",
+    "warmup",
+    "measured",
+    "cooldown_s",
+    "concurrency",
+    "prompt_tokens",
+)
 
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
 # channel the stream delivered it in, and a cold visit's first request carries the load a
@@ -1133,25 +1143,38 @@ def _footnotes() -> list[str]:
 # --- the joined grid ------------------------------------------------------------------------
 
 
+# What a pin is worth on a header that predates it. `concurrency` and `prompt_tokens` are the
+# two that arrived after runs existed: every header written before them drove its requests one
+# at a time and sized no prompt at all, so `1` and `None` are what those runs did rather than
+# defaults standing in for something unknown -- which is what separates them from an absent
+# `temperature`, whose absence is a header this guard cannot compare.
+ABSENT_PINS = {"concurrency": 1, "prompt_tokens": None}
+
+
 def _check_pins(runs: list[tuple]) -> None:
     """Guard 1: every column was measured under the same pins, down to the prompts.
 
-    The header's five pins are compared one by one and so is every workload's ``messages`` and
+    Every header pin is compared one by one and so is every workload's ``messages`` and
     ``max_tokens``, because columns that answered different prompts are not one grid. No
     prompt is printed in the refusal: the prefill prompt is 6.5 kB of prose, and naming the
     field is what a reader needs to find the difference themselves.
+
+    A pin the header does not carry is read through ``ABSENT_PINS`` when that absence is
+    itself the fact -- see its comment -- so a column measured before a pin existed joins a
+    column that pinned the value that absence means, and is refused against any other.
     """
     if len(runs) < 2:
         return
     reference_label, reference = runs[0][0], runs[0][1]
     for label, header, _rows in runs[1:]:
         for field in PIN_FIELDS:
-            if header.get(field) != reference.get(field):
+            pinned = reference.get(field, ABSENT_PINS.get(field))
+            held = header.get(field, ABSENT_PINS.get(field))
+            if pinned != held:
                 raise ValueError(
-                    f"the pins disagree: {reference_label} pinned {field}="
-                    f"{reference.get(field)!r} and {label} pinned {field}="
-                    f"{header.get(field)!r}; columns measured under different pins are not "
-                    "one grid"
+                    f"the pins disagree: {reference_label} pinned {field}={pinned!r} and "
+                    f"{label} pinned {field}={held!r}; columns measured under different pins "
+                    "are not one grid"
                 )
         _check_workload_pins(reference_label, reference, label, header)
 
@@ -1313,7 +1336,7 @@ def _provenance(runs: list[tuple], columns: list[dict]) -> list[str]:
     lines.append("")
     if runs:
         header = runs[0][1]
-        pins = ", ".join(f"{field} `{_text(header.get(field))}`" for field in PIN_FIELDS)
+        pins = ", ".join(f"{field} `{_text(header.get(field, ABSENT_PINS.get(field)))}`" for field in PIN_FIELDS)
         lines.append(f"Pins all columns share: {pins}.")
         lines.append("")
         shapes = ", ".join(

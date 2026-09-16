@@ -398,6 +398,7 @@ def run_cells(
     measured: int = 9,
     concurrency: int = 1,
     cooldown_s: float = 30.0,
+    prompt_tokens: dict | None = None,
     results_dir: str,
 ) -> list[CellResult]:
     """Measure every cell under every workload; one :class:`CellResult` per pair.
@@ -415,6 +416,13 @@ def run_cells(
     by, record for record. At 8, nine batches are 72 requests and nine spans. Concurrency is a
     property of how the run drove the cells rather than of a cell, so it is a header pin: a
     sweep is N runs differing in that one field, joined afterwards.
+
+    ``prompt_tokens`` is the prompt-length pin, and it is written to the header verbatim:
+    ``{"target": N, "achieved": M}`` for a run whose prompt was sized to N tokens, or ``None``
+    for the three pinned workloads, which send their own literals. Nothing here computes or
+    checks it -- the prompt is sized against the serving tokenizer by the caller, before this
+    function is called -- and like ``concurrency`` it describes how the run drove the cells
+    rather than a cell, so a sweep of it is N runs differing in this one field.
 
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
@@ -454,6 +462,11 @@ def run_cells(
         # How the run drove the cells, pinned beside the sampling pins so a sweep declares it
         # with one header field and a join compares it like every other hold-constant.
         "concurrency": concurrency,
+        # The prompt-length pin, verbatim, and `None` for the three pinned workloads. This
+        # module does not compute it: the caller sized the prompt against the serving
+        # tokenizer, and a pin this module re-derived would be its own opinion about what the
+        # columns sent.
+        "prompt_tokens": prompt_tokens,
         "cooldown_s": cooldown_s,
     }
 
@@ -1099,14 +1112,17 @@ def _require_modules() -> None:
 def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> None:
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
-    Line 1 is the run header — temperature, seed, warmup, measured, concurrency, cooldown_s and
-    every workload that was measured, each with the messages it sent and its own max_tokens (a
-    single run-level cap would be a half-truth once three workloads carry three of them).
-    ``warmup`` is the rule that was in force, as a dict, or the integer budget a caller pinned
-    instead; which one it is is what tells a reader how to read ``warmup_count``. ``measured``
-    counts batches and ``concurrency`` says how many requests are in one, so the two together
-    are how many requests a row holds — and ``concurrency`` is what a sweep varies and a join
-    guard compares, because it is a property of how the run drove the cells, not of a cell.
+    Line 1 is the run header — temperature, seed, warmup, measured, concurrency, prompt_tokens,
+    cooldown_s and every workload that was measured, each with the messages it sent and its own
+    max_tokens (a single run-level cap would be a half-truth once three workloads carry three of
+    them). ``warmup`` is the rule that was in force, as a dict, or the integer budget a caller
+    pinned instead; which one it is is what tells a reader how to read ``warmup_count``.
+    ``measured`` counts batches and ``concurrency`` says how many requests are in one, so the two
+    together are how many requests a row holds — and ``concurrency`` is what a sweep varies and a
+    join guard compares, because it is a property of how the run drove the cells, not of a cell.
+    ``prompt_tokens`` rides beside it for the same reason: one prompt length, recorded with the
+    count it achieved.
+
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything
     it measured and no reader sees half a file.

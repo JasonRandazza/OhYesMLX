@@ -657,3 +657,69 @@ today.
 `prefill_tps`, `itl_s`, and every per-request figure. A concurrent cell's requests are judged
 one at a time exactly as a sequential cell's are — a fast cell emitting garbage is still a
 failed cell, at any concurrency.
+
+---
+
+## Phase 6 plan 06-01c — the prompt-length pin
+
+Findings behind it, from the runtimes' shipped source: `docs/research/2026-09-16-prompt-length-context-limits.md`.
+
+```python
+# cli.py
+LONGTEXT = Path(__file__).with_name("longtext.md")   # frozen; sha256 3ed2c160…a8a3
+PROMPT_TOKEN_TARGETS = (128, 1024, 4096, 16384, 32768)  # documentation, not a selector
+
+def sized_prompt(counter, target: int) -> tuple[str, int]: ...
+# -> (prompt text, achieved token count). achieved <= target, and achieved is what
+#    counter.count(text) returns for the exact text returned.
+```
+
+```
+ohyesmlx run --study format --cells <cell> --prompt-tokens 4096
+```
+
+**The text.** `SIZED_HEAD + cut + SIZED_TAIL`, where the source is the MS-7 excerpt body out of
+`PREFILL_PROMPT` (between its BEGIN and END markers) followed by `longtext.md`, and `cut` is the
+longest prefix of that source ending at a **whitespace boundary** whose whole prompt counts
+`<= target`. Found by bisection over whitespace positions using only `counter.count`, so a test
+can drive it with a counter as simple as `len(text.split())`. The head asks the model to read
+the document; the tail asks, in one sentence, what the document is about — a question any cut
+can answer, which the MS-7 question is not once the cut lands before rule 3. No repetition,
+ever: a target whose prompt would need more text than the source holds is a `ValueError`, as
+is a target too small to fit the head and tail.
+
+`longtext.md` is the 2026-09-14 and 2026-09-15 research documents concatenated in name order,
+frozen as a package file (60,701 tokens by the Qwen3.5-4B tokenizer). It is never regenerated
+from `docs/`: those documents may be edited, and a prompt that changed under a pin is a
+different prompt. Chosen by Jason, 2026-09-16, over a downloaded book and authored text.
+
+**The workload.** With `--prompt-tokens N` the run measures **one** workload, `prefill`, whose
+message is `sized_prompt(counter, N)` and whose cap is 64 — the existing prefill cap. `chat` and
+`decode` are not run: they would be byte-identical across every run of the sweep and cost a
+plateau warmup each. Without the flag the three pinned workloads run exactly as today.
+
+**The counter is the serving tokenizer.** `TokenCounter(cell.artifact_dir)` for each distinct
+artifact the cells name. If two artifacts' counters disagree about the achieved count of the
+prompt, the run is refused before a runtime starts: one run pins one prompt length.
+
+**The header pin.**
+
+```python
+"prompt_tokens": {"target": 4096, "achieved": 4093} | None   # None: the three pinned workloads
+```
+
+`run_cells(..., prompt_tokens: dict | None = None, ...)` writes it verbatim; `measure` does not
+compute it. `load_run` needs nothing: a header is a dict, and `.get` of an absent key is `None`,
+which is exactly true of every run before this pin.
+
+**Join guard 1 compares both sweep pins.** `PIN_FIELDS` gains `concurrency` and
+`prompt_tokens`. `concurrency` is compared with an absent value read as `1` — every run written
+before the pin existed issued requests one at a time, so `1` is the fact and not a default
+standing in for something unknown. This closes a defect: 06-01b's header pin was never added to
+`PIN_FIELDS`, so `ohyesmlx grid` would have joined an N=8 run into an N=1 grid without a word.
+
+**Refusals are not built yet, on purpose.** The source says no runtime refuses 32k on
+Qwen3.5-4B: mlx-lm has no check, OptiQ's cap is now `off`, oMLX's discovered limit is 262,144,
+vMLX's memory estimate lands far above it. Osaurus is unreadable and gets a live probe first. A
+`REFUSED` status is built only if a probe shows a refusal; until then an HTTP 400/413 at a long
+prompt reports as the `FAIL` it currently is, and the sweep is not published with one in it.

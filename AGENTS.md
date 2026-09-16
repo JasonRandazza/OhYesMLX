@@ -59,6 +59,7 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 ## Runtime hazards, already paid for
 
 - **OptiQ** flips `--stream-experts auto` on when `model_disk_bytes > 0.70 * total_RAM`. Identical weights then decode roughly 5× slower, with nothing in the artifact explaining it. Pin the flag explicitly.
+- **OptiQ's `--max-context <int>` rotates, it does not refuse.** It installs a `RotatingKVCache`, so a longer prompt is silently windowed and measured as though it were whole. Qwen3.5 and LFM2 define their own `make_cache` and ignore the cap; a model that does not would start truncating at the cap with nothing in the output saying so. The harness pins `off` (2026-09-16). See `docs/research/2026-09-16-prompt-length-context-limits.md`.
 - **Osaurus takes no tuning flags.** Everything that determines what you measure lives in `~/.osaurus/config/*.json` and an app plist. Snapshot it and diff against a checked-in baseline before every run.
 - **oMLX** must be given a per-run temporary model catalog so only the cell's model is visible; otherwise it may serve something other than what you think.
 - **oMLX's SSD prefix cache survives restarts** and consumes real disk. Clear it between cold-cache runs.

@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from ohyesmlx import report
+from ohyesmlx import report, token_counter
 
 STUDIES = report.AXES
 
@@ -135,6 +135,147 @@ PREFILL_PROMPT = (
     "Question: which single rule does the standard treat as non-negotiable, and why?"
 )
 
+# The prompt-length pin's second source. A frozen package file rather than text assembled from
+# `docs/`: those documents may be edited, and a prompt that changed under a pin is a different
+# prompt. longtext.md is the 2026-09-14 and 2026-09-15 research documents concatenated in name
+# order -- 60,701 tokens by the Qwen3.5-4B tokenizer, sha256 3ed2c160...a8a3 -- and it is never
+# regenerated from `docs/`, reformatted, or edited.
+LONGTEXT = Path(__file__).with_name("longtext.md")
+
+# The lengths Phase 6 walks. Documentation, not a selector: `--prompt-tokens` takes any N, and
+# there is no second flag that names a set of them.
+PROMPT_TOKEN_TARGETS = (128, 1024, 4096, 16384, 32768)
+
+# The markers around the MS-7 excerpt in PREFILL_PROMPT. The excerpt body between them is the
+# first half of the source a sized prompt is cut from, and longtext.md is the rest. The head
+# asks the model to read the document; the tail asks, in one sentence, what the document is
+# about -- a question any cut can answer, which the MS-7 question at the end of PREFILL_PROMPT
+# is not once the cut lands before rule 3.
+EXCERPT_BEGIN = "--- BEGIN EXCERPT: Measurement Standard MS-7 ---"
+EXCERPT_END = "--- END EXCERPT ---"
+
+SIZED_HEAD = (
+    "Read the document below in full, then answer the question at the end in one sentence.\n\n"
+)
+SIZED_TAIL = "\n\nQuestion: in one sentence, what is this document about?"
+
+
+def sized_source() -> str:
+    """The pinned source a sized prompt is cut from: the MS-7 excerpt body, then longtext.md."""
+    body = PREFILL_PROMPT.split(EXCERPT_BEGIN, 1)[1].split(EXCERPT_END, 1)[0]
+    return body.strip() + "\n\n" + LONGTEXT.read_text(encoding="utf-8")
+
+
+def sized_prompt(counter, target: int) -> tuple[str, int]:
+    """``(prompt text, achieved token count)``: the longest prompt that fits inside *target*.
+
+    The text is ``SIZED_HEAD + cut + SIZED_TAIL``, where ``cut`` is a prefix of
+    :func:`sized_source` ending at a whitespace boundary -- never a section repeated to reach
+    the length, which would make the prompt a different prompt from the one the pin names. The
+    cut is found by bisection over those boundaries, and the candidate it lands on is counted
+    whole before it is returned, so the prompt cannot overshoot the target. On a tokenizer
+    whose count is not monotone in prefix length the bisection can land a little short of the
+    longest cut that fits, which is the direction that keeps the pin honest. ``achieved`` is
+    ``counter.count`` of the exact text returned, and is never above *target*.
+
+    The counter is the **serving** tokenizer -- whatever will tokenize this prompt -- and it is
+    the only thing consulted, so a test can drive this with a counter as simple as
+    ``len(text.split())``.
+
+    Refused rather than approximated: a target too small to hold the head and the tail, one
+    that fits them and leaves no room for any of the document, and one that would need more
+    text than the source holds.
+    """
+    source = sized_source()
+    head_and_tail = counter.count(SIZED_HEAD + SIZED_TAIL)
+    if head_and_tail > target:
+        raise ValueError(
+            f"--prompt-tokens {target} cannot fit the head and the tail: they count "
+            f"{head_and_tail} tokens on their own"
+        )
+    whole = counter.count(SIZED_HEAD + source + SIZED_TAIL)
+    if whole < target:
+        raise ValueError(
+            f"--prompt-tokens {target} needs more text than the source holds: the whole "
+            f"prompt counts {whole} tokens"
+        )
+
+    cuts = _cut_points(source)
+    low, high = 0, len(cuts) - 1
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = source[: cuts[middle]]
+        if counter.count(SIZED_HEAD + candidate + SIZED_TAIL) <= target:
+            low = middle
+        else:
+            high = middle - 1
+
+    cut = source[: cuts[low]]
+    if not cut:
+        raise ValueError(
+            f"--prompt-tokens {target} fits only the head and the tail ({head_and_tail} "
+            "tokens): the prompt would ask about a document it does not hold"
+        )
+
+    text = SIZED_HEAD + cut + SIZED_TAIL
+    return text, counter.count(text)
+
+
+def _cut_points(source: str) -> list[int]:
+    """Every position a prefix of *source* may end at, in ascending order.
+
+    A cut ends where whitespace begins, so the text never trails a run of spaces or newlines,
+    and the end of the source is the last position. The empty prefix at 0 is the candidate the
+    bisection starts from rather than a prompt: :func:`sized_prompt` refuses it.
+    """
+    points = [0]
+    points.extend(
+        index
+        for index, char in enumerate(source)
+        if index > 0 and char.isspace() and not source[index - 1].isspace()
+    )
+    points.append(len(source))
+    return points
+
+
+def sized_workload(measure, cells: list, target: int) -> tuple[list, dict]:
+    """The one workload a ``--prompt-tokens`` run measures, and the pin its header records.
+
+    One run pins one prompt length, so the prompt is sized once per **distinct artifact**: the
+    counter is the tokenizer that will serve it, and two artifacts are free to disagree about
+    how many tokens the same bytes are. Two that disagree refuse the run before a runtime is
+    started, because a column measured under a length its own tokenizer does not produce is
+    not a column of the sweep.
+
+    ``chat`` and ``decode`` are not run: they would be byte-identical across every run of the
+    sweep and each costs a warmup window of its own.
+    """
+    sized = []
+    for artifact_dir in dict.fromkeys(cell.artifact_dir for cell in cells):
+        text, achieved = sized_prompt(token_counter.TokenCounter(artifact_dir), target)
+        sized.append((artifact_dir, text, achieved))
+
+    achieved = {count for _artifact_dir, _text, count in sized}
+    if len(achieved) > 1:
+        raise ValueError(
+            "the artifact tokenizers do not agree on this prompt's length: "
+            + ", ".join(
+                f"{artifact_dir} counts {count}" for artifact_dir, _text, count in sized
+            )
+            + f". One run pins one prompt length ({target} tokens), so its columns would be "
+            "measuring different prompts"
+        )
+
+    _artifact_dir, text, count = sized[0]
+    return (
+        [
+            measure.Workload(
+                id="prefill", messages=[{"role": "user", "content": text}], max_tokens=64
+            )
+        ],
+        {"target": target, "achieved": count},
+    )
+
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns the process exit code."""
@@ -242,6 +383,16 @@ def _parser() -> argparse.ArgumentParser:
         "pin, joined afterwards; it is not a second cell selector and not a third --study axis.",
     )
     run.add_argument(
+        "--prompt-tokens",
+        type=int,
+        default=None,
+        metavar="N",
+        help="pin the prompt length in tokens: the run measures one workload, `prefill`, whose "
+        "prompt is sized to N against the serving tokenizer, and the header records the target "
+        "beside the count achieved. A pin, not a selector: it says how long the prompt is, "
+        "never which cells run. A sweep is several runs differing only in this pin.",
+    )
+    run.add_argument(
         "--results-dir",
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
@@ -311,6 +462,12 @@ def _run(args) -> int:
     try:
         cells = build_cells(measure.Cell, args.cells)
         _check_axis(cells, args.study)
+        # The prompt is sized, and the tokenizers are made to agree on its length, before a
+        # run directory exists and before any runtime is started for it.
+        if args.prompt_tokens is None:
+            shapes, prompt_tokens = workloads(measure), None
+        else:
+            shapes, prompt_tokens = sized_workload(measure, cells, args.prompt_tokens)
     except ValueError as exc:
         print(f"ohyesmlx run: {exc}", file=sys.stderr)
         return 2
@@ -319,7 +476,11 @@ def _run(args) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     results = measure.run_cells(
-        cells, workloads(measure), concurrency=args.concurrency, results_dir=str(run_dir)
+        cells,
+        shapes,
+        concurrency=args.concurrency,
+        results_dir=str(run_dir),
+        prompt_tokens=prompt_tokens,
     )
     rows = report.summarize(results)
 

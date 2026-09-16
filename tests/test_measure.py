@@ -2154,6 +2154,23 @@ def test_the_run_header_pins_the_concurrency(harness):
     assert harness.header(harness.tmp_path / "sequential")["concurrency"] == 1
 
 
+def test_the_run_header_pins_the_prompt_length_verbatim_or_none(harness):
+    """The prompt-length pin rides in the header with the sampling pins, and this module writes
+    what it is handed: `None` for the three workloads that send their own literals, and the
+    target beside the count the caller's tokenizer achieved for a sized prompt."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+    pin = {"target": 4096, "achieved": 4093}
+
+    harness.run([cell], measured=1, prompt_tokens=pin)
+
+    assert harness.header()["prompt_tokens"] == pin
+    assert measure.load_run(harness.results_file())[0]["prompt_tokens"] == pin
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "literals")
+    assert harness.header(harness.tmp_path / "literals")["prompt_tokens"] is None
+
+
 def test_a_run_at_four_issues_four_requests_per_batch_and_records_one_span(harness):
     """One batch, one clock, four requests: the observations are every request's and the span is
     the batch's, so a row at N=4 has four observations per span."""

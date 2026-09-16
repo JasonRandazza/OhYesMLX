@@ -863,8 +863,12 @@ class Optiq(Runtime):
             "--no-anthropic",
             "--no-responses",
             "--no-auth",
+            # An integer cap installs a RotatingKVCache that silently rotates a longer prompt
+            # instead of refusing it. Qwen3.5 and LFM2 bring their own make_cache and ignore
+            # it, so 8192 never capped anything measured -- but a start command claiming a cap
+            # that is not there contradicts a 32k figure beside it. `off` is what is true.
             "--max-context",
-            "8192",
+            "off",
             "--max-concurrent",
             "1",
             "--idle-timeout",

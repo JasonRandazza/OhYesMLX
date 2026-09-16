@@ -1319,6 +1319,7 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
 
     assert flags == {
         "-h", "--help", "--study", "--cells", "--results-dir", "--rank", "--concurrency",
+        "--prompt-tokens",
     }
     # --concurrency is a PIN, not a selector: it says how the named cells are driven, never
     # which cells run. That distinction is the whole reason concurrency is not a third
@@ -2095,7 +2096,7 @@ def test_the_join_states_the_pins_and_every_run_directory_it_joined():
 
     assert (
         "Pins all columns share: temperature `0.0`, seed `0`, warmup `3`, measured `5`, "
-        "cooldown_s `30.0`." in grid
+        "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`." in grid
     )
     assert "Workloads all columns ran, with identical messages: `chat` (max_tokens 128)" in grid
 
@@ -2340,6 +2341,86 @@ def test_guard_1_refuses_two_runs_that_pinned_a_header_field_differently():
     ]
 
     assert_refused(runs, RUN_A, RUN_B, "temperature")
+
+
+def test_guard_1_refuses_a_concurrent_column_in_a_sequential_grid():
+    """The defect plan 06-01c closes: 06-01b pinned the concurrency in the header and never
+    added it here, so an N=8 run would have joined an N=1 grid without a word. It is refused
+    against a column that pinned 1 and against one that predates the pin, which is the same
+    fact written as an absence."""
+    for sequential in (run_header(("chat",)), run_header(("chat",), concurrency=1)):
+        runs = [
+            grid_run(
+                RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",),
+                header=sequential,
+            ),
+            grid_run(
+                RUN_B,
+                "osaurus",
+                "Osaurus 0.25.4",
+                ("jang",),
+                workload_ids=("chat",),
+                header=run_header(("chat",), concurrency=8),
+            ),
+        ]
+
+        message = assert_refused(
+            runs, RUN_A, RUN_B, "concurrency", "concurrency=1", "concurrency=8"
+        )
+
+        # A header that never carried the pin ran its requests one at a time, and that is what
+        # the refusal says it pinned rather than leaving the value unstated.
+        assert "concurrency=None" not in message
+
+
+def test_guard_1_refuses_two_runs_that_pinned_a_different_prompt_length():
+    """A prompt-length sweep is N runs differing in this pin, and two of its runs are one
+    column each of a sweep. Joined as a grid instead they would be one table over two prompts."""
+    runs = [
+        grid_run(
+            RUN_A,
+            "mlxlm",
+            "mlx-lm 0.31.3",
+            ("oq4",),
+            workload_ids=("prefill",),
+            header=run_header(("prefill",), prompt_tokens={"target": 4096, "achieved": 4093}),
+        ),
+        grid_run(
+            RUN_B,
+            "osaurus",
+            "Osaurus 0.25.4",
+            ("jang",),
+            workload_ids=("prefill",),
+            header=run_header(
+                ("prefill",), prompt_tokens={"target": 16384, "achieved": 16380}
+            ),
+        ),
+    ]
+
+    message = assert_refused(runs, RUN_A, RUN_B, "prompt_tokens")
+
+    assert "4096" in message and "16384" in message
+
+
+def test_guard_1_accepts_a_header_that_predates_the_concurrency_pin():
+    """Every run written before the pin existed issued requests one at a time, so an absent
+    concurrency is 1 rather than something unknown -- and a pre-pin column joins an N=1 column
+    instead of being refused for a field it could not have written."""
+    pre_pin = grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",))
+    pinned_one = grid_run(
+        RUN_B,
+        "osaurus",
+        "Osaurus 0.25.4",
+        ("jang",),
+        workload_ids=("chat",),
+        header=run_header(("chat",), concurrency=1),
+    )
+
+    for runs in ([pre_pin, pinned_one], [pinned_one, pre_pin]):
+        grid = report.render_grid(runs)
+
+        assert "Provenance" in grid, "the join was refused where the absence is the fact"
+        assert RUN_A in grid and RUN_B in grid
 
 
 def test_guard_1_refuses_two_runs_that_pinned_a_different_max_tokens():
