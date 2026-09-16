@@ -28,7 +28,7 @@ Phases: 6 of 7 complete
 | 1 | Portability spike | 1 | **Complete** | 2026-09-15 |
 | 2 | Measurement core | 5 | **Complete** | 2026-09-15 |
 | 2.1 | Coherence gate [INSERTED] | 1 | **Complete** | 2026-09-15 |
-| 3 | The sparse grid — format axis per runtime | 2 | **Complete** | 2026-09-15 |
+| 3 | The sparse grid — format axis per runtime | 2 | **Complete** | 2026-09-16 |
 | 4 | The 256-expert question | 1 | **Complete** | 2026-09-15 |
 | 5 | The joined grid (runtime axis falls out of it) | 2 | **Complete** | 2026-09-16 |
 | 6 | Sweeps | 2 | Not started | - |
@@ -99,7 +99,7 @@ exonerate stock mlx-lm on high-expert-count MoE.
 
 **Plans:**
 - [x] 03-01: Format axis, dense (`Qwen3.5-4B`) — five columns, 60/60 PASS
-- [ ] 03-02: Format axis, MoE (`LFM2.5-8B-A1B`)
+- [x] 03-02: Format axis, MoE (`LFM2.5-8B-A1B`) — 59/60 PASS, `docs/research/2026-09-16-moe-format-axis.md`. The dense tail ordering does NOT transfer: stock wins by 11-17% and oq4/oq4e/OptiQ are tied.
 
 ### Phase 4: The 256-expert question — COMPLETE
 
