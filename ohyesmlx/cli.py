@@ -282,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "grid":
         return _grid(args)
+    if args.command == "sweep":
+        return _sweep(args)
     return _run(args)
 
 
@@ -425,6 +427,45 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="also write the grid here (default: stdout only)",
     )
+
+    sweep = commands.add_parser(
+        "sweep",
+        help="join run directories into one sweep of a single header pin",
+        description="Join finished run directories that differ in exactly one header pin -- "
+        "concurrency or prompt length -- into one table per workload: cells down, the pin's "
+        "values across. Measures nothing and starts no runtime -- it reads results.jsonl "
+        "files that already exist.",
+    )
+    sweep.add_argument(
+        "run_dirs",
+        nargs="+",
+        metavar="RUN-DIR",
+        help="the run directories to join, named one by one and read exactly as `grid` reads "
+        "them. There is no glob and no --all: results/ accumulates runs from every session, "
+        "and a sweep assembled by wildcard would join runs that never belonged together.",
+    )
+    sweep.add_argument(
+        "--varying",
+        required=True,
+        choices=report.SWEEP_PINS,
+        help="the one header pin these runs were allowed to disagree about; every other pin, "
+        "and every workload, is compared across the runs and refused where it disagrees",
+    )
+    sweep.add_argument(
+        "--rank",
+        default=report.DEFAULT_RANK,
+        choices=tuple(report.RANK_METRICS),
+        metavar="METRIC",
+        help=f"the one metric each sweep entry carries (default: {report.DEFAULT_RANK}). A "
+        "concurrency sweep's per-request rates fall as N rises by construction, so "
+        "`aggregate_tps` is the throughput reading; a prompt-length sweep is compared on "
+        "`ttft_p50_s`.",
+    )
+    sweep.add_argument(
+        "--out",
+        default=None,
+        help="also write the sweep here (default: stdout only)",
+    )
     return parser
 
 
@@ -453,6 +494,38 @@ def _grid(args) -> int:
     print(grid)
     if args.out:
         Path(args.out).write_text(grid, encoding="utf-8")
+        print(f"wrote {args.out}")
+    return 0
+
+
+def _sweep(args) -> int:
+    """Join the named run directories and render the sweep.
+
+    The run directories are read exactly as ``_grid`` reads them -- the same ``load_run``, the
+    same ``summarize``, the same run-directory name as the label -- because a sweep and a grid
+    are two joins over one file format. The guards live in ``report.render_sweep``, not here:
+    refusing to join runs that disagree, or runs whose swept pin never moved, is a statement
+    about the data, and the CLI is not where that is decided.
+    """
+    measure = _load_measure()
+    runs = []
+    for run_dir in args.run_dirs:
+        try:
+            header, results = measure.load_run(run_dir)
+        except (OSError, ValueError) as exc:
+            print(f"ohyesmlx sweep: {run_dir}: {exc}", file=sys.stderr)
+            return 2
+        runs.append((Path(run_dir).name, header, report.summarize(results)))
+
+    try:
+        sweep = report.render_sweep(runs, varying=args.varying, rank=args.rank)
+    except ValueError as exc:
+        print(f"ohyesmlx sweep: {exc}", file=sys.stderr)
+        return 2
+
+    print(sweep)
+    if args.out:
+        Path(args.out).write_text(sweep, encoding="utf-8")
         print(f"wrote {args.out}")
     return 0
 

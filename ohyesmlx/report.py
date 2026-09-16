@@ -697,7 +697,7 @@ def _row(result: CellResult) -> dict:
         "itl_s": median(itl),
         "decode_tps": median(decode),
         "drift": drift,
-        "aggregate_tps": _aggregate_tps(measured),
+        "aggregate_tps": _aggregate_tps(measured, result.batch_spans),
         "prefill_tps": median(prefill),
         "cold_load_s": result.cold_load_s,
         "first_request_s": result.first_request_s,
@@ -951,14 +951,43 @@ def _per_request(observation) -> dict:
     return {"decode_tps": decode_tps, "prefill_tps": prefill_tps, "itl_s": itl_s}
 
 
-def _aggregate_tps(observations: list) -> float | None:
-    """Cell-wide output throughput: every completion token over the time they took.
+def _aggregate_tps(observations: list, batch_spans: list[float]) -> float | None:
+    """Cell-wide output throughput: every completion token over the wall time it took.
 
-    # ponytail: Observation carries durations, not timestamps, so this sums per-request
-    # wall clocks and cannot see overlap. Ceiling: exact at concurrency 1, conservative
-    # once requests run concurrently. Upgrade path: record send/close stamps on
-    # Observation and use the span of the measured window instead.
+    Two clocks, and which one is the cell's depends on how the run drove the cell. A record
+    carrying ``batch_spans`` was driven in batches of N requests issued together under one clock
+    each, so the window is the sum of those spans. Summing the per-request ``total_s`` instead
+    counts the overlap N times and divides by ~N x the wall clock: measured, oMLX ``chat`` in
+    ``results/sweep-conc/`` read 66.0 / 42.3 / 25.5 / 14.3 tok/s at N=1/2/4/8 over the
+    per-request clocks while the runtime held a flat 66.0-66.8. A per-request result rendered as
+    a throughput one is the reading the concurrency sweep exists to avoid.
+
+    A record without spans is every sequential run and every record written before plan 06-01b:
+    at ``concurrency=1`` a batch is one request, no clock is taken around it, and measure refuses
+    to reconstruct one from ``total_s`` -- a gap between two sequential requests belongs to
+    neither one. Those rows keep the sum of the per-request clocks exactly as they always had
+    it, so no number measured so far moves.
+
+    The mapping between the two series is measure's: ``_workload_visit`` extends
+    ``observations`` with a batch's observations and appends that batch's span in the same step,
+    so N observations arrive per span and the ratio over the totals is what the per-batch
+    aggregates are over the window, without attributing any observation to a batch. That
+    attribution is deliberately not made -- the row is handed the requests that came back, and
+    one request that did not come back would shift every later chunk of them. A batch that lost
+    a request still took its span, and the tokens that came back over the time the window took
+    is the honest figure.
     """
+    if batch_spans:
+        tokens = sum(
+            observation.completion_tokens
+            for observation in observations
+            if observation.completion_tokens is not None
+        )
+        seconds = sum(batch_spans)
+        if not tokens or seconds <= 0:
+            return None
+        return tokens / seconds
+
     tokens = 0
     seconds = 0.0
     for observation in observations:
@@ -1151,7 +1180,7 @@ def _footnotes() -> list[str]:
 ABSENT_PINS = {"concurrency": 1, "prompt_tokens": None}
 
 
-def _check_pins(runs: list[tuple]) -> None:
+def _check_pins(runs: list[tuple], *, varying: str | None = None) -> None:
     """Guard 1: every column was measured under the same pins, down to the prompts.
 
     Every header pin is compared one by one and so is every workload's ``messages`` and
@@ -1162,12 +1191,20 @@ def _check_pins(runs: list[tuple]) -> None:
     A pin the header does not carry is read through ``ABSENT_PINS`` when that absence is
     itself the fact -- see its comment -- so a column measured before a pin existed joins a
     column that pinned the value that absence means, and is refused against any other.
+
+    *varying* is the one pin a caller's join permits its runs to disagree about -- a Phase 6
+    sweep's swept pin -- and it is the only field skipped; the grid passes nothing and so
+    compares every one of them. `prompt_tokens` carries one further relaxation: a prompt length
+    IS the prompt, so a workload's ``messages`` go uncompared when that is what the runs are
+    sweeping, and every other field of every shape still is.
     """
     if len(runs) < 2:
         return
     reference_label, reference = runs[0][0], runs[0][1]
     for label, header, _rows in runs[1:]:
         for field in PIN_FIELDS:
+            if field == varying:
+                continue
             pinned = reference.get(field, ABSENT_PINS.get(field))
             held = header.get(field, ABSENT_PINS.get(field))
             if pinned != held:
@@ -1176,11 +1213,32 @@ def _check_pins(runs: list[tuple]) -> None:
                     f"{label} pinned {field}={held!r}; columns measured under different pins "
                     "are not one grid"
                 )
-        _check_workload_pins(reference_label, reference, label, header)
+        _check_workload_pins(
+            reference_label,
+            reference,
+            label,
+            header,
+            ignore_messages=varying == "prompt_tokens",
+        )
 
 
-def _check_workload_pins(label_a: str, header_a: dict, label_b: str, header_b: dict) -> None:
-    """The workload half of guard 1: the same shapes, with the same prompts and caps."""
+def _check_workload_pins(
+    label_a: str,
+    header_a: dict,
+    label_b: str,
+    header_b: dict,
+    *,
+    ignore_messages: bool = False,
+) -> None:
+    """The workload half of guard 1: the same shapes, with the same prompts and caps.
+
+    *ignore_messages* is the prompt-length pin's relaxation and no other caller's: a sweep of
+    prompt lengths is the one join whose columns are meant to answer prompts of different
+    lengths, so their ``messages`` go uncompared while the set of shapes and every
+    ``max_tokens`` are still held to each other. The relaxation belongs to the pin rather than
+    to the caller's convenience -- a concurrency sweep whose columns answered different prompts
+    is refused like any other grid.
+    """
     shapes_a, shapes_b = _shapes(header_a), _shapes(header_b)
     if set(shapes_a) != set(shapes_b):
         raise ValueError(
@@ -1190,6 +1248,8 @@ def _check_workload_pins(label_a: str, header_a: dict, label_b: str, header_b: d
         )
     for workload_id, shape in shapes_a.items():
         for field in ("messages", "max_tokens"):
+            if ignore_messages and field == "messages":
+                continue
             if shape.get(field) != shapes_b[workload_id].get(field):
                 raise ValueError(
                     f"the pins disagree: workload `{workload_id}` pinned a different "
@@ -1498,6 +1558,387 @@ def _recommendation(rows: list[dict], rank: str) -> str:
         "so this says which pair came first and not which of the two earned it — the format "
         "axis is its column above and the runtime axis is its row."
     )
+
+
+# --- the Phase 6 sweep ----------------------------------------------------------------------
+
+# The header pins a sweep may vary, and the whole of the list. A cell is `(format, runtime)`,
+# and both of these are properties of how a run *drove* its cells rather than of a cell: that is
+# why they are header pins, why `--study` can name neither of them, and why a sweep is N runs
+# differing in exactly one of them. Anything else a header carries is held by guard 1 like any
+# other pin, so a "sweep" of `temperature` would be a grid with a pin quietly left uncompared.
+SWEEP_PINS = ("concurrency", "prompt_tokens")
+
+# What each swept pin holds, in words a reader of the rendered sweep can act on.
+SWEPT_PIN = {
+    "concurrency": "requests issued together in one batch",
+    "prompt_tokens": "the length the prompt was sized to, as a target and the count the "
+    "serving tokenizer achieved",
+}
+
+# What each sweep holds constant while the pin moves, and -- for the one pin that moves
+# something else with it -- exactly how far that goes.
+SWEEP_HELD = {
+    "concurrency": (
+        "Every other pin is identical across these runs, and so is every workload down to its "
+        "prompt and its cap: the join guard compared them field by field, so a column differs "
+        "from its neighbour in concurrency and nothing else."
+    ),
+    "prompt_tokens": (
+        "Every other pin is identical across these runs and every workload keeps its "
+        "`max_tokens`; the prompts themselves differ, and that is what this pin holds. A "
+        "prompt-length sweep is the one join whose columns are meant to answer prompts of "
+        "different lengths, so a workload's `messages` is the single field the guard relaxes, "
+        "and only for this pin."
+    ),
+}
+
+# The sentence a sweep of concurrency carries, verbatim. Measured, plan 06-01a: oMLX at N=8
+# swung 65.3-81.0 tok/s of per-request decode rate across 16 batches with no trend and never
+# settled, while its per-batch aggregate settled at batch 12. So the drift a concurrent cell
+# prints is queueing variance in a per-request rate, and the annotation's own reading of a
+# positive change -- insufficient warmup -- is not the reading there.
+CONCURRENCY_DRIFT_SENTENCE = (
+    "At concurrency > 1, measured drift reads per-request rates: positive drift means the "
+    "per-request rate was still moving, not that the cell was under-warmed."
+)
+
+
+def render_sweep(
+    runs: list[tuple[str, dict, list[dict]]], *, varying: str, rank: str = DEFAULT_RANK
+) -> str:
+    """The Phase 6 sweep: one table per workload, cells down and the swept pin's values across.
+
+    *runs* is one ``(run label, run header, rows)`` per run directory, exactly the shape and the
+    meaning :func:`render_grid` takes: *rows* is ``summarize``'s output, no file is read here,
+    and no figure is re-derived. What differs is which one field the runs are allowed to
+    disagree about.
+
+    A **cell** is `(format, runtime)`, and *varying* is neither of those: `concurrency` and
+    `prompt_tokens` are properties of how a run drove its cells, so they live in the header. A
+    sweep is N run directories differing in exactly that pin, joined afterwards. Guard 1 is the
+    grid's, with the swept pin skipped, and beside it sit the two refusals a sweep needs and a
+    grid has no use for: a pin holding one value across every run -- a table with one column is
+    not a sweep -- and the same cell measured at one value by two run directories.
+
+    `varying="prompt_tokens"` is the one relaxation, and the refusal it does not lift is worth
+    reading beside it. Its pin is ``{"target": N, "achieved": M}`` and its runs measure the
+    single `prefill` shape, so their prompts are *supposed* to differ: a workload's `messages`
+    are dropped from the comparison for this pin, and every other field of every shape is still
+    compared. Two runs that pinned one target are one column whatever their tokenizers achieved
+    — which is why the pin's key is its target — and two runs whose *other* shapes disagree are
+    still refused.
+
+    The columns ascend, because that is the reading: a prompt that got longer or batches that
+    got wider says nothing while the table is in command-line order. Entries are the ``rank``
+    metric, formatted by the same functions the grid formats its own with, so `—`, `FAIL` and
+    `no value` mean here exactly what they mean there.
+
+    A run that issued more than one request at a time, or a sweep of concurrency, carries
+    ``CONCURRENCY_DRIFT_SENTENCE``: the drift beside a concurrent cell's per-request rate is not
+    the unfinished warm-up that annotation was written for.
+    """
+    if varying not in SWEEP_PINS:
+        raise ValueError(
+            f"varying must be one of {SWEEP_PINS}, not {varying!r}: a sweep varies one run "
+            "header pin, and a cell's two variables are what `--study` names"
+        )
+    if rank not in RANK_METRICS:
+        raise ValueError(_rank_error(rank))
+
+    runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
+    _check_pins(runs, varying=varying)
+    _check_sweep_varies(runs, varying)
+    _check_sweep_cells_appear_once(runs, varying)
+
+    columns = _sweep_columns(runs, varying)
+    cells = _sweep_cells(runs)
+    index = _sweep_index(runs, varying)
+
+    lines = [
+        f"# Sweep — `{varying}` across {len(columns)} values in {len(runs)} run directories",
+        "",
+        f"One variable varied: the run header pin `{varying}` — {SWEPT_PIN[varying]}. "
+        f"{SWEEP_HELD[varying]}",
+        "",
+        f"Each table is one workload and carries one metric: `{rank}` ({_direction(rank)}).",
+        "",
+        "| entry | means |",
+        "|---|---|",
+        "| a number | a measured cell that cleared every floor |",
+        "| `no value` | a cell that cleared every floor and has no value for this metric; "
+        "its run's leaderboard carries the note saying why |",
+        "| `FAIL` | a measured cell that did not clear one |",
+        "| `—` | a combination no run measured |",
+        "",
+    ]
+    if varying == "concurrency" or any(
+        _drove_more_than_one_request(header) for _label, header, _rows in runs
+    ):
+        lines += [f"> {CONCURRENCY_DRIFT_SENTENCE}", ""]
+    lines += _sweep_provenance(runs, varying)
+
+    for workload, _rows in _by_workload(
+        [row for _label, _header, rows in runs for row in rows]
+    ):
+        lines += [
+            f"## Workload `{workload}` — entries are `{rank}` ({_direction(rank)})",
+            "",
+            _sweep_table(workload, cells, columns, index, rank, varying),
+            "",
+        ]
+    lines += [
+        "## Notes",
+        "",
+        "The notes below are the leaderboard's own, unchanged, and govern every figure here. "
+        "Where one refers to the metric card, that card is in each run's own `leaderboard.md`: "
+        "the sweep joins published rows and re-renders none of their numbers.",
+        "",
+    ]
+    lines += _footnotes()
+    return "\n".join(lines) + "\n"
+
+
+def _pin_value(header: dict, varying: str):
+    """The swept pin's value on this header, an absent pin read as what that absence means.
+
+    `concurrency`'s absence is ``1``: every run written before the pin existed issued its
+    requests one at a time, so that is the fact rather than a default standing in for something
+    unknown. `prompt_tokens`'s is ``None``: those runs sized no prompt.
+    """
+    return header.get(varying, ABSENT_PINS.get(varying))
+
+
+def _pin_key(header: dict, varying: str):
+    """What a sweep's columns are keyed on: the pin's value, or its target where it has one.
+
+    A `prompt_tokens` pin is ``{"target": 4096, "achieved": 4093}`` and the target is the length
+    the run asked for. Keying the column on the whole dict would make two runs of one intended
+    length two columns the moment their tokenizers landed a token apart -- and the achieved count
+    is already printed beside the target, so the disagreement stays visible either way.
+    """
+    value = _pin_value(header, varying)
+    if varying == "prompt_tokens" and isinstance(value, dict):
+        return value.get("target")
+    return value
+
+
+def _pin_note(header: dict, varying: str) -> str:
+    """One run's value of the swept pin, as a reader should see it beside its directory.
+
+    A prompt pin is two numbers and both are printed: the target is what the run asked for and
+    the achieved count is what its own tokenizer produced for the text it sent.
+    """
+    value = _pin_value(header, varying)
+    if not isinstance(value, dict):
+        return _text(value)
+    target, achieved = value.get("target"), value.get("achieved")
+    return _text(target) if achieved is None else f"{_text(target)} (achieved {achieved})"
+
+
+def _drove_more_than_one_request(header: dict) -> bool:
+    """Whether this run issued more than one request at a time.
+
+    An absent pin is a run that issued them one at a time, so it is the ``1`` it means.
+    """
+    return (_pin_value(header, "concurrency") or 1) > 1
+
+
+def _check_sweep_varies(runs: list[tuple], varying: str) -> None:
+    """A sweep's pin has to actually vary, and a prompt pin is keyed on its target.
+
+    One value across every run makes every one of them the same column, so there is no sweep to
+    render and the join refuses rather than drawing a table with one column and calling it one.
+    `prompt_tokens` is keyed on its **target**: the achieved count is a fact about a run's own
+    tokenizer at that length, so two runs that pinned one target are one column whether or not
+    their tokenizers landed on the same number -- and this is the only place that says so.
+    """
+    values: dict = {}
+    for label, header, _rows in runs:
+        values.setdefault(_pin_key(header, varying), []).append((label, _pin_note(header, varying)))
+    if len(values) >= 2:
+        return
+    named = "; ".join(
+        f"{label} pinned {value}" for pinned in values.values() for label, value in pinned
+    )
+    raise ValueError(
+        f"the swept pin does not vary: {varying} is the same value in every one of these runs "
+        f"({named or 'no run directories were named'}); a sweep is N run directories that "
+        "differ in exactly this pin, and one value across all of them is not a sweep"
+    )
+
+
+def _check_sweep_cells_appear_once(runs: list[tuple], varying: str) -> None:
+    """Guard 2: no ``(cell, workload, pin value)`` measured by two run directories.
+
+    The pin value joins the grid's key because a sweep's columns are the pin: one cell at two
+    values is the table working as intended, and one cell at one value twice is ambiguous rather
+    than superseded. There is no latest-wins rule here either -- which run is newer is not which
+    run is right -- so the join refuses and names both directories.
+    """
+    seen: dict[tuple, str] = {}
+    for label, header, rows in runs:
+        value = _pin_key(header, varying)
+        for row in rows:
+            key = (row.get("label"), row.get("runtime"), row.get("workload_id"), value)
+            if key in seen:
+                raise ValueError(
+                    f"duplicate cell: (label, runtime, workload_id, {varying}) = {key!r} "
+                    f"appears in both {seen[key]} and {label}; two run directories measured one "
+                    "cell at one value of the swept pin, and there is no latest-wins rule "
+                    "because which run is newer is not which run is right"
+                )
+            seen[key] = label
+
+
+def _sweep_columns(runs: list[tuple], varying: str) -> list[dict]:
+    """The sweep's columns: one per value of the swept pin, smallest first.
+
+    Ascending order is the reading rather than a tidiness: a prompt that got longer or batches
+    that got wider says nothing across columns left in the order the directories happened to be
+    named, and every other table in this project names its ordering for the same reason. A column
+    carries the achieved counts its runs landed on, and a column two runs share prints both of
+    them rather than the first.
+    """
+    columns: dict = {}
+    for _label, header, _rows in runs:
+        key = _pin_key(header, varying)
+        column = columns.setdefault(key, {"key": key, "achieved": []})
+        achieved = _achieved(header, varying)
+        if achieved is not None and achieved not in column["achieved"]:
+            column["achieved"].append(achieved)
+    return sorted(columns.values(), key=lambda column: _ascending(column["key"]))
+
+
+def _achieved(header: dict, varying: str):
+    """The count a prompt pin achieved, or ``None`` for a pin that has no such field."""
+    value = _pin_value(header, varying)
+    return value.get("achieved") if isinstance(value, dict) else None
+
+
+def _ascending(value):
+    """A sort key for one swept pin's values: ascending, with an absent value last.
+
+    A value is a number for both pins that exist, and the only other thing it can be is the
+    absence of a pin the run predates, which sorts after every real value rather than raising.
+    """
+    return (value is None, "" if value is None else value)
+
+
+def _sweep_cells(runs: list[tuple]) -> list[str]:
+    """The sweep's rows: every cell any run measured, in the order they arrived.
+
+    A row is the cell's own id, `<format>__<runtime>`, because the columns are the pin and the
+    row therefore has to carry the two things a cell is. A cell no run measured never becomes a
+    row for the same reason a label never does in the grid: a row of `—` says a combination does
+    not exist, and a cell nobody ran is not a combination.
+    """
+    cells: list[str] = []
+    for _label, _header, rows in runs:
+        for row in rows:
+            cell_id = row.get("cell_id")
+            if cell_id and cell_id not in cells:
+                cells.append(cell_id)
+    return cells
+
+
+def _sweep_index(runs: list[tuple], varying: str) -> dict:
+    """``(cell, workload, pin value)`` -> the row measured there, across every run.
+
+    Guard 2 has already refused a key two run directories both wrote, so nothing here is
+    overwritten: a ``setdefault`` that silently dropped a row would be the exact ambiguity that
+    guard exists to refuse.
+    """
+    index: dict[tuple, dict] = {}
+    for _label, header, rows in runs:
+        key = _pin_key(header, varying)
+        for row in rows:
+            index.setdefault((row.get("cell_id"), row.get("workload_id"), key), row)
+    return index
+
+
+def _sweep_provenance(runs: list[tuple], varying: str) -> list[str]:
+    """Per run directory its value of the swept pin, then the pins the runs held in common.
+
+    This is the block that makes the join legal rather than assumed: it names the directory
+    behind every column of every table and the one field they were allowed to differ on, and it
+    prints the pins guard 1 compared them on, so a reader holding the same ``results.jsonl``
+    files can rebuild the sweep and check that the refusals were not needed.
+    """
+    lines = [
+        "## Provenance",
+        "",
+        f"A column in the tables below is one value of `{varying}`, and every run directory "
+        "behind the sweep is named here with the value it pinned. The lines under the table are "
+        "the pins every run shared -- the join guard compared them field by field -- and the "
+        "workload line names the shapes it compared with them.",
+        "",
+        f"| run directory | `{varying}` |",
+        "|---|---|",
+    ]
+    for label, header, _rows in runs:
+        lines.append(f"| {_text(label)} | {_pin_note(header, varying)} |")
+    lines.append("")
+    if runs:
+        header = runs[0][1]
+        pins = ", ".join(
+            f"{field} `{_text(header.get(field, ABSENT_PINS.get(field)))}`"
+            for field in PIN_FIELDS
+            if field != varying
+        )
+        lines.append(
+            f"Pins all runs shared, with `{varying}` the one pin they differ on: {pins}."
+        )
+        lines.append("")
+        shapes = ", ".join(
+            f"`{_text(shape.get('id'))}` (max_tokens {_text(shape.get('max_tokens'))})"
+            for shape in header.get("workloads") or ()
+        )
+        lines.append(
+            f"Workloads all runs ran: {shapes}."
+            if varying == "prompt_tokens"
+            else f"Workloads all runs ran, with identical messages: {shapes}."
+        )
+        lines.append("")
+    return lines
+
+
+def _sweep_table(
+    workload: str, cells: list[str], columns: list[dict], index: dict, rank: str, varying: str
+) -> str:
+    """One workload's sweep: cells down, the swept pin's values across, one entry per cell.
+
+    An entry is the row's ``rank`` metric in the same four states the grid renders it in, by the
+    same function, so a combination no run measured (`—`), a cell that ran and did not clear a
+    floor (`FAIL`) and one that cleared every floor without a value for this metric (`no value`)
+    stay three facts here as they are there.
+    """
+    header = "| cell | " + " | ".join(_sweep_head(column, varying) for column in columns) + " |"
+    divider = "|" + "---|" * (header.count("|") - 1)
+    lines = [header, divider]
+    for cell in cells:
+        entry = [_text(cell)]
+        entry += [
+            _entry(index.get((cell, workload, column["key"])), rank) for column in columns
+        ]
+        lines.append("| " + " | ".join(entry) + " |")
+    return "\n".join(lines)
+
+
+def _sweep_head(column: dict, varying: str) -> str:
+    """A column head: the pin's value, and for a prompt pin the count achieved beside it.
+
+    The target is what the run asked for and the achieved count is what its tokenizer produced,
+    and both are printed because the pin is only checkable against the text that was sent. A
+    column whose runs landed on different counts prints all of them: the runs disagreed, and a
+    head that picked one of them would be the join choosing a number on their behalf.
+    """
+    if varying != "prompt_tokens":
+        return _text(column["key"])
+    achieved = ", ".join(str(count) for count in column["achieved"])
+    if not achieved:
+        return _text(column["key"])
+    return f"{_text(column['key'])} (achieved {achieved})"
 
 
 def _number(value, places: int) -> str:

@@ -61,6 +61,9 @@ class FakeCellResult:
     # Defaulted here only so the many single-workload fixtures below stay readable.
     workload_id: str = "chat"
     warmup_observations: list = dataclasses.field(default_factory=list)
+    # Wall-clock seconds per measured batch, one entry per batch. Empty for a sequential run:
+    # at concurrency=1 a batch is one request and no clock is taken around it.
+    batch_spans: list = dataclasses.field(default_factory=list)
     # The cold visit's first warmup latency: the load a lazy loader deferred past readiness.
     first_request_s: float | None = None
     # Which workload made that request, as measure records it on every row of the cell.
@@ -110,6 +113,7 @@ def cell_result(
     workload_id="chat",
     first_request_s=None,
     first_request_workload_id=None,
+    batch_spans=None,
 ):
     """A cell as measure.py will hand it over: one result per (cell, workload)."""
     return FakeCellResult(
@@ -124,6 +128,7 @@ def cell_result(
         workload_id=workload_id,
         first_request_s=first_request_s,
         first_request_workload_id=first_request_workload_id,
+        batch_spans=[] if batch_spans is None else list(batch_spans),
     )
 
 
@@ -189,6 +194,34 @@ def test_aggregate_throughput_counts_every_token_over_every_request():
     )[0]
 
     assert row["aggregate_tps"] == pytest.approx(150 / 4.0)
+
+
+def test_aggregate_throughput_divides_by_the_batch_spans_not_the_summed_requests():
+    """At concurrency N the per-request clocks overlap, so summing them counts the batch N
+    times: two batches of four 2.0 s requests over 2.1 s each is 4.2 s of wall clock, and a
+    throughput figure over 16.0 s is the per-request result published as a batch one."""
+    concurrent = [obs(total=2.0) for _ in range(8)]
+    row = report.summarize([cell_result(concurrent, batch_spans=[2.1, 2.1])])[0]
+
+    assert row["aggregate_tps"] == pytest.approx(8 * 101 / 4.2)
+    assert row["aggregate_tps"] != pytest.approx(8 * 101 / 16.0), (
+        "the sum of the per-request clocks is what the batch spans exist to replace"
+    )
+
+
+def test_a_record_without_batch_spans_keeps_the_aggregate_it_always_had():
+    """Every sequential run, and every record written before batches existed, carries no span
+    to divide by: the same eight requests over the same per-request clocks report the number
+    they always did."""
+    concurrent = [obs(total=2.0) for _ in range(8)]
+    without = report.summarize([cell_result(concurrent)])[0]
+    spanned = report.summarize([cell_result(concurrent, batch_spans=[2.1, 2.1])])[0]
+
+    # Today's formula, spelled out: every token over the sum of the per-request clocks.
+    assert without["aggregate_tps"] == pytest.approx(
+        8 * 101 / sum(o.total_s for o in concurrent)
+    )
+    assert without["aggregate_tps"] != spanned["aggregate_tps"]
 
 
 def test_decode_tok_per_second_is_a_real_number_for_a_normal_cell(rows):
@@ -1326,10 +1359,11 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
     # --study axis -- if it selected cells, one --cells could vary three things at once.
     selectors = {flag for flag in flags if flag in {"--cells"}}
     assert selectors == {"--cells"}
-    # `run` says which cells to measure with --cells and nothing else. `grid` is not a second
-    # way to say that: it joins run directories that already exist, starts no runtime and
-    # measures nothing, so the selector count for a *run* is still one.
-    assert set(subcommands.choices) == {"run", "grid"}
+    # `run` says which cells to measure with --cells and nothing else. `grid` and `sweep` are
+    # not a second way to say that: both join run directories that already exist, start no
+    # runtime and measure nothing -- and `sweep`'s `--varying` names a header pin, never a cell
+    # -- so the selector count for a *run* is still one.
+    assert set(subcommands.choices) == {"run", "grid", "sweep"}
 
 
 def test_modules_stay_on_the_standard_library():
@@ -2561,3 +2595,535 @@ def test_the_runtime_axis_refuses_to_rank_a_metric_that_is_not_one_quantity():
 
     speed = report.render_grid(runs, rank="decode_tps")
     assert "is not one quantity across runtimes" not in speed
+
+
+# --- the Phase 6 sweep (a pin, not an axis) ---------------------------------------------------
+#
+# A sweep is N run directories differing in exactly one header pin, joined afterwards. The pin
+# names how the run *drove* its cells -- how many requests went out together, how long the prompt
+# was -- which is why neither can be a `--study` axis and why the join has to say both what
+# varied and where every column came from.
+
+SWEEP_RUNS = (
+    "20260916T100000Z-format",
+    "20260916T101000Z-format",
+    "20260916T102000Z-format",
+)
+
+# The sentence a concurrency sweep carries, written out rather than read from the constant, so a
+# reworded constant fails this file instead of agreeing with it.
+DRIFT_SENTENCE = (
+    "At concurrency > 1, measured drift reads per-request rates: positive drift means the "
+    "per-request rate was still moving, not that the cell was under-warmed."
+)
+
+
+def concurrency_run(
+    run_label,
+    value,
+    *,
+    rate=100.0,
+    labels=("oq4",),
+    workload_ids=("chat",),
+    runtime="mlxlm",
+    version="mlx-lm 0.31.3",
+    header=None,
+    **kwargs,
+):
+    """One run of a concurrency sweep: the sweep's cells, driven at one N."""
+    return grid_run(
+        run_label,
+        runtime,
+        version,
+        labels,
+        workload_ids=workload_ids,
+        rate_of=lambda *_: rate,
+        header=run_header(workload_ids, concurrency=value) if header is None else header,
+        **kwargs,
+    )
+
+
+def prompt_run(
+    run_label,
+    target,
+    achieved,
+    *,
+    rate=100.0,
+    labels=("oq4",),
+    workload_ids=("prefill",),
+    header=None,
+    **pins,
+):
+    """One run of a prompt-length sweep: the same shapes, answered by prompts of different
+    lengths. The text stands in for the pinned cut, and only has to differ across the runs the
+    way the cut does."""
+    if header is None:
+        header = run_header(
+            workload_ids, prompt_tokens={"target": target, "achieved": achieved}, **pins
+        )
+        header["workloads"][0]["messages"] = [
+            {"role": "user", "content": f"a prompt sized to {target} tokens"}
+        ]
+    return grid_run(
+        run_label,
+        "mlxlm",
+        "mlx-lm 0.31.3",
+        labels,
+        workload_ids=workload_ids,
+        rate_of=lambda *_: rate,
+        header=header,
+    )
+
+
+def other_prompt_header(workload_ids=("chat",), **pins):
+    """A header whose one shape answered a prompt no other run of the sweep sent."""
+    header = run_header(workload_ids, **pins)
+    header["workloads"][0]["messages"] = [{"role": "user", "content": "a different prompt"}]
+    return header
+
+
+def sweep_tables(markdown):
+    """The sweep's tables as ``{workload: {cell: {column head: entry}}}``, in printed order.
+
+    Read off the rendered text for the same reason ``grid_tables`` is: what a reader can tell
+    apart is the question, and the provenance table above the tables is not one of them.
+    """
+    tables, workload = {}, None
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("## Workload ") and line.count("`") >= 2:
+            workload = line.split("`")[1]
+        if workload is None or not line.startswith("| cell |"):
+            continue
+        header = [cell.strip() for cell in line.strip("|").split("|")][1:]
+        table = {}
+        for body in lines[index + 2:]:
+            if not body.startswith("|"):
+                break
+            cells = [cell.strip() for cell in body.strip("|").split("|")]
+            table[cells[0]] = dict(zip(header, cells[1:]))
+        tables[workload] = table
+    return tables
+
+
+def assert_sweep_refused(runs, varying, *fragments):
+    """The sweep refused, and its message carried every fragment the interface requires."""
+    with pytest.raises(ValueError) as raised:
+        report.render_sweep(runs, varying=varying)
+    message = str(raised.value)
+    for fragment in fragments:
+        assert fragment in message, f"{fragment!r} is missing from the refusal: {message}"
+    return message
+
+
+def test_a_sweep_may_vary_only_one_of_the_two_header_pins():
+    """A cell is (format, runtime) and neither pin is one: they are properties of how a run drove
+    its cells, which is why `--study` cannot name them and why anything else is refused rather
+    than left uncompared."""
+    runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
+
+    assert report.SWEEP_PINS == ("concurrency", "prompt_tokens")
+    assert set(report.SWEEP_PINS) <= set(report.PIN_FIELDS)
+    for varying in ("temperature", "seed", "warmup", "measured", "cooldown_s", "decode_tps", None):
+        with pytest.raises(ValueError) as raised:
+            report.render_sweep(runs, varying=varying)
+        assert "varying must be one of" in str(raised.value), varying
+
+
+def test_a_sweep_refuses_two_runs_that_pinned_something_else_differently():
+    """Guard 1, unchanged: the one pin the caller named is skipped and every other field is
+    compared exactly as the grid compares it, both directories named in the refusal."""
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 1),
+        concurrency_run(
+            SWEEP_RUNS[1], 8, header=run_header(("chat",), concurrency=8, temperature=0.2)
+        ),
+    ]
+
+    assert_sweep_refused(
+        runs, "concurrency", SWEEP_RUNS[0], SWEEP_RUNS[1], "temperature", "not one grid"
+    )
+
+
+def test_a_sweep_refuses_runs_that_all_pinned_the_same_value():
+    """A pin that held still makes every run the same column, so there is no sweep to render."""
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 1, rate=100.0),
+        concurrency_run(SWEEP_RUNS[1], 1, rate=50.0),
+    ]
+
+    message = assert_sweep_refused(
+        runs, "concurrency", "does not vary", SWEEP_RUNS[0], SWEEP_RUNS[1]
+    )
+
+    assert "not a sweep" in message
+
+
+def test_a_prompt_length_pin_is_keyed_on_its_target_not_on_what_was_achieved():
+    """Two runs of one intended length are one column whatever their tokenizers landed on: the
+    achieved count is a fact about one artifact's tokenizer, and it is printed beside the target
+    rather than folded into the pin's identity."""
+    at_one_target = [
+        prompt_run(SWEEP_RUNS[0], 4096, 4093),
+        prompt_run(SWEEP_RUNS[1], 4096, 4090),
+    ]
+
+    message = assert_sweep_refused(
+        at_one_target, "prompt_tokens", "does not vary", "4093", "4090"
+    )
+    assert SWEEP_RUNS[0] in message and SWEEP_RUNS[1] in message
+
+    # And the key really is the target: with a third run at another length the pin does vary, so
+    # what refuses the pair above is the two of them sharing one column rather than the pin
+    # having held still.
+    with_another_length = at_one_target + [prompt_run(SWEEP_RUNS[2], 8192, 8180)]
+
+    assert_sweep_refused(
+        with_another_length,
+        "prompt_tokens",
+        "duplicate cell",
+        "(label, runtime, workload_id, prompt_tokens)",
+        SWEEP_RUNS[0],
+        SWEEP_RUNS[1],
+        "latest-wins",
+    )
+
+
+def test_a_sweep_refuses_a_cell_two_run_directories_measured_at_one_value():
+    """Guard 2 with the pin in the key: one cell at two values is the table working, and one
+    cell at one value twice is ambiguous rather than superseded."""
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 1),
+        concurrency_run(SWEEP_RUNS[1], 1, rate=50.0),
+        concurrency_run(SWEEP_RUNS[2], 8, rate=25.0),
+    ]
+
+    assert_sweep_refused(
+        runs,
+        "concurrency",
+        "duplicate cell",
+        "(label, runtime, workload_id, concurrency)",
+        SWEEP_RUNS[0],
+        SWEEP_RUNS[1],
+        "latest-wins",
+    )
+
+
+def test_a_sweep_renders_a_prompt_length_sweep_whose_runs_answered_different_prompts():
+    """The one relaxation, and the whole reason it exists: a prompt-length sweep's columns are
+    meant to send different text, so `messages` goes uncompared for this pin."""
+    runs = [prompt_run(SWEEP_RUNS[0], 128, 126), prompt_run(SWEEP_RUNS[1], 4096, 4093)]
+
+    sweep = report.render_sweep(runs, varying="prompt_tokens", rank="ttft_p50_s")
+    table = sweep_tables(sweep)["prefill"]
+
+    assert list(table["oq4__mlxlm"]) == ["128 (achieved 126)", "4096 (achieved 4093)"]
+
+
+def test_the_grid_still_refuses_the_prompt_difference_a_prompt_sweep_is_allowed():
+    """The relaxation belongs to the sweep's prompt pin and nowhere else: as a grid, these two
+    directories pinned the same length and answered different prompts, and are refused for it."""
+    same_pin = run_header(("prefill",), prompt_tokens={"target": 128, "achieved": 126})
+    same_pin["workloads"][0]["messages"] = [{"role": "user", "content": "the other prompt"}]
+    runs = [
+        prompt_run(SWEEP_RUNS[0], 128, 126),
+        prompt_run(SWEEP_RUNS[1], 128, 126, header=same_pin),
+    ]
+
+    with pytest.raises(ValueError) as raised:
+        report.render_grid(runs)
+
+    message = str(raised.value)
+    assert "messages" in message
+    assert SWEEP_RUNS[0] in message and SWEEP_RUNS[1] in message
+
+
+def test_a_concurrency_sweep_still_refuses_two_runs_that_answered_different_prompts():
+    """Nothing about workloads is relaxed for a concurrency sweep: its columns answered one
+    prompt, and a directory that answered another is not a column of it."""
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 1),
+        concurrency_run(
+            SWEEP_RUNS[1], 8, header=other_prompt_header(("chat",), concurrency=8)
+        ),
+    ]
+
+    assert_sweep_refused(
+        runs, "concurrency", "messages", SWEEP_RUNS[0], SWEEP_RUNS[1], "not one grid"
+    )
+
+
+def test_the_sweep_columns_ascend_in_the_order_of_the_pin():
+    """The reading is the ordering: a prompt that got longer or batches that got wider says
+    nothing across columns left in the order the directories were named."""
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 8, rate=25.0),
+        concurrency_run(SWEEP_RUNS[1], 1, rate=100.0),
+        concurrency_run(SWEEP_RUNS[2], 4, rate=50.0),
+    ]
+
+    heads = list(
+        sweep_tables(report.render_sweep(runs, varying="concurrency"))["chat"]["oq4__mlxlm"]
+    )
+    assert heads == ["1", "4", "8"]
+
+    # And the same for the lengths, in the order the runs happen to be named on the command line.
+    prompts = [prompt_run(SWEEP_RUNS[0], 16384, 16380), prompt_run(SWEEP_RUNS[1], 128, 126)]
+    heads = list(
+        sweep_tables(report.render_sweep(prompts, varying="prompt_tokens"))["prefill"][
+            "oq4__mlxlm"
+        ]
+    )
+    assert heads == ["128 (achieved 126)", "16384 (achieved 16380)"]
+
+
+def test_a_combination_no_run_measured_is_an_em_dash_and_a_failure_is_a_fail():
+    """The grid's four entry states, rendered by the grid's own function: `—` is a combination
+    nobody ran, `FAIL` is a cell that ran and did not clear a floor, and they are not alike."""
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 1, labels=("oq4",)),
+        concurrency_run(
+            SWEEP_RUNS[1],
+            8,
+            labels=("jang",),
+            status="FAIL",
+            reason="incoherent output: replacement characters",
+        ),
+    ]
+
+    sweep = report.render_sweep(runs, varying="concurrency")
+    table = sweep_tables(sweep)["chat"]
+
+    assert table["oq4__mlxlm"]["1"] == "100.0"
+    assert table["oq4__mlxlm"]["8"] == "—"
+    assert table["jang__mlxlm"]["1"] == "—"
+    assert table["jang__mlxlm"]["8"] == "FAIL"
+    assert "| `—` | a combination no run measured |" in sweep
+    assert "| `FAIL` | a measured cell that did not clear one |" in sweep
+
+
+def test_the_sweep_names_the_pin_in_its_title_and_every_run_directory_in_its_provenance():
+    """A table that does not say what varied between its columns is the thing this project exists
+    not to publish, and the block that names every column is what makes the join checkable."""
+    runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
+
+    sweep = report.render_sweep(runs, varying="concurrency")
+
+    title = sweep.splitlines()[0]
+    assert title.startswith("# Sweep")
+    assert "`concurrency`" in title
+
+    assert "| run directory | `concurrency` |" in sweep
+    assert f"| {SWEEP_RUNS[0]} | 1 |" in sweep
+    assert f"| {SWEEP_RUNS[1]} | 8 |" in sweep
+
+    # The pins the runs held in common, with the swept one named as the exception rather than
+    # listed among them.
+    shared = next(line for line in sweep.splitlines() if line.startswith("Pins all runs shared"))
+    assert "`concurrency` the one pin they differ on" in shared
+    assert "temperature `0.0`" in shared and "measured `5`" in shared
+    assert "concurrency `1`" not in shared
+
+
+def test_a_prompt_sweep_names_its_pin_and_where_each_column_landed():
+    """A prompt pin is two numbers -- what the run asked for and what its tokenizer produced --
+    and both are in the head and in the provenance, because the pin is only checkable against
+    the text that was actually sent."""
+    runs = [prompt_run(SWEEP_RUNS[0], 128, 126), prompt_run(SWEEP_RUNS[1], 4096, 4093)]
+
+    sweep = report.render_sweep(runs, varying="prompt_tokens")
+
+    assert "`prompt_tokens`" in sweep.splitlines()[0]
+    assert f"| {SWEEP_RUNS[0]} | 128 (achieved 126) |" in sweep
+    assert f"| {SWEEP_RUNS[1]} | 4096 (achieved 4093) |" in sweep
+
+    shared = next(line for line in sweep.splitlines() if line.startswith("Pins all runs shared"))
+    assert "`prompt_tokens` the one pin they differ on" in shared
+    assert "prompt_tokens `" not in shared  # the swept pin is not one of the shared pins
+    assert "Workloads all runs ran: `prefill` (max_tokens 64)." in sweep
+
+
+def test_a_sweep_of_concurrency_carries_the_per_request_drift_sentence():
+    runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
+
+    sweep = report.render_sweep(runs, varying="concurrency")
+
+    assert DRIFT_SENTENCE in sweep
+    assert report.CONCURRENCY_DRIFT_SENTENCE == DRIFT_SENTENCE
+
+
+def test_a_sequential_prompt_sweep_carries_no_such_sentence():
+    """At N=1 the drift beside a per-request rate is the leaderboard's ordinary one, and a
+    sentence about concurrency in a sweep that ran none would be a claim about the wrong run."""
+    runs = [prompt_run(SWEEP_RUNS[0], 128, 126), prompt_run(SWEEP_RUNS[1], 4096, 4093)]
+
+    sweep = report.render_sweep(runs, varying="prompt_tokens")
+
+    assert "At concurrency > 1" not in sweep
+
+
+def test_a_prompt_sweep_driven_concurrently_carries_it_too():
+    """The sentence is about the runs' concurrency rather than about which pin was swept."""
+    runs = [
+        prompt_run(SWEEP_RUNS[0], 128, 126, concurrency=8),
+        prompt_run(SWEEP_RUNS[1], 4096, 4093, concurrency=8),
+    ]
+
+    sweep = report.render_sweep(runs, varying="prompt_tokens")
+
+    assert DRIFT_SENTENCE in sweep
+
+
+def test_the_sweep_refuses_a_rank_metric_no_row_carries():
+    runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
+
+    with pytest.raises(ValueError) as raised:
+        report.render_sweep(runs, varying="concurrency", rank="vibes")
+
+    assert "rank must be one of" in str(raised.value)
+
+
+# --- the sweep on the CLI ----------------------------------------------------------------------
+
+
+class SweepRuns:
+    """Stands in for ``ohyesmlx.measure`` at the one call the sweep makes of it: ``load_run``.
+
+    ``_sweep`` reads each directory exactly as ``_grid`` does -- ``load_run``, then
+    ``report.summarize`` -- so what is stood in for here is the file read. The join and the
+    rendering both run for real, and the run directory's own name is the label.
+    """
+
+    def __init__(self, runs):
+        self.runs = runs
+
+    def load_run(self, run_dir):
+        return self.runs[Path(run_dir).name]
+
+
+def measured_results(*, rate=100.0, runtime="mlxlm", labels=("oq4",), workload_ids=("chat",)):
+    """One run directory's raw results, as ``load_run`` hands them over before ``summarize``."""
+    return [
+        cell_result(
+            [obs(ttft=0.5, last=0.5 + 101 / rate) for _ in range(5)],
+            cell_id=f"{label}__{runtime}",
+            runtime=runtime,
+            artifact_dir=ARTIFACTS[label],
+            label=label,
+            runtime_version="mlx-lm 0.31.3",
+            workload_id=workload_id,
+            disk_bytes=1_000_000,
+        )
+        for label in labels
+        for workload_id in workload_ids
+    ]
+
+
+def sweep_days(monkeypatch, a, b):
+    """Two run directories on disk as far as the CLI is concerned: one pin, two values."""
+    runs = {"run-a": (a, measured_results(rate=100.0)), "run-b": (b, measured_results(rate=50.0))}
+    monkeypatch.setattr(cli, "_load_measure", lambda: SweepRuns(runs))
+    return runs
+
+
+def test_the_sweep_command_joins_the_named_directories_and_writes_where_it_is_told(
+    monkeypatch, tmp_path, capsys
+):
+    sweep_days(
+        monkeypatch,
+        run_header(("chat",), concurrency=1),
+        run_header(("chat",), concurrency=8),
+    )
+    out = tmp_path / "sweep.md"
+
+    code = cli.main(
+        [
+            "sweep",
+            "--varying",
+            "concurrency",
+            "--rank",
+            "aggregate_tps",
+            "--out",
+            str(out),
+            "results/run-a",
+            "results/run-b",
+        ]
+    )
+    printed = capsys.readouterr().out
+    written = out.read_text(encoding="utf-8")
+
+    assert code == 0
+    assert written.startswith("# Sweep — `concurrency` across 2 values in 2 run directories")
+    assert written == printed[: len(written)], "the file is the document that was printed"
+    assert "aggregate_tps" in written
+    assert "| run-a | 1 |" in written and "| run-b | 8 |" in written
+    assert str(out) in printed
+
+
+def test_the_sweep_command_prints_a_guard_error_and_exits_non_zero(monkeypatch, tmp_path, capsys):
+    sweep_days(
+        monkeypatch,
+        run_header(("chat",), concurrency=1),
+        run_header(("chat",), concurrency=1),
+    )
+    out = tmp_path / "sweep.md"
+
+    code = cli.main(
+        [
+            "sweep",
+            "--varying",
+            "concurrency",
+            "--out",
+            str(out),
+            "results/run-a",
+            "results/run-b",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code != 0
+    assert captured.err.startswith("ohyesmlx sweep: ")
+    assert "does not vary" in captured.err
+    assert captured.out == ""
+    assert not out.exists(), "a refused sweep wrote its file anyway"
+
+
+def test_the_sweep_command_refuses_a_pin_it_does_not_know(monkeypatch, tmp_path, capsys):
+    sweep_days(
+        monkeypatch,
+        run_header(("chat",), concurrency=1),
+        run_header(("chat",), concurrency=8),
+    )
+
+    with pytest.raises(SystemExit):
+        cli.main(["sweep", "--varying", "temperature", "results/run-a", "results/run-b"])
+
+    assert capsys.readouterr().out == ""
+
+
+def test_the_sweep_command_reports_a_directory_it_cannot_read(tmp_path, capsys):
+    """The loader is ``_grid``'s own, so a directory that will not read is the loader's refusal
+    rather than the join's -- reported the same way, through the same exit code."""
+    code = cli.main(
+        [
+            "sweep",
+            "--varying",
+            "concurrency",
+            str(tmp_path / "not-here"),
+            str(tmp_path / "also-not-here"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.err.startswith("ohyesmlx sweep: ")
+    assert "not-here" in captured.err
+    assert captured.out == ""
+
+
+def test_the_sweep_command_takes_the_two_pins_a_sweep_may_vary():
+    actions = cli._parser()._subparsers._group_actions[0].choices["sweep"]._actions
+    varying = next(action for action in actions if "--varying" in action.option_strings)
+
+    assert varying.required is True
+    assert tuple(varying.choices) == report.SWEEP_PINS

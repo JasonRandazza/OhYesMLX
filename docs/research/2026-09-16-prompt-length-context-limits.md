@@ -132,7 +132,7 @@ it has to be deterministic, committed, free of downloads, and real prose.
 
 ---
 
-## Measured: four of five serve 32k whole, and none of them caches it
+## Measured: all five serve 32k whole, and none of them caches it
 
 2026-09-16 11:42–11:57 local, `scripts/probe_context.py <runtime> 16384 32768`, oQ4 cell, one
 runtime resident at a time, nothing else running. Each prompt sent twice. Not a published
@@ -148,6 +148,8 @@ figure: one request per point, no warmup.
 | OptiQ | 32,765 | 32,777 | 69.22 | 69.24 | coherent |
 | vMLX | 16,384 | 16,389 | 28.07 | 29.21 | coherent |
 | vMLX | 32,765 | 32,770 | 67.02 | 66.98 | coherent |
+| Osaurus (caches off) | 16,384 | 12,851 † | 33.76 | 33.94 | coherent |
+| Osaurus (caches off) | 32,765 | 26,215 † | 75.57 | 74.56 | coherent |
 
 - **No refusal and no truncation.** Every runtime reports the prompt it was sent plus its chat
   template (+5 to +12 tokens, constant per runtime across lengths), so nothing was cut or
@@ -163,5 +165,17 @@ figure: one request per point, no warmup.
   ~70 s. Under the plateau warmup rule a 32k cell makes at least 20 requests: ~25 minutes per
   cell before loads and cooldowns. Budget the sweep at 4–5 hours.
 
-**Osaurus not yet probed:** an Osaurus app instance of unknown origin (pid 24495, launched by
-CLI during this session) held port 1337, and a probe does not start a runtime on a held port.
+**Osaurus, probed 2026-09-16 afternoon** with `cache.prefix` and `cache.blockDisk` disabled
+(toggled and restored as `scripts/run_sweep_prompt.sh` does; drift NONE before and after).
+
+† **Osaurus's `usage.prompt_tokens` is not a token count.** It is the prompt's character count
+divided by four: 51,404 chars → 12,851 and 104,861 chars → 26,215, exact. It served the whole
+prompt all the same — TTFT at both lengths matches the other four's full prefill, and each
+answer summarises the tail of its cut, which a truncated prompt would not reach. No refusal, no
+cache hit (repeat TTFT within 1.3%), so `REFUSED` stays unbuilt.
+
+**Consequence:** `prefill_tps = usage.prompt_tokens / ttft_s` understates Osaurus by the ratio
+of chars/4 to real tokens — about 0.78–0.80 on this text, and different on other text. Any
+published Osaurus `prefill_tps`, and any prefill ranking that includes Osaurus, is not
+comparable with the other four. TTFT is unaffected. The sweep should compare runtimes on TTFT,
+or on the locally counted `achieved` over TTFT, never on reported usage.
