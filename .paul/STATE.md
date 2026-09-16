@@ -49,7 +49,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Two single-variable studies replace LMRE's native diagonal | Pre-phase | Every run declares which axis it varies; nothing varies both. |
 | PAUL is the only process spine | Pre-phase | No CONTEXT.md, no ADRs, no handoff docs, no wayfinder. This file is the only state store. |
 | Speed + memory only in v1 | Pre-phase | Accuracy work is refused until v1 ships, however tempting. |
-| Hero model is `gemma-4-12B-it-qat` | Pre-phase | Zero downloads; 36 GiB free disk forbids more. |
+| ~~Hero model is `gemma-4-12B-it-qat`~~ **Superseded Phase 1** | Pre-phase | Zero downloads; 36 GiB free disk forbade more. Replaced by the Qwen3.5-4B + LFM2.5-8B-A1B row below. |
 | `--cells a,b,c` is the only cell selector | Pre-phase | Any second mechanism gets deleted on sight. |
 | Implementation delegated to `cc-agent` (deepseek-v4.1-flash, max effort) | Pre-phase | Opus reviews every diff and every test run personally; worker prose is not evidence. |
 | Hero models are `Qwen3.5-4B` + `LFM2.5-8B-A1B` | Phase 1 | `gemma4_unified` is not shipped by mlx-lm, so that family can carry no stock-mlx control. 33.7 GB for both, all four formats each. |
@@ -88,7 +88,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Issue | Origin | Effort | Revisit |
 |-------|--------|--------|---------|
 | LMRE not yet archived to ~/Dev/archive/ | Pre-phase | S | After Phase 4, once nothing more is needed from it |
-| Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: both hero models fit in 36 GiB without deleting anything |
+| Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: 238 GiB free, both hero models on disk. Worth doing only if disk tightens again |
 | ~~LMRE's rubric/ruling design not ported~~ **PULLED FORWARD 2026-09-15** | Pre-phase | — | Floors + one ordering metric now pinned in docs/interfaces.md. The accuracy axis stays in v2; only the honest half moved. |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
 | ~~Tokenizer-unavailable should make a cell N/A~~ **ALREADY FIXED, entry was stale** | Phase 4 | — | `_visit` checks the counter before starting the runtime and writes N/A with the reason; `test_an_unavailable_tokenizer_is_na_rather_than_a_silent_fallback` covers it. Verified 2026-09-16. |

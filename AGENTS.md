@@ -10,8 +10,14 @@ Rules that bind automated contributors to OhYesMLX. Read this before touching an
 4. `.paul/ROADMAP.md` — phases and their order.
 
 `.paul/STATE.md` is **the only project state store.** There is no `CONTEXT.md`, no
-`docs/adr/`, no handoff documents, and no wayfinder map. If a second thing starts
-tracking "what phase are we in", delete it in the same commit that notices it.
+`docs/adr/`, and no wayfinder map. If a second thing starts tracking "what phase are we in",
+delete it in the same commit that notices it.
+
+`.paul/HANDOFF.md` is the one exception, and it is not a state store: it is a **session-transfer
+note**, rewritten (never appended to) at the end of a session so the next one can resume. It
+points at STATE, the research docs and this file rather than copying them. Superseded handoffs
+go to `.paul/archive/`, which is history and not required reading. Where HANDOFF and STATE
+disagree, STATE wins.
 
 ## The one rule that defines this project
 
@@ -32,7 +38,7 @@ varied and carries the caveat naming what it therefore cannot claim.
 - **End-to-end latency** — P50 / P90 / P99. Never report a bare mean.
 - **Output throughput** — per-request and aggregate are separate numbers and are reported separately.
 - **Cold load time** — its own metric. Never folded into the first request.
-- **Peak memory** — `footprint -p <pid>`. **Never `ps` RSS**: Metal buffers, mmap'd weights, and wired GPU memory account inconsistently under MLX.
+- **Peak memory** — `footprint -p <pid>`. **Never `ps` RSS**: Metal buffers, mmap'd weights, and wired GPU memory account inconsistently under MLX. `peak_mb` is sound **within a runtime** and carries **no cross-runtime ranking**: Osaurus puts weights in wired GPU pages and oMLX in anonymous memory, and `phys_footprint` charges those differently (measured 2026-09-16; see `docs/research/2026-09-16-footprint-is-not-one-quantity.md`).
 - **On-disk size** — includes sidecar files (e.g. JANGTQ's runtime sidecar).
 
 Every measured run pins temperature 0, a fixed seed, a fixed chat template, and a fixed
@@ -46,7 +52,7 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 - **`--cells a,b,c` is the only cell-selection mechanism.** The predecessor project built six overlapping ones across ~3,700 lines. Any second mechanism gets deleted.
 - **No governance layer.** No plan hashing, no sealed evidence bundles, no single-use action grants, no operator policy, no workspace scaffolding, no `doctor`. A directory name plus `results.jsonl` is the right amount of provenance for a single-user Mac tool.
 - **No new dependency** without naming, in the commit message, what it replaces.
-- **No model downloads.** v1 runs only on artifacts already in `~/.cache/huggingface/hub`. Free disk is 36 GiB.
+- **Downloads need a reason and a record.** The original rule was "no model downloads", because free disk was 36 GiB. That constraint is gone (238 GiB free), and Jason lifted the rule on 2026-09-16 for what v1 needs — 21.9 GB of LFM2.5-8B-A1B was fetched under it. A download still needs a stated purpose tied to a phase, and the repo ids go in a committed script (`scripts/fetch_moe.sh` is the pattern). **Never download while a measurement is running** — it competes for the disk that `cold_load_s` is timing.
 - **No accuracy scoring in v1.** It is out of scope until v1 ships, however tempting.
 - **Target size is ~1,000 lines.** If a module is growing past its share, that is the signal to stop and ask, not to keep going.
 
@@ -60,6 +66,11 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 - **A cell that produces incoherent output has FAILED, however fast it was.** Verified 2026-09-15: stock `mlx_lm.server` loads `Jundot/Qwen3.6-35B-A3B-oQ4-mtp` in 4s, returns HTTP 200, generates a clean 64/64 tokens — and the text is mixed-script token salad with replacement characters. Nothing errored. A speed-only harness would have recorded that cell as healthy with excellent throughput. Every measured cell therefore passes a **coherence gate** before its numbers count, and a cell that fails the gate reports `FAIL` with its sample output, never a tok/s figure. This is not accuracy scoring (deferred to v2) — it is a floor, and it is cheap.
 - **Exactly one model is resident at a time.** Never start a second runtime while another holds weights. On 64 GB of unified memory a 35B MoE is ~20 GB resident; two at once saturates memory, forces compression and swap, and silently corrupts every number in the run — the measurement would still complete and still look plausible. `measure.py` stops the previous runtime and confirms its port is free *before* starting the next. This is not an optimization; a run that violates it is void.
 - **Thermal.** An M2 Max in a laptop chassis throttles under sustained inference. Interleave cell order, insert cooldowns, record drift. Walking cells in config order aliases thermal drift perfectly onto runtime identity.
+- **Nothing else runs on this machine while a cell is measured.** Not a test suite, not a git operation, not a download, not "lightweight" background work. The harness cannot detect contention, so this rule holds without enforcement. It was paid for on 2026-09-16: a coordinator pushed commits and ran pytest during the oMLX column, and one cell warmed at 68–73 tok/s, then *measured* 40–60 before recovering to 75 on the quiet second visit. It published 60.7 at +40.6% drift and would have inverted the format ordering that replicates across three codebases. That column is discarded and kept, named with its reason.
+- **Never edit `ohyesmlx/*.py` while a grid is running.** The runners re-enter the CLI once per column, so a mid-run edit means the columns ran different code and cannot be joined. Do defect work on a branch in a worktree and merge after the grid lands.
+- **Discard a run only for a stated defect in its conditions, never for its number.** Keep the discarded directory and name it with the reason. A run thrown away without one was thrown away for its result.
+- **Stale Osaurus instances accumulate.** `osaurus stop` frees the port and leaves the app alive at ~900 MB, so a port sweep misses it by design; three aged 5–7 h were resident through both grids on 2026-09-16. Sweep them by full executable path — `^/Applications/osaurus.app/Contents/MacOS/osaurus` — **never by the name `osaurus`**, because `osaurus mcp` is Jason's long-running process.
+- **`mlx_lm.server` lives in its own venv** at `~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin`, which must be on `PATH`. Without it every mlx-lm cell fails to start, and that failure looks exactly like an unsupported `model_type`. Check `from mlx_lm import load` in that venv before believing it.
 
 ## Delegation contract
 
@@ -70,7 +81,14 @@ A worker dispatch always carries: the plan's acceptance criteria, the exact file
 touch, and "touch nothing else."
 
 A ticket closes only when the coordinator has **personally observed** the diff and a
-green test run. **A worker's report is not evidence.** The predecessor project recorded a
+green test run — `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`
+(the repo has no venv with pytest; that one carries `pytest` and `tokenizers`).
+**A worker's report is not evidence**, and neither is a worker's *justification* just because
+its tests pass: a drift worker's code and tests were right while its stated reason for the
+threshold was false, and only running it against real rows showed that. Conversely, treat a
+BLOCKED or a flagged scope note as a finding — workers have repeatedly caught contradictions
+in the order that the coordinator wrote. And the coordinator's own commit messages are held to
+the same standard: say a fix is in the code only once it is in the code. The predecessor project recorded a
 worker whose own tests passed while it deleted an unrelated function, and another that
 ran a command against an explicit capitalised warning and left a server holding port 1337.
 
@@ -95,8 +113,9 @@ rules actually change, not to tidy wording.
 
 Traps worth keeping:
 
-- `cc-agent` hardcodes `--max-turns 40`. Scope each dispatch to one deliverable and forbid
-  tangents explicitly.
+- `cc-agent` defaults to 40 turns; set `CC_AGENT_MAX_TURNS=200` for anything non-trivial.
+  Scope each dispatch to one deliverable and forbid tangents explicitly. A DeepSeek peak window
+  is a price bump the launcher announces and proceeds through, not a blocker.
 - `explain` and `review` run in plan mode and cannot write. Research that must produce a
   file needs `implement`.
 - The collateral-deletion guard compares definition snapshots and misfires under fan-out —

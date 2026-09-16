@@ -62,7 +62,7 @@ runtime or their quantization is what's actually costing them speed and memory.
 
 - **Accuracy / "intelligence" scoring** — deferred to v2 entirely. It is a harder problem than speed and it is what drowned the predecessor project. When it lands it will be `lm-evaluation-harness` over the same endpoints, not a bespoke scorer. The v1 coherence gate is a floor, not an eval: it answers "is this producing language at all", never "is it smart".
 - **JANG as a point on either axis** — it loads in no runtime that loads the other formats, so it is a runtime+format bundle rather than a quantization you can isolate. It gets its own labelled study after v1.
-- **Any new model download** — v1 runs only on artifacts already in the local HF cache. Free disk is 36 GiB.
+- ~~**Any new model download**~~ **Lifted 2026-09-16 for what v1 needs.** The rule existed because free disk was 36 GiB; it is now 238 GiB. 21.9 GB of LFM2.5-8B-A1B was fetched for the MoE format axis. A download still needs a stated phase purpose and a committed fetch script — see `AGENTS.md`.
 - **35B model families** — deferred until models move to `/Volumes/Storage`.
 - **vMLX/MLX Studio, LM Studio, llama.cpp** as runtimes — v2.
 - **A governance layer** — no plan hashing, no sealed evidence bundles, no action grants, no operator policy, no workspace scaffolding. A directory name plus `results.jsonl` is the right amount of provenance for a single-user Mac tool.
@@ -98,7 +98,7 @@ Testing that claim fairly is the sharpest single reason this project should exis
 
 ### Technical Constraints
 
-- **36 GiB free disk.** `/System/Volumes/Data` is 96% full. No bf16 reference (~70 GB at 35B) is possible. v1 downloads nothing.
+- ~~**36 GiB free disk.**~~ **Resolved 2026-09-15**: 312 GiB after Time Machine local snapshots were cleared; 238 GiB free as of 2026-09-16 after the MoE artifacts. A bf16 reference (~70 GB at 35B) is now physically possible, and has not been attempted.
 - **M2 Max in a laptop chassis throttles** under sustained inference. Cell order must be interleaved, cooldowns inserted, and thermal drift recorded — otherwise drift aliases perfectly onto runtime identity.
 - **`ps` RSS is wrong for MLX.** Metal buffers, mmap'd weights, and wired GPU memory account inconsistently. `footprint` is the primary number.
 - **The matrix is ragged.** JANG cannot be loaded by stock mlx-lm; GGUF cannot be loaded by any MLX runtime. A full cross-product does not exist.

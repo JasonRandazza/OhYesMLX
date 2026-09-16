@@ -2192,11 +2192,17 @@ def test_measured_counts_batches_not_requests(harness):
 def test_a_batchs_span_is_shorter_than_the_sum_of_its_requests(harness):
     """The whole reason the clock is around the batch.
 
-    Four requests of 20 ms each finish in about one 20 ms batch. An aggregate built from their
-    per-request wall clocks would divide the same tokens by four times the window the batch
-    actually occupied -- which is why the span is measured and not summed.
+    Four requests of 250 ms each finish in about one 250 ms batch. An aggregate built from
+    their per-request wall clocks would divide the same tokens by four times the window the
+    batch actually occupied -- which is why the span is measured and not summed.
+
+    250 ms, not 20: this test was 20 ms and flaked on CI's shared macOS runners, where
+    thread-pool startup took ~30 ms and landed inside the span -- `sum(totals) > 2 * span`
+    read 0.08 > 0.104. That overhead is the known ceiling `_batch`'s ponytail comment names,
+    and a fixed cost must be small against the request or the test prices the pool instead of
+    the overlap. At 250 ms even 150 ms of overhead leaves the assertion true.
     """
-    per_request_s = 0.02
+    per_request_s = 0.25
 
     def responder(call):
         time.sleep(per_request_s)
