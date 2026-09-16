@@ -171,8 +171,8 @@ order, so request #1 belongs to exactly one of them, and `first_request_workload
 which. `first_request_s` is the visit's fact and every row of the cell prints it; the
 deferred-load **note** is made only on the row that owns it. Read against another shape's
 requests the comparison is between two workloads: on the recorded corpus the note fired on 27
-rows and 13 of those were an eager loader's honest chat request measured against prefill's
-shorter median. Attributed, 14 remain, all of them the shape that paid.
+rows, and 13 of those were rows that did not make the request -- a 3.6-5.0 s chat request read
+against prefill's shorter median. Attributed, 14 remain, every one the shape that paid.
 
 Excluding a JIT warm-up from the measured figures is correct — it is an artifact of
 benchmarking. Excluding the weight load is not: the user pays it on every cold start.
