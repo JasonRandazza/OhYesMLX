@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ohyesmlx import measure, report
+from ohyesmlx import cli, measure, report
 
 WARMUPS = 3
 MEASURED = 5
@@ -109,13 +109,14 @@ class FakeRuntime:
     """``ohyesmlx.runtimes.Runtime``: one port, one start, one Handle."""
 
     def __init__(self, name, recorder, *, port=8081, version="0.31.3", cold_load_s=7.5,
-                 start_error=None, fail_from_attempt=None):
+                 start_error=None, fail_from_attempt=None, fail_attempts=()):
         self.name = name
         self.port = port
         self.version = version
         self.cold_load_s = cold_load_s
         self.start_error = start_error
         self.fail_from_attempt = fail_from_attempt
+        self.fail_attempts = tuple(fail_attempts)
         self.recorder = recorder
         self.attempts = 0
         self.handles: list[FakeHandle] = []
@@ -123,9 +124,7 @@ class FakeRuntime:
     def start(self, artifact_dir, model_id):
         self.attempts += 1
         self.recorder.log("start", self.name, artifact_dir, model_id)
-        if self.start_error is not None and (
-            self.fail_from_attempt is None or self.attempts >= self.fail_from_attempt
-        ):
+        if self.start_error is not None and self._fails(self.attempts):
             raise self.start_error
         handle = FakeHandle(
             self.name,
@@ -137,6 +136,18 @@ class FakeRuntime:
         )
         self.handles.append(handle)
         return handle
+
+    def _fails(self, attempt):
+        """Whether this attempt raises.
+
+        ``fail_attempts`` names the attempts that fail one at a time -- the prompt sweep's
+        Osaurus 128, whose visit 1's start raised while visit 2's started and measured -- and an
+        error with no attempt named fails every attempt from ``fail_from_attempt`` on, or every
+        one of them.
+        """
+        if self.fail_attempts:
+            return attempt in self.fail_attempts
+        return self.fail_from_attempt is None or attempt >= self.fail_from_attempt
 
 
 class FakeTransport:
@@ -1200,6 +1211,157 @@ def test_a_second_visit_that_will_not_start_fails_rather_than_passes(harness):
     assert "port still held" in results[0].reason
     assert len(results[0].observations) == 3
     assert results[0].cold_load_s == pytest.approx(7.5)
+
+
+# ------------------------------------------------------------------------- a lost visit
+
+
+def test_a_lost_visit_is_kept_when_a_later_visit_measures(harness):
+    """The prompt sweep's Osaurus 128, reproduced: visit 1's ``runtime.start()`` raised, visit
+    2 measured its quota of the five, and ``_set_status`` rewrote the row to PASS/None -- a PASS
+    with two of five batches and nothing on the row saying a visit was missing or why.
+
+    The samples that survived are healthy, so the row stays PASS. The lost visit's reason is
+    kept in a field of its own, one the surviving visit's verdict cannot overwrite.
+    """
+    harness.add_runtime(
+        "osaurus",
+        start_error=RuntimeError("port still held by a stale server"),
+        fail_attempts=(1,),
+    )
+
+    results = harness.run([harness.cell("oq__osaurus", "osaurus")])
+
+    result = results[0]
+    assert result.status == "PASS", "the surviving visit's requests were healthy"
+    assert result.reason is None, "a PASS carries no reason, exactly as it always did"
+    assert len(result.observations) == 2, "the second visit's quota: five splits three then two"
+    assert result.lost_visit_reason.startswith("runtime 'osaurus' did not start:")
+    assert "port still held by a stale server" in result.lost_visit_reason
+    # The start that recorded the cold load is the second one, so the figure is a later,
+    # warm-page-cache start's and the row says so rather than printing it as the cell's.
+    assert result.cold_load_after_lost_visit is True
+
+    record, = harness.lines()
+    assert record["lost_visit_reason"] == result.lost_visit_reason
+    assert record["cold_load_after_lost_visit"] is True
+
+    _header, loaded = measure.load_run(harness.results_file())
+    assert loaded[0].lost_visit_reason == result.lost_visit_reason
+    assert loaded[0].cold_load_after_lost_visit is True
+    assert measure._record(loaded[0]) == record
+
+
+def test_a_cell_whose_every_visit_measured_keeps_the_record_it_always_had(harness):
+    """No lost visit, no new keys: a healthy run writes the record this module wrote before the
+    field existed, byte for byte, which is what keeps every column on disk comparable."""
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+    record, = harness.lines()
+
+    assert results[0].lost_visit_reason is None
+    assert results[0].cold_load_after_lost_visit is False
+    assert "lost_visit_reason" not in record
+    assert "cold_load_after_lost_visit" not in record
+
+
+def test_a_visit_that_fails_last_changes_nothing_new(harness):
+    """The other direction, and why the field is written only where a reason was overwritten:
+    the visit that measured was the first one, so nothing is erased and the record gains
+    nothing -- the row keeps the failure as its own reason, as it always did."""
+    harness.add_runtime("mlxlm", start_error=RuntimeError("port still held by a stale server"),
+                        fail_from_attempt=2)
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+    record, = harness.lines()
+
+    assert results[0].status == "FAIL"
+    assert "port still held" in results[0].reason
+    assert results[0].lost_visit_reason is None
+    assert "lost_visit_reason" not in record
+    assert "cold_load_after_lost_visit" not in record
+
+
+def test_a_record_without_the_lost_visit_fields_loads_as_no_lost_visit(harness):
+    """Every column on disk was written before the field existed, and no visit of theirs was
+    lost -- so the absence IS the fact, and the loader reads it rather than refusing the file.
+    """
+    harness.add_runtime(
+        "osaurus",
+        start_error=RuntimeError("port still held by a stale server"),
+        fail_attempts=(1,),
+    )
+    harness.run([harness.cell("oq__osaurus", "osaurus")])
+    record, = harness.lines()
+    assert "lost_visit_reason" in record, "the fixture has a lost visit to strip"
+
+    older = {
+        key: value
+        for key, value in record.items()
+        if key not in ("lost_visit_reason", "cold_load_after_lost_visit")
+    }
+    path = harness.tmp_path / "older" / measure.RESULTS_FILENAME
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"temperature": 0.0}) + "\n" + json.dumps(older) + "\n")
+
+    _header, loaded = measure.load_run(path)
+
+    assert loaded[0].lost_visit_reason is None
+    assert loaded[0].cold_load_after_lost_visit is False
+    assert measure._record(loaded[0]) == older
+
+
+def test_the_runs_batch_pin_is_stamped_on_every_row(harness):
+    """What the report checks a short window against: the pin the run was measured under. It is
+    the run's own number rather than this module's default, which is what lets the CLI's
+    leaderboard name it without naming anything itself."""
+    harness.add_runtime("mlxlm")
+
+    results = harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=9)
+
+    assert harness.header()["measured"] == 9
+    assert [result.measured_pin for result in results] == [9]
+    # Not persisted: the run header owns it, and a copy on every line would be the duplication
+    # the record's rules forbid -- so a loaded row carries none and says so.
+    assert "measured_pin" not in harness.lines()[0]
+    _header, loaded = measure.load_run(harness.results_file())
+    assert loaded[0].measured_pin is None
+
+
+def test_the_leaderboard_of_a_run_with_a_lost_visit_says_both_things(harness, tmp_path):
+    """End to end through the CLI, which names no pin and passes none: the leaderboard a run
+    writes carries the lost visit, the later start, and the short window -- and the `4 of 9` in
+    it can only have come from the pin the run itself was measured under."""
+    harness.add_runtime(
+        "osaurus",
+        start_error=RuntimeError("port still held by a stale server"),
+        fail_attempts=(1,),
+    )
+
+    code = cli.main(
+        [
+            "run",
+            "--study",
+            "runtime",
+            "--cells",
+            "oq__osaurus=/models/oq4",
+            "--results-dir",
+            str(tmp_path / "results"),
+        ]
+    )
+    run_dir, = (tmp_path / "results").iterdir()
+    leaderboard = (run_dir / "leaderboard.md").read_text(encoding="utf-8")
+
+    assert code == 0
+    assert "a visit to this cell was lost before the one that measured" in leaderboard
+    assert "port still held by a stale server" in leaderboard
+    assert "cold load s and first request s are from a later start" in leaderboard
+    assert "short measured window: 4 of 9 pinned batches landed" in leaderboard
+    # Three workloads, so three marked rows -- and one metric card each, which is where the
+    # note appears beside the count it qualifies rather than in a notes column.
+    assert leaderboard.count("a visit to this cell was lost") == 6
+    assert leaderboard.count("short measured window: 4 of 9") == 6
 
 
 def test_an_unavailable_tokenizer_is_na_rather_than_a_silent_fallback(harness):

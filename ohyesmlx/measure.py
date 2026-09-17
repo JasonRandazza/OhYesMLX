@@ -264,6 +264,26 @@ class CellResult:
     memory: dict
     runtime_version: str | None
     disk_bytes: int | None
+    # The reason a planned visit to this cell was lost before the visit that measured it. A
+    # visit that fails writes its reason on the row, and the next visit's verdict rewrites the
+    # row's status and reason from the samples that survived -- which erased the failure. Seen:
+    # the prompt sweep's Osaurus 128, where visit 1's ``runtime.start()`` raised, visit 2
+    # measured its quota of four, and the row was published PASS/None with nothing saying a
+    # visit was missing. The reason is kept here, where :func:`_set_status` cannot overwrite
+    # it; ``None`` means no visit was lost.
+    lost_visit_reason: str | None = None
+    # Whether the start that recorded ``cold_load_s`` came after a lost visit rather than
+    # first. The figure is still the start's own, but it is a later, warm-page-cache start and
+    # not the cell's cold one, which the cold load column alone cannot say.
+    cold_load_after_lost_visit: bool = False
+    # The run's batch pin, stamped on every row by :func:`run_cells` with the ``measured`` it
+    # was given. It is what tells the report a row fell short of the run's window, and it is
+    # the run's own number rather than the default this module would use if left to itself.
+    # **Not written to the record**: the run header owns it there, one copy per run, and a copy
+    # per line would be the duplication the record's rules forbid -- so a result rebuilt by
+    # `load_run` carries ``None``, and a caller joining run directories passes each run's own
+    # header pin to ``report.summarize`` instead.
+    measured_pin: int | None = None
 
 
 def decode_tps(observation) -> float | None:
@@ -476,21 +496,34 @@ def run_cells(
     unmeasurable: set[str] = set()
 
     visits = _visits(cells, measured=measured)
+    # Each cell's lost reason, held for the visit that may still measure. A failed visit writes
+    # it on the row, and the next visit's verdict overwrites it there -- so it is kept here
+    # until that verdict lands, and then recorded beside it.
+    lost: dict[str, str] = {}
     for index, (cell, quota) in enumerate(visits):
         if cell.id in unmeasurable:
             # A cell that cannot run here is not visited again, and nothing waits for it.
             continue
 
-        cell_results = _results_for(cell, workloads, by_key, results)
+        cell_results = _results_for(cell, workloads, by_key, results, measured=measured)
         measured_before = sum(len(result.observations) for result in cell_results)
         outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
                          concurrency=concurrency, counters=counters)
         if outcome == "measured":
+            reason = lost.pop(cell.id, None)
             for result in cell_results:
+                if reason is not None:
+                    # The visit that measured is a later one, and both facts that makes are
+                    # kept: the reason a visit is missing, and that the cold load this row now
+                    # carries is that later start's rather than the cell's first.
+                    result.lost_visit_reason = reason
+                    result.cold_load_after_lost_visit = result.cold_load_s is not None
                 _set_status(result)
         elif outcome == "skip":
             unmeasurable.add(cell.id)
-        # "retry" keeps the reason the failed visit wrote, and the next visit tries again.
+        elif outcome == "retry":
+            # "retry" keeps the reason the failed visit wrote, and the next visit tries again.
+            lost[cell.id] = cell_results[0].reason
 
         write_jsonl(results, results_path, run=run)
         # A cooldown after a visit that started no runtime and took no sample is 30
@@ -507,11 +540,14 @@ def _results_for(
     workloads: list[Workload],
     by_key: dict[tuple[str, str], CellResult],
     results: list[CellResult],
+    *,
+    measured: int | None = None,
 ) -> list[CellResult]:
     """This cell's result per workload, created on the first visit and reused after.
 
     The pair is the key, so a cell's three shapes are three results rather than three
-    measurements collapsed into one.
+    measurements collapsed into one. The run's batch pin is stamped on each one as it is
+    created: the row it belongs to is the row that can fall short of it.
     """
     cell_results = []
     for workload in workloads:
@@ -532,6 +568,7 @@ def _results_for(
                 memory={},
                 runtime_version=None,
                 disk_bytes=artifact_bytes(cell.artifact_dir),
+                measured_pin=measured,
             )
             by_key[(cell.id, workload.id)] = result
             results.append(result)
@@ -1176,6 +1213,14 @@ def _record(result: CellResult) -> dict:
     # neither one. `load_run` reads the absence as the ``[]`` it exactly is.
     if result.batch_spans:
         record["batch_spans"] = result.batch_spans
+    # A lost visit is written only when there was one, for the same reason: a cell whose every
+    # visit measured keeps the record it always wrote, byte for byte, and an absent key is read
+    # back as no lost visit -- which is exactly true of every record written before the field
+    # existed.
+    if result.lost_visit_reason is not None:
+        record["lost_visit_reason"] = result.lost_visit_reason
+    if result.cold_load_after_lost_visit:
+        record["cold_load_after_lost_visit"] = result.cold_load_after_lost_visit
     return record
 
 
@@ -1267,6 +1312,11 @@ def _cell_result(record: dict, path: Path, number: int) -> CellResult:
             cold_load_s=record["cold_load_s"],
             first_request_s=record["first_request_s"],
             first_request_workload_id=record["first_request_workload_id"],
+            # Read leniently for the same shape of reason. Every record on disk was written
+            # before a lost visit could be recorded, and no visit of theirs was lost, so the
+            # absence IS the fact here rather than a default standing in for something unknown.
+            lost_visit_reason=record.get("lost_visit_reason"),
+            cold_load_after_lost_visit=record.get("cold_load_after_lost_visit", False),
             memory=record["memory"],
             runtime_version=record["runtime_version"],
             disk_bytes=record["disk_bytes"],

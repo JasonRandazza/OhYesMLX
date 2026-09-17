@@ -38,7 +38,8 @@ tail behind it; it is not a decode or a chat result.
 The joined render is `results/sweep-prompt/sweep-ttft.md`, produced with
 `ohyesmlx sweep --varying prompt_tokens --rank ttft_p50_s`. The 25 `results.jsonl` files under
 `results/sweep-prompt/*-format/` are the raw record, warmups and failures included; every
-number below is recomputed from them, and the p50s reproduce the rendered table to the digit.
+number below outside the Reruns section is recomputed from them, and the p50s reproduce the
+rendered table to the digit.
 
 ## TTFT by prompt length: p50, and p90 beside it
 
@@ -67,7 +68,8 @@ documented in `report.py`, not new exceptions.
 The two absences are different facts. At 128 Osaurus has four samples, so no p90 exists to
 print. At 32k vMLX's row is FAIL and publishes nothing: six of its nine measured requests did
 come back, at TTFTs of 85.56–87.51 s, and three produced no output at all — the section on
-that cell is below.
+that cell is below, and publishing that row as FAIL, rather than treating the rerun as a
+replacement for it, is Jason's decision, recorded in Reruns.
 
 The two rows agree on shape: within a cell the spread is small — p90 is 0.5–10% above p50 — and
 p90 reorders no pair that p50 ranked. Osaurus's 128 p50 is a median of **four** requests rather
@@ -213,7 +215,7 @@ confirmed at every length in the sweep and for every runtime in it.
 
 One cell does not carry the sweep's full plan, and it is the only one. `oq4__osaurus` at 128
 holds **13 warmup requests and 4 measured** where every other cell holds 20–40 warmups and 9
-measured. The evidence that it is one visit rather than a lost second one:
+measured. The evidence that these are one visit's requests and not two visits' worth:
 
 - the 13 + 4 requests' durations sum to 20.245 s and the sampler's window for that cell is
   20.248 s — the window covers those requests exactly;
@@ -224,12 +226,22 @@ measured. The evidence that it is one visit rather than a lost second one:
 - the cell's own log (`log-osaurus-128.log`, written at run time) already reads `n=4`, so this
   is how the run ended, not an edit to the file afterwards.
 
-The record is internally clean — status PASS, reason `None`, the cold first request at 1.49 s
-TTFT against a 0.592 s median, the drift verdict −1.8% — and **nothing in it says why the
-pinned nine measured batches did not all land.** Two consequences a reader has to carry: the
-0.592 s p50 in the table above is a median of four requests, and its p90/p99 are omitted by the
-n≥5 rule rather than being unavailable. A rerun of that one cell is the cheap way to settle it;
-it is in the open questions.
+The record is internally clean — status PASS, reason `None`, the surviving visit's first request
+at 1.49 s TTFT against a 0.592 s median, the drift verdict −1.8% — and at the time it was
+written nothing in it said why the pinned nine measured batches did not all land. **The cause is
+now known, and it is a lost visit: the row holds the second visit's quota and nothing else.** A
+cell is planned for two visits (`VISIT_ROUNDS`), the pinned nine batches splitting 5 and 4
+between them; here the first visit died in `runtime.start()`, the failure was recorded and the
+visit returned `"retry"`, `run_cells` did nothing further with the retry, the second visit
+measured its four, and `_set_status` rewrote the row to `PASS, None`, erasing the failed visit's
+reason (measure.py:598-606, 486-493, 550-553, 968). Nothing compares a row's measured count
+against its pin, so the row rendered clean. Three consequences a reader has to carry: the
+0.592 s p50 in the table above is a median of four requests — and 4 is exactly the second
+visit's split, which is what makes this a lost visit rather than an early stop — its p90/p99 are
+omitted by the n≥5 rule rather than being unavailable, and `cold_load_s` (1.2667 s) and
+`first_request_s` (1.9935 s) are the *second* start's numbers, so what the row prints as a cold
+load sits behind a warm page cache. The cell has since been rerun — nine measured requests, none
+lost (Reruns, below) — and a code fix now keeps a lost visit's reason on the row and prints a short window as `(n=K of N)` beside the entry (it renders here as `0.592 (n=4 of 9)`); it is forward-looking, so this record, written before it, still carries no lost-visit reason.
 
 ## vMLX at 32k: 28 of 49 streams produced nothing
 
@@ -273,13 +285,29 @@ floor passed on the reasoning text the model did emit.
 probe on this machine (TTFT 67.02 s and 66.98 s, both coherent, 16k twice too at 28.07 / 29.21
 s), and inside this very cell 15 warmups and 6 measured requests did complete, at TTFTs
 consistent with full prefill. vMLX's startup-estimated prompt limit is 60% of free Metal memory
-divided by per-token KV cost, far above 32k on this model; whatever closed the 28 streams, the
-estimate did not refuse them — a refusal has a status code and this cell recorded none.
+divided by per-token KV cost, far above 32k on this model; nothing here was refused — a refusal
+has a status code and this cell recorded none.
 
-What it **is**, from the record: a majority of this cell's requests whose streams terminated
-before delivering any token in either channel, from as early as 1.9 s and as late as 78.6 s,
-with the surviving requests answering reasoning-only. The record cannot say more than that, and
-this document does not. Worth stating beside it: the 32k cell's own warmup window is the only
+**What it is, from the server logs.** The record alone cannot say more than that; the cell's own
+visit logs can, and they name the failure. `results/logs/vmlx-20260916T164132-18804.log` and
+`results/logs/vmlx-20260916T170838-18804.log` hold **28 `Prefill failed` errors, one per dead
+stream** — 16 in the first visit and 12 in the second, against 25 and 24 prefill attempts — and
+every one of them is the same line:
+
+    RuntimeError: [METAL] Command buffer execution failed: Impacting Interactivity
+    (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)
+
+raised at `mx.eval(last_logits)` inside `vmlx_engine.mllm_batch_generator._process_prompts`,
+after the engine logged `Hybrid prefill path=one-shot … seq_len=32775`. The error is Metal's,
+under MLX's `mx.eval`, not a vMLX limit check — the name on it, `Impacting Interactivity`, is the
+OS's GPU watchdog — and the transport's `chat stream produced no content` is the same failure
+arriving at the client: the server answered HTTP 200 and then aborted the stream before any
+delta in either channel. The record's timing agrees with that reading — every dead stream closed
+before the ~80 s a full 32k prefill-plus-decode took. A rerun later the same evening
+reproduced all of it and worse (Reruns, below); why one attempt survives the guard and the next
+dies is in neither log.
+
+Worth stating beside it: the 32k cell's own warmup window is the only
 one in the sweep that never settled (`warmup_plateau` false, both visits running the 20-request
 cap) — a request that produces no rate cannot close a warmup window, so the cap is what ended
 it. The cell is also the sweep's longest at 50.3 minutes.
@@ -300,7 +328,9 @@ after the last cell's log closed at 19:14:48, which is where the runner's restor
 The measurement agrees with the toggle. Osaurus's TTFTs in this sweep are full-prefill times at
 every length — 0.592 s, 2.246 s, 8.266 s, 37.729 s, 80.335 s — and rise with length; a cache
 hit is the flat 0.27–0.30 s the 2026-09-15 grid recorded at 1.3k, which would have shown up as
-a cell whose median barely moves between 128 and 32k. None does.
+a cell whose median barely moves between 128 and 32k. None does. The 128 rerun ran with the
+same toggle off and reads the same way: 0.640 s over nine measured requests, a prefill, not a
+lookup.
 
 The consequence for reading Osaurus numbers is the one the context probe already recorded, and
 the sweep's own records show it: Osaurus's `usage.prompt_tokens` is character count divided by
@@ -322,7 +352,7 @@ usage-based and would understate Osaurus by about 20% at 32k (326 against 408 to
   measured requests.
 - **One cell is a five-way comparison and one is a four-way one.** vMLX at 32k is FAIL and
   unranked, so the 32768 column compares four runtimes; Osaurus at 128 measured four requests,
-  not nine.
+  not nine. Both cells were later rerun, and neither rerun joins the table (Reruns, below).
 - **Warmup counts differ per cell, and that is published rather than hidden.** The plateau rule
   asks for at least two windows of five rates and stops when the medians agree within 3%, at a
   cap of 20 per visit over two visits: mlx-lm 30/24/23/21/20, oMLX 27/26/20/20/25, OptiQ
@@ -339,22 +369,118 @@ usage-based and would understate Osaurus by about 20% at 32k (326 against 408 to
   0.15–0.46 s is fixed per-request cost that has nothing to do with prefill; a 5% difference
   between two runtimes there is 20–36 ms of it. The 4k-and-up columns are where the ordering
   actually means prefill throughput.
-- Everything in this document is recomputed from the 25 recorded `results.jsonl` files and the
-  rendered sweep; no runtime was started and nothing was re-measured for it.
+- Everything in this document outside the Reruns section is recomputed from the 25 recorded
+  `results.jsonl` files and the rendered sweep, which reproduces from them byte for byte; the
+  two reruns in that section were measured after the sweep closed and live in their own run
+  directories, with their server logs under `results/logs/`. Nothing else was run for this
+  document, and no figure above it was re-measured for it.
+
+## Reruns
+
+Two cells were rerun after the sweep closed, and both are recorded beside it rather than in it.
+**The decisions are Jason's:** vMLX at 32k is **published as FAIL** — the sweep's row stands as
+written and the rerun is a separate test, not a replacement — and Osaurus at 128 was rerun
+because its sweep cell measured 4 of the pinned 9, whose cause the section above now names. Each
+run directory keeps an empty per-cell stdout log (`log-vmlx-32768.log`, `log-osaurus-128.log`, 0
+bytes each); the records are the `results.jsonl` files beside them, and the runtimes' own output
+is under `results/logs/`.
+
+Neither rerun can join the sweep table above. What the join refuses first is a cell measured
+twice at one value of the swept pin (`report._check_sweep_cells_appear_once`, guard 2 — *"there
+is no latest-wins rule"*); under the Osaurus rerun the runtime version also moved, 0.25.4 in the
+sweep against 0.25.5 here, which is the one-runtime-one-version disagreement the grid's guard 4
+(`report._check_one_version_per_runtime`) exists to refuse. So the numbers below are read beside
+the table, never as new columns of it.
+
+### vMLX at 32k, rerun: the same failure, 43 of 49 streams dead
+
+`results/rerun-vmlx-32k/20260917T005449Z-format`, 2026-09-16 20:54:49–21:21:24 local (26.6 min),
+vMLX **1.6.59** — the build the sweep ran — same artifact (`RepublicOfKorokke--Qwen3.5-4B-oQ4`)
+and same pins (one `prefill` workload, `max_tokens` 64, temperature `0.0`, seed `0`, `measured`
+9, `cooldown_s` 30.0, the plateau warmup; prompt target 32768, achieved 32765).
+
+| requests | came back | produced nothing | error on every failure |
+|---|---|---|---|
+| 40 warmup | 5 | 35 | `chat stream produced no content` |
+| 9 measured | 1 | 8 | `chat stream produced no content` |
+| **49** | **6** | **43** | |
+
+The 43 dead streams carry the sweep's error string exactly, and closed 1.50–67.64 s after the
+request went out; **no dead stream ran as long as the shortest survivor** (the first warmup,
+83.95 s total), the same gap the sweep's 32k cell showed. Five warmups came back — the first
+two, then warmups #25, #28 and #36 — at TTFTs of 82.47, 85.02, 89.63, 90.06 and 92.83 s. Of
+the nine measured requests one came back, the sixth, at TTFT **92.413 s**, and like the sweep's
+six survivors it answered in the reasoning channel only (the transport moves its event count
+with the timings it used, so the record's `content_event_count` of 64 is 64 reasoning deltas;
+`completion_tokens` 64 from usage; `text` empty). The cell is **FAIL** again, with the sweep's
+reason verbatim: *no content-delta timing, so decode tok/s is undefined*.
+
+**The server logs name it.** The cell's two visit logs —
+`results/logs/vmlx-20260916T205450-40527.log` and `…T210611-40527.log` — hold 23 and 20
+`Prefill failed` errors, **43 in all, one per dead stream**, against 25 + 24 = 49 prefill
+attempts for the 49 requests. Every one is the same line:
+
+    RuntimeError: [METAL] Command buffer execution failed: Impacting Interactivity
+    (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)
+
+raised at `mx.eval(last_logits)` in `vmlx_engine.mllm_batch_generator._process_prompts`, after
+`Hybrid prefill path=one-shot … seq_len=32775`. The error is Metal's, under MLX's `mx.eval`,
+not a vMLX limit check — the name on it, `Impacting Interactivity`, is the OS's GPU watchdog.
+The client-visible string follows from it: the server answered HTTP 200 and then aborted the
+stream mid-flight, so the transport saw a stream ending with no delta in either channel. That
+the sweep's own 32k visits carry the same 28 errors is in the section above; this rerun is the
+same failure mode a few hours later, at a worse rate (43 of 49 against 28 of 49). Why an
+identical request survives the guard on one attempt and dies on the next is in neither log.
+
+**Not claimed.** `kIOGPUCommandBufferCallbackErrorImpactingInteractivity` appears in four files
+under `results/logs/`, and all four are vMLX at 32k — the sweep's two visit logs and this
+rerun's two. No other runtime's server log carries it, and vMLX's own shorter cells do not
+either. **Why the other four runtimes — and vMLX at 16k and below — do not trip it is not
+established by anything read for this document**: their logs show no such error, and no
+runtime's source was read to explain the absence. It is unverified.
+
+### Osaurus at 128, rerun: nine measured requests, none lost
+
+`results/rerun-osaurus-128/20260917T012209Z-format`, 2026-09-16 21:22:09–21:23:34 local,
+Osaurus **0.25.5** (the sweep ran 0.25.4), same artifact and pins, caches off as in the sweep.
+One setting was pinned for the run: `~/.osaurus/config/server.json`'s
+`modelIdleResidencyPolicy.seconds` was **900**, because 0.25.5's update left it at 30 — a value
+that unloads the model inside the `cooldown_s` 30.0 between batches, so every request would pay
+the load — and the config file was restored byte-exact after the run. The repository's baseline
+(`config/osaurus-settings-baseline.json`) records both caches back at `true` and the residency
+policy at 900.
+
+**23 warmups, 9 measured, 0 lost** — 32 requests, every one came back, plateau settled. The nine
+measured TTFTs are 0.665 / 0.663 / 0.649 / 0.637 / 0.640 / 0.642 / 0.626 / 0.618 / 0.623 s:
+**p50 0.6397 s, p90 0.664, p99 0.665**, spread 0.618–0.665 s — a warm window's own spread, not
+a lookup (a prefix-cache hit on this model is the 0.27–0.30 s shape the 2026-09-15 grid
+recorded). Drift +4.4%, `cold_load_s` 1.30 s, `first_request_s` 2.20 s.
+
+Against the sweep's cell — 0.5919 s over four requests — the rerun's median is **8.1% higher
+over nine**. That difference is not a claim about anything: the two runs differ in the runtime's
+version as well as in the count, and this document reads no number that moved two things. What
+the rerun settles is the count: the pinned nine can land, the runtime does not lose requests
+under this workload, and the sweep's four were one lost visit — the second visit's quota, per
+the cause above — not a cell that ran out of work.
 
 ## Open questions
 
-1. **vMLX at 32k: rerun it, or publish it as FAIL?** The cell is not a refusal and vMLX served
-   the same prompt twice that morning in the probe (11:42–11:57), so a rerun on a quiet machine
-   is a real experiment rather than a formality — it would separate "this runtime cannot hold a
-   32k request under a repeated sweep" from "this cell hit something transient". Publishing it
-   as FAIL is defensible as it stands: 28 dead streams and no content on any surviving response
-   is exactly the shape the FAIL floor exists for. Jason decides.
-2. **Osaurus at 128: rerun for the pinned nine measured requests?** Its p50 currently rests on
-   four, and it is the cell the cache check's 0.68 minimum lives in. One cell — 29-odd requests
-   at ~1.2 s each — plus the cache-toggle procedure.
+1. **vMLX at 32k: does a prefill chunk-size setting avoid the watchdog?** The FAIL is published
+   (Reruns, above), and the rerun reproduced it: 43 of 49 streams dead, one `[METAL] …
+   Impacting Interactivity` per dead stream, on the same build and the same 32,765-token prompt.
+   The lever the logs make visible is that vMLX prefills this prompt in one shot (`Hybrid prefill
+   path=one-shot`, `seq_len=32775`); whether a chunked or otherwise smaller prefill path exists,
+   and whether it would stay under the OS's interactivity guard, is Jason's call.
+2. **Osaurus at 128: what publishes now that the rerun exists?** The rerun measured the pinned
+   nine with none lost — p50 0.640 s, p90 0.664, p99 0.665 — but it cannot join the sweep table
+   (the join refuses a cell measured twice at one pin value, and the version moved 0.25.4 →
+   0.25.5), so the table still prints 0.592 s over four, and it is the cell the cache check's
+   0.68 minimum lives in. Whether that number stays alone, or the cell is annotated once the
+   lost-visit note lands, is a decision above this document.
 3. **Does the p90 column get published with one FAIL and one n=4 in it,** or does the sweep
-   ship p50 alone and keep p90 as the engine's own figure?
+   ship p50 alone and keep p90 as the engine's own figure? Nothing in the reruns changes the
+   column's shape: the FAIL is now a decision rather than a pending one, and the n=4 cell's
+   nine-sample rerun cannot join it.
 4. **Which prefill rate is the published one?** The renderer's `prefill tok/s` divides
    `usage.prompt_tokens` by TTFT, which is not comparable across these five runtimes — Osaurus's
    usage is chars/4, and the other four report the templated count. This document uses
@@ -363,4 +489,6 @@ usage-based and would understate Osaurus by about 20% at 32k (326 against 408 to
 5. **Is a reasoning-only answer an answer for a prefill workload?** vMLX's six surviving 32k
    responses produced no content at all; the transport times the reasoning stream by design, so
    their TTFTs are real, but if the same shape shows up in a *PASSing* cell the question of
-   whether to publish its first-token latency will come back.
+   whether to publish its first-token latency will come back. The rerun's one surviving measured
+   request took that same shape (TTFT 92.413 s, no content delta), so it is not one cell's
+   accident.

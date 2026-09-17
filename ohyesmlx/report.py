@@ -30,6 +30,12 @@ it published is an early-window rate. Neither is a floor — a still-moving cell
 the rest and annotated — because the row that says the window was too short is the row that
 must not be thrown away.
 
+A cell that landed fewer measured batches than the run pinned is the same shape of finding as
+a drifting one, and gets the same treatment: the pin comes from the run header, the row carries
+a note, and the grid and the sweep print the count beside the number. It is not a floor and not
+a status either — a row short of its pin was still measured, and failing it would delete the one
+row that says the window was short.
+
 Percentiles need samples to be percentiles. Below five, ``ttft_p90_s`` and ``ttft_p99_s``
 are ``None`` and the row carries an ``n=<k>`` note, because a p95 built from two values is
 not a p95.
@@ -278,12 +284,15 @@ CROSS_RUNTIME_UNCOMPARABLE = {
     "two, not this column alone.",
 }
 
+# A cold load recorded by a later start says which start it came from; a rate's, TTFT's and a
+# cold visit's first request carry the caveats above.
 _METRIC_CAVEAT = {
     "decode_tps": "delta_note",
     "prefill_tps": "delta_note",
     "itl_s": "delta_note",
     "ttft_p50_s": "ttft_note",
     "first_request_s": "first_request_note",
+    "cold_load_s": "cold_load_note",
 }
 
 # The note that explains a missing value instead: a rate's absence is the delta rule's, and a
@@ -342,7 +351,7 @@ def dir_bytes(path):
     return total
 
 
-def summarize(results: list[CellResult]) -> list[dict]:
+def summarize(results: list[CellResult], *, measured: int | None = None) -> list[dict]:
     """One row per (cell, workload): the contract's fields, joined from measure, the sampler
     and disk.
 
@@ -353,11 +362,25 @@ def summarize(results: list[CellResult]) -> list[dict]:
     streamed fewer than ``MIN_CONTENT_DELTAS`` content deltas carries no rate to report, and
     ``delta_note`` and ``ttft_note`` say that instead.
 
+    *measured* is the run's batch pin: a row that landed fewer batches than that carries
+    ``short_note``, and the grid and the sweep print the count beside the number. A caller
+    joining run directories reads it from each run's header and passes it in, because a result
+    rebuilt by ``load_run`` does not carry it — the header owns it on disk. A caller
+    summarizing a run it just made passes nothing, and each row's own pin is used instead,
+    which is the same number that run's header recorded.
+
+    No pin at all means no note: absent is no check, never a pin of zero. That is the honest
+    reading of an older record and of a caller that never knew about the pin, and it is the one
+    place a run short of its window can go unremarked.
+
     Each row also carries the floor verdicts and whether they leave it rankable. Figures
     are never averaged across workloads: a prefill-bound number blended with a decode-bound
     one describes no workload that was run.
     """
-    return [_row(result) for result in results]
+    return [
+        _row(result, measured=measured if measured is not None else result.measured_pin)
+        for result in results
+    ]
 
 
 def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) -> str:
@@ -578,7 +601,15 @@ def _card(row: dict, rank: str) -> list[str]:
         "| field | value | note |",
         "|---|---|---|",
         _card_row("workload", _text(row.get("workload_id"))),
-        _card_row("status", _text(row.get("status")), row.get("reason")),
+        # The row's own reason, and beside it the visit that was lost before this one measured:
+        # the status is the surviving visit's and the lost visit is why the row is short.
+        _card_row(
+            "status",
+            _text(row.get("status")),
+            "; ".join(
+                note for note in (row.get("reason"), row.get("lost_visit_note")) if note
+            ),
+        ),
         _card_row(
             "rank",
             _text(row.get("rank")),
@@ -590,7 +621,10 @@ def _card(row: dict, rank: str) -> list[str]:
             _card_row(f"floor {floor['floor']}", floor["state"], floor.get("detail"))
         )
     lines += [
-        _card_row("n measured", _text(row.get("n_measured"))),
+        # The count the pin was checked against, and what the check found: a card that printed
+        # the count alone would render a cell that landed four of nine batches like one that
+        # landed all nine.
+        _card_row("n measured", _text(row.get("n_measured")), row.get("short_note")),
         _card_row("n requests", _text(row.get("n_requests"))),
         _card_row(
             "content deltas", _text(row.get("content_deltas")), "over the measured requests"
@@ -653,17 +687,17 @@ def _rank_error(metric) -> str:
     return f"rank must be one of {tuple(RANK_METRICS)}, not {metric!r}"
 
 
-def _row(result: CellResult) -> dict:
+def _row(result: CellResult, *, measured: int | None = None) -> dict:
     cell = result.cell
     observations = list(result.observations)
     # Who came back is measure's question, and its answer is asked for rather than respelled:
     # ``observation.ok`` is a second definition of it, and the two drifted apart — a cell whose
     # five requests all answered in the reasoning channel was published as ``n = 0/5``.
-    measured = [o for o in observations if measure.came_back(o)]
+    samples = [o for o in observations if measure.came_back(o)]
 
-    ttft = [o.ttft_s for o in measured if o.ttft_s is not None]
+    ttft = [o.ttft_s for o in samples if o.ttft_s is not None]
     decode, prefill, itl = [], [], []
-    for observation in measured:
+    for observation in samples:
         per_request = _per_request(observation)
         if per_request["decode_tps"] is not None:
             decode.append(per_request["decode_tps"])
@@ -673,12 +707,17 @@ def _row(result: CellResult) -> dict:
             itl.append(per_request["itl_s"])
 
     n = len(ttft)
-    deltas = [_content_deltas(observation) for observation in measured]
+    deltas = [_content_deltas(observation) for observation in samples]
     single_delta = deltas.count(1)
     too_few = sum(1 for count in deltas if count < MIN_CONTENT_DELTAS)
     # measure's own dict off the raw observations, which is what ``results.jsonl`` recorded for
     # this row: asking for it rather than recomputing it here is what keeps the two in step.
     drift = measure.measured_drift(result.observations)
+    batches = _measured_batches(result)
+    # A cell that landed fewer batches than its pin is a result measured short, not a failed
+    # one: it is annotated and still ranked, and the pin is only compared when the caller
+    # handed one over -- absent is no check, never a pin of zero.
+    short = measured is not None and 0 < batches < measured
     row = {
         "cell_id": cell.id,
         "runtime": cell.runtime,
@@ -687,17 +726,19 @@ def _row(result: CellResult) -> dict:
         "workload_id": result.workload_id,
         "status": result.status,
         "reason": result.reason,
-        "n_measured": len(measured),
+        "n_measured": len(samples),
         "n_requests": len(observations),
+        "measured_batches": batches,
+        "measured_pin": measured,
         "content_deltas": sum(deltas),
-        "token_source": _token_source(measured),
+        "token_source": _token_source(samples),
         "ttft_p50_s": percentile(ttft, 50),
         "ttft_p90_s": percentile(ttft, 90) if n >= MIN_PERCENTILE_N else None,
         "ttft_p99_s": percentile(ttft, 99) if n >= MIN_PERCENTILE_N else None,
         "itl_s": median(itl),
         "decode_tps": median(decode),
         "drift": drift,
-        "aggregate_tps": _aggregate_tps(measured, result.batch_spans),
+        "aggregate_tps": _aggregate_tps(samples, result.batch_spans),
         "prefill_tps": median(prefill),
         "cold_load_s": result.cold_load_s,
         "first_request_s": result.first_request_s,
@@ -712,20 +753,73 @@ def _row(result: CellResult) -> dict:
         "delta_note": None
         if not too_few
         else f"n={len(decode)}: decode tok/s, ITL and prefill tok/s omitted (fewer than "
-        f"{MIN_CONTENT_DELTAS} content deltas in {too_few} of {len(measured)} measured "
+        f"{MIN_CONTENT_DELTAS} content deltas in {too_few} of {len(samples)} measured "
         "requests)",
         "ttft_note": None
         if not single_delta
         else f"TTFT is time-to-completion, not time-to-first-token: {single_delta} of "
-        f"{len(measured)} measured requests arrived whole in one content delta",
-        "drift_note": _drift_note(drift, len(measured)),
+        f"{len(samples)} measured requests arrived whole in one content delta",
+        "drift_note": _drift_note(drift, len(samples)),
+        "short_note": None
+        if not short
+        else f"short measured window: {batches} of {measured} pinned batches landed; "
+        f"the median is over the {batches} that did",
+        "lost_visit_note": _lost_visit_note(result),
+        "cold_load_note": _cold_load_note(result),
         "first_request_note": _deferred_load_note(
             result.first_request_s if _made_the_first_request(result) else None,
-            [observation.total_s for observation in measured],
+            [observation.total_s for observation in samples],
         ),
     }
     row.update(_floor_verdicts(row["status"], row["reason"]))
     return row
+
+
+def _measured_batches(result: CellResult) -> int:
+    """How many measured batches the row landed, the unit the run's pin is counted in.
+
+    ``measured`` pins batches, and at ``concurrency=1`` a batch is one request with no clock
+    around it: the observation count is the batch count exactly, which is what every column on
+    disk ran. Above 1 the batch spans are the only record of how many batches ran — nine batches
+    of eight are 72 observations and nine spans, and the pin counts the nine — so the count is
+    read off them rather than off the requests they held, which would compare requests to
+    batches and never report a concurrent run short of its pin.
+    """
+    if result.batch_spans:
+        return len(result.batch_spans)
+    return len(result.observations)
+
+
+def _lost_visit_note(result: CellResult) -> str | None:
+    """The note a cell whose visit was lost keeps, or ``None`` when none was.
+
+    A visit that fails writes its reason on the row, and the visit that measures after it
+    rewrites that row's status and reason from its own samples — so without this the failure is
+    erased and the row is a PASS one visit short with nothing saying so or why. The reason is
+    what the row keeps, because which visit was lost is the whole account of the gap.
+    """
+    if result.lost_visit_reason is None:
+        return None
+    return (
+        "a visit to this cell was lost before the one that measured: "
+        f"{result.lost_visit_reason}; the samples on this row are the surviving visit's"
+    )
+
+
+def _cold_load_note(result: CellResult) -> str | None:
+    """The note a cold load recorded by a later start earns, or ``None``.
+
+    ``cold_load_s`` and ``first_request_s`` are the cold visit's numbers, and the visit that
+    recorded them is a later one whenever an earlier visit was lost: its start is a
+    warm-page-cache start, not the cell's first, and a column read as "cold load s" would say
+    otherwise. The figures stay exactly as measured; the row says which start they came from.
+    """
+    if not result.cold_load_after_lost_visit:
+        return None
+    return (
+        "cold load s and first request s are from a later start than the first planned visit: "
+        "the load this start paid is a warm-page-cache one, not the cell's cold start"
+    )
 
 
 def _made_the_first_request(result: CellResult) -> bool:
@@ -1062,10 +1156,13 @@ def _cells(row: dict) -> list[str]:
                 row.get("rank_note"),
                 row.get("exclusion"),
                 row.get("reason"),
+                row.get("lost_visit_note"),
+                row.get("short_note"),
                 row.get("percentile_note"),
                 row.get("ttft_note"),
                 row.get("delta_note"),
                 row.get("drift_note"),
+                row.get("cold_load_note"),
                 row.get("first_request_note"),
             )
             if part
@@ -1440,6 +1537,10 @@ def _entry(row: dict | None, rank: str) -> str:
     the floors; what is missing is one metric's domain, not the cell. `order_rows` already
     holds that distinction and ranks such a row last with a note rather than excluding it,
     and the grid would be the one place it collapsed.
+
+    A row measured short of its pin carries the count beside the number, the way an annotated
+    cell carries its drift percentage: the number is the row's own and the count says how much
+    of the window it stands on, which the joined tables have no notes column to say in words.
     """
     if row is None or row.get("status") == "N/A":
         return "—"
@@ -1448,8 +1549,28 @@ def _entry(row: dict | None, rank: str) -> str:
     if row.get(rank) is None:
         return "no value"
     number = _rank_number(row, rank)
-    marker = _drift_marker(row)
-    return number if marker is None else f"{number} (drift {marker}%)"
+    markers = []
+    drift = _drift_marker(row)
+    if drift is not None:
+        markers.append(f"drift {drift}%")
+    short = _short_marker(row)
+    if short is not None:
+        markers.append(short)
+    return number if not markers else f"{number} ({') ('.join(markers)})"
+
+
+def _short_marker(row: dict) -> str | None:
+    """The count a short entry carries, or ``None`` when the window was full.
+
+    The threshold is `_row`'s to apply, not this function's: the entry annotates exactly the
+    rows that earned the note, so the grid cannot print a count the leaderboard leaves alone.
+    It is a marker and never a state: the cell cleared every floor, produced language, and is
+    ranked with the rest -- dropping it would delete the only row that says the window was
+    short.
+    """
+    if not row.get("short_note"):
+        return None
+    return f"n={row['measured_batches']} of {row['measured_pin']}"
 
 
 def _rank_number(row: dict, rank: str) -> str:

@@ -68,6 +68,15 @@ class FakeCellResult:
     first_request_s: float | None = None
     # Which workload made that request, as measure records it on every row of the cell.
     first_request_workload_id: str | None = None
+    # The reason a visit that failed left behind, when a later visit measured the cell anyway,
+    # and whether the cold load this row carries came from that later start. Defaulted because
+    # no lost visit is the ordinary case and the one every other fixture here is.
+    lost_visit_reason: str | None = None
+    cold_load_after_lost_visit: bool = False
+    # The run's batch pin, as `run_cells` stamps it on a fresh result. `load_run` does not
+    # rebuild it -- the run header owns it on disk -- so a fixture standing in for a loaded row
+    # leaves it None and a test that wants the pin passed a loaded row's header, not this.
+    measured_pin: int | None = None
 
 
 def obs(
@@ -114,6 +123,9 @@ def cell_result(
     first_request_s=None,
     first_request_workload_id=None,
     batch_spans=None,
+    lost_visit_reason=None,
+    cold_load_after_lost_visit=False,
+    measured_pin=None,
 ):
     """A cell as measure.py will hand it over: one result per (cell, workload)."""
     return FakeCellResult(
@@ -129,6 +141,9 @@ def cell_result(
         first_request_s=first_request_s,
         first_request_workload_id=first_request_workload_id,
         batch_spans=[] if batch_spans is None else list(batch_spans),
+        lost_visit_reason=lost_visit_reason,
+        cold_load_after_lost_visit=cold_load_after_lost_visit,
+        measured_pin=measured_pin,
     )
 
 
@@ -1015,6 +1030,143 @@ def test_the_drift_column_is_the_only_column_added():
     )
 
 
+# --- a lost visit, and a short measured window -----------------------------------------------
+
+# `measured` counts batches, and a run pins nine. The prompt sweep's Osaurus 128 landed four of
+# them -- visit 1's `runtime.start()` raised and visit 2 measured its quota -- and the row was
+# published PASS with nothing saying either thing. Both are notes, not floors and not statuses:
+# the row was measured, it cleared every floor with what it landed, and it is ranked with the
+# rest, because dropping it would delete the one row that says the window was short.
+
+LOST_REASON = (
+    "runtime 'osaurus' did not start: RuntimeStartError: port still held by a stale server"
+)
+
+
+def short_window_row(*, pin=9, batches=4):
+    """One row measured short of its pin: *batches* healthy requests against a pinned nine."""
+    return report.summarize([cell_result([obs() for _ in range(batches)])], measured=pin)[0]
+
+
+def test_a_short_measured_window_is_a_note_and_never_a_floor():
+    row = short_window_row()
+
+    assert row["status"] == "PASS"
+    assert row["rankable"] is True
+    assert row["excluded_by"] is None
+    assert row["measured_batches"] == 4
+    assert row["measured_pin"] == 9
+    assert row["short_note"] == (
+        "short measured window: 4 of 9 pinned batches landed; the median is over the 4 that did"
+    )
+    # The median it names is the row's own: four requests of 101 tokens over a 2.0 s window.
+    assert row["decode_tps"] == pytest.approx(101 / 2.0)
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert printed["decode tok/s"] == "50.5"
+    assert printed["rank by decode_tps"] == "1", "annotated, and still in the ordering"
+    assert "short measured window: 4 of 9 pinned batches landed" in printed["notes"]
+
+    card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+    assert "short measured window: 4 of 9 pinned batches landed" in card
+
+
+def test_a_full_measured_window_carries_no_short_note():
+    """A note on every row would separate none of them: nine of nine is not a finding."""
+    row = report.summarize([cell_result([obs() for _ in range(5)])], measured=5)[0]
+
+    assert row["measured_batches"] == 5
+    assert row["short_note"] is None
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert "short measured window" not in printed["notes"]
+
+
+def test_a_pin_nobody_passed_is_no_check_rather_than_a_pin_of_zero():
+    """An older caller, or a run whose header predates the field: absent is absent, and a row is
+    never reported short against a pin nobody stated."""
+    row = report.summarize([cell_result([obs() for _ in range(4)])])[0]
+
+    assert row["measured_pin"] is None
+    assert row["short_note"] is None
+
+
+def test_a_cell_that_never_measured_is_not_told_its_window_was_short():
+    """n=0 already says nothing was measured and the row carries the reason it was not: a note
+    about a window that never opened would bury the reason that is."""
+    row = report.summarize(
+        [cell_result([], status="N/A", reason="port 8100 never opened")], measured=9
+    )[0]
+
+    assert row["status"] == "N/A"
+    assert row["measured_batches"] == 0
+    assert row["short_note"] is None
+
+
+def test_the_count_is_batches_so_a_concurrent_row_is_read_against_the_pin_it_was_given():
+    """`measured` counts batches, and above concurrency 1 the requests outnumber them: four
+    batches of eight are 32 samples against a pinned nine, and the window is still short. The
+    count is read off the spans, which are the batches that ran."""
+    observations = [obs() for _ in range(8 * 4)]
+    row = report.summarize(
+        [cell_result(observations, batch_spans=[2.1, 2.1, 2.1, 2.1])], measured=9
+    )[0]
+
+    assert row["n_measured"] == 32
+    assert row["measured_batches"] == 4
+    assert row["short_note"] == (
+        "short measured window: 4 of 9 pinned batches landed; the median is over the 4 that did"
+    )
+
+
+def test_a_lost_visit_and_the_later_start_it_left_behind_are_both_visible():
+    """The row the sweep published: PASS over four of nine batches, with the failure that
+    explains both gone from the record. The reason is the row's note again, and the cold load
+    the later start recorded says which start it was."""
+    row = report.summarize(
+        [
+            cell_result(
+                [obs() for _ in range(4)],
+                lost_visit_reason=LOST_REASON,
+                cold_load_after_lost_visit=True,
+            )
+        ],
+        measured=9,
+    )[0]
+
+    assert row["status"] == "PASS"
+    assert "a visit to this cell was lost before the one that measured" in row["lost_visit_note"]
+    assert LOST_REASON in row["lost_visit_note"]
+    assert "later start" in row["cold_load_note"]
+    assert "not the cell's cold start" in row["cold_load_note"]
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert "a visit to this cell was lost" in printed["notes"]
+    assert "port still held by a stale server" in printed["notes"]
+    assert "cold load s and first request s are from a later start" in printed["notes"]
+    assert "short measured window: 4 of 9" in printed["notes"]
+
+    card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+    assert "| status | PASS | a visit to this cell was lost before the one that measured" in card
+    assert "| n measured | 4 | short measured window: 4 of 9 pinned batches landed" in card
+    assert "| cold_load_s | 12.50 | cold load s and first request s are from a later start" in card
+
+
+def test_a_row_with_no_lost_visit_carries_neither_note():
+    row = report.summarize([cell_result([obs() for _ in range(5)])], measured=5)[0]
+
+    assert row["lost_visit_note"] is None
+    assert row["cold_load_note"] is None
+
+    printed = leaderboard_rows(report.render_markdown([row], axis="runtime"))[0]
+    assert "lost" not in printed["notes"]
+    assert "cold load s and first request s" not in printed["notes"]
+
+    card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+    assert "was lost" not in card
+    assert "later start" not in card
+
+
 # --- disk size -----------------------------------------------------------------------------
 
 
@@ -1754,6 +1906,10 @@ def test_the_row_carries_no_blended_or_normalised_figure(rows):
         "n_measured",
         "n_requests",
         "content_deltas",
+        # Counts, like the three above: how many batches the row landed and the pin it was
+        # checked against. Neither is a figure and neither orders anything.
+        "measured_batches",
+        "measured_pin",
         "ttft_p50_s",
         "ttft_p90_s",
         "ttft_p99_s",
@@ -2222,6 +2378,64 @@ def test_a_drift_annotated_cell_carries_its_marker_into_its_entry():
     assert table["oq4"]["mlxlm"] == "101.0 (drift +100.0%)"
     assert table["oq4"]["osaurus"] == "101.0"
     assert "51.0" not in grid, "the marker is the percentage, not a second number"
+
+
+def test_a_short_measured_window_carries_its_count_into_its_entry():
+    """The grid has no notes column, so a cell read from four batches would otherwise render
+    exactly like one read from nine: the entry prints the count beside the number, the way the
+    drift marker prints the percentage."""
+    rows = report.summarize(
+        [
+            cell_result(
+                [obs() for _ in range(4)],
+                cell_id="oq4__mlxlm",
+                label="oq4",
+                artifact_dir=ARTIFACTS["oq4"],
+                runtime_version="mlx-lm 0.31.3",
+                disk_bytes=1_000_000,
+            ),
+            cell_result(
+                [obs() for _ in range(9)],
+                cell_id="jang__mlxlm",
+                label="jang",
+                artifact_dir=ARTIFACTS["jang"],
+                runtime_version="mlx-lm 0.31.3",
+                disk_bytes=1_000_000,
+            ),
+        ],
+        measured=9,
+    )
+
+    grid = report.render_grid([(RUN_A, run_header(("chat",), measured=9), rows)])
+    table = grid_tables(grid)["chat"]
+
+    assert table["oq4"]["mlxlm"] == "50.5 (n=4 of 9)"
+    assert table["jang"]["mlxlm"] == "50.5", "a full window carries its number alone"
+    # Not a state of its own: the cell is a ranked entry with a count beside it, exactly as the
+    # drift marker leaves an annotated cell ranked.
+    assert "no value" not in table["oq4"]["mlxlm"]
+    assert "FAIL" not in table["oq4"]["mlxlm"]
+
+
+def test_a_short_and_drifting_cell_carries_both_markers_beside_its_number():
+    """Two annotations are two facts about one number, and neither replaces the other: 101 tok/s
+    in the early half against 202 in the late one, over four batches of a pinned nine."""
+    row = report.summarize(
+        [
+            cell_result(
+                [obs(ttft=0.5, last=0.5 + window) for window in (1.0, 1.0, 0.5, 0.5)],
+                disk_bytes=1_000_000,
+            )
+        ],
+        measured=9,
+    )[0]
+
+    assert row["decode_tps"] == pytest.approx(151.5)
+    assert row["drift"]["change_pct"] == pytest.approx(100.0)
+
+    grid = report.render_grid([(RUN_A, run_header(("chat",), measured=9), [row])])
+
+    assert grid_tables(grid)["chat"]["oq4"]["mlxlm"] == "151.5 (drift +100.0%) (n=4 of 9)"
 
 
 RANK_COLUMNS = {
@@ -2902,6 +3116,33 @@ def test_a_combination_no_run_measured_is_an_em_dash_and_a_failure_is_a_fail():
     assert "| `FAIL` | a measured cell that did not clear one |" in sweep
 
 
+def test_a_short_measured_window_carries_its_count_into_its_sweep_entry():
+    """The same marker in the sweep's tables, by the grid's own function: a column measured
+    short of the pin says so where its number is rather than only in its own leaderboard."""
+    def loaded_rows(count):
+        """One run directory's rows as `load_run` hands them over: no pin on the rows."""
+        return report.summarize(
+            [
+                cell_result(
+                    [obs() for _ in range(count)],
+                    disk_bytes=1_000_000,
+                    runtime_version="mlx-lm 0.31.3",
+                )
+            ],
+            measured=9,
+        )
+
+    runs = [
+        (SWEEP_RUNS[0], run_header(("chat",), concurrency=1, measured=9), loaded_rows(4)),
+        (SWEEP_RUNS[1], run_header(("chat",), concurrency=8, measured=9), loaded_rows(9)),
+    ]
+
+    table = sweep_tables(report.render_sweep(runs, varying="concurrency"))["chat"]
+
+    assert table["oq4__mlxlm"]["1"] == "50.5 (n=4 of 9)"
+    assert table["oq4__mlxlm"]["8"] == "50.5"
+
+
 def test_the_sweep_names_the_pin_in_its_title_and_every_run_directory_in_its_provenance():
     """A table that does not say what varied between its columns is the thing this project exists
     not to publish, and the block that names every column is what makes the join checkable."""
@@ -3001,11 +3242,13 @@ class SweepRuns:
         return self.runs[Path(run_dir).name]
 
 
-def measured_results(*, rate=100.0, runtime="mlxlm", labels=("oq4",), workload_ids=("chat",)):
+def measured_results(
+    *, rate=100.0, runtime="mlxlm", labels=("oq4",), workload_ids=("chat",), count=5
+):
     """One run directory's raw results, as ``load_run`` hands them over before ``summarize``."""
     return [
         cell_result(
-            [obs(ttft=0.5, last=0.5 + 101 / rate) for _ in range(5)],
+            [obs(ttft=0.5, last=0.5 + 101 / rate) for _ in range(count)],
             cell_id=f"{label}__{runtime}",
             runtime=runtime,
             artifact_dir=ARTIFACTS[label],
@@ -3058,6 +3301,30 @@ def test_the_sweep_command_joins_the_named_directories_and_writes_where_it_is_to
     assert "aggregate_tps" in written
     assert "| run-a | 1 |" in written and "| run-b | 8 |" in written
     assert str(out) in printed
+
+
+def test_the_sweep_command_reads_each_runs_short_window_from_its_own_header(monkeypatch, capsys):
+    """The pin is the run's, and the header is where a join reads it: a row rebuilt by
+    ``load_run`` carries no pin of its own, so a sweep that renders the count at all is reading
+    it from the header that run recorded."""
+    runs = {
+        "run-a": (
+            run_header(("chat",), concurrency=1, measured=9),
+            measured_results(count=4),
+        ),
+        "run-b": (
+            run_header(("chat",), concurrency=8, measured=9),
+            measured_results(count=9),
+        ),
+    }
+    monkeypatch.setattr(cli, "_load_measure", lambda: SweepRuns(runs))
+
+    code = cli.main(["sweep", "--varying", "concurrency", "results/run-a", "results/run-b"])
+    table = sweep_tables(capsys.readouterr().out)["chat"]
+
+    assert code == 0
+    assert table["oq4__mlxlm"]["1"] == "100.0 (n=4 of 9)"
+    assert table["oq4__mlxlm"]["8"] == "100.0"
 
 
 def test_the_sweep_command_prints_a_guard_error_and_exits_non_zero(monkeypatch, tmp_path, capsys):

@@ -483,7 +483,10 @@ def _grid(args) -> int:
         except (OSError, ValueError) as exc:
             print(f"ohyesmlx grid: {run_dir}: {exc}", file=sys.stderr)
             return 2
-        runs.append((Path(run_dir).name, header, report.summarize(results)))
+        # The run's own batch pin, from its header: a row that landed fewer batches than the
+        # run asked for carries the count into the grid beside its number.
+        rows = report.summarize(results, measured=header.get("measured"))
+        runs.append((Path(run_dir).name, header, rows))
 
     try:
         grid = report.render_grid(runs, rank=args.rank)
@@ -515,7 +518,9 @@ def _sweep(args) -> int:
         except (OSError, ValueError) as exc:
             print(f"ohyesmlx sweep: {run_dir}: {exc}", file=sys.stderr)
             return 2
-        runs.append((Path(run_dir).name, header, report.summarize(results)))
+        # The run's own batch pin, from its header, exactly as `_grid` reads it.
+        rows = report.summarize(results, measured=header.get("measured"))
+        runs.append((Path(run_dir).name, header, rows))
 
     try:
         sweep = report.render_sweep(runs, varying=args.varying, rank=args.rank)
@@ -555,6 +560,9 @@ def _run(args) -> int:
         results_dir=str(run_dir),
         prompt_tokens=prompt_tokens,
     )
+    # No pin is named here and none is passed: `run_cells` stamps each result with the batch
+    # pin it ran under, which is the same value its header records, so the leaderboard's
+    # short-window note is keyed to the run's own pin rather than to a copy of the default.
     rows = report.summarize(results)
 
     leaderboard = report.render_markdown(rows, axis=args.study, rank=args.rank)
