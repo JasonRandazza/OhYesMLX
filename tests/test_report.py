@@ -3318,12 +3318,15 @@ def test_every_rank_the_drift_figure_does_not_qualify_prints_its_entries_bare():
             assert "drift" not in entry, rank
 
 
-def test_the_grids_entry_is_not_rank_sensitive():
-    """The rule is the sweep's and it does not leak into the grid: a grid entry carries the
-    cell's marker beside whichever metric the table is ordered by, which is the rendering every
-    published grid has had. A cell's own marker is the cell's fact, and the grid is a matrix of
-    one number per cell rather than a table read on one metric."""
-    runs = [
+# The grid's rule is the sweep's too: the marker is a decode rate's movement, so it rides only a
+# rank in `DECODE_DERIVED_RANKS` and a table ordered on anything else prints its entries' numbers
+# alone. Every published grid was rendered on the default `decode_tps`, whose entries are
+# unchanged -- and the grid still joins published rows rather than re-reading them on one metric.
+
+
+def drifting_grid_runs():
+    """One run directory holding a cell whose decode rate climbed 101 -> 202 tok/s."""
+    return [
         (
             RUN_A,
             run_header(("chat",)),
@@ -3331,11 +3334,59 @@ def test_the_grids_entry_is_not_rank_sensitive():
         )
     ]
 
-    by_decode = grid_tables(report.render_grid(runs))["chat"]["oq4"]["mlxlm"]
-    by_ttft = grid_tables(report.render_grid(runs, rank="ttft_p50_s"))["chat"]["oq4"]["mlxlm"]
 
-    assert by_decode == "101.0 (drift +100.0%)"
-    assert by_ttft == "0.500 (drift +100.0%)"
+def test_a_decode_ranked_grid_entry_keeps_the_drift_marker():
+    """The default rank, and every published grid with it: the marker rides the decode rate it
+    qualifies, which is the number this entry carries."""
+    runs = drifting_grid_runs()
+
+    assert "drift +100.0%" in runs[0][2][0]["drift_note"], "the fixture has to be an annotated cell"
+
+    by_default = grid_tables(report.render_grid(runs))["chat"]["oq4"]["mlxlm"]
+    by_name = grid_tables(report.render_grid(runs, rank="decode_tps"))["chat"]["oq4"]["mlxlm"]
+
+    assert by_default == "101.0 (drift +100.0%)"
+    assert by_name == by_default
+
+
+def test_a_ttft_ranked_grid_entry_carries_no_decode_drift_marker():
+    """A marker beside a first-token latency claims the wrong metric moved: the cell's decode
+    rate moved a hundred percent and the TTFT it is ordered by did not move at all."""
+    runs = drifting_grid_runs()
+
+    entry = grid_tables(report.render_grid(runs, rank="ttft_p50_s"))["chat"]["oq4"]["mlxlm"]
+
+    assert entry == "0.500"
+    # Annotated and still ranked: the marker is gone from the entry, not the cell from the table.
+    assert "FAIL" not in entry
+
+
+def test_every_rank_the_drift_figure_does_not_qualify_prints_its_grid_entries_bare():
+    """One rule for all of them rather than one for TTFT, read off the same set the sweep reads:
+    no rank outside `DECODE_DERIVED_RANKS` carries the marker into a grid entry."""
+    runs = drifting_grid_runs()
+
+    assert report.DECODE_DERIVED_RANKS <= set(report.RANK_METRICS)
+    for rank in report.RANK_METRICS:
+        entry = grid_tables(report.render_grid(runs, rank=rank))["chat"]["oq4"]["mlxlm"]
+        if rank in report.DECODE_DERIVED_RANKS:
+            assert entry.endswith("(drift +100.0%)"), rank
+        else:
+            assert "drift" not in entry, rank
+
+
+def test_the_grid_says_which_ranks_carry_the_marker():
+    """The paragraph that explains the marker describes what the tables below it print: ordered
+    on a non-decode metric it says the entries carry their numbers alone rather than promising a
+    marker none of them carries."""
+    runs = drifting_grid_runs()
+
+    marked = report.render_grid(runs)
+    bare = report.render_grid(runs, rank="ttft_p50_s")
+
+    assert "carries its marker beside its number" in marked
+    assert "carries no marker in this table" in bare
+    assert "carries its marker beside its number" not in bare
 
 
 def test_the_sweep_names_the_pin_in_its_title_and_every_run_directory_in_its_provenance():
@@ -3408,6 +3459,19 @@ def test_a_prompt_sweep_driven_concurrently_carries_it_too():
     sweep = report.render_sweep(runs, varying="prompt_tokens")
 
     assert DRIFT_SENTENCE in sweep
+
+
+def test_the_concurrency_drift_sentence_rides_only_the_decode_ranks():
+    """The sentence explains drift markers, and a rank outside `DECODE_DERIVED_RANKS` prints
+    none: emitted anyway, it would explain a figure no entry in the table carries."""
+    runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
+
+    for rank in report.RANK_METRICS:
+        sweep = report.render_sweep(runs, varying="concurrency", rank=rank)
+        if rank in report.DECODE_DERIVED_RANKS:
+            assert DRIFT_SENTENCE in sweep, rank
+        else:
+            assert DRIFT_SENTENCE not in sweep, rank
 
 
 def test_the_sweep_refuses_a_rank_metric_no_row_carries():

@@ -474,6 +474,14 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
     recommendation and never an attribution: it won under one format and one runtime at once,
     and nothing in the number can apportion the win between them. No figure is averaged
     across workloads, and there is no combined score.
+
+    An entry carries the drift marker only where the drift figure qualifies the number beside
+    it, exactly as a sweep's entries do: ``measure.measured_drift`` compares per-request decode
+    rates, so the marker rides only a rank in ``DECODE_DERIVED_RANKS`` and a table ordered on
+    anything else prints its entries' numbers alone. The default rank is a decode rate's, so
+    every published grid renders as it always has. Nothing is dropped from the record: the
+    drift stays on the row, and each run's own leaderboard prints it beside the rate it
+    qualifies.
     """
     if rank not in RANK_METRICS:
         raise ValueError(_rank_error(rank))
@@ -498,6 +506,16 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         lines += ["No run directories were named, so there was nothing to join.", ""]
         return "\n".join(lines) + "\n"
 
+    marker_note = (
+        "A cell whose drift moved more than "
+        f"{DRIFT_ANNOTATION_PCT:g}% across its own window carries its marker beside its "
+        "number, the same marker the leaderboard prints beside the rate it qualifies."
+        if rank in DECODE_DERIVED_RANKS
+        else "A cell whose drift moved more than "
+        f"{DRIFT_ANNOTATION_PCT:g}% across its own window carries no marker in this table: "
+        "the marker states a decode rate's movement and every entry here carries its "
+        f"`{rank}` alone. Each run's own leaderboard prints it beside the rate it qualifies."
+    )
     lines += [
         f"Each table is one workload and carries one metric: `{rank}` "
         f"({_direction(rank)}).",
@@ -511,9 +529,7 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         "| `—` | a combination no run measured |",
         "",
         "The matrix is ragged by design — no runtime loads every format — so `—` is ordinary "
-        "and does not read as a failure. A cell whose drift moved more than "
-        f"{DRIFT_ANNOTATION_PCT:g}% across its own window carries its marker beside its "
-        "number, the same marker the leaderboard prints beside the rate it qualifies.",
+        "and does not read as a failure. " + marker_note,
         "",
     ]
     lines += _provenance(runs, columns)
@@ -1533,7 +1549,13 @@ def _provenance(runs: list[tuple], columns: list[dict]) -> list[str]:
 
 
 def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: str) -> str:
-    """One workload's grid: format labels down, runtime names across, one entry per cell."""
+    """One workload's grid: format labels down, runtime names across, one entry per cell.
+
+    The drift marker rides only a rank in ``DECODE_DERIVED_RANKS``, by ``_sweep_table``'s rule
+    and for its reason: the figure is the cell's decode rate moving, so it qualifies an entry
+    carrying a decode rate and misstates one carrying anything else. Every published grid was
+    rendered on the default ``decode_tps``, where the marker is unchanged.
+    """
     index = {}
     for row in rows:
         index.setdefault((row.get("label"), row.get("runtime")), row)
@@ -1543,7 +1565,14 @@ def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: 
     lines = [header, divider]
     for label in labels:
         cells = [_text(label)]
-        cells += [_entry(index.get((label, column["runtime"])), rank) for column in columns]
+        cells += [
+            _entry(
+                index.get((label, column["runtime"])),
+                rank,
+                drift_marker=rank in DECODE_DERIVED_RANKS,
+            )
+            for column in columns
+        ]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -1561,9 +1590,10 @@ def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
     *drift_marker* is the caller's to set, because whether the marker belongs beside this entry
     depends on what the entry's number is. The figure is a decode rate's movement, so it
     qualifies an entry carrying a decode rate and misstates any other one (see
-    ``DECODE_DERIVED_RANKS``). ``_sweep_table`` turns it off for a rank the figure does not
-    qualify — a sweep is read on one metric and its entries are that metric alone — and the
-    grid leaves it on, which is the rendering every published grid has had.
+    ``DECODE_DERIVED_RANKS``). ``_grid_table`` and ``_sweep_table`` both turn it off for a rank
+    the figure does not qualify, so an entry ordered on a non-decode metric prints its number
+    alone; the default rank is a decode rate's, where the marker rides the entry exactly as
+    every published grid has printed it.
 
     A cell that cleared every floor and still has no value for *this* metric is the fourth
     state and gets its own word. ``_number`` renders ``None`` as ``—``, which would file it
@@ -1818,7 +1848,9 @@ def render_sweep(
 
     A run that issued more than one request at a time, or a sweep of concurrency, carries
     ``CONCURRENCY_DRIFT_SENTENCE``: the drift beside a concurrent cell's per-request rate is not
-    the unfinished warm-up that annotation was written for.
+    the unfinished warm-up that annotation was written for. The sentence explains markers, and
+    a non-decode rank prints none, so it rides only a rank in ``DECODE_DERIVED_RANKS`` too — a
+    sweep ordered on `ttft_p50_s` would otherwise explain a figure none of its entries carries.
 
     An entry carries the drift marker only where the drift figure qualifies the number it sits
     beside. ``measure.measured_drift`` compares per-request decode rates, so the percentage is one
@@ -1865,8 +1897,9 @@ def render_sweep(
         "| `—` | a combination no run measured |",
         "",
     ]
-    if varying == "concurrency" or any(
-        _drove_more_than_one_request(header) for _label, header, _rows in runs
+    if rank in DECODE_DERIVED_RANKS and (
+        varying == "concurrency"
+        or any(_drove_more_than_one_request(header) for _label, header, _rows in runs)
     ):
         lines += [f"> {CONCURRENCY_DRIFT_SENTENCE}", ""]
     lines += _sweep_provenance(runs, varying)
