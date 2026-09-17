@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-17 (midday, v1 closed)"
+description: "OhYesMLX — session handoff, 2026-09-17 (afternoon, Candidates 3 & 4 closed)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-17, midday
+# Handoff — 2026-09-17, afternoon
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
@@ -16,120 +16,51 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## Where the project is
 
-**v1 is closed on paper.** All six closeout items from the 2026-09-16 handoff are done,
-committed, and pushed in four commits (`d388ca6`, `b3dac72`, `5e40bc4`, `9e46385`).
-CI (`tests.yml`) is green on the latest push — verify with `gh run list --workflow=tests.yml`.
-ROADMAP reads Phase 6 complete / 7 of 7 / milestone Complete; STATE reads 100% / UNIFY.
+**v1 is closed, and both v2 candidate closeouts (Candidates 3 and 4) are complete and published.**
+All commits are pushed to `origin/main` (latest HEAD `5773b14`).
+CI (`tests.yml`) remains green — verify with `gh run list --workflow=tests.yml`.
+STATE reads 100% / UNIFY.
 
-- **491 tests** pass (487 baseline + 4 from the drift fix), observed by the coordinator with
-  `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`.
-- **Nothing is in flight.** Before starting anything, check anyway:
+- **495 tests pass** (observed by coordinator via `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`).
+- **Nothing is in flight.** Check before starting:
   `lsof -i :1337 -i :8080 -i :8081 -i :8100 -i :8000`,
   `pgrep -fl "^/Applications/osaurus.app"`, `pgrep -fl "cc-agent|ohyesmlx.cli run|run_grid|probe_"`.
 - `osaurus mcp` is Jason's and must stay up. **Never sweep by the name `osaurus`.**
-  Osaurus app (pid 74720) was listening on 1337 at last check — left alone deliberately.
-- **Git rule going forward:** Jason approved pushing this session. Default returns to
-  local-only commits; push needs his explicit go-ahead each session.
+- Osaurus settings on host are byte-exact to Jason's baseline (`cache.prefix.enabled: true`, `cache.blockDisk.enabled: true`, `modelIdleResidencyPolicy.seconds: 30`), verified with `cmp`.
 
-## What this session did (all by cc-agent workers, verified and committed by the coordinator)
+## What this session did
 
-1. **v1 on paper** — ROADMAP 7-of-7/milestone Complete (05-02 marked superseded by
-   per-cell measured warmup, not deleted), STATE 100%/UNIFY/v1-closed decision row.
-   Orders in `.paul/orders/`: `residency-pin-port.md`, `ttft-drift-marker.md`,
-   `empty-runner-log.md`, `runner-log-hardening.md`.
-2. **Residency pin ported** — `run_grid.sh`, `run_grid_moe.sh` pin
-   `modelIdleResidencyPolicy.seconds=900` around the Osaurus column only;
-   `run_sweep_prompt.sh` composes the pin with its cache toggle and drops the
-   drift-NONE restore (unpassable while the host keeps 30). All verified with `cmp`.
-   `sh -n` clean on all three. **Never run.**
-3. **TTFT drift fixed in `render_sweep` only** — entries carry the marker solely for
-   decode-derived ranks (`DECODE_DERIVED_RANKS = {decode_tps}`; `itl_s` excluded —
-   reciprocal sign would invert). Grids byte-identical, both TTFT sweeps marker-free,
-   decode renders keep markers. Red-check done by the worker.
-4. **runner.log diagnosed then hardened** — cause is launch-side (`cmd & > file`
-   unbound redirect), not in-repo. Jason chose the in-repo hardening: both sweep
-   runners now `exec > "$OUT/runner.log" 2>&1` after `mkdir -p`. Per-cell redirects
-   override per-command, unaffected. Tradeoff: live progress only via `tail -f`.
-5. **Jason's decisions, all in STATE.md Decisions:** warm-cache TTFT beside prefill
-   numbers (not its own column); v2 leads with cheap closeouts (non-hybrid cache
-   repeat, vMLX 32k re-test), then JANG, accuracy last; nothing starts without a
-   fresh go-ahead per item.
-6. **v2 options note** — `.paul/v2-options-note.md` (plan only).
+1. **Grid TTFT Drift Fix:** Render sweep and grid marker fix committed and pushed (`38cb8bb`).
+2. **README Status:** Updated with research links (`4c69c7f`, `7ec6ff0`, `5773b14`).
+3. **Deep Wiki Page:** Authoritative project page created at `/Users/jrazz/Documents/ObsidianNotes/10 Wiki/Projects/OhYesMLX/OhYesMLX.md` conforming to Agent Onboarding Contract and Metadata Schema. Vault validated clean.
+4. **Stale Osaurus Backups Removed:** `~/.osaurus/config/server-runtime.json.probe-orig` and `.sweep-prompt-orig` deleted.
+5. **Candidate 3 (Non-hybrid KV Cache Sweep):**
+   - Fetched `brainworkup/Llama-3.1-8B-oQ4` via `scripts/fetch_cache_nonhybrid.sh` and attached instruct chat template.
+   - Executed full 10-cell sweep across all 5 runtimes via `scripts/run_sweep_cache_nonhybrid.sh`.
+   - Result: All 5 runtimes hit on trimmable `KVCache` (25x–142x speedup; mlx-lm 0.136s, optiq 0.138s, vmlx 0.419s, omlx 0.529s, osaurus 0.697s).
+   - Documented in `docs/research/2026-09-17-cache-state-split-nonhybrid.md`.
+6. **Candidate 4 (vMLX 32k Prefill Resolution):**
+   - Audited vMLX source (`mllm_batch_generator.py`) and PyPI release `1.6.61`.
+   - Identified that `VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` unlocks chunked hybrid prefill, overriding the one-shot default that bypassed `--prefill-step-size`.
+   - Verified live at 32k on Qwen3.5-4B-oQ4: prefilled in 16 chunks of 2,048 tokens, 4.10 GB active memory, TTFT 88.76s, 0 Metal errors.
+   - Documented in `docs/research/2026-09-17-vmlx-32k-chunked-prefill.md` and updated `docs/runtimes/vmlx.md`.
 
-## Jason's open items (his call, not a worker's)
+## Research Documents Index
 
-- **README:** `README.md:60` still says "Nothing is published yet." Propose a short
-  Results pointer to the research docs; do not rewrite unasked.
-- **Deep Wiki:** no `10 Wiki/Projects/OhYesMLX` page exists — propose one per LEAD.md
-  rather than creating it.
-- **Stale Osaurus copies:** `~/.osaurus/config/…sweep-prompt-orig` and `…probe-orig`
-  predate this session; delete only after confirming unneeded.
-
-## Known follow-ups (need their own orders, all in STATE.md Deferred)
-
-- `ohyesmlx grid --rank ttft_p50_s` has the same latent drift mislabel (frozen by the
-  sweep-fix order's scope).
-- `CONCURRENCY_DRIFT_SENTENCE` now explains markers on tables that no longer show
-  them when ranked non-decode — coordinator call whether to scope it per-rank.
-- TTFT-ranked concurrent tables carry no queueing caveat (design says concurrent
-  TTFT is a queueing measurement; the render doesn't). Minor.
-
-## Still-open questions for Jason (carried)
-
-- **Should a cell that hangs be abandoned rather than retried?** (mlx-optiq on JANG, 600 s.)
-- **Ties are rendered as orderings.** Adjacent cells within ~2.5–3% still get rank numbers.
-- **Column-entry effect** (~+15% on the first cell in 3 of 5 columns) never re-examined
-  under the plateau rule.
-- **Warmup at 32k:** the plateau floor of 10 costs ~12–15 minutes per 32k cell.
-
-## What is established — read the documents, not a summary of them
-
-| result | document |
+| Topic | Document |
 |---|---|
-| Dense format axis: `stock4bit > oq4 > oq4e > OptiQ`, 60/60 PASS | `docs/research/2026-09-16-phase5-joined-grid.md` |
-| MoE format axis: stock wins by 11–17%, the three specialized formats tie | `docs/research/2026-09-16-moe-format-axis.md` |
-| `phys_footprint` counts different page classes per runtime | `docs/research/2026-09-16-footprint-is-not-one-quantity.md` |
-| None of the five runtimes batch — N=8 aggregate gains 0.99–1.15× | `docs/research/2026-09-16-concurrency-omlx.md` |
-| A sweep is a run *pin*, never a third `--study` axis | `docs/research/2026-09-16-phase6-design.md` |
-| All five serve 32k whole; none caches it; Osaurus usage is chars/4 | `docs/research/2026-09-16-prompt-length-context-limits.md` |
-| Prompt-length sweep: TTFT by length, vMLX 32k watchdog FAIL, reruns | `docs/research/2026-09-16-prompt-length-sweep.md` |
-| Cold/warm KV: only oMLX (17×) and Osaurus (23×) reuse a cache on Qwen3.5 | `docs/research/2026-09-17-cache-state-split.md` |
-| v2 candidates, options only, Jason's order: cheap closeouts → JANG → accuracy | `.paul/v2-options-note.md` |
+| Dense format axis | `docs/research/2026-09-16-phase5-joined-grid.md` |
+| MoE format axis | `docs/research/2026-09-16-moe-format-axis.md` |
+| Memory footprint accounting across runtimes | `docs/research/2026-09-16-footprint-is-not-one-quantity.md` |
+| Concurrency & batching (N=8) | `docs/research/2026-09-16-concurrency-omlx.md` |
+| Prompt-length sweep (128 to 32k) | `docs/research/2026-09-16-prompt-length-sweep.md` |
+| Cold vs warm KV cache state (hybrid baseline) | `docs/research/2026-09-17-cache-state-split.md` |
+| Cold vs warm KV cache state (non-hybrid control) | `docs/research/2026-09-17-cache-state-split-nonhybrid.md` |
+| vMLX 32k watchdog diagnosis and resolution | `docs/research/2026-09-17-vmlx-32k-chunked-prefill.md` |
+| v2 options roadmap | `.paul/v2-options-note.md` |
 
-Publishable run dirs (`results/` is gitignored; these exist only on this machine):
+## Next Steps
 
-- **Dense grid:** `results/grid/20260916T034308Z-format` (mlx-lm), `…T061309Z` (oMLX),
-  `…T044750Z` (mlx-optiq), `…T051603Z` (vMLX), `…T054434Z` (Osaurus).
-- **MoE grid:** `results/grid-moe/20260916T071532Z-format`, `…T073145Z`, `…T074854Z`,
-  `…T080547Z`, `…T082354Z`.
-- **Prompt sweep:** all 25 `results/sweep-prompt/*-format` dirs.
-- **Cache split:** all 10 `results/sweep-cache/*-format` dirs.
-- **Diagnostic, not published:** `results/probe-vmlx-32k-step512/`.
-- **Reruns (not joinable with the sweep):** `results/rerun-vmlx-32k/`, `results/rerun-osaurus-128/`.
-- **Concurrency:** `results/sweep-conc8/` (four runtimes, N=8), `results/sweep-conc/` (oMLX N=1/2/4/8).
-- **Discarded, kept on purpose:** `results/grid/20260916T041544Z-format` (machine not quiet).
-
-## Machine state and runners
-
-- Osaurus **0.25.5**, oMLX 0.6.4, mlx-optiq 0.5.6, vMLX 1.6.59, mlx-lm 0.31.3 in its own venv at
-  `~/.local/share/ohyesmlx/mlx-lm-0.31.3` (**must be on `PATH`**; the runners export it).
-- The host keeps `modelIdleResidencyPolicy.seconds = 30` (Jason's choice); **every**
-  runner now pins 900 for the Osaurus run and restores byte-exact via `cmp`.
-  Both sweep runners own their log via `exec > "$OUT/runner.log" 2>&1` — tail it.
-- Runners: `scripts/run_grid.sh`, `scripts/run_grid_moe.sh`, `scripts/run_sweep_prompt.sh`,
-  `scripts/run_sweep_cache.sh`.
-  Probes: `probe_context.py`, `probe_grid_moe.py`, `probe_footprint.py`,
-  `probe_concurrency_warmup.py`. No probe writes to `results/`.
-- **Delegation:** `.paul/orders/dispatch.sh <role> <order> [log]` with `CC_AGENT_MAX_TURNS=200`;
-  the default route is DeepSeek V4.1 Flash. Orders go AFTER the preamble verbatim —
-  never before, or every dispatch pays full input price instead of the $0.003/M cache
-  read. Between ~01:00 and ~04:00 UTC DeepSeek bills double; use `--route mimo` there.
-  Write the log to a file: the worker's report is the log's tail. `explain` is read-only
-  and suits diagnosis during a measurement. Workers never run git; the coordinator commits.
-- **While a measurement runs:** no pytest, no edits to `ohyesmlx/*.py`, no worker that runs tests.
-  Read-only workers are fine.
-- This session the coordinator ran workers as background shell tasks and read reports from
-  `$COMMANDCODE_SCRATCHPAD/logs/*.log`. Orca tracks the repo (worktree `OhYesMLX`);
-  `orca worktree set --worktree active --comment …` surfaces status visibly.
-- Use a background job's own exit notification to wait on a long run, not a polling loop.
-- Create an output directory before redirecting a runner into it.
+Await Jason's review and direction on subsequent v2 phases:
+1. JANG study (Osaurus vs vMLX, runtime axis with format held constant).
+2. Accuracy benchmarking (designing methodology without unpinned sampling noise).

@@ -17,9 +17,9 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
 Phase: 6 (sweeps) — **complete**; milestone **closed on paper 2026-09-17**.
-Plan: v1 closeout — ROADMAP/STATE updated; runner hardening + report defects + v2 note in flight
-Status: Unifying (v2 options note for Jason next; no v2 work starts without him)
-Last activity: 2026-09-17 — **v1 closed on paper.** ROADMAP Phase 6 complete / 7-of-7 / milestone Complete; 05-02 marked superseded by per-cell measured warmup. Phase 6 measurements (2026-09-16): 06-02 cold/warm KV split at 4k (`docs/research/2026-09-17-cache-state-split.md`): only oMLX (17.4×) and Osaurus (23.3×) serve a warm hit on Qwen3.5; mlx-lm/OptiQ cannot (hybrid `ArraysCache` not trimmable), vMLX disables its prefix cache for hybrids without block-disk. Earlier: 06-01c prompt-length sweep (`docs/research/2026-09-16-prompt-length-sweep.md`); vMLX 32k FAIL is the GPU watchdog on a one-shot hybrid prefill that ignores `--prefill-step-size`. 495 tests.
+Plan: v1 closeout & post-v1 candidate investigations complete (Candidates 3 & 4 closed).
+Status: Ready for v2 planning / Jason's direction.
+Last activity: 2026-09-17 — **Candidates 3 & 4 completed and published.** Candidate 3 (`docs/research/2026-09-17-cache-state-split-nonhybrid.md`): all five runtimes hit on non-hybrid `Llama-3.1-8B-oQ4` (25x–142x speedup; mlx-lm 0.136s, optiq 0.138s). Candidate 4 (`docs/research/2026-09-17-vmlx-32k-chunked-prefill.md`): `VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` enables chunked hybrid prefill, resolving 32k Metal watchdog failure at 88.76s TTFT. 495 tests green.
 
 Progress:
 - Milestone: [██████████] 100%
@@ -90,8 +90,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | A short measured window is annotated, not failed | Phase 6 | `(n=K of N)` beside the entry, and a lost visit keeps its reason on a PASS row. Same rule as drift: dropping the row deletes the only evidence the window was short. |
 | Osaurus runs pin idle residency to 900 s and restore the host's 30 | Phase 6 | Jason, 2026-09-16. 0.25.5 set 30, which unloads the model inside the 30 s cooldown. Restore is verified with `cmp`, not drift NONE. Only `run_sweep_cache.sh` does it so far. |
 | v1 closed on paper 2026-09-17; 05-02 superseded | Phase 6 | The "6 of 7" count included inserted Phase 2.1; there is no Phase 7. 05-02 (per-runtime warmup column re-run) is superseded by per-cell measured warmup (Phase 5 decision) — no re-run needed, runtime-axis caveat stands. |
-| Warm-cache TTFT published beside prefill numbers | Phase 6 | Jason, 2026-09-17. The warm TTFT figures (oMLX 0.49 s, Osaurus 0.40 s at 4k) sit alongside cold prefill numbers, not in a separate lookup column. |
-| v2 leads with cheap closeouts: non-hybrid cache-split repeat, vMLX 32k re-test | v2 | Jason, 2026-09-17. Then JANG study, accuracy last. Nothing starts without a fresh go-ahead per item. |
+| v2 leads with cheap closeouts: non-hybrid cache-split repeat, vMLX 32k re-test | v2 | Jason, 2026-09-17. Both candidates closed 2026-09-17. Next: JANG study, accuracy last. |
+| Non-hybrid KV cache hit on all five runtimes (Candidate 3) | v2 | Measured 2026-09-17 on Llama-3.1-8B-oQ4: 25x–142x speedup. Proves hybrid ArraysCache was the cause of 1.00x on Qwen3.5. `docs/research/2026-09-17-cache-state-split-nonhybrid.md` |
+| vMLX 32k chunked prefill enabled by VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 (Candidate 4) | v2 | Shipped source audit + live probe 2026-09-17: one-shot default bypassed --prefill-step-size. Env var unlocks chunked prefill, eliminating Metal watchdog failure (88.76s TTFT). `docs/research/2026-09-17-vmlx-32k-chunked-prefill.md` |
 | The cold/warm split is pinned at 4,096 tokens, block-disk caches off in both states | Phase 6 | One variable per pair. It is why vMLX shows no hit on the hybrid model — its prefix cache has no RAM backend for hybrids. |
 
 ### Deferred Issues
@@ -128,9 +129,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-17 midday (non-Claude manager, this session)
-Stopped at: v1 fully closed — 5 commits pushed, 491 tests green, handoff rewritten for the next agent. Jason's decisions recorded (warm-cache beside prefill, runner hardening applied, v2 order).
-Next action: next agent reads HANDOFF first. Jason's open items: README results pointer proposal, Deep Wiki page proposal, stale Osaurus copies. No v2 work without fresh go-ahead per item.
+Last session: 2026-09-17 afternoon (Antigravity manager)
+Stopped at: Candidates 3 & 4 completed, verified, documented, and pushed. Osaurus settings restored byte-exact (cmp verified). 495 tests green.
+Next action: Await Jason's review and direction for v2 planning (JANG study, accuracy benchmarking).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
