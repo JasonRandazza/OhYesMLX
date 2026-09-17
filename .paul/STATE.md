@@ -128,10 +128,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-17 (this session, non-Claude manager)
-Stopped at: v1 closed on paper and pushed. Closeout items for the runner hardening, report defects, and v2 note are dispatched or in flight.
-Next action: verify worker diffs + pytest per item, commit locally after each, push only on Jason's go-ahead. Then the v2 options note and Jason's warm-cache decision.
-Resume context: **Read `.paul/HANDOFF.md` first**, then the two 2026-09-16/17 sweep write-ups.
+Last session: 2026-09-17 midday (non-Claude manager, this session)
+Stopped at: v1 fully closed — 5 commits pushed, 491 tests green, handoff rewritten for the next agent. Jason's decisions recorded (warm-cache beside prefill, runner hardening applied, v2 order).
+Next action: next agent reads HANDOFF first. Jason's open items: README results pointer proposal, Deep Wiki page proposal, stale Osaurus copies. No v2 work without fresh go-ahead per item.
+Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
 *STATE.md — Updated after every significant action*
