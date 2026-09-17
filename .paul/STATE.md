@@ -90,6 +90,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | A short measured window is annotated, not failed | Phase 6 | `(n=K of N)` beside the entry, and a lost visit keeps its reason on a PASS row. Same rule as drift: dropping the row deletes the only evidence the window was short. |
 | Osaurus runs pin idle residency to 900 s and restore the host's 30 | Phase 6 | Jason, 2026-09-16. 0.25.5 set 30, which unloads the model inside the 30 s cooldown. Restore is verified with `cmp`, not drift NONE. Only `run_sweep_cache.sh` does it so far. |
 | v1 closed on paper 2026-09-17; 05-02 superseded | Phase 6 | The "6 of 7" count included inserted Phase 2.1; there is no Phase 7. 05-02 (per-runtime warmup column re-run) is superseded by per-cell measured warmup (Phase 5 decision) — no re-run needed, runtime-axis caveat stands. |
+| Warm-cache TTFT published beside prefill numbers | Phase 6 | Jason, 2026-09-17. The warm TTFT figures (oMLX 0.49 s, Osaurus 0.40 s at 4k) sit alongside cold prefill numbers, not in a separate lookup column. |
+| v2 leads with cheap closeouts: non-hybrid cache-split repeat, vMLX 32k re-test | v2 | Jason, 2026-09-17. Then JANG study, accuracy last. Nothing starts without a fresh go-ahead per item. |
 | The cold/warm split is pinned at 4,096 tokens, block-disk caches off in both states | Phase 6 | One variable per pair. It is why vMLX shows no hit on the hybrid model — its prefix cache has no RAM backend for hybrids. |
 
 ### Deferred Issues

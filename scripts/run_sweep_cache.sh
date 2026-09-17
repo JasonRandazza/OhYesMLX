@@ -21,6 +21,12 @@ PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 OUT=results/sweep-cache
 mkdir -p "$OUT"
+# The runner owns its log. runner.log came out 0 bytes on 2026-09-16 because the caller's
+# redirect was unbound from the command (`cmd & > file` shape), so the echoes here went to a
+# terminal instead. An exec redirect cannot be missed that way. The per-cell redirects below
+# still override per-command. Tradeoff: live progress now reaches only this file -- `tail -f`
+# results/sweep-cache/runner.log to watch a run.
+exec > "$OUT/runner.log" 2>&1
 CONF="$HOME/.osaurus/config/server-runtime.json"
 SERVER="$HOME/.osaurus/config/server.json"
 CONF_ORIG="$CONF.sweep-cache-orig"
