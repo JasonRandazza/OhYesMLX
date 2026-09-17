@@ -463,9 +463,32 @@ the rerun settles is the count: the pinned nine can land, the runtime does not l
 under this workload, and the sweep's four were one lost visit — the second visit's quota, per
 the cause above — not a cell that ran out of work.
 
+### vMLX at 32k with `--prefill-step-size 512`: the setting does not reach this prefill path
+
+Jason asked whether a smaller prefill chunk avoids the watchdog. vMLX 1.6.59's `serve --help`
+documents `--prefill-step-size` (default 2048) as the remedy for Metal single-buffer failures at
+long context ("Try 512 or 256 if prefill crashes"). A diagnostic run, 2026-09-16 22:17–22:46,
+started vMLX with every harness flag unchanged plus `--prefill-step-size 512` (a PATH wrapper
+appended it; the flag was confirmed on the live `vmlx serve` process), and ran the same oq4 cell
+at 32,768 tokens into `results/probe-vmlx-32k-step512/`. It is not a published figure: a Command
+Code worker was running pytest on the machine during part of it.
+
+- **42 of 49 streams died** — 34 of 40 warmups and 7 of 9 measured — against 43 of 49 without
+  the flag. Status FAIL, same reason.
+- The two visit logs carry 24 and 18 `Prefill failed` lines, each with the same
+  `kIOGPUCommandBufferCallbackErrorImpactingInteractivity` error.
+- **Every prefill still logs `Hybrid prefill path=one-shot family=qwen3_5_text seq_len=32775`**
+  (24 of 24 in the second visit's log). The hybrid Qwen3.5 path prefills the whole prompt as one
+  buffer whatever the step size says, so the documented setting never applies to this model.
+
+So the answer to open question 1 is **no, not through the documented flag**: vMLX's hybrid-model
+prefill path ignores `--prefill-step-size`, and the FAIL stands as a property of vMLX 1.6.59 on
+Qwen3.5 at 32k. Whether a later vMLX release chunks the hybrid path is a question for its release
+notes, not this sweep.
+
 ## Open questions
 
-1. **vMLX at 32k: does a prefill chunk-size setting avoid the watchdog?** The FAIL is published
+1. **vMLX at 32k: does a prefill chunk-size setting avoid the watchdog? Answered: no** — see "vMLX at 32k with `--prefill-step-size 512`" above. The FAIL is published
    (Reruns, above), and the rerun reproduced it: 43 of 49 streams dead, one `[METAL] …
    Impacting Interactivity` per dead stream, on the same build and the same 32,765-token prompt.
    The lever the logs make visible is that vMLX prefills this prompt in one shot (`Hybrid prefill
