@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 6 of 7 (sweeps) — in progress. Phases 1, 2, 2.1, 3 (**both** halves), 4, 5 complete.
-Plan: 06-01c done (sweep run, rendered, written up, reruns done); 06-02 next
+Phase: 6 of 7 (sweeps) — **complete**. Phases 1, 2, 2.1, 3, 4, 5, 6 complete; Phase 7 remains.
+Plan: 06-02 done — Phase 6 complete
 Status: Applying (v1's measurement work is done; Phase 6 is the remaining milestone content)
-Last activity: 2026-09-16 ~21:45 local — **06-01c complete.** 25-run prompt-length sweep (128–32k, oq4, five runtimes) rendered through the new `render_sweep` by `ttft_p50_s`: mlx-lm leads from 1k up; no cell cache-hits; vMLX 32k FAIL (macOS GPU watchdog kills its prefill, reproduced 43/49 on rerun). Found and fixed: concurrent `aggregate_tps` divided by summed per-request clocks; a lost visit's failure erased by `_set_status` and a short measured window unannounced (Osaurus 128 had 4 of 9). Osaurus `usage.prompt_tokens` is chars/4. See `docs/research/2026-09-16-prompt-length-sweep.md`. 468 tests, CI green at `0898fd7`.
+Last activity: 2026-09-16 ~23:55 local — **Phase 6 complete.** 06-02 cold/warm KV split at 4k (`docs/research/2026-09-17-cache-state-split.md`): only oMLX (17.4×) and Osaurus (23.3×) serve a warm hit on Qwen3.5; mlx-lm/OptiQ cannot (hybrid `ArraysCache` not trimmable), vMLX disables its prefix cache for hybrids without block-disk. Earlier: 06-01c prompt-length sweep (`docs/research/2026-09-16-prompt-length-sweep.md`); vMLX 32k FAIL is the GPU watchdog on a one-shot hybrid prefill that ignores `--prefill-step-size`. 487 tests.
 
 Progress:
-- Milestone: [█████████░] 97%
-- Phase: [███████░░░] 70%
+- Milestone: [█████████░] 99%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
@@ -88,6 +88,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | The prompt-length sweep ranks on TTFT, never `prefill_tps` | Phase 6 | Osaurus's `usage.prompt_tokens` is chars/4, so `prefill_tps` from usage understates it ~20% on this text. TTFT, or locally counted `achieved` / TTFT, is comparable. |
 | vMLX at 32k is published as FAIL | Phase 6 | Jason, 2026-09-16. Not a refusal (`—`): the macOS GPU watchdog (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`) kills its prefill; 28/49 in the sweep, 43/49 on rerun. Whether a prefill chunk setting avoids it is Jason's call. |
 | A short measured window is annotated, not failed | Phase 6 | `(n=K of N)` beside the entry, and a lost visit keeps its reason on a PASS row. Same rule as drift: dropping the row deletes the only evidence the window was short. |
+| Osaurus runs pin idle residency to 900 s and restore the host's 30 | Phase 6 | Jason, 2026-09-16. 0.25.5 set 30, which unloads the model inside the 30 s cooldown. Restore is verified with `cmp`, not drift NONE. Only `run_sweep_cache.sh` does it so far. |
+| The cold/warm split is pinned at 4,096 tokens, block-disk caches off in both states | Phase 6 | One variable per pair. It is why vMLX shows no hit on the hybrid model — its prefix cache has no RAM backend for hybrids. |
 
 ### Deferred Issues
 
@@ -121,10 +123,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-16 (midday to ~21:45)
-Stopped at: 06-01c complete and pushed (`0898fd7`, CI green). Prompt sweep in `results/sweep-prompt/` (25 run dirs, publishable with vMLX 32k as FAIL and Osaurus 128 marked n=4 of 9); reruns in `results/rerun-vmlx-32k/` and `results/rerun-osaurus-128/` (Osaurus 0.25.5).
-Next action: 06-02, the cold/warm KV split. Osaurus 0.25.5 now defaults `server.json` `modelIdleResidencyPolicy.seconds` to 30 against the baseline's 900 — resolve that before any Osaurus run.
-Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-prompt-length-sweep.md`.
+Last session: 2026-09-16 (midday to ~23:55)
+Stopped at: Phase 6 complete and pushed. Sweeps: `results/sweep-prompt/`, `results/sweep-cache/`; reruns and the vMLX step-512 diagnostic beside them.
+Next action: Phase 7 — plan it with Jason. Before any old runner starts Osaurus, port the residency pin from `scripts/run_sweep_cache.sh`.
+Resume context: **Read `.paul/HANDOFF.md` first**, then the two 2026-09-16/17 sweep write-ups.
 
 ---
 *STATE.md — Updated after every significant action*

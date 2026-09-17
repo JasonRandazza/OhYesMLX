@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-16 (evening, after the prompt-length sweep)"
+description: "OhYesMLX — session handoff, 2026-09-16 (late night, Phase 6 complete)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-16, evening
+# Handoff — 2026-09-16, late night
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
@@ -16,11 +16,11 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## Where the project is
 
-**Phase 6 (sweeps): 06-01a, 06-01b and 06-01c are done. 06-02 (cold/warm KV split) is next.**
-Milestone ~98%.
+**Phase 6 (sweeps) is complete: 06-01a/b/c and 06-02 are done.** Phase 7 is the only remaining
+milestone content — read `.paul/ROADMAP.md` for its scope before planning. Milestone ~99%.
 
-- `main` is clean and **pushed**; the last code commit is `0898fd7`, and CI (`tests.yml`) is green on it.
-- **468 tests** pass, observed by the coordinator with
+- `main` is clean and **pushed**; CI (`tests.yml`) was green at `0898fd7` — check the latest run with `gh run list --workflow=tests.yml`.
+- **487 tests** pass, observed by the coordinator with
   `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`.
 - **Nothing is in flight.** Before starting anything, check anyway:
   `lsof -i :1337 -i :8080 -i :8081 -i :8100 -i :8000`,
@@ -29,20 +29,21 @@ Milestone ~98%.
   app instance launched by the CLI reappeared once, ~60 s after a probe killed it, and did not
   respawn when killed again; origin unknown. The sweep runner now sweeps before each cell as well
   as after.
-- **The Osaurus app was killed by the reruns and has not been reopened.** Jason may reopen it.
+- **The Osaurus app was killed by the runs and has not been reopened.** Jason may reopen it.
 
 ## Osaurus is now 0.25.5, and its settings drift
 
 Osaurus updates often (sometimes twice a day). 0.25.5 migrated
 `~/.osaurus/config/server.json`: it added `_modelIdleResidencyPolicyVersion: 2` and set
 `modelIdleResidencyPolicy.seconds` to **30**. The committed baseline says **900**, so the drift
-guard reads one difference and **any Osaurus run refuses to start until it is resolved.**
+guard reads one difference, and **a runner that does not pin 900 for the run cannot start Osaurus.**
 
 30 s matters: the harness cools down 30 s between visits, so at 30 the model unloads and reload
-time lands inside TTFT. The Osaurus 128 rerun set it to 900 for the run and restored Jason's 30
-byte-exact afterwards. Before 06-02, either do the same in the runner, or ask Jason whether 900
-should be the host setting and then refresh the baseline. Do not rewrite the baseline to 30
-without that conversation.
+time lands inside TTFT. **Jason's decision (2026-09-16): the host keeps 30; each Osaurus run pins
+900 and restores byte-exact.** `scripts/run_sweep_cache.sh` does this and verifies with `cmp`
+(drift NONE cannot be the check while the host differs from the committed baseline). The older
+runners (`run_grid.sh`, `run_grid_moe.sh`, `run_sweep_prompt.sh`) do NOT pin it yet and will
+refuse to start Osaurus on drift — port the toggle before re-running any of them.
 
 Its prefix and block-disk caches are **on** (Jason's setting), restored after every toggle.
 
@@ -88,6 +89,24 @@ to get the `(n=4 of 9)` marker). TTFT p50 in seconds:
   runtimes. The published grids rank on `decode_tps` and are unaffected. Rank prompt sweeps on
   TTFT.
 
+**06-02, the cold/warm KV split** — `results/sweep-cache/`, 10 run dirs, oq4 at 4,096 tokens, each
+runtime `--cache-state off` then `on`, Osaurus 0.25.5. Write-up:
+`docs/research/2026-09-17-cache-state-split.md`. TTFT p50 off → on: mlx-lm 7.825 → 7.845, oMLX
+8.487 → **0.487 (17.4×)**, OptiQ 9.813 → 9.983, vMLX 8.283 → 8.260, Osaurus 9.401 → **0.404
+(23.3×)**. All PASS, 303/303 requests returned.
+
+- **mlx-lm and OptiQ cannot serve a hit on Qwen3.5**: entries are stored keyed by prompt + output,
+  so a repeat is a strict prefix, and serving a longer entry needs a trimmable cache; the hybrid
+  model's `ArraysCache` is not (`mlx_lm/models/cache.py:146-147, 88-92`).
+- **vMLX declines itself**: `mllm_scheduler.py:758-770` disables the prefix cache for a hybrid
+  model when paged and block-disk caches are off ("no RAM fallback"), and the harness keeps block
+  disk off in both states by the single-variable rule.
+- Whether a non-hybrid model turns those three over is untested.
+
+**vMLX 32k with `--prefill-step-size 512`** (`results/probe-vmlx-32k-step512/`, diagnostic):
+42 of 49 still die. The hybrid prefill path logs `path=one-shot seq_len=32775` regardless of the
+flag, so the FAIL is a property of vMLX 1.6.59 on Qwen3.5 at 32k. Recorded in the sweep doc.
+
 **Code built and fixed this session** (all by Command Code workers, reviewed and committed by the
 coordinator; orders in `.paul/orders/`):
 
@@ -103,24 +122,23 @@ coordinator; orders in `.paul/orders/`):
   `(n=K of N)` and a note; a cold load from a later start is noted — `short-window-note.md`,
   diagnosis in `short-measured-window.md`. Forward-looking: existing records carry no reason.
   Only one row on disk is short (Osaurus 128 above); every published grid renders byte-identical.
+- `ohyesmlx run --cache-state off|on` (header pin; absent = None, never "off") with per-runtime
+  flags, `render_sweep(varying="cache_state")`, and `scripts/run_sweep_cache.sh` —
+  `cache-state-pin.md`. `docs/interfaces.md` is current, including the short-window fix.
 
 ## What is next, in order
 
-1. **Resolve the Osaurus residency drift** (section above) before any Osaurus run.
-2. **06-02 — cold/warm KV split.** Jason authorised the Osaurus cache toggle for it; the other
-   four clear their cache by restart. Read `docs/research/2026-09-16-phase6-design.md` for the
-   design, and use `scripts/run_sweep_prompt.sh` as the model for toggling and restoring.
-3. **Update `docs/interfaces.md`** for the short-window fix: `summarize(results, *, measured=None)`
-   and `CellResult.lost_visit_reason`, `cold_load_after_lost_visit`, `measured_pin`.
-4. Small defects, recorded in STATE.md "Deferred Issues": runner stdout logs (`runner.log`, the
-   rerun logs) come out 0 bytes although runs complete; drift markers in a TTFT-ranked sweep are
-   decode-rate drift and read as TTFT drift.
+1. **Phase 7.** Read `.paul/ROADMAP.md` and `.paul/STATE.md` for its scope; plan it with Jason.
+2. **Port the Osaurus residency pin** (900 for the run, byte-exact restore, `cmp` check) into
+   `run_grid.sh`, `run_grid_moe.sh` and `run_sweep_prompt.sh` before any of them runs Osaurus again.
+3. Small defects in STATE.md "Deferred Issues": runner stdout logs come out 0 bytes (seen again in
+   `results/sweep-cache/runner.log`); drift markers in a TTFT-ranked sweep are decode drift.
+4. Optional: repeat the cache split on a non-hybrid model to see whether mlx-lm, OptiQ and vMLX hit.
 
 ## Open questions for Jason
 
-- **vMLX 32k:** test whether a smaller prefill chunk / step setting avoids the GPU watchdog? A
-  separate rerun, not a change to the published FAIL.
-- **Osaurus residency:** should the host keep 0.25.5's 30 s, or go back to 900?
+- **Is a warm-cache TTFT a publishable prefill number, or a lookup number** that belongs in its own
+  column? (oMLX 0.49 s and Osaurus 0.40 s at 4k are lookups.)
 - **Should a cell that hangs be abandoned rather than retried?** (mlx-optiq on JANG, 600 s.)
 - **Ties are rendered as orderings.** Adjacent cells within ~2.5–3% still get rank numbers.
 - **Column-entry effect** (first cell in a column drifted ~+15% in 3 of 5 fixed-warmup columns)
@@ -138,6 +156,7 @@ coordinator; orders in `.paul/orders/`):
 | A sweep is a run *pin*, never a third `--study` axis | `docs/research/2026-09-16-phase6-design.md` |
 | All five serve 32k whole; none caches it; Osaurus usage is chars/4 | `docs/research/2026-09-16-prompt-length-context-limits.md` |
 | Prompt-length sweep: TTFT by length, vMLX 32k watchdog FAIL, reruns | `docs/research/2026-09-16-prompt-length-sweep.md` |
+| Cold/warm KV: only oMLX (17×) and Osaurus (23×) reuse a cache on Qwen3.5 | `docs/research/2026-09-17-cache-state-split.md` |
 
 Publishable run dirs (`results/` is gitignored; these exist only on this machine):
 
@@ -146,6 +165,8 @@ Publishable run dirs (`results/` is gitignored; these exist only on this machine
 - **MoE grid:** `results/grid-moe/20260916T071532Z-format`, `…T073145Z`, `…T074854Z`,
   `…T080547Z`, `…T082354Z`.
 - **Prompt sweep:** all 25 `results/sweep-prompt/*-format` dirs.
+- **Cache split:** all 10 `results/sweep-cache/*-format` dirs.
+- **Diagnostic, not published:** `results/probe-vmlx-32k-step512/`.
 - **Reruns (not joinable with the sweep):** `results/rerun-vmlx-32k/`, `results/rerun-osaurus-128/`.
 - **Concurrency:** `results/sweep-conc8/` (four runtimes, N=8), `results/sweep-conc/` (oMLX N=1/2/4/8).
 - **Discarded, kept on purpose:** `results/grid/20260916T041544Z-format` (machine not quiet).
@@ -158,7 +179,8 @@ Publishable run dirs (`results/` is gitignored; these exist only on this machine
   not in bytes — restore from a byte-exact copy taken at toggle time. `…sweep-prompt-orig` and
   `…probe-orig` are stale copies from this session; delete them only after checking they are not
   needed.
-- Runners: `scripts/run_grid.sh`, `scripts/run_grid_moe.sh`, `scripts/run_sweep_prompt.sh`.
+- Runners: `scripts/run_grid.sh`, `scripts/run_grid_moe.sh`, `scripts/run_sweep_prompt.sh`,
+  `scripts/run_sweep_cache.sh`.
   Probes: `probe_context.py`, `probe_grid_moe.py`, `probe_footprint.py`,
   `probe_concurrency_warmup.py`. No probe writes to `results/`.
 - **Delegation:** `.paul/orders/dispatch.sh <role> <order> [log]` with `CC_AGENT_MAX_TURNS=200`;
