@@ -64,6 +64,7 @@ Key findings are published in `docs/research/`:
 - [Prompt-length sweep](docs/research/2026-09-16-prompt-length-sweep.md)
 - [Cold vs warm KV cache state (hybrid baseline)](docs/research/2026-09-17-cache-state-split.md)
 - [Cold vs warm KV cache state (non-hybrid control)](docs/research/2026-09-17-cache-state-split-nonhybrid.md)
+- [vMLX 32k prefill watchdog diagnosis and resolution](docs/research/2026-09-17-vmlx-32k-chunked-prefill.md)
 - [Memory footprint accounting across runtimes](docs/research/2026-09-16-footprint-is-not-one-quantity.md)
 
 ## License

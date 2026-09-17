@@ -199,7 +199,7 @@ from model name").
 | `--no-continuous-batching` | — | Direct single-request engine; disables the features above |
 | `--max-num-seqs` | `1` | Simultaneous requests. Requires `--continuous-batching` |
 | `--prefill-batch-size` | `512` | Prompts processed at once during prefill |
-| `--prefill-step-size` | `2048` | Max tokens per prefill chunk. Lower it for large MoE at long context (Metal single-buffer OOM) |
+| `--prefill-step-size` | `2048` | Max tokens per prefill chunk. Lower it for large MoE at long context (Metal single-buffer OOM). **Note:** Hybrid models (e.g. Qwen3.5) default to one-shot prefill and bypass this flag unless `VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` is exported in the environment (see `docs/research/2026-09-17-vmlx-32k-chunked-prefill.md`). |
 | `--completion-batch-size` | `512` | Responses decoding simultaneously |
 | `--prefill-keep-alloc` | off | Skips per-chunk `mx.clear_cache()`, by setting `VMLX_PREFILL_KEEP_ALLOC=1` |
 | `--max-tokens` | `4096` | Default output cap; per-request `max_tokens` overrides |
