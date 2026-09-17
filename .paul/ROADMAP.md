@@ -18,8 +18,8 @@ us.
 ## Current Milestone
 
 **v1 — Format axis on small models** (0.1.0)
-Status: In progress
-Phases: 6 of 7 complete
+Status: Complete
+Phases: 7 of 7 complete
 
 ## Phases
 
@@ -31,7 +31,7 @@ Phases: 6 of 7 complete
 | 3 | The sparse grid — format axis per runtime | 2 | **Complete** | 2026-09-16 |
 | 4 | The 256-expert question | 1 | **Complete** | 2026-09-15 |
 | 5 | The joined grid (runtime axis falls out of it) | 2 | **Complete** | 2026-09-16 |
-| 6 | Sweeps | 2 | Not started | - |
+| 6 | Sweeps | 2 | **Complete** | 2026-09-16 |
 
 ## Phase Details
 
@@ -135,23 +135,33 @@ entry states, four join guards refuse a grid whose columns never belonged togeth
 **Plans:**
 - [x] 05-01: `load_run`, `render_grid`, the `grid` command, and the write-up —
       `docs/research/2026-09-16-phase5-joined-grid.md`
-- [ ] 05-02: per-runtime warmup, re-run the mlx-lm column, re-join. **The runtime axis is
-      not publishable until this lands**: mlx-lm is last in 11 of 14 orderings on the
-      published median and 1st/3rd/3rd/4th on the late-window one, so the ordering is
-      measuring warmup rather than serving speed. The format axis is unaffected.
+- [ ] 05-02: per-runtime warmup, re-run the mlx-lm column, re-join. **SUPERSEDED
+      2026-09-16 by per-cell measured warmup** (two windows of five rates, medians
+      compared at 3%, floor 10, cap 20 — STATE.md Decisions): warmup is measured per
+      cell, not pinned per run, so no column re-run is needed. The runtime-axis
+      caveat stands: mlx-lm's published-median ordering still measures warmup as
+      much as speed.
 
-### Phase 6: Sweeps
+### Phase 6: Sweeps — COMPLETE
 
-**Goal:** find where continuous batching and mixed-precision KV cache actually pay off.
-**Depends on:** Phase 5
-**Research:** Likely — GuideLLM integration, and how each runtime's prefix cache is cleared
+**Goal, as built:** two single-variable sweeps joined with Phase 5's machinery, plus the
+concurrency finding that fell out along the way.
 
-Concurrency 1/2/4/8/16/32; prompt lengths 128/1k/4k/16k/32k; cold vs warm KV cache with
-caches cleared between.
+- **06-01 (concurrency + prompt length):** N=8 aggregate gains 0.99–1.15× — none of the
+  five runtimes batch. Prompt sweep at 128/1k/4k/16k/32k ranks on TTFT (Osaurus's
+  `usage.prompt_tokens` is chars/4, so `prefill_tps` is not comparable); mlx-lm leads
+  from 1k up; vMLX 32k is published FAIL (macOS GPU watchdog on a one-shot hybrid
+  prefill, 28/49 in the sweep, 43/49 on rerun). See
+  `docs/research/2026-09-16-prompt-length-sweep.md` and
+  `docs/research/2026-09-16-concurrency-omlx.md`.
+- **06-02 (cold/warm KV split):** at 4,096 tokens, only oMLX (17.4×) and Osaurus (23.3×)
+  serve a warm hit on Qwen3.5; mlx-lm/OptiQ cannot (hybrid `ArraysCache` not trimmable),
+  vMLX declines its own prefix cache for hybrids without block-disk. See
+  `docs/research/2026-09-17-cache-state-split.md`.
 
 **Plans:**
-- [ ] 06-01: Concurrency and prompt-length sweeps
-- [ ] 06-02: Cold/warm KV-cache split
+- [x] 06-01: Concurrency and prompt-length sweeps
+- [x] 06-02: Cold/warm KV-cache split
 
 ## Out of this milestone
 
@@ -166,4 +176,4 @@ caches cleared between.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-15 (Phase 5 opened)*
+*Last updated: 2026-09-17 (v1 complete — Phase 6 closed)*

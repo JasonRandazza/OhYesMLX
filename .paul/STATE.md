@@ -11,18 +11,18 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** v1 — Phase 3, the sparse grid on Qwen3.5-4B
+**Current focus:** v1 closed — v2 options under discussion
 
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 6 (sweeps) — **complete**, and it was v1's last phase ("6 of 7" counted 2.1). Milestone closeout on paper remains.
-Plan: 06-02 done — Phase 6 complete
-Status: Applying (v1's measurement work is done; Phase 6 is the remaining milestone content)
-Last activity: 2026-09-16 ~23:55 local — **Phase 6 complete.** 06-02 cold/warm KV split at 4k (`docs/research/2026-09-17-cache-state-split.md`): only oMLX (17.4×) and Osaurus (23.3×) serve a warm hit on Qwen3.5; mlx-lm/OptiQ cannot (hybrid `ArraysCache` not trimmable), vMLX disables its prefix cache for hybrids without block-disk. Earlier: 06-01c prompt-length sweep (`docs/research/2026-09-16-prompt-length-sweep.md`); vMLX 32k FAIL is the GPU watchdog on a one-shot hybrid prefill that ignores `--prefill-step-size`. 487 tests.
+Phase: 6 (sweeps) — **complete**; milestone **closed on paper 2026-09-17**.
+Plan: v1 closeout — ROADMAP/STATE updated; runner hardening + report defects + v2 note in flight
+Status: Unifying (v2 options note for Jason next; no v2 work starts without him)
+Last activity: 2026-09-17 — **v1 closed on paper.** ROADMAP Phase 6 complete / 7-of-7 / milestone Complete; 05-02 marked superseded by per-cell measured warmup. Phase 6 measurements (2026-09-16): 06-02 cold/warm KV split at 4k (`docs/research/2026-09-17-cache-state-split.md`): only oMLX (17.4×) and Osaurus (23.3×) serve a warm hit on Qwen3.5; mlx-lm/OptiQ cannot (hybrid `ArraysCache` not trimmable), vMLX disables its prefix cache for hybrids without block-disk. Earlier: 06-01c prompt-length sweep (`docs/research/2026-09-16-prompt-length-sweep.md`); vMLX 32k FAIL is the GPU watchdog on a one-shot hybrid prefill that ignores `--prefill-step-size`. 487 tests.
 
 Progress:
-- Milestone: [█████████░] 99%
+- Milestone: [██████████] 100%
 - Phase: [██████████] 100%
 
 ## Loop Position
@@ -30,7 +30,7 @@ Progress:
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ◉        ○        ○     [Planning]
+  ○        ○        ◉     [Unifying]
 ```
 
 ## Performance Metrics
@@ -89,6 +89,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | vMLX at 32k is published as FAIL | Phase 6 | Jason, 2026-09-16. Not a refusal (`—`): the macOS GPU watchdog (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`) kills its prefill; 28/49 in the sweep, 43/49 on rerun. Whether a prefill chunk setting avoids it is Jason's call. |
 | A short measured window is annotated, not failed | Phase 6 | `(n=K of N)` beside the entry, and a lost visit keeps its reason on a PASS row. Same rule as drift: dropping the row deletes the only evidence the window was short. |
 | Osaurus runs pin idle residency to 900 s and restore the host's 30 | Phase 6 | Jason, 2026-09-16. 0.25.5 set 30, which unloads the model inside the 30 s cooldown. Restore is verified with `cmp`, not drift NONE. Only `run_sweep_cache.sh` does it so far. |
+| v1 closed on paper 2026-09-17; 05-02 superseded | Phase 6 | The "6 of 7" count included inserted Phase 2.1; there is no Phase 7. 05-02 (per-runtime warmup column re-run) is superseded by per-cell measured warmup (Phase 5 decision) — no re-run needed, runtime-axis caveat stands. |
 | The cold/warm split is pinned at 4,096 tokens, block-disk caches off in both states | Phase 6 | One variable per pair. It is why vMLX shows no hit on the hybrid model — its prefix cache has no RAM backend for hybrids. |
 
 ### Deferred Issues
@@ -104,9 +105,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | ~~mlx-optiq reports `"mlx-optiq, version 0.5.6"`~~ **FIXED on branch `defects`** | Phase 3 | — | `OptiqRuntime.parse_version` records the version and passes an unrecognised shape through whole. Merges to main once the in-flight grid lands. |
 | `footprint` vs resident on Osaurus is inferred, not probed | Phase 5 | S | The file-backed-pages explanation needs a probe before any memory ranking is published |
 | ~~`mlx-lm` 0.31.3 lives only in `/tmp/mlxspike`~~ **RESOLVED 2026-09-15** | Phase 4 | — | Reinstalled at `~/.local/share/ohyesmlx/mlx-lm-0.31.3` with the spike's exact pins (mlx 0.32.2, transformers 5.17.0, tokenizers 0.23.2, numpy 2.5.3). |
-| `docs/interfaces.md` lags the short-window fix | Phase 6 | S | `summarize(results, *, measured=None)` and `CellResult`'s new fields (`lost_visit_reason`, `cold_load_after_lost_visit`, `measured_pin`) are not in it |
-| Runner stdout logs come out 0 bytes | Phase 6 | S | `results/sweep-prompt/runner.log` and both rerun logs are empty though the runs completed; `results.jsonl` is intact. Cause unknown |
-| Drift markers in a TTFT-ranked table are decode drift | Phase 6 | S | `render_sweep --rank ttft_p50_s` prints decode-rate drift beside TTFT entries; misleading |
+| Runner stdout logs come out 0 bytes | Phase 6 | S | Active — plan item for this session (`explain` first). `results/sweep-prompt/runner.log` and both rerun logs are empty though the runs completed; `results.jsonl` is intact. Cause unknown |
+| Drift markers in a TTFT-ranked table are decode drift | Phase 6 | S | Active — plan item for this session. `render_sweep --rank ttft_p50_s` prints decode-rate drift beside TTFT entries; misleading |
 
 ### Blockers/Concerns
 
@@ -123,9 +123,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-16 (midday to ~23:55)
-Stopped at: Phase 6 complete and pushed. Sweeps: `results/sweep-prompt/`, `results/sweep-cache/`; reruns and the vMLX step-512 diagnostic beside them.
-Next action: **run by a non-Claude manager (`cc-lead`, or Antigravity)** per `.paul/HANDOFF.md` "Next session: run it WITHOUT Claude": close v1 on paper, port the Osaurus residency pin to the old runners, two small report/runner defects, then v2 options for Jason.
+Last session: 2026-09-17 (this session, non-Claude manager)
+Stopped at: v1 closed on paper and pushed. Closeout items for the runner hardening, report defects, and v2 note are dispatched or in flight.
+Next action: verify worker diffs + pytest per item, commit locally after each, push only on Jason's go-ahead. Then the v2 options note and Jason's warm-cache decision.
 Resume context: **Read `.paul/HANDOFF.md` first**, then the two 2026-09-16/17 sweep write-ups.
 
 ---
