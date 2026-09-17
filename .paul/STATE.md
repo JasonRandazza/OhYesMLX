@@ -17,13 +17,13 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
 Phase: 6 of 7 (sweeps) — in progress. Phases 1, 2, 2.1, 3 (**both** halves), 4, 5 complete.
-Plan: 06-01c of 06-01a/b/c + 06-02 — pin built and probed; the sweep itself has not run
+Plan: 06-01c done (sweep run, rendered, written up, reruns done); 06-02 next
 Status: Applying (v1's measurement work is done; Phase 6 is the remaining milestone content)
-Last activity: 2026-09-16 ~12:00 local — **06-01c's pin is built and four runtimes serve 32k whole.** `--prompt-tokens N` sizes one prefill prompt against the serving tokenizer (achieved 128/1024/4096/16384/32765). Live probe: mlx-lm, oMLX, OptiQ, vMLX all accept 16k and 32k untruncated, none prefix-caches a repeat, ~70 s TTFT at 32k. Join guard 1 now compares `concurrency` and `prompt_tokens` (06-01b had left concurrency out). OptiQ pinned `--max-context off`. Osaurus not yet probed. See `docs/research/2026-09-16-prompt-length-context-limits.md`. Earlier: none of the five runtimes batch (N=8 gains 0.99–1.15x).
+Last activity: 2026-09-16 ~21:45 local — **06-01c complete.** 25-run prompt-length sweep (128–32k, oq4, five runtimes) rendered through the new `render_sweep` by `ttft_p50_s`: mlx-lm leads from 1k up; no cell cache-hits; vMLX 32k FAIL (macOS GPU watchdog kills its prefill, reproduced 43/49 on rerun). Found and fixed: concurrent `aggregate_tps` divided by summed per-request clocks; a lost visit's failure erased by `_set_status` and a short measured window unannounced (Osaurus 128 had 4 of 9). Osaurus `usage.prompt_tokens` is chars/4. See `docs/research/2026-09-16-prompt-length-sweep.md`. 468 tests, CI green at `0898fd7`.
 
 Progress:
 - Milestone: [█████████░] 97%
-- Phase: [████░░░░░░] 40%
+- Phase: [███████░░░] 70%
 
 ## Loop Position
 
@@ -85,6 +85,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Sweep prompts are cut from a frozen fixture, `ohyesmlx/longtext.md` | Phase 6 | The 09-14/09-15 research docs concatenated once (60,701 tokens, sha256 3ed2c160…a8a3), after the MS-7 excerpt. Chosen by Jason over a downloaded book and authored text. Never regenerated from `docs/`. |
 | Osaurus runs the prompt-length sweep with its prefix and block-disk caches off | Phase 6 | With them on every repeat is a 0.27 s lookup. Authorised by Jason 2026-09-16; `scripts/run_sweep_prompt.sh` toggles, restores byte-exact and requires drift NONE. |
 | OptiQ is started with `--max-context off` | Phase 6 | An integer cap rotates the KV window instead of refusing. No-op on Qwen3.5/LFM2 (both define `make_cache`), so no grid number moves. Jason's call, 2026-09-16. |
+| The prompt-length sweep ranks on TTFT, never `prefill_tps` | Phase 6 | Osaurus's `usage.prompt_tokens` is chars/4, so `prefill_tps` from usage understates it ~20% on this text. TTFT, or locally counted `achieved` / TTFT, is comparable. |
+| vMLX at 32k is published as FAIL | Phase 6 | Jason, 2026-09-16. Not a refusal (`—`): the macOS GPU watchdog (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`) kills its prefill; 28/49 in the sweep, 43/49 on rerun. Whether a prefill chunk setting avoids it is Jason's call. |
+| A short measured window is annotated, not failed | Phase 6 | `(n=K of N)` beside the entry, and a lost visit keeps its reason on a PASS row. Same rule as drift: dropping the row deletes the only evidence the window was short. |
 
 ### Deferred Issues
 
@@ -99,6 +102,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | ~~mlx-optiq reports `"mlx-optiq, version 0.5.6"`~~ **FIXED on branch `defects`** | Phase 3 | — | `OptiqRuntime.parse_version` records the version and passes an unrecognised shape through whole. Merges to main once the in-flight grid lands. |
 | `footprint` vs resident on Osaurus is inferred, not probed | Phase 5 | S | The file-backed-pages explanation needs a probe before any memory ranking is published |
 | ~~`mlx-lm` 0.31.3 lives only in `/tmp/mlxspike`~~ **RESOLVED 2026-09-15** | Phase 4 | — | Reinstalled at `~/.local/share/ohyesmlx/mlx-lm-0.31.3` with the spike's exact pins (mlx 0.32.2, transformers 5.17.0, tokenizers 0.23.2, numpy 2.5.3). |
+| `docs/interfaces.md` lags the short-window fix | Phase 6 | S | `summarize(results, *, measured=None)` and `CellResult`'s new fields (`lost_visit_reason`, `cold_load_after_lost_visit`, `measured_pin`) are not in it |
+| Runner stdout logs come out 0 bytes | Phase 6 | S | `results/sweep-prompt/runner.log` and both rerun logs are empty though the runs completed; `results.jsonl` is intact. Cause unknown |
+| Drift markers in a TTFT-ranked table are decode drift | Phase 6 | S | `render_sweep --rank ttft_p50_s` prints decode-rate drift beside TTFT entries; misleading |
 
 ### Blockers/Concerns
 
@@ -115,10 +121,10 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-16 (overnight, unattended)
-Stopped at: v1's measurement work complete. Dense grid (5 columns, 60/60 PASS) and MoE grid (5 columns, 59/60 PASS) both joined; all eight measurement-validity defects found, fixed or recorded. Phase 5 complete and pushed. The publishable grid is the five dirs `20260916T034308Z` (mlx-lm), `061309Z` (oMLX, the quiet re-run), `044750Z` (mlx-optiq), `051603Z` (vMLX), `054434Z` (Osaurus). 403 tests. CI exists and is green.
-Next action: Phase 6 plan 06-01c — prompt-length sweeps (128/1k/4k/16k/32k, token counts verified against the serving tokenizer, over-context cells rendered `—` with the refusal recorded). Then `render_sweep(varying=...)`, which is designed and pinned but NOT built — the concurrency results were compared by hand, not joined. Then 06-02, the cold/warm KV split; Jason authorised toggling `~/.osaurus/config/server-runtime.json` provided it is restored and the drift verified back to NONE.
-Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-phase5-joined-grid.md`.
+Last session: 2026-09-16 (midday to ~21:45)
+Stopped at: 06-01c complete and pushed (`0898fd7`, CI green). Prompt sweep in `results/sweep-prompt/` (25 run dirs, publishable with vMLX 32k as FAIL and Osaurus 128 marked n=4 of 9); reruns in `results/rerun-vmlx-32k/` and `results/rerun-osaurus-128/` (Osaurus 0.25.5).
+Next action: 06-02, the cold/warm KV split. Osaurus 0.25.5 now defaults `server.json` `modelIdleResidencyPolicy.seconds` to 30 against the baseline's 900 — resolve that before any Osaurus run.
+Resume context: **Read `.paul/HANDOFF.md` first**, then `docs/research/2026-09-16-prompt-length-sweep.md`.
 
 ---
 *STATE.md — Updated after every significant action*
