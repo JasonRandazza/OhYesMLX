@@ -16,7 +16,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 6 of 7 (sweeps) — **complete**. Phases 1, 2, 2.1, 3, 4, 5, 6 complete; Phase 7 remains.
+Phase: 6 (sweeps) — **complete**, and it was v1's last phase ("6 of 7" counted 2.1). Milestone closeout on paper remains.
 Plan: 06-02 done — Phase 6 complete
 Status: Applying (v1's measurement work is done; Phase 6 is the remaining milestone content)
 Last activity: 2026-09-16 ~23:55 local — **Phase 6 complete.** 06-02 cold/warm KV split at 4k (`docs/research/2026-09-17-cache-state-split.md`): only oMLX (17.4×) and Osaurus (23.3×) serve a warm hit on Qwen3.5; mlx-lm/OptiQ cannot (hybrid `ArraysCache` not trimmable), vMLX disables its prefix cache for hybrids without block-disk. Earlier: 06-01c prompt-length sweep (`docs/research/2026-09-16-prompt-length-sweep.md`); vMLX 32k FAIL is the GPU watchdog on a one-shot hybrid prefill that ignores `--prefill-step-size`. 487 tests.
@@ -125,7 +125,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-16 (midday to ~23:55)
 Stopped at: Phase 6 complete and pushed. Sweeps: `results/sweep-prompt/`, `results/sweep-cache/`; reruns and the vMLX step-512 diagnostic beside them.
-Next action: Phase 7 — plan it with Jason. Before any old runner starts Osaurus, port the residency pin from `scripts/run_sweep_cache.sh`.
+Next action: **run by a non-Claude manager (`cc-lead`, or Antigravity)** per `.paul/HANDOFF.md` "Next session: run it WITHOUT Claude": close v1 on paper, port the Osaurus residency pin to the old runners, two small report/runner defects, then v2 options for Jason.
 Resume context: **Read `.paul/HANDOFF.md` first**, then the two 2026-09-16/17 sweep write-ups.
 
 ---

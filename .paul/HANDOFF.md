@@ -16,8 +16,9 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## Where the project is
 
-**Phase 6 (sweeps) is complete: 06-01a/b/c and 06-02 are done.** Phase 7 is the only remaining
-milestone content — read `.paul/ROADMAP.md` for its scope before planning. Milestone ~99%.
+**Phase 6 (sweeps) is complete: 06-01a/b/c and 06-02 are done. It was v1's last phase** — the
+roadmap's "6 of 7" counts the inserted Phase 2.1; there is no Phase 7. What remains of v1 is
+closing it out on paper. `.paul/ROADMAP.md` is stale (Phase 6 still "Not started").
 
 - `main` is clean and **pushed**; CI (`tests.yml`) was green at `0898fd7` — check the latest run with `gh run list --workflow=tests.yml`.
 - **487 tests** pass, observed by the coordinator with
@@ -126,19 +127,71 @@ coordinator; orders in `.paul/orders/`):
   flags, `render_sweep(varying="cache_state")`, and `scripts/run_sweep_cache.sh` —
   `cache-state-pin.md`. `docs/interfaces.md` is current, including the short-window fix.
 
-## What is next, in order
+## Next session: run it WITHOUT Claude
 
-1. **Phase 7.** Read `.paul/ROADMAP.md` and `.paul/STATE.md` for its scope; plan it with Jason.
-2. **Port the Osaurus residency pin** (900 for the run, byte-exact restore, `cmp` check) into
-   `run_grid.sh`, `run_grid_moe.sh` and `run_sweep_prompt.sh` before any of them runs Osaurus again.
-3. Small defects in STATE.md "Deferred Issues": runner stdout logs come out 0 bytes (seen again in
-   `results/sweep-cache/runner.log`); drift markers in a TTFT-ranked sweep are decode drift.
-4. Optional: repeat the cache split on a non-hybrid model to see whether mlx-lm, OptiQ and vMLX hit.
+Jason's instruction (2026-09-17): about 15% of the week's Claude Code budget is left, so the next
+session is planned here and run by a non-Claude manager. **Claude Code does not execute it.**
+
+**Who runs it**
+- **Manager: the Command Code lead agent** — `cd ~/Dev/active/OhYesMLX && cc-lead`. It loads
+  `~/.commandcode/lead/LEAD.md` (it reads AGENTS.md, this handoff and the roadmap, then asks Jason
+  before starting a new item). Default model `meta/muse-spark-1.3`; override with
+  `CC_LEAD_MODEL=… cc-lead`. **Not** `cc-agent` as the manager, and not Command Code's built-in
+  subagents.
+- **Alternative manager: Antigravity** (`agy`), given this same section as its brief.
+- **Workers: `cc-agent` via `.paul/orders/dispatch.sh`**, DeepSeek V4.1 Flash by default. Between
+  ~01:00 and ~04:00 UTC DeepSeek bills double (the dispatcher prints a NOTE); use `--route mimo`
+  there, or schedule around it.
+- **Git:** this session, only the coordinator ran git. For next session, the lead commits locally
+  after reading each diff and running pytest itself; **push only on Jason's explicit go-ahead.**
+  (Jason may change this.)
+
+**How the manager should work** (what made this session reliable):
+- Every worker gets an order file in `.paul/orders/` (goal, files it may edit, required, what must
+  not change, acceptance with a red-check, what to report). The orders written this session are
+  the templates: `render-sweep.md`, `short-window-note.md`, `cache-state-pin.md`.
+- Pass a log path to `dispatch.sh`; the worker's report is the log's tail. Delete logs before
+  committing.
+- Never accept on the report alone: run pytest with the verify venv, read `git diff --stat` and
+  the key functions, and for rendering changes render a real `results/` dir before and after.
+- Nothing measures in this plan. If a measurement is ever added: no pytest, no edits to
+  `ohyesmlx/*.py` while it runs; Osaurus runs pin residency to 900 and restore byte-exact.
+
+**The plan, in order — each item is one worker order unless marked**
+
+1. **Close v1 on paper** (manager, or one `implement` order; docs only):
+   - `.paul/ROADMAP.md`: Phase 6 complete with dates; plans 06-01 (a/b/c) and 06-02 checked;
+     milestone v1 status Complete; "Last updated". Fix the "6 of 7" count.
+   - `.paul/STATE.md`: milestone 100%, loop position, session continuity.
+   - Check whether `README.md` should carry a short results pointer to the research docs; propose
+     to Jason, do not rewrite the README unasked.
+   - Deep Wiki write-back per LEAD.md (a milestone closed is a durable change).
+2. **Port the Osaurus residency pin** into `scripts/run_grid.sh`, `scripts/run_grid_moe.sh` and
+   `scripts/run_sweep_prompt.sh`, copied from `scripts/run_sweep_cache.sh` (byte-exact copies of
+   `server-runtime.json` and `server.json`, 900 s for the run, restore on exit and on
+   INT/TERM/HUP, verify with `cmp`). Acceptance: `sh -n` on all three, and the manager reads the
+   diff. **Do not run them.**
+3. **Drift markers on a TTFT-ranked sweep** (`report.py`): the marker beside an entry is
+   decode-rate drift, so on `--rank ttft_p50_s` it reads as TTFT drift. Print it only when the
+   rank metric is decode-derived, or label it. Acceptance: pytest green (487 baseline); the
+   published grids (`ohyesmlx grid` over the five dense dirs) render byte-identical;
+   `results/sweep-prompt` and `results/sweep-cache` rendered by TTFT lose the marker.
+4. **0-byte runner stdout logs** (`explain` order first, read-only): `results/sweep-prompt/runner.log`
+   and `results/sweep-cache/runner.log` are empty although the runners echoed progress; the
+   per-run logs are fine. Find why, then fix only if the cause is in the repo.
+5. **Decision for Jason, not a worker:** is a warm-cache TTFT (oMLX 0.49 s, Osaurus 0.40 s at 4k)
+   published beside prefill numbers or in its own lookup column? Record the answer in STATE.md
+   Decisions.
+6. **v2 candidates — plan only, start nothing without Jason**: JANG-in-vMLX as its own cell study
+   (ROADMAP "Out of this milestone"); accuracy via lm-evaluation-harness; repeat the cache split on
+   a non-hybrid model (would mlx-lm, OptiQ and vMLX hit?); vMLX 32k on a later vMLX release (the
+   hybrid prefill path is one-shot in 1.6.59). Use `/paul:discuss-milestone` shape: write a short
+   options note for Jason, do not open a milestone.
 
 ## Open questions for Jason
 
-- **Is a warm-cache TTFT a publishable prefill number, or a lookup number** that belongs in its own
-  column? (oMLX 0.49 s and Osaurus 0.40 s at 4k are lookups.)
+- **Warm-cache TTFT**: plan item 5.
+- **Git for the next session**: plan "Who runs it".
 - **Should a cell that hangs be abandoned rather than retried?** (mlx-optiq on JANG, 600 s.)
 - **Ties are rendered as orderings.** Adjacent cells within ~2.5–3% still get rank numbers.
 - **Column-entry effect** (first cell in a column drifted ~+15% in 3 of 5 fixed-warmup columns)
