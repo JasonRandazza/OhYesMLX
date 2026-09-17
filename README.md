@@ -57,7 +57,13 @@ Raw observations are never discarded, so every summary stays recomputable.
 
 ## Status
 
-Early. Nothing is published yet. See the issue tracker for what's in flight.
+v1 benchmarks complete across dense and MoE format axes, prompt-length sweeps, and KV cache reuse.
+Key findings are published in `docs/research/`:
+- [Dense format axis](docs/research/2026-09-16-phase5-joined-grid.md)
+- [MoE format axis](docs/research/2026-09-16-moe-format-axis.md)
+- [Prompt-length sweep](docs/research/2026-09-16-prompt-length-sweep.md)
+- [Cold vs warm KV cache state](docs/research/2026-09-17-cache-state-split.md)
+- [Memory footprint accounting across runtimes](docs/research/2026-09-16-footprint-is-not-one-quantity.md)
 
 ## License
 
