@@ -198,6 +198,25 @@ RANK_METRICS = {
 
 DEFAULT_RANK = "decode_tps"
 
+# The rank metrics the drift marker qualifies: `decode_tps`, and anything computed from decode
+# rates. `measure.measured_drift` compares per-request decode rates, so the percentage is one
+# metric's movement and the marker's whole claim is "this cell's decode rate moved x% across its
+# own window". Beside a metric that is not a decode rate it makes that claim about a different
+# number, which is how a sweep read on `ttft_p50_s` came to print `drift +11.5%` beside a
+# first-token latency: the cell's decode rate moved and its TTFT did not, and nothing in the
+# marker's words let a reader tell the two apart.
+#
+# Nothing else in `RANK_METRICS` is a decode rate or computed from one, and each neighbour is
+# excluded for a reason of its own. `itl_s` is read off the same decode window, but as that
+# window's interval -- the rate's reciprocal -- so its own movement carries the opposite sign:
+# `drift +17.0%` beside it would report an inter-token gap that grew where the rate rising is
+# the gap shrinking. `aggregate_tps` divides a batch's completion tokens by the wall time it
+# took, prefill and queueing included, and at concurrency > 1 the per-request rate it is read
+# against is the one thing it deliberately is not. `prefill_tps` is prompt over TTFT, and the
+# rest are latency, memory and disk. A metric added to `RANK_METRICS` later belongs here only
+# when it is a decode rate or is computed from one.
+DECODE_DERIVED_RANKS = frozenset({"decode_tps"})
+
 # Every value the row carries, in one place, so the card cannot drift from the table.
 CARD_FIELDS = (
     ("ttft_p50_s", 3),
@@ -1529,7 +1548,7 @@ def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: 
     return "\n".join(lines)
 
 
-def _entry(row: dict | None, rank: str) -> str:
+def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
     """One grid entry, in one of the four states a cell can be in.
 
     A combination no run measured is ``—`` and a cell that ran without clearing a floor is
@@ -1538,6 +1557,13 @@ def _entry(row: dict | None, rank: str) -> str:
     same state the floors print as "not measured"; anything else that is not PASS ran and did
     not clear one. A PASS entry carries its number, and a drifting one carries its marker
     beside it.
+
+    *drift_marker* is the caller's to set, because whether the marker belongs beside this entry
+    depends on what the entry's number is. The figure is a decode rate's movement, so it
+    qualifies an entry carrying a decode rate and misstates any other one (see
+    ``DECODE_DERIVED_RANKS``). ``_sweep_table`` turns it off for a rank the figure does not
+    qualify — a sweep is read on one metric and its entries are that metric alone — and the
+    grid leaves it on, which is the rendering every published grid has had.
 
     A cell that cleared every floor and still has no value for *this* metric is the fourth
     state and gets its own word. ``_number`` renders ``None`` as ``—``, which would file it
@@ -1558,7 +1584,7 @@ def _entry(row: dict | None, rank: str) -> str:
         return "no value"
     number = _rank_number(row, rank)
     markers = []
-    drift = _drift_marker(row)
+    drift = _drift_marker(row) if drift_marker else None
     if drift is not None:
         markers.append(f"drift {drift}%")
     short = _short_marker(row)
@@ -1595,6 +1621,11 @@ def _drift_marker(row: dict) -> str | None:
     ``DRIFT_ANNOTATION_PCT`` call from the same drift measure recorded, so the grid cannot
     annotate a cell the leaderboard leaves alone. The absence a measured cell with no window
     to compare gets is not a finding, and neither is a cell that held still.
+
+    What it returns is the decode rate's movement, so it says nothing about a cell's other
+    metrics. Whether that belongs beside the number the caller is printing is the caller's to
+    decide -- see ``_entry``'s *drift_marker* -- because it is a property of the metric the
+    entry carries and not of the cell.
     """
     note = _drift_note(row.get("drift"), row.get("n_measured") or 0)
     if note is None or note == _DRIFT_ABSENCE:
@@ -1788,6 +1819,17 @@ def render_sweep(
     A run that issued more than one request at a time, or a sweep of concurrency, carries
     ``CONCURRENCY_DRIFT_SENTENCE``: the drift beside a concurrent cell's per-request rate is not
     the unfinished warm-up that annotation was written for.
+
+    An entry carries the drift marker only where the drift figure qualifies the number it sits
+    beside. ``measure.measured_drift`` compares per-request decode rates, so the percentage is one
+    metric's movement: beside a decode rate it is that cell's own, and beside any other metric it
+    states a different one's. A sweep read on `ttft_p50_s` — the prompt-length sweep and the
+    cache-state sweep are both ordered on it — printed `drift +11.5%` beside a first-token latency
+    whose cell's TTFT had not moved, and nothing in the marker's words said which metric had. So
+    the marker rides only a rank in ``DECODE_DERIVED_RANKS``, and every entry ordered on anything
+    else carries its number alone: one rule for every non-decode rank, enforced for all of them by
+    ``_sweep_table``. Nothing is dropped from the record — the drift stays on the row, and each
+    run's own leaderboard prints it beside the decode rate it qualifies.
     """
     if varying not in SWEEP_PINS:
         raise ValueError(
@@ -2070,6 +2112,13 @@ def _sweep_table(
     same function, so a combination no run measured (`—`), a cell that ran and did not clear a
     floor (`FAIL`) and one that cleared every floor without a value for this metric (`no value`)
     stay three facts here as they are there.
+
+    One thing is decided here and not by ``_entry``: whether a drifting cell's marker belongs
+    beside the number. The drift figure is the cell's decode rate moving, so it qualifies an
+    entry that carries a decode rate and misstates an entry carrying anything else — a table
+    ordered on `ttft_p50_s` would print a decode rate's movement as an apparent TTFT movement.
+    The marker therefore rides only a rank in ``DECODE_DERIVED_RANKS``, and every other rank's
+    entries print their numbers alone.
     """
     header = "| cell | " + " | ".join(_sweep_head(column, varying) for column in columns) + " |"
     divider = "|" + "---|" * (header.count("|") - 1)
@@ -2077,7 +2126,12 @@ def _sweep_table(
     for cell in cells:
         entry = [_text(cell)]
         entry += [
-            _entry(index.get((cell, workload, column["key"])), rank) for column in columns
+            _entry(
+                index.get((cell, workload, column["key"])),
+                rank,
+                drift_marker=rank in DECODE_DERIVED_RANKS,
+            )
+            for column in columns
         ]
         lines.append("| " + " | ".join(entry) + " |")
     return "\n".join(lines)

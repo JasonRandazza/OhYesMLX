@@ -3256,6 +3256,88 @@ def test_a_short_measured_window_carries_its_count_into_its_sweep_entry():
     assert table["oq4__mlxlm"]["8"] == "50.5"
 
 
+# The drift marker is a decode rate's movement, and a sweep's entries are the one metric the
+# table is ordered by: the cache sweep published `0.487 (drift +11.5%)` beside a first-token
+# latency whose cell's TTFT had not moved. So the marker rides only a rank in
+# `DECODE_DERIVED_RANKS`, and every other rank prints its entries bare.
+
+
+def drifting_sweep_runs():
+    """Two columns of one sweep, the first carrying a cell that climbed 101 -> 202 tok/s."""
+    return [
+        (
+            SWEEP_RUNS[0],
+            run_header(("chat",), concurrency=1),
+            report.summarize([drift_cell(CLIMBING, disk_bytes=1_000_000)]),
+        ),
+        concurrency_run(SWEEP_RUNS[1], 8),
+    ]
+
+
+def test_a_ttft_ranked_sweep_entry_carries_no_decode_drift_marker():
+    """The reading the prompt sweep and the cache sweep are both published on. The cell is
+    annotated -- its decode rate moved a hundred percent -- and the TTFT it is ordered by did
+    not move at all: a marker beside that entry claims the wrong metric's movement."""
+    runs = drifting_sweep_runs()
+
+    assert "drift +100.0%" in runs[0][2][0]["drift_note"], "the fixture has to be an annotated cell"
+
+    sweep = report.render_sweep(runs, varying="concurrency", rank="ttft_p50_s")
+    table = sweep_tables(sweep)["chat"]
+
+    assert table["oq4__mlxlm"]["1"] == "0.500"
+    assert not any("drift" in entry for cells in table.values() for entry in cells.values())
+    # Annotated and still ranked: the marker is gone from the entry, not the cell from the table.
+    assert "FAIL" not in table["oq4__mlxlm"]["1"]
+    assert "drift +100.0%" in runs[0][2][0]["drift_note"]
+
+
+def test_a_decode_ranked_sweep_entry_keeps_the_drift_marker():
+    """Unchanged where the figure qualifies the number: a decode-ranked sweep prints exactly what
+    it printed before, marker and all."""
+    runs = drifting_sweep_runs()
+
+    sweep = report.render_sweep(runs, varying="concurrency")
+
+    assert sweep_tables(sweep)["chat"]["oq4__mlxlm"]["1"] == "101.0 (drift +100.0%)"
+
+
+def test_every_rank_the_drift_figure_does_not_qualify_prints_its_entries_bare():
+    """One rule for all of them rather than one for TTFT: the marker states a decode rate's
+    movement, so no rank outside `DECODE_DERIVED_RANKS` carries it."""
+    runs = drifting_sweep_runs()
+
+    assert report.DECODE_DERIVED_RANKS <= set(report.RANK_METRICS)
+    for rank in report.RANK_METRICS:
+        entry = sweep_tables(
+            report.render_sweep(runs, varying="concurrency", rank=rank)
+        )["chat"]["oq4__mlxlm"]["1"]
+        if rank in report.DECODE_DERIVED_RANKS:
+            assert entry.endswith("(drift +100.0%)"), rank
+        else:
+            assert "drift" not in entry, rank
+
+
+def test_the_grids_entry_is_not_rank_sensitive():
+    """The rule is the sweep's and it does not leak into the grid: a grid entry carries the
+    cell's marker beside whichever metric the table is ordered by, which is the rendering every
+    published grid has had. A cell's own marker is the cell's fact, and the grid is a matrix of
+    one number per cell rather than a table read on one metric."""
+    runs = [
+        (
+            RUN_A,
+            run_header(("chat",)),
+            report.summarize([drift_cell(CLIMBING, disk_bytes=1_000_000)]),
+        )
+    ]
+
+    by_decode = grid_tables(report.render_grid(runs))["chat"]["oq4"]["mlxlm"]
+    by_ttft = grid_tables(report.render_grid(runs, rank="ttft_p50_s"))["chat"]["oq4"]["mlxlm"]
+
+    assert by_decode == "101.0 (drift +100.0%)"
+    assert by_ttft == "0.500 (drift +100.0%)"
+
+
 def test_the_sweep_names_the_pin_in_its_title_and_every_run_directory_in_its_provenance():
     """A table that does not say what varied between its columns is the thing this project exists
     not to publish, and the block that names every column is what makes the join checkable."""
