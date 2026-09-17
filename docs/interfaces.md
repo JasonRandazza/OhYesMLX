@@ -83,7 +83,9 @@ class TokenCounter:            # ohyesmlx/token_counter.py
 class Runtime:
     name: str                      # "mlxlm" | "osaurus" | "omlx" | "optiq"
     port: int
-    def start(self, artifact_dir: str, model_id: str) -> "Handle": ...
+    def start(self, artifact_dir: str, model_id: str, *,
+              cache_state: str | None = None) -> "Handle": ...    # see "Phase 6 plan 06-02"
+    def cache_state_refusal(self, cache_state: str | None) -> str | None: ...
 
 @dataclass
 class Handle:
@@ -134,6 +136,12 @@ class CellResult:
     status: str                    # "PASS" | "FAIL" | "N/A"
     reason: str | None
     observations: list[Observation]   # EVERY raw sample. Never truncated.
+    warmup_observations: list[Observation]
+    batch_spans: list[float]       # one per measured batch; [] for a sequential cell (06-01b)
+    warmup_plateau: bool | None
+    lost_visit_reason: str | None  # a planned visit that never measured. See the short-window section.
+    cold_load_after_lost_visit: bool
+    measured_pin: int | None       # the run's batch pin; not written to the record
     cold_load_s: float | None
     first_request_s: float | None
     first_request_workload_id: str | None   # which shape made it. See below.
@@ -142,9 +150,12 @@ class CellResult:
     disk_bytes: int | None
 
 def run_cells(cells: list[Cell], workloads: list[Workload], *,
-              warmup: int = 3, measured: int = 5,
-              max_tokens: int = 256, cooldown_s: float = 30.0,
+              warmup: int | str = "plateau", measured: int = 9, concurrency: int = 1,
+              cache_state: str | None = None,
+              cooldown_s: float = 30.0, prompt_tokens: dict | None = None,
               results_dir: str) -> list[CellResult]: ...
+# warmup/measured/concurrency: see "Phase 6 plan 06-01b"; prompt_tokens: 06-01c;
+# cache_state: 06-02. Every one of them is a run header pin and none is a cell property.
 ```
 
 ### `cold_load_s` alone cannot be compared across runtimes
@@ -232,11 +243,12 @@ is never compared across different generation lengths.
 ## `ohyesmlx/report.py` — issue #6
 
 ```python
-def summarize(results: list[CellResult]) -> list[dict]: ...
+def summarize(results: list[CellResult], *, measured: int | None = None) -> list[dict]: ...
 # one row per cell: ttft_p50_s/p90/p99, itl_s, decode_tps, prefill_tps,
-# cold_load_s, peak_mb, disk_bytes, runtime_version, status
+# cold_load_s, peak_mb, disk_bytes, runtime_version, status — plus the short-window
+# fields in "the lost visit and the short measured window" below.
 
-def render_markdown(rows: list[dict], *, axis: str) -> str: ...      # axis: "runtime" | "format"
+def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) -> str: ...
 ```
 
 **`measure.py` owns `results.jsonl`, and is the only thing that writes it.** The
@@ -723,3 +735,129 @@ Qwen3.5-4B: mlx-lm has no check, OptiQ's cap is now `off`, oMLX's discovered lim
 vMLX's memory estimate lands far above it. Osaurus is unreadable and gets a live probe first. A
 `REFUSED` status is built only if a probe shows a refusal; until then an HTTP 400/413 at a long
 prompt reports as the `FAIL` it currently is, and the sweep is not published with one in it.
+
+---
+
+## Phase 6 — the lost visit and the short measured window (found by 06-01c's sweep)
+
+The prompt sweep's Osaurus 128 cell recorded **4 measured requests against a run pinning 9**, on
+a row that was marked `PASS` with no note. Two visits are planned per cell and its quota splits
+5/4; visit 1's `runtime.start()` raised, visit 2 measured its quota of four, and `_set_status`
+rewrote the row from the samples that survived — erasing both the failure and the fact that half
+the window was missing. A reader of that table saw a full `PASS` row with the count column
+reading `4/4`.
+
+Three additions, all of them annotations and none of them floors — the same rule drift follows:
+a window that was short is a result, and dropping it would delete the only row that says so.
+
+```python
+CellResult.lost_visit_reason: str | None   # the failed visit's reason, kept where _set_status
+                                           # cannot overwrite it. None = no visit was lost.
+CellResult.cold_load_after_lost_visit: bool  # the start that recorded cold_load_s came after a
+                                             # lost visit, so it is a warm-page-cache start and
+                                           # not the cell's cold one.
+CellResult.measured_pin: int | None        # the run's batch pin, stamped on every row by
+                                           # run_cells. NOT written to the record: the header
+                                           # owns it there, one copy per run, and a result
+                                           # rebuilt by load_run carries None.
+```
+
+`lost_visit_reason` and `cold_load_after_lost_visit` are written to the record **only when they
+are true**, so a cell whose every visit measured keeps the record it always had, byte for byte;
+both are read back leniently on the same reasoning — every record on disk was written before the
+fields existed and no visit of theirs was lost, so the absence *is* the fact.
+
+```python
+def summarize(results: list[CellResult], *, measured: int | None = None) -> list[dict]: ...
+```
+
+*measured* is the run's batch pin, passed in by a caller joining run directories because a
+result rebuilt by `load_run` does not carry it. A row that landed fewer batches than the pin —
+counted off `batch_spans` above concurrency 1 and off the observations at 1, because the pin
+counts batches — carries `short_note` and the row reads `(n=K of N)` beside its number in the
+grid and the sweep. No pin at all is **no check**, never a pin of zero: that is the honest
+reading of an older record and of a caller that never knew about the pin, and it is the one
+place a run short of its window can go unremarked.
+
+The lost visit rides in the metric card as `lost_visit_note` ("a visit to this cell was lost
+before the one that measured: …; the samples on this row are the surviving visit's"), beside the
+status whose reason it is not, and the cold load carries `cold_load_note` naming which start the
+figure came from. Neither is a floor and neither moves a published number.
+
+## Phase 6 plan 06-02 — the cache-state pin
+
+The cold/warm split, per the Phase 6 design ("Cold versus warm KV"): the same prompt answered
+with a runtime's prefix/KV reuse off and on, the difference between the two being what the cache
+is worth. It is a **pin**, not an axis and not a cell property — one run drives every cell in it
+into one state — so it is joined exactly as the other two sweeps are.
+
+```
+ohyesmlx run ... --cache-state {off,on}
+ohyesmlx sweep <off-run-dir> <on-run-dir> --varying cache_state --rank ttft_p50_s
+```
+
+**The header pin.**
+
+```python
+"cache_state": "off" | "on" | None     # None: the pin was not taken
+```
+
+`PIN_FIELDS` gains `cache_state` and `ABSENT_PINS` reads an absent one as `None` — which is the
+one part of this pin that must not be got wrong. `None` is not a third state and it is not a
+synonym for `"off"`: every run measured before the pin existed ran each runtime's own default,
+and those defaults were not uniform — the Osaurus grid columns ran with its prefix cache ON, and
+the same 2026-09-15 columns ran with oMLX's `--no-cache` and vMLX's two disable flags pinned off.
+Reading the absence as `off` would fold two different cache states into one column and call them
+a comparison. Without the flag every start command is **byte-identical to today**; that is
+checked against recorded literals for all five runtimes, not re-derived.
+
+**The mechanism, per runtime.** `off` disables prefix/KV reuse and `on` enables it, through each
+runtime's own start command:
+
+| runtime | `off` | `on` | where it comes from |
+|---|---|---|---|
+| mlx-lm 0.31.3 | `--prompt-cache-size 0` | `--prompt-cache-size 10` | `mlx_lm/server.py:1872` — "Maximum number of distinct KV caches to hold in the prompt cache", default 10. At 0 the cache holds nothing: every insert evicts the entry it just added (`models/cache.py:1696-1737`), so the `fetch_nearest_cache` at `server.py:753` always answers `None` and every request prefills its prompt whole. |
+| mlx-optiq 0.5.6 | the same two flags | the same two flags | `optiq serve` is a fork of the same server: unknown options are collected (`optiq/cli.py:2332` `ignore_unknown_options`, `:2571` `ctx.args`) and handed to the bundled `mlx_lm.server`'s own argparse (`:3030`), and the bundle is the same mlx-lm 0.31.3. |
+| oMLX 0.6.4 | `--no-cache` (already in the command) | omit `--no-cache` | `omlx/cli.py:1139-1143` — "Disable oMLX paged SSD cache". Absent it, `CacheSettings.enabled` is True (`omlx/settings.py:331`) and the SSD directory resolves to `<base-path>/cache` (`settings.py:387-399`) — for a run, the per-run scratch the runtime is handed and that `stop()` removes. |
+| vMLX 1.6.59 | `--disable-prefix-cache` | `--enable-prefix-cache` | `vmlx_engine/cli.py:3658-3670` — `--enable-prefix-cache` defaults True, `--disable-prefix-cache` is the explicit off. `--disable-block-disk-cache` is in **both** states: left unset, the engine turns the SSD L2 on by itself whenever continuous batching and prefix caching are active (`cli.py:661-701`) and persists it under `~/.cache/vmlx-engine/block-cache/<model_hash>`, so the two states would differ in two things and an `on` cell could serve another run's prefix. |
+| Osaurus 0.25.x | refused unless the host is already off | refused unless the host is already on | No flag exists in either direction. The state is `cache.prefix.enabled` in `~/.osaurus/config/server-runtime.json`, which the harness does **not** edit — the sweep script does, with a byte-exact backup and restore. |
+
+**A state a runtime cannot be driven into is `N/A` with the reason**, through the same path an
+unknown runtime and an unavailable tokenizer take: the runtime is asked
+(`Runtime.cache_state_refusal`) *before* it is started, and `_visit` returns `"skip"` so no later
+visit retries it. Osaurus is the whole of the mechanism: `_visit` asks it whether the live
+`cache.prefix.enabled` matches the requested state (`True` for `on`, `False` for `off`), and a
+disagreement — or a settings file that cannot be read, `MISSING`/`UNREADABLE` included — records
+the refusal instead of measuring. **A restart is not a way to turn a cache on**: a process that
+just started has an empty cache whatever the settings say, so restarting to reach `on` would
+label an off cell as an on one, and a cell measured in a state it did not hold is not a result.
+The reason names the setting and the value that disagreed, because the fix is a script's and not
+this runtime's.
+
+**`render_sweep` gains `varying="cache_state"`.** `concurrency`, `prompt_tokens` and
+`cache_state` are the whole of `SWEEP_PINS`. The one relaxation stays the prompt-length pin's
+alone: a cache sweep's columns are meant to answer the **same** prompt twice, once cold and once
+warm, so every workload's `messages` are compared like any other field and two runs that sent
+different prompts are refused. The columns render **`off` before `on`** — the cold column is the
+baseline the warm one is read against — from `SWEEP_VALUES`, an explicit order rather than the
+accident of how two words sort. `off` vs `on` in a *grid* is refused by guard 1 like any other
+pin difference, and so is an absent pin against a pinned `off`.
+
+**What the sweep is read on.** TTFT, not a rate: a prefix cache that hits collapses prefill, so
+the reading is `ttft_p50_s`. A cell whose runtime never hits the cache measures the same number
+in both columns, and that is a finding — "the cache was worth nothing here" — not a failure.
+The 2026-09-16 probe found exactly that for an oQ4 prefill on four of the five runtimes, and the
+flat-TTFT check (warmup #1 against the measured median) is what tells a hit from a miss rather
+than assuming one.
+
+**The runner** is `scripts/run_sweep_cache.sh`, modelled on `scripts/run_sweep_prompt.sh`: the
+`oq4` cell, five runtimes, `--prompt-tokens 4096`, each runtime `off` then `on`, into
+`results/sweep-cache/`. For Osaurus it snapshots `server-runtime.json` **and** `server.json`
+byte-exact, flips `cache.prefix.enabled` and `cache.blockDisk.enabled` false for `off`, sets
+`modelIdleResidencyPolicy.seconds` to 900 in **both** states (the host's 30 unloads the model
+inside the 30 s cooldown), re-records the baseline so the harness's drift guard passes, and
+restores both files with `git checkout -- config/osaurus-settings-baseline.json` at the end and
+on INT/TERM/HUP. Restoration is verified with `cmp` against the copies rather than with the drift
+guard, because the host's 30 legitimately differs from the committed baseline's 900 and the
+guard would report Jason's own machine as drift forever.
+

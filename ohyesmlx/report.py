@@ -220,9 +220,12 @@ _RANK_PLACES = dict(CARD_FIELDS)
 
 # The run-header pins the grid's first join guard compares across columns. A header carries
 # these and the workloads it measured, and nothing else -- a pin belongs here on the day one
-# exists, and two did: `concurrency` (plan 06-01b) and `prompt_tokens` (plan 06-01c). Both were
-# pinned in the header and left out of this tuple, so an N=8 run and a 32k-prompt run would each
-# have joined a grid of their opposite without a word.
+# exists, and three did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c) and
+# `cache_state` (plan 06-02). The first two were pinned in the header and left out of this
+# tuple, so an N=8 run and a 32k-prompt run would each have joined a grid of their opposite
+# without a word; the third is here from the day it was written. Every one of the three is a
+# property of how the run drove its cells, which is exactly why the grid may not join runs
+# that disagree about it.
 PIN_FIELDS = (
     "temperature",
     "seed",
@@ -231,6 +234,7 @@ PIN_FIELDS = (
     "cooldown_s",
     "concurrency",
     "prompt_tokens",
+    "cache_state",
 )
 
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
@@ -1269,12 +1273,16 @@ def _footnotes() -> list[str]:
 # --- the joined grid ------------------------------------------------------------------------
 
 
-# What a pin is worth on a header that predates it. `concurrency` and `prompt_tokens` are the
-# two that arrived after runs existed: every header written before them drove its requests one
-# at a time and sized no prompt at all, so `1` and `None` are what those runs did rather than
-# defaults standing in for something unknown -- which is what separates them from an absent
-# `temperature`, whose absence is a header this guard cannot compare.
-ABSENT_PINS = {"concurrency": 1, "prompt_tokens": None}
+# What a pin is worth on a header that predates it. `concurrency`, `prompt_tokens` and
+# `cache_state` are the three that arrived after runs existed: every header written before them
+# drove its requests one at a time and sized no prompt at all and ran each runtime's own cache
+# default, so `1`, `None` and `None` are what those runs did rather than defaults standing in
+# for something unknown -- which is what separates them from an absent `temperature`, whose
+# absence is a header this guard cannot compare. `cache_state`'s `None` is the one that matters
+# most here: an absent pin is not `"off"`, because the runs it stands for were not uniform --
+# the Osaurus grid columns ran with its prefix cache ON -- so reading the absence as a state
+# would fold two different cache states into one column and call them a sweep.
+ABSENT_PINS = {"concurrency": 1, "prompt_tokens": None, "cache_state": None}
 
 
 def _check_pins(runs: list[tuple], *, varying: str | None = None) -> None:
@@ -1684,17 +1692,19 @@ def _recommendation(rows: list[dict], rank: str) -> str:
 # --- the Phase 6 sweep ----------------------------------------------------------------------
 
 # The header pins a sweep may vary, and the whole of the list. A cell is `(format, runtime)`,
-# and both of these are properties of how a run *drove* its cells rather than of a cell: that is
-# why they are header pins, why `--study` can name neither of them, and why a sweep is N runs
-# differing in exactly one of them. Anything else a header carries is held by guard 1 like any
-# other pin, so a "sweep" of `temperature` would be a grid with a pin quietly left uncompared.
-SWEEP_PINS = ("concurrency", "prompt_tokens")
+# and all three of these are properties of how a run *drove* its cells rather than of a cell:
+# that is why they are header pins, why `--study` can name none of them, and why a sweep is N
+# runs differing in exactly one of them. Anything else a header carries is held by guard 1 like
+# any other pin, so a "sweep" of `temperature` would be a grid with a pin quietly uncompared.
+SWEEP_PINS = ("concurrency", "prompt_tokens", "cache_state")
 
 # What each swept pin holds, in words a reader of the rendered sweep can act on.
 SWEPT_PIN = {
     "concurrency": "requests issued together in one batch",
     "prompt_tokens": "the length the prompt was sized to, as a target and the count the "
     "serving tokenizer achieved",
+    "cache_state": "whether the runtime's prefix/KV reuse was off or on, as the start command "
+    "pinned it",
 }
 
 # What each sweep holds constant while the pin moves, and -- for the one pin that moves
@@ -1712,7 +1722,22 @@ SWEEP_HELD = {
         "different lengths, so a workload's `messages` is the single field the guard relaxes, "
         "and only for this pin."
     ),
+    "cache_state": (
+        "Every other pin is identical across these runs, and so is every workload down to its "
+        "prompt and its cap -- the runs sent byte-identical prompts and differ only in whether "
+        "the runtime's prefix/KV reuse was off or on, which is the single field the guard "
+        "skips. No prompt is relaxed for this pin: a cache sweep's whole subject is the same "
+        "prompt answered twice."
+    ),
 }
+
+# A swept pin's values in the order they are read, for the one pin whose order is not its
+# numeric one. A cache sweep's reading is the difference between the same prompt answered cold
+# and answered warm, so `off` is the baseline column and `on` is the reading against it; the
+# order is pinned here rather than left to the words' spelling, which happens to sort the same
+# way today and would stop the moment a third value arrived.
+SWEEP_VALUES = {"cache_state": ("off", "on")}
+
 
 # The sentence a sweep of concurrency carries, verbatim. Measured, plan 06-01a: oMLX at N=8
 # swung 65.3-81.0 tok/s of per-request decode rate across 16 batches with no trend and never
@@ -1735,12 +1760,13 @@ def render_sweep(
     and no figure is re-derived. What differs is which one field the runs are allowed to
     disagree about.
 
-    A **cell** is `(format, runtime)`, and *varying* is neither of those: `concurrency` and
-    `prompt_tokens` are properties of how a run drove its cells, so they live in the header. A
-    sweep is N run directories differing in exactly that pin, joined afterwards. Guard 1 is the
-    grid's, with the swept pin skipped, and beside it sit the two refusals a sweep needs and a
-    grid has no use for: a pin holding one value across every run -- a table with one column is
-    not a sweep -- and the same cell measured at one value by two run directories.
+    A **cell** is `(format, runtime)`, and *varying* is neither of those: `concurrency`,
+    `prompt_tokens` and `cache_state` are properties of how a run drove its cells, so they live
+    in the header. A sweep is N run directories differing in exactly that pin, joined
+    afterwards. Guard 1 is the grid's, with the swept pin skipped, and beside it sit the two
+    refusals a sweep needs and a grid has no use for: a pin holding one value across every run
+    -- a table with one column is not a sweep -- and the same cell measured at one value by two
+    run directories.
 
     `varying="prompt_tokens"` is the one relaxation, and the refusal it does not lift is worth
     reading beside it. Its pin is ``{"target": N, "achieved": M}`` and its runs measure the
@@ -1748,11 +1774,15 @@ def render_sweep(
     are dropped from the comparison for this pin, and every other field of every shape is still
     compared. Two runs that pinned one target are one column whatever their tokenizers achieved
     — which is why the pin's key is its target — and two runs whose *other* shapes disagree are
-    still refused.
+    still refused. `cache_state` relaxes nothing: its columns are meant to answer the same
+    prompt twice, once cold and once warm, so a pair of runs whose prompts differ is refused
+    like any other grid.
 
     The columns ascend, because that is the reading: a prompt that got longer or batches that
-    got wider says nothing while the table is in command-line order. Entries are the ``rank``
-    metric, formatted by the same functions the grid formats its own with, so `—`, `FAIL` and
+    got wider says nothing while the table is in command-line order. A pin with an order of its
+    own reads in that order — `cache_state`'s `off` before its `on`, the cold column first
+    because it is the baseline the warm one is read against. Entries are the ``rank`` metric,
+    formatted by the same functions the grid formats its own with, so `—`, `FAIL` and
     `no value` mean here exactly what they mean there.
 
     A run that issued more than one request at a time, or a sweep of concurrency, carries
@@ -1917,9 +1947,11 @@ def _sweep_columns(runs: list[tuple], varying: str) -> list[dict]:
 
     Ascending order is the reading rather than a tidiness: a prompt that got longer or batches
     that got wider says nothing across columns left in the order the directories happened to be
-    named, and every other table in this project names its ordering for the same reason. A column
-    carries the achieved counts its runs landed on, and a column two runs share prints both of
-    them rather than the first.
+    named, and every other table in this project names its ordering for the same reason. A pin
+    with a named order of its own -- `cache_state`'s off-before-on -- reads in that order, which
+    is why the ordering is a property of the pin rather than of the Python type its values
+    happen to be. A column carries the achieved counts its runs landed on, and a column two runs
+    share prints both of them rather than the first.
     """
     columns: dict = {}
     for _label, header, _rows in runs:
@@ -1928,7 +1960,7 @@ def _sweep_columns(runs: list[tuple], varying: str) -> list[dict]:
         achieved = _achieved(header, varying)
         if achieved is not None and achieved not in column["achieved"]:
             column["achieved"].append(achieved)
-    return sorted(columns.values(), key=lambda column: _ascending(column["key"]))
+    return sorted(columns.values(), key=lambda column: _ascending(column["key"], varying))
 
 
 def _achieved(header: dict, varying: str):
@@ -1937,13 +1969,18 @@ def _achieved(header: dict, varying: str):
     return value.get("achieved") if isinstance(value, dict) else None
 
 
-def _ascending(value):
-    """A sort key for one swept pin's values: ascending, with an absent value last.
+def _ascending(value, varying: str):
+    """A sort key for one swept pin's values: its own order, an absent value last.
 
-    A value is a number for both pins that exist, and the only other thing it can be is the
-    absence of a pin the run predates, which sorts after every real value rather than raising.
+    A pin with a named order (`SWEEP_VALUES`) sorts by that order; every other pin's values are
+    numbers and sort numerically. The only other thing a value can be is the absence of a pin
+    the run predates, which sorts after every real value rather than raising.
     """
+    order = SWEEP_VALUES.get(varying)
+    if order is not None:
+        return (value is None, order.index(value) if value in order else len(order))
     return (value is None, "" if value is None else value)
+
 
 
 def _sweep_cells(runs: list[tuple]) -> list[str]:

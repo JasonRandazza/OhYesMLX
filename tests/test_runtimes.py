@@ -466,6 +466,156 @@ def test_no_pinned_command_carries_a_predecessor_placeholder():
 
 
 # --------------------------------------------------------------------------------------
+# The cache pin (plan 06-02)
+# --------------------------------------------------------------------------------------
+#
+# The five start commands with no cache pin: what every runtime ran before the pin existed.
+# Written out rather than recomputed, because the claim is about bytes -- the way to check a
+# command did not change is to compare it against the command that was recorded, not against
+# the expression that produced it.
+
+TODAY = {
+    "mlxlm": ("python", "-m", "mlx_lm.server", "--model", ARTIFACT, "--port", "8081"),
+    "osaurus": ("osaurus", "serve", "--port", "1337", "--yes"),
+    "omlx": (
+        "omlx", "serve", "--model-dir", runtimes.OMLX_CATALOG_TOKEN, "--host", "127.0.0.1",
+        "--port", "8100", "--max-concurrent-requests", "1", "--memory-guard", "off",
+        "--no-cache",
+    ),
+    "optiq": (
+        "optiq", "serve", "--model", ARTIFACT, "--host", "127.0.0.1", "--port", "8080",
+        "--no-anthropic", "--no-responses", "--no-auth", "--max-context", "off",
+        "--max-concurrent", "1", "--idle-timeout", "0", "--context-scale", "1.0",
+        "--no-stream-experts",
+    ),
+    "vmlx": (
+        "vmlx", "serve", ARTIFACT, "--host", "127.0.0.1", "--port", "8000",
+        "--served-model-name", HF_ID, "--stream-interval", "1", "--continuous-batching",
+        "--max-num-seqs", "1", "--no-jit", "--disable-native-mtp", "--disable-prefix-cache",
+        "--disable-block-disk-cache",
+    ),
+}
+
+
+def test_no_cache_pin_leaves_every_start_command_byte_identical_to_today():
+    """Absent is not `off` and not `on`: the pin was never taken, so no runtime's command gains
+    a cache flag, and every one of the five is the tuple this module built before the pin
+    existed. An absent pin read as `off` would have added `--prompt-cache-size 0` to two of
+    these commands and claimed a cache state nobody asked for."""
+    assert set(TODAY) == set(RUNTIMES)
+    for name, runtime in RUNTIMES.items():
+        assert runtime.start_command(ARTIFACT, HF_ID) == TODAY[name]
+        assert runtime.start_command(ARTIFACT, HF_ID, cache_state=None) == TODAY[name]
+
+
+def test_mlxlm_and_optiq_pin_the_prompt_cache_size_in_both_states():
+    """`--prompt-cache-size` is the LRUPromptCache's only control (mlx_lm/server.py:1872,
+    default 10), and at 0 the cache holds nothing: every insert evicts the entry it just added
+    (models/cache.py:1696-1737), so no later request can fetch a prefix. OptiQ runs the same
+    server and takes the same flag through it."""
+    for name in ("mlxlm", "optiq"):
+        off = RUNTIMES[name].start_command(ARTIFACT, HF_ID, cache_state="off")
+        on = RUNTIMES[name].start_command(ARTIFACT, HF_ID, cache_state="on")
+
+        assert off == TODAY[name] + ("--prompt-cache-size", "0")
+        assert on == TODAY[name] + ("--prompt-cache-size", "10")
+        assert "--prompt-cache-size" not in TODAY[name]
+
+
+def test_omlx_off_is_the_flag_it_already_passed_and_on_is_omitting_it():
+    """`--no-cache` is "Disable oMLX paged SSD cache" (omlx/cli.py:1140-1143) and is already in
+    the start command; `on` drops it, which leaves CacheSettings.enabled at its True default
+    (settings.py:331) with the SSD directory under the per-run scratch base path
+    (settings.py:387-399)."""
+    off = RUNTIMES["omlx"].start_command(ARTIFACT, HF_ID, cache_state="off")
+    on = RUNTIMES["omlx"].start_command(ARTIFACT, HF_ID, cache_state="on")
+
+    assert off == TODAY["omlx"] and "--no-cache" in off
+    assert "--no-cache" not in on
+    assert tuple(part for part in off if part != "--no-cache") == on
+
+
+def test_vmlx_moves_one_flag_between_its_states_and_holds_the_disk_tier_off_in_both():
+    """The prefix cache is `--enable-prefix-cache`, default True (cli.py:3659), against
+    `--disable-prefix-cache` (cli.py:3667). The SSD L2 stays disabled in both states: left unset
+    it turns itself on the moment continuous batching and prefix caching are active
+    (_apply_paged_block_disk_default, cli.py:661-701) and persists under the user's cache, which
+    would make the two states differ in two things instead of one and put another run's prefix
+    in an `on` cell."""
+    off = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID, cache_state="off")
+    on = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID, cache_state="on")
+
+    assert off == TODAY["vmlx"]
+    assert "--disable-prefix-cache" in off and "--enable-prefix-cache" not in off
+    assert "--enable-prefix-cache" in on and "--disable-prefix-cache" not in on
+    assert off.count("--disable-block-disk-cache") == 1
+    assert on.count("--disable-block-disk-cache") == 1
+    # Exactly one flag differs between the states, and it is the prefix cache's.
+    assert [part for part in off if part != "--disable-prefix-cache"] == [
+        part for part in on if part != "--enable-prefix-cache"
+    ]
+
+
+def test_osaurus_takes_no_cache_flag_in_either_state():
+    """No flag in either direction: its cache state is host settings, so both states produce
+    the one command, and a state the host is not in is refused rather than faked."""
+    for state in (None, "off", "on"):
+        assert RUNTIMES["osaurus"].start_command(ARTIFACT, HF_ID, cache_state=state) == (
+            TODAY["osaurus"]
+        )
+
+
+def host_prefix_cache(monkeypatch, value):
+    """The live ``cache.prefix.enabled`` the runtime reads, without touching the host's files."""
+    monkeypatch.setattr(
+        runtimes,
+        "capture_osaurus_settings",
+        lambda: {"server-runtime.json:cache.prefix.enabled": value},
+    )
+
+
+def test_osaurus_refuses_the_cache_state_the_host_is_not_in(monkeypatch):
+    """The harness does not edit ~/.osaurus/config, so a requested state is honoured only when
+    the host is already in it -- and the refusal says which setting disagreed, because that is
+    the script's to change and not this runtime's."""
+    osaurus = RUNTIMES["osaurus"]
+
+    host_prefix_cache(monkeypatch, True)
+    assert osaurus.cache_state_refusal("on") is None
+    refusal = osaurus.cache_state_refusal("off")
+    assert "cache.prefix.enabled" in refusal
+    assert "true" in refusal
+    assert "restart" in refusal, "a restart is not a way to turn a cache on"
+
+    host_prefix_cache(monkeypatch, False)
+    assert osaurus.cache_state_refusal("off") is None
+    refusal = osaurus.cache_state_refusal("on")
+    assert "cache.prefix.enabled" in refusal and "false" in refusal
+
+
+def test_osaurus_refuses_a_host_it_cannot_read_rather_than_assuming_a_state(monkeypatch):
+    osaurus = RUNTIMES["osaurus"]
+
+    for sentinel in (osaurus_settings.UNREADABLE, osaurus_settings.MISSING):
+        host_prefix_cache(monkeypatch, sentinel)
+        for state in ("off", "on"):
+            assert "unreadable" in osaurus.cache_state_refusal(state)
+
+
+def test_the_absent_cache_pin_is_never_refused_and_the_flag_runtimes_never_refuse_either(
+    monkeypatch,
+):
+    """The absent pin asks for no state, so nothing can refuse it; and the four runtimes whose
+    cache state is a start flag can be driven into both states."""
+    host_prefix_cache(monkeypatch, True)
+    for runtime in RUNTIMES.values():
+        assert runtime.cache_state_refusal(None) is None
+    for name in ("mlxlm", "omlx", "optiq", "vmlx"):
+        assert RUNTIMES[name].cache_state_refusal("off") is None
+        assert RUNTIMES[name].cache_state_refusal("on") is None
+
+
+# --------------------------------------------------------------------------------------
 # Model-id aliasing
 # --------------------------------------------------------------------------------------
 

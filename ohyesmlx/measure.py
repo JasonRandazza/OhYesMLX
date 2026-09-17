@@ -112,8 +112,12 @@ except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
 
 try:
     from . import runtimes
+    from .runtimes import CACHE_STATES
 except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
     runtimes = None
+    # The runtime module owns these two values; this copy exists only for the import that
+    # finds it absent, where every run fails in _require_modules regardless.
+    CACHE_STATES = ("off", "on")
 
 try:
     from . import transport
@@ -417,6 +421,7 @@ def run_cells(
     warmup: int | str = WARMUP_MODE,
     measured: int = 9,
     concurrency: int = 1,
+    cache_state: str | None = None,
     cooldown_s: float = 30.0,
     prompt_tokens: dict | None = None,
     results_dir: str,
@@ -444,6 +449,15 @@ def run_cells(
     function is called -- and like ``concurrency`` it describes how the run drove the cells
     rather than a cell, so a sweep of it is N runs differing in this one field.
 
+    ``cache_state`` is the same kind of pin: ``"off"`` or ``"on"`` for a run whose cells were
+    measured with their prefix/KV reuse disabled or enabled, and ``None`` when the pin was not
+    taken. ``None`` is not a third state and is never read as ``"off"`` -- every run measured
+    before the pin existed ran each runtime's own default and those defaults were not uniform
+    -- so it rides into the header as the absence it is and into each start command as no flag
+    at all. The state is asked of the runtime before it is started
+    (:meth:`runtimes.Runtime.cache_state_refusal`), and a runtime that cannot be driven into
+    the requested state is ``N/A`` with that reason rather than measured in the other state.
+
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
     are written to ``<results_dir>/results.jsonl`` after every visit, so a run that dies still
@@ -458,6 +472,13 @@ def run_cells(
     if concurrency < 1:
         raise ValueError(
             f"concurrency must be >= 1, not {concurrency!r}: a batch is at least one request"
+        )
+    if cache_state not in (None, *CACHE_STATES):
+        raise ValueError(
+            f"cache_state must be one of {CACHE_STATES} or None, not {cache_state!r}: None is "
+            "the pin not taken and not a third state, which is why it is also not 'off' -- "
+            "the runs measured before the pin existed ran each runtime's own default, and "
+            "those defaults were not uniform"
         )
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
@@ -487,6 +508,11 @@ def run_cells(
         # tokenizer, and a pin this module re-derived would be its own opinion about what the
         # columns sent.
         "prompt_tokens": prompt_tokens,
+        # How the run drove the cells, one more time: `"off"`/`"on"` for a run whose cells
+        # were measured with prefix/KV reuse disabled/enabled, and `None` for the pin not
+        # taken. `None` is not `"off"` in the header either -- an absent pin means each
+        # runtime ran its own default, which is a different fact from a disabled cache.
+        "cache_state": cache_state,
         "cooldown_s": cooldown_s,
     }
 
@@ -508,7 +534,7 @@ def run_cells(
         cell_results = _results_for(cell, workloads, by_key, results, measured=measured)
         measured_before = sum(len(result.observations) for result in cell_results)
         outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
-                         concurrency=concurrency, counters=counters)
+                         concurrency=concurrency, cache_state=cache_state, counters=counters)
         if outcome == "measured":
             reason = lost.pop(cell.id, None)
             for result in cell_results:
@@ -604,6 +630,7 @@ def _visit(
     warmup: int | str,
     quota: int,
     concurrency: int,
+    cache_state: str | None,
     counters: dict,
 ) -> str:
     """One visit to one cell, returning ``"measured"``, ``"retry"`` or ``"skip"``.
@@ -614,6 +641,13 @@ def _visit(
     ``"retry"`` means this visit failed for a reason that may not hold next time — a runtime
     that will not load is usually deterministic, but a port still held by a stale server is
     not — and the samples already taken, if any, stand.
+
+    The requested cache state is asked of the runtime before anything is started, and a state
+    the runtime cannot be driven into is ``"skip"`` with the reason on every row: a cell whose
+    cache state the host disagrees with is not a cell that is briefly unavailable, and
+    measuring it anyway would publish a number under a header pin it does not hold. The check
+    is the runtime's to answer because only it knows its mechanism -- a start flag, or for
+    Osaurus a settings file the harness does not edit.
     """
     runtime = runtimes.RUNTIMES.get(cell.runtime)
     if runtime is None:
@@ -629,10 +663,18 @@ def _visit(
             _na(result, reason)
         return "skip"
 
+    refusal = runtime.cache_state_refusal(cache_state)
+    if refusal is not None:
+        for result in results:
+            _na(result, refusal)
+        return "skip"
+
     try:
         # The artifact directory doubles as the model-id hint; the runtime resolves it to
         # whatever it calls those weights, and that resolved name is what gets recorded.
-        handle = runtime.start(cell.artifact_dir, cell.artifact_dir)
+        handle = runtime.start(
+            cell.artifact_dir, cell.artifact_dir, cache_state=cache_state
+        )
     except Exception as error:  # noqa: BLE001 - a runtime that will not load is a result
         reason = f"runtime {cell.runtime!r} did not start: {type(error).__name__}: {error}"
         for result in results:
@@ -1150,15 +1192,16 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
     Line 1 is the run header — temperature, seed, warmup, measured, concurrency, prompt_tokens,
-    cooldown_s and every workload that was measured, each with the messages it sent and its own
-    max_tokens (a single run-level cap would be a half-truth once three workloads carry three of
-    them). ``warmup`` is the rule that was in force, as a dict, or the integer budget a caller
-    pinned instead; which one it is is what tells a reader how to read ``warmup_count``.
-    ``measured`` counts batches and ``concurrency`` says how many requests are in one, so the two
-    together are how many requests a row holds — and ``concurrency`` is what a sweep varies and a
-    join guard compares, because it is a property of how the run drove the cells, not of a cell.
-    ``prompt_tokens`` rides beside it for the same reason: one prompt length, recorded with the
-    count it achieved.
+    cache_state, cooldown_s and every workload that was measured, each with the messages it sent
+    and its own max_tokens (a single run-level cap would be a half-truth once three workloads
+    carry three of them). ``warmup`` is the rule that was in force, as a dict, or the integer
+    budget a caller pinned instead; which one it is is what tells a reader how to read
+    ``warmup_count``. ``measured`` counts batches and ``concurrency`` says how many requests are
+    in one, so the two together are how many requests a row holds — and ``concurrency`` is what
+    a sweep varies and a join guard compares, because it is a property of how the run drove the
+    cells, not of a cell. ``prompt_tokens`` rides beside it for the same reason: one prompt
+    length, recorded with the count it achieved. ``cache_state`` does too: it is the state the
+    cells were started in, and its absence is the pin not taken rather than a state.
 
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything

@@ -1504,7 +1504,7 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
 
     assert flags == {
         "-h", "--help", "--study", "--cells", "--results-dir", "--rank", "--concurrency",
-        "--prompt-tokens",
+        "--prompt-tokens", "--cache-state",
     }
     # --concurrency is a PIN, not a selector: it says how the named cells are driven, never
     # which cells run. That distinction is the whole reason concurrency is not a third
@@ -2286,7 +2286,7 @@ def test_the_join_states_the_pins_and_every_run_directory_it_joined():
 
     assert (
         "Pins all columns share: temperature `0.0`, seed `0`, warmup `3`, measured `5`, "
-        "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`." in grid
+        "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`, cache_state `—`." in grid
     )
     assert "Workloads all columns ran, with identical messages: `chat` (max_tokens 128)" in grid
 
@@ -2671,6 +2671,48 @@ def test_guard_1_accepts_a_header_that_predates_the_concurrency_pin():
         assert RUN_A in grid and RUN_B in grid
 
 
+def test_guard_1_refuses_a_grid_over_two_cache_states():
+    """`cache_state` is a header pin and a grid joins runs that agree on every one of them. Two
+    states of one cell are a cache sweep's two columns; joined as a grid they would be one table
+    whose difference the reader would attribute to the format or the runtime instead of to the
+    cache."""
+    for state_a, state_b in (("off", "on"), ("on", None)):
+        runs = [
+            grid_run(
+                RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",),
+                header=run_header(("chat",), cache_state=state_a),
+            ),
+            grid_run(
+                RUN_B, "osaurus", "Osaurus 0.25.4", ("jang",), workload_ids=("chat",),
+                header=run_header(("chat",), cache_state=state_b),
+            ),
+        ]
+
+        assert_refused(runs, RUN_A, RUN_B, "cache_state")
+
+
+def test_guard_1_refuses_an_absent_cache_pin_against_a_pinned_off_one():
+    """The defect the pin's absence invites: reading `None` as `off` would say a run whose cache
+    state was never pinned was measured with the cache disabled. Every run on disk before the
+    pin ran each runtime's own default and the Osaurus columns ran with it ON, so the absence is
+    refused against `off` rather than folded into it."""
+    pre_pin = grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",))
+    pinned_off = grid_run(
+        RUN_B,
+        "osaurus",
+        "Osaurus 0.25.4",
+        ("jang",),
+        workload_ids=("chat",),
+        header=run_header(("chat",), cache_state="off"),
+    )
+
+    for runs in ([pre_pin, pinned_off], [pinned_off, pre_pin]):
+        message = assert_refused(runs, RUN_A, RUN_B, "cache_state")
+
+        assert "cache_state=None" in message, "the absence is printed as the absence"
+        assert "cache_state='off'" in message
+
+
 def test_guard_1_refuses_two_runs_that_pinned_a_different_max_tokens():
     header = run_header(("chat",))
     header["workloads"][0]["max_tokens"] = 256
@@ -2896,6 +2938,34 @@ def other_prompt_header(workload_ids=("chat",), **pins):
     return header
 
 
+def cache_run(
+    run_label,
+    state,
+    *,
+    rate=100.0,
+    labels=("oq4",),
+    workload_ids=("prefill",),
+    header=None,
+    **kwargs,
+):
+    """One run of a cache-state sweep: the same prompt with prefix/KV reuse off or on."""
+    return grid_run(
+        run_label,
+        "mlxlm",
+        "mlx-lm 0.31.3",
+        labels,
+        workload_ids=workload_ids,
+        rate_of=lambda *_: rate,
+        header=run_header(workload_ids, cache_state=state) if header is None else header,
+        **kwargs,
+    )
+
+
+def other_cache_header(workload_ids=("prefill",), state="on"):
+    """A cache-sweep header whose one shape answered a prompt no other run sent."""
+    return other_prompt_header(workload_ids, cache_state=state)
+
+
 def sweep_tables(markdown):
     """The sweep's tables as ``{workload: {cell: {column head: entry}}}``, in printed order.
 
@@ -2930,13 +3000,13 @@ def assert_sweep_refused(runs, varying, *fragments):
     return message
 
 
-def test_a_sweep_may_vary_only_one_of_the_two_header_pins():
-    """A cell is (format, runtime) and neither pin is one: they are properties of how a run drove
-    its cells, which is why `--study` cannot name them and why anything else is refused rather
-    than left uncompared."""
+def test_a_sweep_may_vary_only_one_of_the_header_pins():
+    """A cell is (format, runtime) and none of these is one: they are properties of how a run
+    drove its cells, which is why `--study` cannot name them and why anything else is refused
+    rather than left uncompared."""
     runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
 
-    assert report.SWEEP_PINS == ("concurrency", "prompt_tokens")
+    assert report.SWEEP_PINS == ("concurrency", "prompt_tokens", "cache_state")
     assert set(report.SWEEP_PINS) <= set(report.PIN_FIELDS)
     for varying in ("temperature", "seed", "warmup", "measured", "cooldown_s", "decode_tps", None):
         with pytest.raises(ValueError) as raised:
@@ -3089,6 +3159,49 @@ def test_the_sweep_columns_ascend_in_the_order_of_the_pin():
         ]
     )
     assert heads == ["128 (achieved 126)", "16384 (achieved 16380)"]
+
+
+def test_a_cache_state_sweep_renders_the_cold_column_before_the_warm_one():
+    """The order is the pin's own and it is the reading: `off` is the baseline the `on` column
+    is compared against. The runs are handed over the other way round, because a `cache_state`
+    sweep whose columns came out in directory order would be an accident of spelling two words
+    happen to sort the way the history is read."""
+    runs = [
+        cache_run(SWEEP_RUNS[1], "on", rate=200.0),
+        cache_run(SWEEP_RUNS[0], "off", rate=100.0),
+    ]
+
+    sweep = report.render_sweep(runs, varying="cache_state")
+    table = sweep_tables(sweep)["prefill"]["oq4__mlxlm"]
+
+    assert list(table) == ["off", "on"]
+    # Each column carries its own run's number: the two states are not one row printed twice.
+    assert table == {"off": "100.0", "on": "200.0"}
+    # The pin is named where a reader needs it, in the title and in the provenance block.
+    assert "`cache_state`" in sweep.splitlines()[0]
+    assert SWEEP_RUNS[0] in sweep and SWEEP_RUNS[1] in sweep
+    assert "prefix/KV reuse" in sweep
+
+
+def test_a_cache_state_sweep_refuses_two_runs_that_answered_different_prompts():
+    """This pin relaxes nothing. A prompt-length sweep's columns are *meant* to answer different
+    text; a cache sweep's are meant to answer the same text twice, once cold and once warm, so a
+    pair of runs whose prompts differ is refused like any other grid -- the difference between
+    their numbers would be a prompt's and would publish as a cache's."""
+    runs = [
+        cache_run(SWEEP_RUNS[0], "off"),
+        cache_run(SWEEP_RUNS[1], "on", header=other_cache_header()),
+    ]
+
+    assert_sweep_refused(
+        runs,
+        "cache_state",
+        "workload `prefill`",
+        "pinned a different messages",
+        SWEEP_RUNS[0],
+        SWEEP_RUNS[1],
+        "not one grid",
+    )
 
 
 def test_a_combination_no_run_measured_is_an_em_dash_and_a_failure_is_a_fail():

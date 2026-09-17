@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from ohyesmlx import report, token_counter
+from ohyesmlx.runtimes import CACHE_STATES
 
 STUDIES = report.AXES
 
@@ -395,6 +396,17 @@ def _parser() -> argparse.ArgumentParser:
         "never which cells run. A sweep is several runs differing only in this pin.",
     )
     run.add_argument(
+        "--cache-state",
+        choices=CACHE_STATES,
+        default=None,
+        help="pin whether the runtime's prefix/KV reuse is on for this run: `off` disables it "
+        "and `on` enables it, each through the runtime's own start flags. Leaving the flag out "
+        "pins nothing: the header records `None` and every runtime starts at its own default, "
+        "which was not uniform across the grid and is not the same fact as `off`. A state a "
+        "runtime cannot be driven into is N/A with the reason rather than measured in the "
+        "other one. A sweep is several runs differing only in this pin.",
+    )
+    run.add_argument(
         "--results-dir",
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
@@ -432,9 +444,9 @@ def _parser() -> argparse.ArgumentParser:
         "sweep",
         help="join run directories into one sweep of a single header pin",
         description="Join finished run directories that differ in exactly one header pin -- "
-        "concurrency or prompt length -- into one table per workload: cells down, the pin's "
-        "values across. Measures nothing and starts no runtime -- it reads results.jsonl "
-        "files that already exist.",
+        "concurrency, prompt length or cache state -- into one table per workload: cells down, "
+        "the pin's values across. Measures nothing and starts no runtime -- it reads "
+        "results.jsonl files that already exist.",
     )
     sweep.add_argument(
         "run_dirs",
@@ -459,7 +471,8 @@ def _parser() -> argparse.ArgumentParser:
         help=f"the one metric each sweep entry carries (default: {report.DEFAULT_RANK}). A "
         "concurrency sweep's per-request rates fall as N rises by construction, so "
         "`aggregate_tps` is the throughput reading; a prompt-length sweep is compared on "
-        "`ttft_p50_s`.",
+        "`ttft_p50_s`, and so is a cache-state one, where a hit shows as a collapse in the "
+        "time to first token.",
     )
     sweep.add_argument(
         "--out",
@@ -557,6 +570,7 @@ def _run(args) -> int:
         cells,
         shapes,
         concurrency=args.concurrency,
+        cache_state=args.cache_state,
         results_dir=str(run_dir),
         prompt_tokens=prompt_tokens,
     )

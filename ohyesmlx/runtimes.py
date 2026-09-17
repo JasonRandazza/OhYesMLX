@@ -26,6 +26,13 @@ docs/research/2026-09-15-grid-loadability-probe.md).
 
 The flag tuples below are ported verbatim from LMRE's ``runtime_adapters``. They are not
 defaults, they are pins, and each one costs something when it is left to the runtime.
+
+The cache pin (Phase 6, plan 06-02) is a start-command flag on four of the five runtimes and
+a host setting on the fifth. ``cache_state=None`` is the pin not taken, and every runtime
+starts exactly as it did before the pin existed. ``"off"`` is prefix/KV reuse disabled and
+``"on"`` is enabled, and the value a runtime cannot deliver is refused up front rather than
+approximated -- see :meth:`Runtime.cache_state_refusal` and, for the one runtime with no flag
+in either direction, :meth:`Osaurus.cache_state_refusal`.
 """
 
 from __future__ import annotations
@@ -71,6 +78,15 @@ LOG_TAIL_BYTES = 1024 * 1024
 
 LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
+
+# The two states the cache pin may take. `None` is not a third state: it is the absence of the
+# pin, and it must never read as "off" -- the runs measured before the pin existed ran each
+# runtime's own default, and those defaults were not uniform (the Osaurus grid columns ran
+# with its prefix cache ON). `on` is not "whatever the runtime happens to do" either: it is
+# the state whose reuse the run header names, pinned where that runtime has a way to pin it.
+CACHE_STATE_OFF = "off"
+CACHE_STATE_ON = "on"
+CACHE_STATES = (CACHE_STATE_OFF, CACHE_STATE_ON)
 
 # Loopback-only key for a run-owned oMLX. Not a shared secret, and not user state.
 OMLX_API_KEY = "ohyesmlx-local"
@@ -585,7 +601,9 @@ class Runtime:
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self.port}/v1"
 
-    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+    def start_command(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> tuple[str, ...]:
         raise NotImplementedError
 
     def stop_command(self) -> tuple[str, ...]:
@@ -593,6 +611,17 @@ class Runtime:
 
     def version_command(self) -> tuple[str, ...]:
         return ()
+
+    def cache_state_refusal(self, cache_state: str | None) -> str | None:
+        """Why this runtime cannot be measured in *cache_state*, or ``None`` when it can.
+
+        The default is ``None``: a runtime whose prefix/KV reuse is controlled by a
+        start-command flag can be driven into either state by :meth:`start_command`, and the
+        absent pin (``None``) asks for no state at all. The one override is Osaurus, whose
+        cache state is host settings this harness must not edit -- it refuses a state the host
+        is not in rather than measuring something else and labelling it.
+        """
+        return None
 
     def version(self) -> str:
         """Provenance for this runtime's build. Never raises; absence says why."""
@@ -620,10 +649,10 @@ class Runtime:
         """Refuse to start when host state this runtime cannot pin has moved."""
 
     def build_command(
-        self, artifact_dir: str, model_id: str
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
     ) -> tuple[tuple[str, ...], str | None]:
         """The argv to spawn, plus any scratch tree a stop will have to remove."""
-        return self.start_command(artifact_dir, model_id), None
+        return self.start_command(artifact_dir, model_id, cache_state=cache_state), None
 
     def await_ready(
         self,
@@ -678,15 +707,24 @@ class Runtime:
                 )
             _sleep(READY_POLL_S)
 
-    def start(self, artifact_dir: str, model_id: str) -> Handle:
-        """Spawn the runtime, hold until it can answer, and return its handle."""
+    def start(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> Handle:
+        """Spawn the runtime, hold until it can answer, and return its handle.
+
+        *cache_state* is the run's cache pin, threaded into the start command; ``None`` is the
+        pin not taken and produces the command this method produced before the pin existed.
+        The refusal is not made here: :meth:`cache_state_refusal` is the measurement loop's to
+        ask, before it starts anything, so a state this runtime cannot be driven into is
+        recorded as ``N/A`` with its reason rather than raised as a start failure.
+        """
         if not _port_is_free(self.port):
             raise RuntimeStartError(
                 f"port {self.port} is already held by a listener this run did not "
                 f"start; refusing to start {self.name} over it"
             )
         self.check_host_state()
-        command, scratch = self.build_command(artifact_dir, model_id)
+        command, scratch = self.build_command(artifact_dir, model_id, cache_state=cache_state)
         log_path = _log_path(self.name)
         started = _now()
         pid = None
@@ -723,11 +761,49 @@ class Runtime:
         )
 
 
+def prompt_cache_flags(cache_state: str | None) -> tuple[str, ...]:
+    """The mlx-lm ``LRUPromptCache`` flags for one cache state: none, off, or a pinned on.
+
+    mlx_lm 0.31.3 keeps an LRU prompt cache and reuses the nearest prefix across requests
+    (``server.py:753``, ``fetch_nearest_cache``), and ``--prompt-cache-size`` is its only
+    control: "Maximum number of distinct KV caches to hold in the prompt cache"
+    (``server.py:1872``, default 10). At 0 the cache holds nothing -- every insert evicts the
+    entry it just added (``models/cache.py:1696-1737``), so ``fetch_nearest_cache`` always
+    answers ``None`` and every request prefills its prompt whole. That is ``off``.
+
+    ``on`` pins the value instead of relying on it: 10 is what this mlx-lm defaults to, and a
+    command that claimed to pin the cache on while naming no size would be adopting whatever a
+    later version's default became.
+
+    OptiQ runs this same server -- ``optiq serve`` passes flags it does not know through to
+    ``mlx_lm.server``'s own argparse (``optiq/cli.py:2571`` collecting ``ctx.args``, ``:3030``
+    handing them to ``mlx_lm.server``, with ``ignore_unknown_options`` set at ``:2332``) and
+    bundles the same mlx-lm 0.31.3 -- so both runtimes read one definition of what the flag
+    means instead of two that would drift.
+    """
+    if cache_state == CACHE_STATE_OFF:
+        return ("--prompt-cache-size", "0")
+    if cache_state == CACHE_STATE_ON:
+        return ("--prompt-cache-size", "10")
+    return ()
+
+
 class MlxLm(Runtime):
     """The control: stock mlx-lm's own server."""
 
-    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
-        return ("python", "-m", "mlx_lm.server", "--model", artifact_dir, "--port", str(self.port))
+    def start_command(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> tuple[str, ...]:
+        return (
+            "python",
+            "-m",
+            "mlx_lm.server",
+            "--model",
+            artifact_dir,
+            "--port",
+            str(self.port),
+            *prompt_cache_flags(cache_state),
+        )
 
     def version_command(self) -> tuple[str, ...]:
         return ("python", "-m", "mlx_lm", "--version")
@@ -742,10 +818,45 @@ class MlxLm(Runtime):
 class Osaurus(Runtime):
     """The one runtime with no tuning flags to pin, and host settings instead."""
 
-    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+    def start_command(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> tuple[str, ...]:
         # No model and no tuning on the command line: what a cell measures is decided by
-        # ~/.osaurus/config, which check_host_state refuses to run away from.
+        # ~/.osaurus/config, which check_host_state refuses to run away from. The cache pin
+        # is one of those settings, so it adds no flag here in either state -- and the state
+        # it cannot be asked for is refused by cache_state_refusal below, never faked.
         return ("osaurus", "serve", "--port", str(self.port), "--yes")
+
+    def cache_state_refusal(self, cache_state: str | None) -> str | None:
+        """Refuse a requested cache state the host's own settings disagree with.
+
+        Osaurus takes no flag for its prefix cache in either direction: the state lives in
+        ``~/.osaurus/config/server-runtime.json``, under ``cache.prefix.enabled``, and the
+        harness does not edit the host's files -- editing them is the sweep script's job, with
+        a byte-exact backup and a restore, because it is a change to Jason's machine rather
+        than to this run.
+
+        So a requested state is honoured only when the host is already in it, and anything
+        else is ``N/A`` with this reason. A restart is not a way to turn the cache on: a
+        process that just started has an empty cache, which is ``off`` whatever the settings
+        say, so restarting to reach ``on`` would label an off cell as an on one.
+        """
+        if cache_state is None:
+            return None
+        live = capture_osaurus_settings().get("server-runtime.json:cache.prefix.enabled")
+        wanted = cache_state == CACHE_STATE_ON
+        if live is wanted:
+            return None
+        state = {True: "true", False: "false"}.get(live, f"unreadable ({live})")
+        return (
+            f"cache_state={cache_state!r} needs Osaurus's prefix cache "
+            f"{'on' if wanted else 'off'}, and the host has cache.prefix.enabled "
+            f"{state} in ~/.osaurus/config/server-runtime.json. Osaurus exposes no "
+            "start-command flag for the cache, and the harness does not edit the host's "
+            "settings, so this cell is N/A in this state rather than measured in another "
+            "one. A restart is not a way to turn the cache on: a fresh process has an empty "
+            "cache whatever the settings say."
+        )
 
     def stop_command(self) -> tuple[str, ...]:
         return ("osaurus", "stop")
@@ -802,8 +913,10 @@ class Osaurus(Runtime):
 class Omlx(Runtime):
     """The runtime that has to be given a model directory it cannot see past."""
 
-    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
-        return (
+    def start_command(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> tuple[str, ...]:
+        command = (
             "omlx",
             "serve",
             "--model-dir",
@@ -816,8 +929,16 @@ class Omlx(Runtime):
             "1",
             "--memory-guard",
             "off",
-            "--no-cache",
         )
+        # `--no-cache` is "Disable oMLX paged SSD cache" (omlx/cli.py:1140-1143) and its
+        # absence leaves the cache on, because CacheSettings.enabled defaults True
+        # (omlx/settings.py:331) and the SSD directory defaults to <base-path>/cache
+        # (settings.py:387-399) -- which for a run is the per-run scratch this runtime is
+        # given, removed with it at stop. So `off` is the flag that is already there, `on`
+        # is dropping it, and the absent pin keeps today's command byte for byte.
+        if cache_state != CACHE_STATE_ON:
+            command += ("--no-cache",)
+        return command
 
     def version_command(self) -> tuple[str, ...]:
         return ("omlx", "--version")
@@ -832,12 +953,12 @@ class Omlx(Runtime):
         )
 
     def build_command(
-        self, artifact_dir: str, model_id: str
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
     ) -> tuple[tuple[str, ...], str | None]:
         scratch = create_omlx_scratch(artifact_dir, model_id)
         command = tuple(
             str(scratch.catalog) if part == OMLX_CATALOG_TOKEN else part
-            for part in self.start_command(artifact_dir, model_id)
+            for part in self.start_command(artifact_dir, model_id, cache_state=cache_state)
         )
         return command + (
             "--base-path",
@@ -850,7 +971,9 @@ class Omlx(Runtime):
 class Optiq(Runtime):
     """The fork whose expert-streaming heuristic silently costs 5x on large artifacts."""
 
-    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+    def start_command(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> tuple[str, ...]:
         return (
             "optiq",
             "serve",
@@ -879,6 +1002,9 @@ class Optiq(Runtime):
             # 0.70 * total_RAM; identical weights then decode ~5x slower with nothing in
             # the artifact explaining it. Pin it off; never leave it auto.
             "--no-stream-experts",
+            # The cache pin, under the same flag stock mlx-lm takes: optiq serve forwards
+            # what it does not know to the mlx_lm.server underneath it.
+            *prompt_cache_flags(cache_state),
         )
 
     def version_command(self) -> tuple[str, ...]:
@@ -946,7 +1072,23 @@ class Vmlx(Runtime):
     neither choice is neutral and this omission is the recorded one.
     """
 
-    def start_command(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+    def start_command(
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+    ) -> tuple[str, ...]:
+        # The prefix cache is `--enable-prefix-cache`, default True (cli.py:3659) against
+        # `--disable-prefix-cache` for the explicit off (cli.py:3667), and `on` pins the
+        # enable rather than leaving the default to speak for itself.
+        #
+        # The block-disk tier stays off in BOTH states, and that is the single-variable rule
+        # rather than tidiness: when neither block-disk flag is passed the engine turns the
+        # SSD L2 on by itself the moment continuous batching and prefix caching are both
+        # active (`_apply_paged_block_disk_default`, cli.py:661-701), writing to
+        # ~/.cache/vmlx-engine/block-cache/<model_hash> -- state that survives restarts, is
+        # not this run's, and would make an `on` cell's prefix possibly another run's. One
+        # flag moves between the two states, and it is the prefix cache.
+        prefix = ("--enable-prefix-cache",)
+        if cache_state != CACHE_STATE_ON:
+            prefix = ("--disable-prefix-cache",)
         return (
             "vmlx",
             "serve",
@@ -975,10 +1117,10 @@ class Vmlx(Runtime):
             # something that is not the variable being measured.
             "--no-jit",
             "--disable-native-mtp",
+            *prefix,
             # A cache hit is invisible to Observation, which carries no cached_tokens, so it
             # would publish as prefill throughput. The block disk cache also survives restarts
             # and is trimmed synchronously inside cold load, on a 22 GB cache that is not ours.
-            "--disable-prefix-cache",
             "--disable-block-disk-cache",
         )
 

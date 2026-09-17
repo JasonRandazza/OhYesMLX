@@ -109,7 +109,8 @@ class FakeRuntime:
     """``ohyesmlx.runtimes.Runtime``: one port, one start, one Handle."""
 
     def __init__(self, name, recorder, *, port=8081, version="0.31.3", cold_load_s=7.5,
-                 start_error=None, fail_from_attempt=None, fail_attempts=()):
+                 start_error=None, fail_from_attempt=None, fail_attempts=(),
+                 cache_state_refusals=None):
         self.name = name
         self.port = port
         self.version = version
@@ -120,10 +121,17 @@ class FakeRuntime:
         self.recorder = recorder
         self.attempts = 0
         self.handles: list[FakeHandle] = []
+        # ``{state: reason}`` for the states this runtime cannot be driven into. Empty by
+        # default: every real runtime but Osaurus reaches both with a start flag, and the
+        # absent pin reaches both everywhere.
+        self.cache_state_refusals = dict(cache_state_refusals or {})
 
-    def start(self, artifact_dir, model_id):
+    def cache_state_refusal(self, cache_state):
+        return self.cache_state_refusals.get(cache_state)
+
+    def start(self, artifact_dir, model_id, *, cache_state=None):
         self.attempts += 1
-        self.recorder.log("start", self.name, artifact_dir, model_id)
+        self.recorder.log("start", self.name, artifact_dir, model_id, cache_state)
         if self.start_error is not None and self._fails(self.attempts):
             raise self.start_error
         handle = FakeHandle(
@@ -332,7 +340,18 @@ def harness(monkeypatch, tmp_path):
 
 
 def starts(harness):
-    return [runtime for runtime, _artifact_dir, _model_id in harness.recorder.of("start")]
+    return [
+        runtime
+        for runtime, _artifact_dir, _model_id, _cache_state in harness.recorder.of("start")
+    ]
+
+
+def started_cache_states(harness):
+    """The cache state every start was asked for, in order."""
+    return [
+        cache_state
+        for _runtime, _artifact, _model, cache_state in harness.recorder.of("start")
+    ]
 
 
 # ---------------------------------------------------------------- one decode definition
@@ -2332,6 +2351,130 @@ def test_the_run_header_pins_the_prompt_length_verbatim_or_none(harness):
 
     harness.run([cell], measured=1, results_dir=harness.tmp_path / "literals")
     assert harness.header(harness.tmp_path / "literals")["prompt_tokens"] is None
+
+
+# ---------------------------------------------------------------------------- the cache pin
+#
+# The pin exists so one cell can be measured with its prefix/KV reuse off and on. The absence
+# of the pin is not one of the two states: the runs measured before it existed ran each
+# runtime's own default, and those defaults were not uniform -- the Osaurus grid columns ran
+# with its cache ON -- so `None` must not read as `off` anywhere the value is recorded, and it
+# must not reach a start command as a flag.
+
+
+def test_the_run_header_pins_the_cache_state_and_an_absent_pin_is_not_off(harness):
+    """`None` is the pin not taken and never a synonym for `off`.
+
+    Three runs, three header values: `off` and `on` are the states a sweep's columns differ in,
+    and a run that names neither drives each runtime at its own default, which is a different
+    fact from a disabled cache and is what every run on disk before this pin holds.
+    """
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.run([cell], measured=1, cache_state="off")
+    assert harness.header()["cache_state"] == "off"
+    assert measure.load_run(harness.results_file())[0]["cache_state"] == "off"
+
+    harness.run([cell], measured=1, cache_state="on", results_dir=harness.tmp_path / "warm")
+    assert harness.header(harness.tmp_path / "warm")["cache_state"] == "on"
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "unpinned")
+    unpinned = harness.header(harness.tmp_path / "unpinned")["cache_state"]
+    assert unpinned is None, "an absent pin is the absence, not the 'off' state"
+    assert unpinned != "off"
+
+
+def test_every_start_is_asked_for_the_runs_cache_state(harness):
+    """The pin reaches the runtime, in both states and as no state at all: `None` is no flag,
+    which is what keeps a run that never named the pin byte-identical to one from before it.
+    One batch is one visit, so three runs of one batch are three starts."""
+    harness.add_runtime("mlxlm")
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=1, cache_state="on")
+    assert started_cache_states(harness) == ["on"]
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=1, cache_state="off",
+                results_dir=harness.tmp_path / "cold")
+    assert started_cache_states(harness) == ["on", "off"]
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=1,
+                results_dir=harness.tmp_path / "unpinned")
+    assert started_cache_states(harness) == ["on", "off", None]
+
+
+def test_a_state_the_runtime_cannot_be_driven_into_is_na_with_its_reason(harness):
+    """Where a runtime has no way to reach a state, the cell is `N/A` with the reason -- the
+    same path an unknown runtime and an unavailable tokenizer take -- and nothing is started.
+    A restart is not a way to turn a cache on, so approximating the state by starting anyway
+    would publish a number under a header pin the cell does not hold."""
+    harness.add_runtime(
+        "osaurus",
+        cache_state_refusals={"off": "the host's cache.prefix.enabled is true, not false"},
+    )
+    cell = harness.cell("oq__osaurus", "osaurus")
+
+    results = harness.run([cell], cache_state="off")
+
+    assert [result.status for result in results] == ["N/A"]
+    assert "cache.prefix.enabled" in results[0].reason
+    assert results[0].observations == []
+    assert results[0].cold_load_s is None
+    assert harness.recorder.of("start") == [], "a refused state starts no runtime"
+    assert started_cache_states(harness) == []
+    # The reason is the run's own, so it survives the reload and the leaderboard prints it.
+    assert measure.load_run(harness.results_file())[1][0].reason == results[0].reason
+
+    # The state the runtime can be driven into is measured as usual: the refusal is about the
+    # state asked for, not about the cell.
+    harness.run([cell], cache_state="on", results_dir=harness.tmp_path / "warm")
+    assert started_cache_states(harness) == ["on", "on"]
+
+
+def test_a_cache_state_that_is_not_one_of_the_two_is_refused_before_anything_starts(harness):
+    harness.add_runtime("mlxlm")
+
+    with pytest.raises(ValueError, match="cache_state"):
+        harness.run([harness.cell("oq__mlxlm", "mlxlm")], cache_state="lukewarm")
+
+    assert harness.transport.calls == []
+    assert harness.recorder.of("start") == []
+
+
+def test_the_real_osaurus_refusal_reaches_the_record_through_the_loop(harness, monkeypatch):
+    """The two modules on their real shapes -- the runtime that decides and the loop that
+    records -- so the reason a reader sees is the one the runtime actually wrote and not a
+    fake's stand-in. The host's settings are read and never edited: a request for the state
+    the host is not in lands on the row as `N/A` naming the setting that disagreed."""
+    from ohyesmlx import runtimes as real_runtimes
+
+    monkeypatch.setattr(
+        real_runtimes,
+        "capture_osaurus_settings",
+        lambda: {"server-runtime.json:cache.prefix.enabled": True},
+    )
+    harness.runtimes.RUNTIMES["osaurus"] = real_runtimes.RUNTIMES["osaurus"]
+
+    results = harness.run([harness.cell("oq__osaurus", "osaurus")], cache_state="off")
+
+    assert [result.status for result in results] == ["N/A"]
+    assert "cache.prefix.enabled" in results[0].reason
+    assert "true" in results[0].reason
+    assert "restart" in results[0].reason
+    assert harness.recorder.of("start") == [], "nothing was started for a refused state"
+
+
+def test_a_run_that_never_took_the_pin_asks_neither_runtime_for_a_state(harness):
+    """Two runtimes, no pin: every start is asked for `None`, which is what leaves each start
+    command exactly as it was before the pin existed."""
+    harness.add_runtime("mlxlm")
+    harness.add_runtime("omlx", port=8100)
+
+    harness.run(
+        [harness.cell("oq__mlxlm", "mlxlm"), harness.cell("oq__omlx", "omlx")], measured=1
+    )
+
+    assert set(started_cache_states(harness)) == {None}
 
 
 def test_a_run_at_four_issues_four_requests_per_batch_and_records_one_span(harness):
