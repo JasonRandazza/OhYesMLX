@@ -1,0 +1,14 @@
+Done. Everything the order asked for is in place and verified offline.
+
+**Changed**
+- `scripts/probe_accuracy_cell.py` — added `MMLU_LIMIT_DEFAULT = 40` and extracted the task-plan resolution into `plan_tasks(is_replicate, task_override, limit_override, mmlu_limit)`; `run_cell` now takes `mmlu_limit` (default 40) and the dial moves **only** `mmlu_generative`'s limit (GSM8K 250 / IFEval 250 untouched). New `--mmlu-limit` CLI arg (type=int, default=40); all existing args and `--no-disable-thinking` handling preserved verbatim. Self-test gained 5 assertions covering the dial, the 40 no-op, the replicate plan, `--task gsm8k`, and the `--limit` precedence.
+- `scripts/run_accuracy_moe.sh` — `run_cell` now passes `--mmlu-limit 20 --no-disable-thinking`; header names the §3.3 pre-registered dial. Cell list re-verified as the required 8: 5 vMLX Column A, 2 replicate (`jang2l` first, reversed), 1 Osaurus Study 2C behind `osaurus_pin`/`restore_and_check` (900s, byte-exact `cmp`) — no structural change needed.
+- `scripts/analyze_accuracy_moe.py` — **not touched**. Nothing in it hardcodes an item count (grep for 2280/1140/2780/40: no matches); all counts derive from loaded samples, so the "only if needed" condition never triggered.
+
+**Verification**
+- Baseline before edits: pytest **495 passed**, both self-tests ok. After: pytest **495 passed**, `probe_accuracy_cell self-test ok`, `analyze_accuracy_moe self-test ok`, `sh -n` clean, `--help` shows `--mmlu-limit`.
+- Red-check: disabled the dial (`if False`), self-test failed at `plan_tasks(False, None, None, 20)` — MMLU would have stayed at 40 items/subject; restored, sha256 `f721c66a…` identical to pre-red-check.
+
+**Judgment call, stated not hidden:** the spec doesn't say what happens when `--limit` and `--mmlu-limit` are both given. I applied `limit_override` first and the MMLU dial after, so the specific dial wins for MMLU — the literal reading of rule 1 ("set `limit` for `mmlu_generative` to `mmlu_limit`"), and pinned by a self-test assertion. Neither runner passes both.
+
+**Not verified:** no runtime was started and the runner was not executed end-to-end (out of scope per standing rules), so the `--no-disable-thinking` HTTP-400 behaviour is unchanged-and-untested from baseline, not re-proven.

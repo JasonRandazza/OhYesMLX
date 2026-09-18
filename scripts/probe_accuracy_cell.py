@@ -45,14 +45,17 @@ REQUEST_TIMEOUT_S = 300.0
 TASK_TIMEOUT_S = 14400.0  # 4 hours per task ceiling
 
 # Task configurations for Plan 02-02 (Dense Accuracy Study)
+# Items per MMLU subject (57 subjects). Plan 02-03 dials this to 20 (1,140 items);
+# nothing else moves — design §3.3, pre-registered.
+MMLU_LIMIT_DEFAULT = 40
 DEFAULT_TASKS = (
-    ("mmlu_generative", 40, 5),   # 40 items per subject * 57 subjects = 2,280 items, 5-shot
+    ("mmlu_generative", MMLU_LIMIT_DEFAULT, 5),   # 40 items per subject * 57 subjects = 2,280 items, 5-shot
     ("gsm8k", 250, 5),            # 250 items, 5-shot CoT
     ("ifeval", 250, 0),           # 250 items, 0-shot
 )
 
 REPLICATE_TASKS = (
-    ("mmlu_generative", 40, 5),   # Replicate is MMLU only
+    ("mmlu_generative", MMLU_LIMIT_DEFAULT, 5),   # Replicate is MMLU only
 )
 
 
@@ -163,12 +166,36 @@ def newest_file(pattern: str, before: set[str]) -> str | None:
     return max(written, key=os.path.getmtime) if written else None
 
 
+def plan_tasks(
+    is_replicate: bool,
+    task_override: str | None,
+    limit_override: int | None,
+    mmlu_limit: int = MMLU_LIMIT_DEFAULT,
+) -> list[tuple[str, int, int]]:
+    plan = list(REPLICATE_TASKS if is_replicate else DEFAULT_TASKS)
+    if task_override:
+        plan = [t for t in plan if t[0] == task_override]
+        if not plan:
+            plan = [(task_override, limit_override or 10, 0)]
+    if limit_override is not None:
+        plan = [(t[0], limit_override, t[2]) for t in plan]
+    if mmlu_limit != MMLU_LIMIT_DEFAULT:
+        plan = [
+            (t[0], mmlu_limit if t[0] == "mmlu_generative" else t[1], t[2]) for t in plan
+        ]
+    return plan
+
+
 def run_cell(
     runtime_name: str,
     cell_label: str,
     artifact_path: str,
     out_dir: str,
     is_replicate: bool = False,
+    task_override: str | None = None,
+    limit_override: int | None = None,
+    disable_thinking: bool = True,
+    mmlu_limit: int = MMLU_LIMIT_DEFAULT,
 ) -> int:
     os.makedirs(out_dir, exist_ok=True)
     manifest_path = os.path.join(out_dir, "manifest.json")
@@ -200,7 +227,7 @@ def run_cell(
             return 1
 
     runtime = runtimes.RUNTIMES[runtime_name]
-    task_plan = REPLICATE_TASKS if is_replicate else DEFAULT_TASKS
+    task_plan = plan_tasks(is_replicate, task_override, limit_override, mmlu_limit)
     logs_dir = Path(ROOT) / "results" / "logs"
     logs_before = set(glob.glob(str(logs_dir / f"{runtime_name}-*.log")))
 
@@ -244,12 +271,15 @@ def run_cell(
                 "--model_args", model_args,
                 "--apply_chat_template",
                 "--fewshot_as_multiturn",
-                "--gen_kwargs", "enable_thinking=false",
                 "--tasks", task_name,
                 "--limit", str(limit),
                 "--output_path", task_out + os.sep,
                 "--log_samples",
             ]
+            if disable_thinking:
+                cmd.extend(["--gen_kwargs", "enable_thinking=false"])
+            else:
+                cmd.extend(["--gen_kwargs", "until=<|im_end|>"])
             if num_fewshot > 0:
                 cmd.extend(["--num_fewshot", str(num_fewshot)])
 
@@ -363,6 +393,21 @@ def self_test() -> int:
         assert count_of(None, res_file, "mmlu_generative") == 2280
         assert task_hash_of(res_file, "gsm8k") == {"gsm8k": "hash_gsm"}
 
+    # Budget dial: mmlu_limit moves MMLU alone; GSM8K and IFEval keep their pins.
+    assert plan_tasks(False, None, None, 20) == [
+        ("mmlu_generative", 20, 5),
+        ("gsm8k", 250, 5),
+        ("ifeval", 250, 0),
+    ]
+    assert plan_tasks(False, None, None, MMLU_LIMIT_DEFAULT) == list(DEFAULT_TASKS)
+    assert plan_tasks(True, None, None, 20) == [("mmlu_generative", 20, 5)]
+    assert plan_tasks(False, "gsm8k", None, 20) == [("gsm8k", 250, 5)]
+    assert plan_tasks(False, None, 5, 20) == [
+        ("mmlu_generative", 20, 5),
+        ("gsm8k", 5, 5),
+        ("ifeval", 5, 0),
+    ]
+
     print("probe_accuracy_cell self-test ok")
     return 0
 
@@ -373,6 +418,10 @@ def main() -> int:
     parser.add_argument("--cell", help="Cell label, e.g. stock4bit__vmlx")
     parser.add_argument("--artifact", help="Absolute path to model snapshot directory")
     parser.add_argument("--out", help="Output directory for cell results")
+    parser.add_argument("--task", help="Run only this specific task")
+    parser.add_argument("--limit", type=int, help="Override item limit per task")
+    parser.add_argument("--mmlu-limit", type=int, default=MMLU_LIMIT_DEFAULT, help="Items per MMLU subject (Plan 02-03 budget dial: 20 = 1,140 items)")
+    parser.add_argument("--no-disable-thinking", dest="disable_thinking", action="store_false", help="Do not pass enable_thinking=false in gen_kwargs")
     parser.add_argument("--replicate", action="store_true", help="Run replicate pass (MMLU only)")
     parser.add_argument("--self-test", action="store_true", help="Run offline unit self-test")
     args = parser.parse_args()
@@ -389,6 +438,10 @@ def main() -> int:
         artifact_path=args.artifact,
         out_dir=args.out,
         is_replicate=args.replicate,
+        task_override=args.task,
+        limit_override=args.limit,
+        disable_thinking=args.disable_thinking,
+        mmlu_limit=args.mmlu_limit,
     )
 
 
