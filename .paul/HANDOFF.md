@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-18 (Phase 2 Track 2 Accuracy Scoring: Plan 02-02 Complete, Plan 02-03 Ready)"
+description: "OhYesMLX — session handoff, 2026-09-18 (Phase 2 Track 2 Accuracy Scoring: Plan 02-03 MoE Campaign In Flight)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-18 (v2 Phase 2 Track 2 Accuracy Scoring: Plan 02-02 Complete, Plan 02-03 Ready)
+# Handoff — 2026-09-18 (v2 Phase 2 Track 2 Accuracy Scoring: Plan 02-03 MoE Campaign In Flight)
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
@@ -20,33 +20,36 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 - **v1 is 100% closed and published.**
 - **v2 Milestone active (0.2.0):** JANG Study and Accuracy Scoring.
 - **v2 Phase 1 (Track 1: The JANG Study) is 100% COMPLETE & PUBLISHED.**
-- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-01 is 100% COMPLETE & PUBLISHED.**
-- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-02 is 100% COMPLETE & PUBLISHED:**
-  - **Research Report published:** [`docs/research/2026-09-18-accuracy-dense.md`](file:///Users/jrazz/Dev/active/OhYesMLX/docs/research/2026-09-18-accuracy-dense.md) (11 cells, 30,580 evaluations, all PASS).
-  - **Q2 Answered (Outcome P1: Quality Parity):** `JANG_4S` delivers its +14–17% decode speedup with zero accuracy penalty vs uniform 4-bit (`stock4bit`) on MMLU (+0.53 pp [95% CI: -0.38, +1.43 pp], strictly inside ±1.5 pp band).
-  - **Q3 Answered (OptiQ Strictly Pareto-Dominated):** OptiQ is 28% larger on disk, slower/tied on decode, and scores lowest across all benchmarks (-3.1 to -4.4 pp on MMLU, $p < 10^{-6}$).
-  - **Replicate Stability:** 100.000% within-runtime agreement (0 discordant items across 6,840 MMLU replicate evaluations).
-  - **Study 2C:** Cross-runtime agreement 88–94% on constrained reasoning with ~3–4 pp loader offset, confirming that cross-runtime accuracy rankings are invalid.
-- **Tests:** 495 tests pass (`pytest -q`).
-- **Ports & Processes:** All ports (1337, 8080, 8081, 8100, 8000) are free. No background runtimes active.
-- **Osaurus State:** Restored byte-exact (`cmp -s` verified).
+- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-01 & 02-02 COMPLETE & PUBLISHED:**
+  - Dense Accuracy Study published: [`docs/research/2026-09-18-accuracy-dense.md`](file:///Users/jrazz/Dev/active/OhYesMLX/docs/research/2026-09-18-accuracy-dense.md).
+- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-03 IS CURRENTLY IN FLIGHT:**
+  - Launched: 2026-09-18 at 17:27:12 local.
+  - Runner log: [`results/accuracy-moe/runner.log`](file:///Users/jrazz/Dev/active/OhYesMLX/results/accuracy-moe/runner.log).
+  - Target matrix: 8 cells total (Column A: 5 cells on vMLX; Replicate: 2 cells on vMLX; Study 2C: 1 cell on Osaurus).
+  - Configuration: Pre-registered budget dial activated (MMLU 20 items/subject = 1,140 items; GSM8K 250; IFEval 250); `--no-disable-thinking` pinned due to vMLX `supports_instruct_mode=False` for LFM2.
+  - Projected runtime: ~18.5 hours total.
+- **Machine State:** Quiet. **DO NOT run tests, downloads, or git operations while measurements are in flight.**
 
 ---
 
-## Active Plan: Plan 02-03 (MoE Accuracy Study: `LFM2.5-8B-A1B`)
+## What is next (Upon Campaign Completion)
 
-**Objective:**
-Execute the MoE Accuracy Study across the 5 MoE formats on `vMLX` (`jang2l`, `stock4bit`, `oq4`, `oq4e`, `optiq`) plus the Q1 replicate (`jang2l` + `stock4bit` on `vMLX`, MMLU) and Study 2C MoE row (`jang2l__osaurus`):
-- Test vendor claim for `JANG_2L` (2.37 bits avg) vs uniform 4-bit on MMLU (Q1).
-- Detect whether 2.37-bit MoE triggers quality collapse (P3) on multi-step math (GSM8K) or distractor reasoning.
-- Author and publish `docs/research/2026-09-18-accuracy-moe.md`.
+1. Verify all 8 cells in [`results/accuracy-moe/`](file:///Users/jrazz/Dev/active/OhYesMLX/results/accuracy-moe) report `status: PASS` and release ports.
+2. Run statistical analysis via `python scripts/analyze_accuracy_moe.py`.
+3. Dispatch Command Code worker (`cc-agent`) to author `docs/research/2026-09-18-accuracy-moe.md` reporting:
+   - Q1 answer: JANG_2L (2.37 bits avg) vs stock 4-bit on MMLU.
+   - P3 collapse check: GSM8K and IFEval reasoning retention.
+   - Q3 answer: OptiQ Pareto status on MoE.
+   - Replicate stability (within-runtime determinism).
+   - Study 2C: Cross-runtime agreement on JANG_2L (`vmlx` vs `osaurus`).
+4. Update `.paul/STATE.md` and close Plan 02-03.
+5. Proceed to Plan 02-04 (Accuracy vs Throughput Pareto Tradeoff Synthesis — 0 measurement hours).
 
 ---
 
 ## Standing Invariants
 
+- **Quiet Machine:** Nothing else runs while a cell is measured.
 - **Vary one thing at a time:** The defining rule of the project.
-- **Zero repository dependencies:** Run `lm-eval` exclusively via isolated `uv run --isolated --with lm-eval`.
-- **Osaurus KV Cache Guarantee:** Restore host config byte-exact upon completion (`cmp` verified).
-- **Process Safety:** Never sweep using bare name `osaurus`. Sweep by full executable path `^/Applications/osaurus.app/Contents/MacOS/osaurus`.
-- **Thermal & Contention:** Exactly one model resident in memory at a time. No local GPU models or repo modifications while measuring.
+- **Zero repository dependencies:** Runs exclusively via isolated `uv`.
+- **Osaurus Host Settings:** Byte-exact restoration verified with `cmp` after Osaurus execution.
