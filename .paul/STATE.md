@@ -16,21 +16,21 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0)
-Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-02 Complete.
-Plan: Plan 02-03 (MoE Accuracy Study: LFM2.5-8B-A1B) next.
-Status: Plan 02-02 published (`docs/research/2026-09-18-accuracy-dense.md`). JANG_4S achieves Outcome P1 (Quality Parity vs stock4bit at +0.53 pp MMLU [95% CI: -0.38, +1.43 pp]); OptiQ strictly Pareto-dominated (-3.1 to -4.4 pp MMLU, +28% disk); 100.0% replicate determinism confirmed. 495 tests green.
-Last activity: 2026-09-18 — **Plan 02-02 Dense Accuracy Study published** (`docs/research/2026-09-18-accuracy-dense.md`). 11 of 11 cells PASS (30,580 items); Q2 answered with Outcome P1; Q3 answered with strict Pareto-domination of OptiQ; Study 2C demonstrates loader-level score offset; all replicates 100.0% deterministic.
+Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-03 Launched.
+Plan: Plan 02-03 (MoE Accuracy Study: LFM2.5-8B-A1B) executing.
+Status: Plan 02-03 campaign launched across 8 cells with pre-registered budget dial (MMLU limit=20 items/subject = 1,140 items; GSM8K limit=250; IFEval limit=250 = 1,640 items/cell). 495 tests pass.
+Last activity: 2026-09-18 — **Plan 02-03 MoE Accuracy Study launched**. Pre-registered budget dial activated (MMLU 20 items/subject = 1,140 items); --no-disable-thinking preserved due to vMLX lfm2 supports_instruct_mode=False; 8 cells scheduled (~18.5h projected).
 
 Progress:
-- Milestone: [████████──] 75%
-- Phase: [█████─────] 50%
+- Milestone: [████████──] 80%
+- Phase: [███████───] 70%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ◉        ○        ○     [Planning]
+  ○        ◉        ○     [Applying / Measuring]
 ```
 
 ## Performance Metrics
@@ -102,6 +102,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 102: Plan 02-01 Accuracy Spike validates local endpoint, patches vMLX stop deadlock, and resolves reasoning trap via enable_thinking=false | v2 Phase 2 | Upstream scheduler deadlock in vmlx_engine/mllm_scheduler.py:3527 patched (match_idx); canary verified; --gen_kwargs enable_thinking=false eliminates 502/null-content trap; fewshot_as_multiturn: true priced & frozen (0.60 vs 0.00); budget verified (~1.2-1.9h per cell); 495 tests pass; docs/research/2026-09-18-accuracy-spike-report.md |
 | Decision 103: ARC-Challenge dropped due to upstream extraction filter defect; Plan 02-02 runs on 3 validated tasks (MMLU 5-shot, GSM8K 5-shot, IFEval 0-shot; 2,780 items/cell) | v2 Phase 2 | Upstream arc_challenge_chat mandates "The best answer is [X]" while filter only strips outer whitespace, failing right answers; Jason chose to drop ARC-Challenge; Plan 02-02 executes across 8 primary + 3 replicate cells on 3 clean tasks |
 | Decision 104: Dense Accuracy Study confirms Outcome P1 (Quality Parity) for JANG_4S vs stock4bit (+0.53 pp MMLU [95% CI: -0.38, +1.43 pp]) and establishes OptiQ as strictly Pareto-dominated (-3.1 to -4.4 pp MMLU, +28% disk) | v2 Phase 2 | Q2 confirmed (zero quality loss for +14–17% decode speedup); Q3 confirmed (OptiQ eliminated from Pareto frontier); 100.0% replicate determinism observed; Study 2C shows ~3–4 pp loader offset, proving cross-runtime accuracy rankings invalid; docs/research/2026-09-18-accuracy-dense.md |
+| Decision 105: Plan 02-03 MoE Accuracy Study activates pre-registered budget dial (§3.3) and pins --no-disable-thinking due to vMLX LFM2 supports_instruct_mode=False | v2 Phase 2 | vMLX rejects enable_thinking=false with HTTP 400 for LFM2; reasoning trace active; MMLU dialed 40 -> 20 items/subject (1,140 items) to keep 8-cell campaign within ~18.5h budget; docs/research/2026-09-17-v2-track2-accuracy-study-design.md §3.3 |
 
 ### Deferred Issues
 
