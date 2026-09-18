@@ -199,17 +199,19 @@ concurrency finding that fell out along the way.
 - [x] 06-01: Concurrency and prompt-length sweeps
 - [x] 06-02: Cold/warm KV-cache split
 
-## Out of this milestone
+## Milestone v2: JANG Study & Accuracy Scoring (0.2.0) — IN PROGRESS
 
-- **JANG** is not a point on either axis. It loads in no runtime that loads the other
-  formats: three oMLX support PRs are open and unmerged, the maintainer objected on the
-  record, and JANG's own model card says it "requires our custom loader" and is "meant to
-  be run in vMLX". It therefore gets its own study, declared as a cell comparison —
-  JANG-in-vMLX against the best portable format in the same vMLX — after v1.
-- **Accuracy scoring.** The coherence gate is a floor, not an eval. lm-evaluation-harness
-  is v2.
-- **35B families beyond Phase 4's single cached artifact**, pending disk.
+### Phase 1: Track 1 — The JANG Study (COMPLETE 2026-09-17)
+- [x] 01-01: Dense JANG Study (`Qwen3.5-4B`) — `docs/research/2026-09-17-dense-jang-study.md` (R1 confirmed: JANG_4S leads portable formats by +14–17% in vMLX and +9–10% in Osaurus on sustained decode).
+- [x] 01-02: MoE JANG Study (`LFM2.5-8B-A1B`) — `docs/research/2026-09-17-moe-jang-study.md` (R4 triggered: JANG_2L ties stock4bit in vMLX and loses in Osaurus, but saves 36% disk and 16–31% memory).
+- [x] 01-03: Cross-Runtime JANG Synthesis — `docs/research/2026-09-17-jang-cross-runtime.md` (JANG Duality established: dense throughput leader vs MoE footprint/density leader).
+
+### Phase 2: Track 2 — Accuracy Scoring (IN PROGRESS)
+- [x] 02-01: Harness Spike & Local Endpoint Validation — `docs/research/2026-09-18-accuracy-spike-report.md` (vMLX stop-deadlock patched, reasoning trap resolved via `enable_thinking=false`, `fewshot_as_multiturn: true` frozen).
+- [x] 02-02: Dense Accuracy Study (`Qwen3.5-4B`) — `docs/research/2026-09-18-accuracy-dense.md` (P1 Parity confirmed for JANG_4S vs stock4bit at +0.53 pp MMLU [95% CI: -0.38, +1.43 pp]; OptiQ strictly Pareto-dominated at -3.8 to -4.4 pp MMLU and +28% disk).
+- [ ] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`) — 5 formats on vMLX plus 2C MoE check.
+- [ ] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-17 (v1 complete — Phase 6 closed)*
+*Last updated: 2026-09-18 (Plan 02-02 complete)*

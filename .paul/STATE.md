@@ -16,13 +16,13 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0)
-Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-02 In Flight.
-Plan: Plan 02-02 (Dense Accuracy Study: Qwen3.5-4B) executing in background.
-Status: Plan 02-02 runner launched (caffeinate sh scripts/run_accuracy_dense.sh all). Decision 103 recorded (ARC-Challenge dropped; 3 validated tasks across 8 primary + 3 replicate cells = 30,580 items total). 495 tests green.
-Last activity: 2026-09-18 — **Plan 02-02 Dense Accuracy Study launched**. Upstream ARC-Challenge filter extraction defect diagnosed and dropped per Decision 103; execution scripts authored (scripts/probe_accuracy_cell.py, scripts/run_accuracy_dense.sh, scripts/analyze_accuracy_dense.py); 495 tests pass.
+Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-02 Complete.
+Plan: Plan 02-03 (MoE Accuracy Study: LFM2.5-8B-A1B) next.
+Status: Plan 02-02 published (`docs/research/2026-09-18-accuracy-dense.md`). JANG_4S achieves Outcome P1 (Quality Parity vs stock4bit at +0.53 pp MMLU [95% CI: -0.38, +1.43 pp]); OptiQ strictly Pareto-dominated (-3.1 to -4.4 pp MMLU, +28% disk); 100.0% replicate determinism confirmed. 495 tests green.
+Last activity: 2026-09-18 — **Plan 02-02 Dense Accuracy Study published** (`docs/research/2026-09-18-accuracy-dense.md`). 11 of 11 cells PASS (30,580 items); Q2 answered with Outcome P1; Q3 answered with strict Pareto-domination of OptiQ; Study 2C demonstrates loader-level score offset; all replicates 100.0% deterministic.
 
 Progress:
-- Milestone: [███████───] 68%
+- Milestone: [████████──] 75%
 - Phase: [█████─────] 50%
 
 ## Loop Position
@@ -101,6 +101,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 101: Track 2 Accuracy Study Design formulated with zero-dependency uv isolation, pinned sample budget, McNemar paired intervals, and 2D Pareto frontier | v2 Phase 2 | Establishes test protocol for vendor parity claims (JANG_2L vs 4-bit MMLU), quality cost of JANG_4S decode lead, and Pareto status of OptiQ; docs/research/2026-09-17-v2-track2-accuracy-study-design.md |
 | Decision 102: Plan 02-01 Accuracy Spike validates local endpoint, patches vMLX stop deadlock, and resolves reasoning trap via enable_thinking=false | v2 Phase 2 | Upstream scheduler deadlock in vmlx_engine/mllm_scheduler.py:3527 patched (match_idx); canary verified; --gen_kwargs enable_thinking=false eliminates 502/null-content trap; fewshot_as_multiturn: true priced & frozen (0.60 vs 0.00); budget verified (~1.2-1.9h per cell); 495 tests pass; docs/research/2026-09-18-accuracy-spike-report.md |
 | Decision 103: ARC-Challenge dropped due to upstream extraction filter defect; Plan 02-02 runs on 3 validated tasks (MMLU 5-shot, GSM8K 5-shot, IFEval 0-shot; 2,780 items/cell) | v2 Phase 2 | Upstream arc_challenge_chat mandates "The best answer is [X]" while filter only strips outer whitespace, failing right answers; Jason chose to drop ARC-Challenge; Plan 02-02 executes across 8 primary + 3 replicate cells on 3 clean tasks |
+| Decision 104: Dense Accuracy Study confirms Outcome P1 (Quality Parity) for JANG_4S vs stock4bit (+0.53 pp MMLU [95% CI: -0.38, +1.43 pp]) and establishes OptiQ as strictly Pareto-dominated (-3.1 to -4.4 pp MMLU, +28% disk) | v2 Phase 2 | Q2 confirmed (zero quality loss for +14–17% decode speedup); Q3 confirmed (OptiQ eliminated from Pareto frontier); 100.0% replicate determinism observed; Study 2C shows ~3–4 pp loader offset, proving cross-runtime accuracy rankings invalid; docs/research/2026-09-18-accuracy-dense.md |
 
 ### Deferred Issues
 
@@ -136,9 +137,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-18 overnight (Antigravity manager)
-Stopped at: Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`) launched in background (`scripts/run_accuracy_dense.sh all`).
-Next action: Monitor completion in `results/accuracy-dense/runner.log`, run `scripts/analyze_accuracy_dense.py`, author research report `docs/research/2026-09-18-accuracy-dense.md`.
+Last session: 2026-09-18 (Antigravity manager)
+Stopped at: Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`) complete and published (`docs/research/2026-09-18-accuracy-dense.md`). 495 tests green.
+Next action: Execute Plan 02-03 (MoE Accuracy Study: `LFM2.5-8B-A1B`).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
