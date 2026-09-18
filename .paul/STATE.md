@@ -16,14 +16,14 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0)
-Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-01 Complete.
-Plan: Plan 02-02 (Dense Accuracy Study: Qwen3.5-4B) next.
-Status: Plan 02-01 published (`docs/research/2026-09-18-accuracy-spike-report.md`). Upstream vMLX string-stop deadlock patched, reasoning channel trap resolved via `enable_thinking=false`, `fewshot_as_multiturn: true` frozen, task registry audited, and budget confirmed. 495 tests green.
-Last activity: 2026-09-18 — **Plan 02-01 Accuracy Harness Spike Report published** (`docs/research/2026-09-18-accuracy-spike-report.md`). Upstream scheduler deadlock in `vmlx_engine/mllm_scheduler.py` isolated and patched; reasoning channel trap resolved via `--gen_kwargs enable_thinking=false` (3.27s/it on GSM8K, 100% extractable scores); `fewshot_as_multiturn: true` priced and frozen (0.60 vs 0.00); MMLU, GSM8K, ARC-Challenge, and IFEval configurations audited; 495 tests pass.
+Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-02 In Flight.
+Plan: Plan 02-02 (Dense Accuracy Study: Qwen3.5-4B) executing in background.
+Status: Plan 02-02 runner launched (caffeinate sh scripts/run_accuracy_dense.sh all). Decision 103 recorded (ARC-Challenge dropped; 3 validated tasks across 8 primary + 3 replicate cells = 30,580 items total). 495 tests green.
+Last activity: 2026-09-18 — **Plan 02-02 Dense Accuracy Study launched**. Upstream ARC-Challenge filter extraction defect diagnosed and dropped per Decision 103; execution scripts authored (scripts/probe_accuracy_cell.py, scripts/run_accuracy_dense.sh, scripts/analyze_accuracy_dense.py); 495 tests pass.
 
 Progress:
-- Milestone: [██████────] 62%
-- Phase: [███───────] 25%
+- Milestone: [███████───] 68%
+- Phase: [█████─────] 50%
 
 ## Loop Position
 
@@ -100,6 +100,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Plan 01-03 Cross-Runtime JANG Synthesis establishes the JANG Duality: dense throughput winner vs MoE density/footprint winner; Phase 1 closed | v2 Phase 1 | Direct answers to design §6.4; vMLX JIT A/B framed as next single-variable experiment; docs/research/2026-09-17-jang-cross-runtime.md |
 | Decision 101: Track 2 Accuracy Study Design formulated with zero-dependency uv isolation, pinned sample budget, McNemar paired intervals, and 2D Pareto frontier | v2 Phase 2 | Establishes test protocol for vendor parity claims (JANG_2L vs 4-bit MMLU), quality cost of JANG_4S decode lead, and Pareto status of OptiQ; docs/research/2026-09-17-v2-track2-accuracy-study-design.md |
 | Decision 102: Plan 02-01 Accuracy Spike validates local endpoint, patches vMLX stop deadlock, and resolves reasoning trap via enable_thinking=false | v2 Phase 2 | Upstream scheduler deadlock in vmlx_engine/mllm_scheduler.py:3527 patched (match_idx); canary verified; --gen_kwargs enable_thinking=false eliminates 502/null-content trap; fewshot_as_multiturn: true priced & frozen (0.60 vs 0.00); budget verified (~1.2-1.9h per cell); 495 tests pass; docs/research/2026-09-18-accuracy-spike-report.md |
+| Decision 103: ARC-Challenge dropped due to upstream extraction filter defect; Plan 02-02 runs on 3 validated tasks (MMLU 5-shot, GSM8K 5-shot, IFEval 0-shot; 2,780 items/cell) | v2 Phase 2 | Upstream arc_challenge_chat mandates "The best answer is [X]" while filter only strips outer whitespace, failing right answers; Jason chose to drop ARC-Challenge; Plan 02-02 executes across 8 primary + 3 replicate cells on 3 clean tasks |
 
 ### Deferred Issues
 
@@ -136,8 +137,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-18 overnight (Antigravity manager)
-Stopped at: Plan 02-01 (Accuracy Harness Spike & Local Endpoint Validation) complete and published (`docs/research/2026-09-18-accuracy-spike-report.md`). 495 tests green.
-Next action: Execute Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`).
+Stopped at: Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`) launched in background (`scripts/run_accuracy_dense.sh all`).
+Next action: Monitor completion in `results/accuracy-dense/runner.log`, run `scripts/analyze_accuracy_dense.py`, author research report `docs/research/2026-09-18-accuracy-dense.md`.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
