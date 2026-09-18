@@ -1,0 +1,16 @@
+Done. `scripts/run_jang_moe.sh` is written, executable, and nothing else was touched.
+
+**Changed:** created `scripts/run_jang_moe.sh` (246 lines, `chmod +x`). All 12 spec rules implemented: `set -u` without `set -e`, the pinned venv python and PATH prepend, the five exact snapshots, the two five-cell columns, `results/grid-jang-moe/` with its own `runner.log` via exec redirect, `--cache-state off` on the single `cli run` site, the `run_sweep_prompt.sh` cache-off/restore protocol (byte-exact backup, trap, cache flags false, residency 900, `write_baseline()`, `cmp` check that fails closed), the port/path sweep, and the reversed-order replicate pass.
+
+**Verified:**
+- `sh -n` clean; also clean under dash, bash, zsh, ksh, and `bash --posix`.
+- `pytest -q`: **495 passed**. Baseline with the file removed: **495 passed** — identical, since nothing imports it (the only `scripts/` reference under `tests/` is a comment).
+- Cell strings and snapshot hashes diffed byte-for-byte against the spec; all five snapshots exist on disk.
+- `best_portable` dry-run against the real v1 MoE run dirs returns `stock4bit` for the vMLX column and `oq4` for the Osaurus column, matching the decode leaders recorded in `2026-09-16-moe-format-axis.md`. Fallbacks verified for empty dir, missing dir, and an old-format dir `load_run` cannot read.
+- **Red-check:** removing the `workload_id == 'decode'` filter changes the answer on 50 real run directories (e.g. `results/grid-jang-dense/20260917T185649Z-format`: correct `oq4` → mutated `stock4bit`, because `decode_tps` is defined on prefill rows too, and on the Osaurus MoE column it ranks by prefill). Restored; the file is byte-identical to the reviewed copy.
+- REPL cell-string expansion and `newest_run_dir` exercised under `/bin/sh` with stubs.
+
+**Not verified, plainly:**
+- The script was never executed end to end — no column, grid, replicate, sweep, or settings write ran. Function ordering and process cleanup are lifted verbatim from `run_sweep_prompt.sh`/`run_jang_dense.sh`, but their runtime behavior in this new sequence is untested.
+- The standing rule "leave one runnable check behind" conflicts with "edit scripts/run_jang_moe.sh only"; I honoured the file constraint and verified the non-trivial logic by dry-running the shipped functions against existing run directories instead of adding a test file. Flagging the tension rather than resolving it silently.
+- Judgment call the spec did not cover: if a primary column writes no run dir, the replicate still runs, with the fallback label. It is not skipped.

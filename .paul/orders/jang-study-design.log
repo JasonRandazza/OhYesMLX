@@ -1,0 +1,17 @@
+Wrote the document and ran the suite. Report:
+
+**Artifact:** `docs/research/2026-09-17-v2-track1-jang-study-design.md` (909 lines, only file created; `git status` clean otherwise — the two `.paul/orders/` files were already untracked).
+
+**Outline**
+1. **Executive summary & problem statement** — the v1 JANG readings (four leads, one 0.3% tie, one mid-pack, all sourced); the founding "runtime+format bundle" decision and the byte-identical `(248320, 640) vs (248320, 320)` refusal that forced it; what v2 changes (both JANG runtimes load portables too); the bounded claim.
+2. **The test matrix** — 1A vMLX format axis (dense 4 cells + the OptiQ vision-map refusal; MoE 5 cells incl. `optiq__vmlx`); 1B Osaurus format axis (dense 4 cells + stock-4bit "not registered with any provider"; MoE 5 cells incl. both previously-omitted cells); 1C runtime axis on identical JANG bytes, designed as the *row reading* of 1A+1B rather than a third campaign; the ragged-edge table; replication + a pre-registered 2.5% tie band and 5% reproduce rule.
+3. **Attribution framework** — three named causes; the sidecars read today (JANG_4S `actual_bits 4.15`, bits [4,6]; JANG_2L `2.37`, bits [2,6,8]) with three traps pinned (`actual_bits` is not a per-token byte model; the dense bundle carries `vmlx_mtp_proposal_head.json`; the "34.5B" label); a 12-row confound ledger; vMLX and Osaurus pinning discipline; the pins the join guard cannot see; pre-registered readings R1–R4.
+4. **Inventory** — all 10 artifacts measured today with `measure.artifact_bytes` (bytes, file counts, GiB/GB, totals 39,948,257,890 B); zero-download statement; sidecar digests.
+5. **Protocol** — header pins incl. `cache_state: "off"` for both runtimes, the plateau constants, the three workloads, coherence gate, `footprint`, host isolation, the Osaurus backup/pin-900/`cmp`-restore guarantee, per-cell pre-flight log checks.
+6. **Execution plan** — preconditions, Plans 01-01/01-02/01-03 with commands, cost derived from v1 wall-clock, exit criteria; out-of-scope list.
+
+**Two findings to flag (recorded in the doc, none blocking):**
+- The dispatch's dense-OptiQ size is wrong: 3.06 GB is dense stock-4bit's decimal GB; disk says 4,043,620,369 B (3.766 GiB), and the MoE write-up independently records 4.04 GB. §4.3 corrects it.
+- The 900 s residency pin is a **precondition, not an optimization**: live host is 30, committed baseline is 900, and the drift check (run read-only today via the module's own functions) reports exactly that one key — so an unpinned Osaurus start is refused.
+
+**Verification:** baseline 495 tests (per `STATE.md`/`HANDOFF`); `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **495 passed in 32.20s**. No code changed, so there was nothing to red-check. Not verified: nothing was measured — no runtime started, no model loaded; every number is either quoted from a v1 doc/run record or recomputed from disk today, and the design's own projections are labelled as such. Host Osaurus files retain their pre-session mtimes.

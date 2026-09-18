@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-17 (v1 closed, ready for v2 Track 1 JANG planning)"
+description: "OhYesMLX — session handoff, 2026-09-18 (Phase 2 Track 2 Accuracy Scoring: Plan 02-01 Complete, Plan 02-02 Ready)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-17 (Transition to v2: Track 1 JANG Study)
+# Handoff — 2026-09-18 (v2 Phase 2 Track 2 Accuracy Scoring: Plan 02-01 Complete, Plan 02-02 Ready)
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
@@ -17,68 +17,47 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## Where the project is
 
-- **v1 is 100% closed and published.** All core milestones and both immediate closeout candidates (Candidate 3: Non-hybrid KV cache split; Candidate 4: vMLX 32k watchdog prefill resolution) are complete, verified, and committed on `origin/main` (HEAD: `060ab23`).
+- **v1 is 100% closed and published.**
+- **v2 Milestone active (0.2.0):** JANG Study and Accuracy Scoring.
+- **v2 Phase 1 (Track 1: The JANG Study) is 100% COMPLETE & PUBLISHED** across all three plans (`docs/research/2026-09-17-dense-jang-study.md`, `docs/research/2026-09-17-moe-jang-study.md`, `docs/research/2026-09-17-jang-cross-runtime.md`).
+- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-01 is 100% COMPLETE & PUBLISHED:**
+  - **Spike Report published:** [`docs/research/2026-09-18-accuracy-spike-report.md`](file:///Users/jrazz/Dev/active/OhYesMLX/docs/research/2026-09-18-accuracy-spike-report.md) (973 lines).
+  - Decision 102 recorded in `.paul/STATE.md`.
+  - Upstream `vmlx_engine` scheduler deadlock on string stop sequences isolated and patched in both copies (`match_idx`, `sha256 9710d2b9…`).
+  - Reasoning channel trap resolved via `--gen_kwargs enable_thinking=false` (3.27s/it on GSM8K, 100% extractable scores).
+  - Presentation priced and frozen: `fewshot_as_multiturn: true` (0.60 vs 0.00 on MMLU 5-shot).
+  - Execution budget validated: ~1.2–1.9h per cell with `enable_thinking=false` (well inside §6.1's 5–7h estimate; §3.3 downward budget dial not triggered).
 - **Tests:** 495 tests pass (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`).
-- **Ports & Processes:** All ports (1337, 8080, 8081, 8100, 8000) are free. No background runtimes or sweeps are active.
-- **Osaurus State:** Jason's host Osaurus settings (`~/.osaurus/config/server-runtime.json` and `server.json`) are byte-exact to baseline (`cache.prefix.enabled: true`, `cache.blockDisk.enabled: true`, `modelIdleResidencyPolicy.seconds: 30`).
-- **Deep Wiki:** Project page active at `/Users/jrazz/Documents/ObsidianNotes/10 Wiki/Projects/OhYesMLX/OhYesMLX.md`; vault validation passes.
+- **Ports & Processes:** All ports (1337, 8080, 8081, 8100, 8000) are free. No background runtimes active.
+- **Osaurus State:** Jason's host Osaurus settings verified byte-exact (`cmp` verified, `config/osaurus-settings-baseline.json` is git-clean).
+- **Deep Wiki:** Updated with Plan 02-01 findings (`10 Wiki/Projects/OhYesMLX/OhYesMLX.md`).
 
 ---
 
-## Immediate Next Task: v2 Track 1 (The JANG Study)
+## Active Plan: Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`)
 
-We are entering **v2**, starting with **Track 1: The JANG Study** as prioritized in `.paul/v2-options-note.md`.
+**Objective:**
+Execute the Dense Accuracy Study across both runtimes (`vMLX` and `Osaurus`) on `Qwen3.5-4B` over the 4 target tasks (MMLU, GSM8K, ARC-Challenge, IFEval):
+- Column A: `vMLX` across the 4 dense formats (`jang4s`, `stock4bit`, `oq4`, `oq4e`), `cache_state="off"`.
+- Column B: `Osaurus` across the 4 dense formats (`jang4s`, `oq4`, `oq4e`, `optiq`), host settings toggled per §4.4 and restored byte-exact.
+- Replicate: `jang4s` + `stock4bit` on `vMLX` and `jang4s` on `Osaurus` (MMLU).
+- Study 2C dense half: per-item agreement rate across shared formats.
+- Author and publish `docs/research/2026-09-18-accuracy-dense.md`.
 
-### Core Problem to Solve
-JANG formats (`JANG_4S`, `JANG_2L`, `JANGTQ`) achieved high throughput in earlier tests, but are proprietary bundles supported only by vMLX and Osaurus. In v1 they could not be placed on the format axis without violating the single-variable rule.
-
-### The v2 Study Design
-Design a single-variable study holding runtime constant:
-1. **JANG vs Portable in vMLX:** Compare `Qwen3.5-4B-JANG_4S` against `Qwen3.5-4B-4bit` (stock) and `Qwen3.5-4B-oQ4` inside vMLX.
-2. **JANG vs Portable in Osaurus:** Compare the same models/formats inside Osaurus.
-3. **Cross-Runtime JANG:** Compare `JANG-on-vMLX` vs `JANG-on-Osaurus`.
-
----
-
-## Orchestration & Delegation Protocol (Command Code & Orca)
-
-As the manager and orchestrator:
-
-1. **Prompt Cache Preservation ($0.003/M vs $0.15/M — 50x discount):**
-   - Delegate implementation/research to `cc-agent` workers on `deepseek/deepseek-v4.1-flash`.
-   - **Always dispatch via:** `.paul/orders/dispatch.sh <role> <order-file>` (roles: `implement`, `refactor`, `test`, `explain`, `review`).
-   - `dispatch.sh` prepends `.paul/orders/PREAMBLE.md` verbatim.
-   - **NEVER** edit `PREAMBLE.md` without necessity.
-   - **NEVER** prepend anything to `PREAMBLE.md`. Order-specific text goes strictly AFTER it so DeepSeek hits prompt cache reads at $0.003/M.
-   - Set `CC_AGENT_MAX_TURNS=200` for non-trivial tasks.
-
-2. **Delegation & Verification Contracts:**
-   - Every order must specify: clear acceptance criteria, the exact files the worker may touch, and "touch nothing else."
-   - **Worker reports are NOT evidence.** The coordinator must personally inspect the git diff and observe a green test run before accepting work or closing orders.
-
-3. **Standing Invariants:**
-   - **Vary one thing at a time:** The defining rule of the project.
-   - **Osaurus KV Cache Guarantee:** Jason approved controlling Osaurus on the strict condition that his KV caches (`prefix` and `blockDisk`) and idle residency are restored byte-exact upon completion. Verify with `cmp`.
-   - **Process Safety:** Never sweep using the bare name `osaurus` (Jason's `osaurus mcp` must stay running). Sweep by full binary path: `^/Applications/osaurus.app/Contents/MacOS/osaurus`.
-   - **Thermal & Contention:** Exactly one model resident in memory at a time. Never run background jobs, tests, git operations, or downloads while measuring a cell.
-   - **Deep Wiki:** Consult `10 Wiki/` and `20 Records/` before planning. End final reports with `Deep Wiki: <files changed>` or `Deep Wiki: no durable change`. Never commit or push the Obsidian vault.
+**Gates before Plan 02-02's first cell (from Spike Report §10.3):**
+1. Verify vMLX engine file hash per block (`shasum -a 256 …/mllm_scheduler.py` == `9710d2b9…`).
+2. Pass `--gen_kwargs enable_thinking=false` on all runs.
+3. Pass `--fewshot_as_multiturn true` on all runs.
+4. Pass `--num_fewshot 5` for MMLU (generative default is 0).
+5. Capture runtime stdout/stderr log alongside `results.json` to preserve reconciliation and token counts.
 
 ---
 
-## Prompt for Next AGY Session
+## Standing Invariants
 
-Copy and paste the following prompt when starting the new session:
-
-```text
-Please read .paul/HANDOFF.md, .paul/STATE.md, and AGENTS.md. You are the manager and orchestrator for OhYesMLX. 
-
-v1 is completely closed and published. We are now beginning v2 planning, starting with Track 1: The JANG Study.
-
-Please:
-1. Review the JANG study requirements in .paul/HANDOFF.md and .paul/v2-options-note.md.
-2. Verify our existing on-disk JANG artifacts (e.g. in ~/.cache/huggingface/hub/ and ~/MLXModels/) for Qwen3.5-4B and LFM2.5-8B-A1B.
-3. Formulate the single-variable test matrix for JANG-in-vMLX vs portable formats and JANG-in-Osaurus vs portable formats.
-4. Prepare the v2 Phase 1 study design and plan before running any measurements.
-
-Remember to utilize orca orchestration and delegate implementation/writing tasks to cc-agent via .paul/orders/dispatch.sh, preserving the byte-identical PREAMBLE prefix for the $0.003/M cache read hit rate. Observe all standing invariants (single variable, Osaurus cache restoration guarantee, quiet machine during measurements).
-```
+- **Vary one thing at a time:** The defining rule of the project.
+- **Zero repository dependencies:** Run `lm-eval` exclusively via isolated `uv run --isolated --with lm-eval`.
+- **Osaurus KV Cache Guarantee:** Restore host config byte-exact upon completion (`cmp` verified).
+- **Process Safety:** Never sweep using bare name `osaurus`. Sweep by full executable path `^/Applications/osaurus.app/Contents/MacOS/osaurus`.
+- **Thermal & Contention:** Exactly one model resident in memory at a time. Never run background jobs, tests, git operations, or downloads while measuring a cell.
+- **Prompt Cache Preservation:** Always dispatch cc-agent via `.paul/orders/dispatch.sh <role> <order-file>`, preserving byte-identical `PREAMBLE.md` for $0.003/M cache read hit rate.

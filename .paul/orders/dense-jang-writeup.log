@@ -1,0 +1,15 @@
+Done — `docs/research/2026-09-17-dense-jang-study.md` (770 lines), the only file I touched.
+
+**Reading, against the pre-registration:** **R1 on the `decode` workload** — JANG_4S leads the best portable in both runtimes and both visits (vMLX +13.9% / +16.8%; Osaurus +9.5% / +9.0%). `chat` yields no ordering in either runtime (vMLX reverses sign between visits; Osaurus's +8.6% lands inside the band in the replicate). `prefill` is a tie in both columns. R2 doesn't apply, R3 doesn't hold, R4 needs Plan 01-02's MoE column.
+
+**Three findings the dispatch didn't have:**
+
+1. **The Osaurus `prefill` column measured prefix-cache lookups, not prefills.** Every primary cell's first prefill request took 3.4–3.7 s and every one after it 0.27–0.61 s; the replicate had no cold request at all (0.32 s). `~/.osaurus/cache/kv_v2/` gained 8 entries / 566.0 MB during the column and none afterwards. So `prefill_tps` 2,886.7 is `1319 / 0.457` — a lookup's reciprocal; the real prefill is ~385 tok/s. `decode_tps` (the ranking metric) is unaffected, and no cross-runtime prefill statement may use TTFT or prefill throughput. Cause: `cache_state` was `null` — the pin not taken — and the host had both cache tiers enabled. vMLX is provably unaffected (identical start command either way, flat TTFTs, 1.00x in 06-02).
+2. **The replicate's column order was not reversed** — vMLX ran first in both passes, so the pre-registered thermal guard didn't operate. Substitute evidence: the cross-runtime gap is +27.5% then +28.5% while cells inside moved −13.6% to +14.5%.
+3. **`stock4bit__vmlx` on `decode` hit the warmup cap** (`warmup_plateau: false`, 37 warmups) — reported, not dropped.
+
+Also corrected two dispatch-side imprecisions: the attribution is narrowed to "packing and loader/kernel path, not separable here" (size is eliminated — JANG carries 4.8% *more* bytes at 4.15 bits; JIT/MTP/TQ are provably off), and all percentages are stated as the rendered-column quotients, with the full-precision values (+13.7% / +9.6%) printed beside them.
+
+**Verification:** 495 passed — `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`, run twice (32.2 s); the new file is untracked markdown and no test reads `docs/`. Both Appendix B checks were executed verbatim from the document and reproduce the published rates. Byte-exact restore confirmed from `runner.log:10` and `:154` (`osaurus settings restored byte-exact (cmp)`); the `jang_config.json` digest recomputed today matches design time.
+
+Not verified: whether the surviving cache entry came from `cache/kv_v2` or a resident app reattached by the next `serve` — the records cannot separate those, and the per-cell digests the design required were never taken. No server, model, or tensor was touched; reads outside the repo were read-only.

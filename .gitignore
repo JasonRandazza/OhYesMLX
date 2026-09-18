@@ -21,3 +21,6 @@ node_modules/
 
 # Command Code
 .commandcode/
+
+# Scratch probes
+scratch/

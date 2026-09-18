@@ -15,13 +15,24 @@ perplexity instead of task accuracy. The runtime axis follows, and cites `mlx-Ch
 rather than pretending to be first. The third study is the one our own first spike handed
 us.
 
-## Current Milestone
+## Completed Milestone
 
 **v1 — Format axis on small models** (0.1.0)
 Status: Complete
 Phases: 7 of 7 complete
 
-## Phases
+## Current Milestone
+
+**v2 — JANG Study and Accuracy Scoring** (0.2.0)
+Status: In Progress
+Phases: 1 of 2 complete
+
+| Phase | Name | Plans | Status | Completed |
+|-------|------|-------|--------|-----------|
+| 1 | Track 1: The JANG Study | 3 | **Complete** | 2026-09-17 |
+| 2 | Track 2: Accuracy Scoring (lm-evaluation-harness) | 4 | **In Progress** | — |
+
+## v1 Phases (Archive)
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
@@ -33,7 +44,32 @@ Phases: 7 of 7 complete
 | 5 | The joined grid (runtime axis falls out of it) | 2 | **Complete** | 2026-09-16 |
 | 6 | Sweeps | 2 | **Complete** | 2026-09-16 |
 
-## Phase Details
+## v2 Phase Details
+
+### Phase 1: Track 1 — The JANG Study (v2)
+
+**Goal:** Single-variable study of the JANG proprietary quantization family (`JANG_4S`, `JANG_2L`) on the two runtimes that load it (`vMLX 1.6.59` and `Osaurus 0.25.x`), holding runtime constant against portable formats, and holding format constant across both runtimes.
+
+**Study Design:** `docs/research/2026-09-17-v2-track1-jang-study-design.md`
+
+**Plans:**
+- [x] 01-01: Dense JANG Study (`Qwen3.5-4B`) — **Complete 2026-09-17** (`docs/research/2026-09-17-dense-jang-study.md`)
+- [x] 01-02: MoE JANG Study (`LFM2.5-8B-A1B`) — **Complete 2026-09-17** (`docs/research/2026-09-17-moe-jang-study.md`)
+- [x] 01-03: Cross-Runtime JANG Synthesis — **Complete 2026-09-17** (`docs/research/2026-09-17-jang-cross-runtime.md`)
+
+### Phase 2: Track 2 — Accuracy Scoring (v2)
+
+**Goal:** Complete the evaluation trilogy (Speed, Memory, Accuracy) by pricing the quality trade for JANG and portable quantization formats on Apple Silicon, directly testing vendor claims (e.g. 2-bit JANG matching 4-bit MMLU), and constructing the 2D Pareto frontier across throughput, footprint, and accuracy.
+
+**Study Design:** `docs/research/2026-09-17-v2-track2-accuracy-study-design.md`
+
+**Plans:**
+- [x] 02-01: Harness Spike & Local Endpoint Validation — **Complete 2026-09-18** (`docs/research/2026-09-18-accuracy-spike-report.md`)
+- [ ] 02-02: Dense Accuracy Study (`Qwen3.5-4B`) — *Next*
+- [ ] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`)
+- [ ] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis
+
+## v1 Phase Details
 
 ### Phase 1: Portability spike — COMPLETE
 

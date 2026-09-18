@@ -1,0 +1,16 @@
+Done. Only `docs/research/2026-09-17-moe-jang-study.md` was created (1069 lines, 27 tables, all structurally valid); no other file touched.
+
+**Path:** `docs/research/2026-09-17-moe-jang-study.md`
+
+**Executive summary of the findings, as the document reports them:**
+- **R4 is triggered.** On the 512-token decode shape, `JANG_2L` does not lead portables: vMLX ties `stock4bit` (+0.87% primary, −0.50% replicate — both inside the 2.5% band, so **R3**), and Osaurus loses to it by a replicated −5.12% / −9.80%. Beside Plan 01-01's dense R1 (+13.9%/+16.8% vMLX, +9.5%/+9.0% Osaurus), that is the design's "split by model" reading — with §8.3 stating that the two studies changed the model *and* the JANG profile, so "model-specific" is not "MoE architecture is why".
+- **Two workloads in vMLX publish no ordering**: `chat` reverses sign between visits, `prefill` crosses into the band (−10.42% → −0.50%). Osaurus's `chat`/`prefill` `stock4bit` leads do replicate.
+- **The row that does carry a JANG advantage is vMLX's prompt processing**: +53.6% / +38.4% over `stock4bit` (TTFT 0.812/0.783 s against 1.245/1.081 s) — while Osaurus on the same bytes gets +0.8% / +2.8%, which is what stops the document attributing it to the 2.37 bits.
+- **Cross-runtime JANG row**: decode is a tie in the primary and +4.70% vMLX in the replicate (opposite directions → no ordering), against dense's +27.5%/+28.5%; Osaurus leads chat and the prefill rate by 12–25% and vMLX leads prompt throughput by ~2x.
+- **The trade is density**: 36% less disk, 30.5% (vMLX) / 15.7% (Osaurus) less peak footprint, for no decode-rate win.
+- Also recorded: Osaurus's `decode` FAIL reproduced for `optiq` and newly hit `oq4e` (language produced, coherence passed, metrics floor failed); the Osaurus cache pin held — every prefill cell prefilled genuinely, unlike the dense campaign.
+
+**Verification:**
+- `495 passed in 32.30s` (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`), run after the document was written. No code was changed, so there was no fix to red-check.
+- Byte-exactness: the two Osaurus settings restores are `cmp -s`-verified by the runner at `runner.log:9` and `:152` (I read the log, not re-executed the comparison — the originals are gone), and I re-hashed `JANG_2L`'s `jang_config.json` to `858385d1…`, byte-identical to the design-time digest. All three Appendix B scripts were run verbatim and reproduce every cited percentage on both the rendered and full-precision bases.
+- **Not verified:** nothing was re-measured (no server started, no model loaded); the "quiet machine" condition is not verifiable from the records (stated in §8.6); I corrected three dispatch figures to what the records actually say (−10.42% not −10.5%, −0.34% not 0.3%, and only 2 of the grid's 4 entry states occurred), and qualified the dispatch's "low precision drove the 53.6% prefill gain" attribution as unsupported by this evidence.

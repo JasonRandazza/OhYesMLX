@@ -11,26 +11,26 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** v1 closed — v2 options under discussion
+**Current focus:** v2 Phase 1: Track 1 (The JANG Study) — design complete, ready for execution
 
 ## Current Position
 
-Milestone: v1 — The sparse format x runtime grid on small models (0.1.0)
-Phase: 6 (sweeps) — **complete**; milestone **closed on paper 2026-09-17**.
-Plan: v1 closeout & post-v1 candidate investigations complete (Candidates 3 & 4 closed).
-Status: Ready for v2 planning / Jason's direction.
-Last activity: 2026-09-17 — **Candidates 3 & 4 completed and published.** Candidate 3 (`docs/research/2026-09-17-cache-state-split-nonhybrid.md`): all five runtimes hit on non-hybrid `Llama-3.1-8B-oQ4` (25x–142x speedup; mlx-lm 0.136s, optiq 0.138s). Candidate 4 (`docs/research/2026-09-17-vmlx-32k-chunked-prefill.md`): `VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` enables chunked hybrid prefill, resolving 32k Metal watchdog failure at 88.76s TTFT. 495 tests green.
+Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0)
+Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-01 Complete.
+Plan: Plan 02-02 (Dense Accuracy Study: Qwen3.5-4B) next.
+Status: Plan 02-01 published (`docs/research/2026-09-18-accuracy-spike-report.md`). Upstream vMLX string-stop deadlock patched, reasoning channel trap resolved via `enable_thinking=false`, `fewshot_as_multiturn: true` frozen, task registry audited, and budget confirmed. 495 tests green.
+Last activity: 2026-09-18 — **Plan 02-01 Accuracy Harness Spike Report published** (`docs/research/2026-09-18-accuracy-spike-report.md`). Upstream scheduler deadlock in `vmlx_engine/mllm_scheduler.py` isolated and patched; reasoning channel trap resolved via `--gen_kwargs enable_thinking=false` (3.27s/it on GSM8K, 100% extractable scores); `fewshot_as_multiturn: true` priced and frozen (0.60 vs 0.00); MMLU, GSM8K, ARC-Challenge, and IFEval configurations audited; 495 tests pass.
 
 Progress:
-- Milestone: [██████████] 100%
-- Phase: [██████████] 100%
+- Milestone: [██████────] 62%
+- Phase: [███───────] 25%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Unifying]
+  ◉        ○        ○     [Planning]
 ```
 
 ## Performance Metrics
@@ -94,6 +94,12 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Non-hybrid KV cache hit on all five runtimes (Candidate 3) | v2 | Measured 2026-09-17 on Llama-3.1-8B-oQ4: 25x–142x speedup. Proves hybrid ArraysCache was the cause of 1.00x on Qwen3.5. `docs/research/2026-09-17-cache-state-split-nonhybrid.md` |
 | vMLX 32k chunked prefill enabled by VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 (Candidate 4) | v2 | Shipped source audit + live probe 2026-09-17: one-shot default bypassed --prefill-step-size. Env var unlocks chunked prefill, eliminating Metal watchdog failure (88.76s TTFT). `docs/research/2026-09-17-vmlx-32k-chunked-prefill.md` |
 | The cold/warm split is pinned at 4,096 tokens, block-disk caches off in both states | Phase 6 | One variable per pair. It is why vMLX shows no hit on the hybrid model — its prefix cache has no RAM backend for hybrids. |
+| v2 Track 1 JANG Study formulated as two format-axis columns and one runtime-axis row reading | v2 Phase 1 | Single-variable problem solved; 10 artifacts verified on disk; zero downloads; pre-registers 2.5% tie band and R1-R4 readings. `docs/research/2026-09-17-v2-track1-jang-study-design.md` |
+| Plan 01-01 Dense JANG Study confirms R1 on decode: JANG_4S leads portable formats in both vMLX (+13.9%/+16.8%) and Osaurus (+9.5%/+9.0%) on near-equal precision (4.15 bits); vMLX is +28% faster than Osaurus on identical JANG bytes | v2 Phase 1 | Eliminated size/bitwidth as cause; custom Metal tensor unpacking confirmed. docs/research/2026-09-17-dense-jang-study.md |
+| Plan 01-02 MoE JANG Study triggers R4 (Split by Model): JANG_2L ties stock4bit in vMLX (+0.87% / −0.50% repl → R3) and loses to stock4bit in Osaurus (−5.12% / −9.80% repl); dense lead does not transfer to MoE; JANG delivers 36% disk savings and 16-31% memory reduction | v2 Phase 1 | Proves JANG decode advantage is model/profile specific; Osaurus prefix cache off toggle verified clean; docs/research/2026-09-17-moe-jang-study.md |
+| Plan 01-03 Cross-Runtime JANG Synthesis establishes the JANG Duality: dense throughput winner vs MoE density/footprint winner; Phase 1 closed | v2 Phase 1 | Direct answers to design §6.4; vMLX JIT A/B framed as next single-variable experiment; docs/research/2026-09-17-jang-cross-runtime.md |
+| Decision 101: Track 2 Accuracy Study Design formulated with zero-dependency uv isolation, pinned sample budget, McNemar paired intervals, and 2D Pareto frontier | v2 Phase 2 | Establishes test protocol for vendor parity claims (JANG_2L vs 4-bit MMLU), quality cost of JANG_4S decode lead, and Pareto status of OptiQ; docs/research/2026-09-17-v2-track2-accuracy-study-design.md |
+| Decision 102: Plan 02-01 Accuracy Spike validates local endpoint, patches vMLX stop deadlock, and resolves reasoning trap via enable_thinking=false | v2 Phase 2 | Upstream scheduler deadlock in vmlx_engine/mllm_scheduler.py:3527 patched (match_idx); canary verified; --gen_kwargs enable_thinking=false eliminates 502/null-content trap; fewshot_as_multiturn: true priced & frozen (0.60 vs 0.00); budget verified (~1.2-1.9h per cell); 495 tests pass; docs/research/2026-09-18-accuracy-spike-report.md |
 
 ### Deferred Issues
 
@@ -129,9 +135,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-17 afternoon (Antigravity manager)
-Stopped at: Candidates 3 & 4 completed, verified, documented, and pushed. Osaurus settings restored byte-exact (cmp verified). 495 tests green.
-Next action: Await Jason's review and direction for v2 planning (JANG study, accuracy benchmarking).
+Last session: 2026-09-18 overnight (Antigravity manager)
+Stopped at: Plan 02-01 (Accuracy Harness Spike & Local Endpoint Validation) complete and published (`docs/research/2026-09-18-accuracy-spike-report.md`). 495 tests green.
+Next action: Execute Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

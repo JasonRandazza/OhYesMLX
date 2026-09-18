@@ -1,0 +1,23 @@
+Done. New document: **`docs/research/2026-09-17-v2-track2-accuracy-study-design.md`** (1,313 lines, design-only, zero measurements).
+
+**Outline**
+
+| § | contents |
+|---|---|
+| 1 | Executive summary — the missing third coordinate, the JANG parity claim framed as a *relation* (testable) rather than a level (not), the four questions Q1–Q4, and the single-variable invariant with its full pin list |
+| 2 | Test matrix — 2A dense (two columns: vMLX covers stock4bit/oq4/oq4e/jang4s, Osaurus covers oq4/oq4e/optiq/jang4s; union = all five, and both holes are the loadability interactions Track 1 measured), 2B MoE (one complete 5-format vMLX column, with the reason vMLX holds it), 2C (per-item answer agreement, not a bitwise claim), the ten re-verified artifacts with hashes/sizes/declared bits, the ragged edges, replication |
+| 3 | Benchmark suite — MMLU/GSM8K/ARC-C/IFEval rationale; the `local-chat-completions` loglikelihood limitation; the `--limit`-on-a-group trap; the pinned item budget with its McNemar resolution table; wire protocol; the `<think>`/reasoning-channel trap and truncation rule; prompt composition incl. the per-artifact chat-template check; thermal shaping; the raw record |
+| 4 | Confound ledger (17 items, each with pin + evidence), pinned parameters, `uv run --isolated --with lm-eval` isolation, Osaurus host controls, per-cell pre-flight |
+| 5 | The ±1.5 pp parity band, the paired instrument and its three bins (tie / difference / **indeterminate**), P1/P2/P3 with at-chance and collapse separated, no task pooling, the 2-D Pareto formulation with band-aware dominance and pair-only trade rates |
+| 6 | Plan 02-01 spike → 02-02 dense → 02-03 MoE → 02-04 Pareto synthesis, with a cost model (~65–90 h) and two named precision dials |
+| 7–8, A–B | What it will not establish, open questions, evidence index, number provenance |
+
+**Verification**
+- Tests: `495 passed` (32s), baseline from `.paul/HANDOFF.md` / `STATE.md` is 495 — unchanged.
+- All ten artifacts re-walked today with `ohyesmlx.measure.artifact_bytes`; sizes match the Track 1 inventory byte-for-byte and sum to 39,948,257,890 B. Both JANG sidecar digests re-hashed and identical to the recorded values.
+- `git status` shows the one new file; nothing else touched (the three modified `.paul/` files predate this session).
+- Red-check not applicable — no code changed.
+
+**Not verified, stated in the document as spike obligations rather than assertions:** task ids/versions, generative variants, effective few-shot defaults, the per-subtask reading of `--limit`, chat-template identity across a column, and the answer channel per (runtime, model). No server was started, no model loaded, no harness installed.
+
+**One deliberate departure from the dispatch, printed in §3.3 rather than carried silently:** "`--limit 250` per task" is per *subtask* on the MMLU group — ~12,000+ requests, not 250 — so the design pins the item count (57 subjects × 40 = 2,280 plus 250 × 3), requires the spike to audit it, and states up front that ±1.5 pp is only resolvable on MMLU, never on a 250-item task.

@@ -1,0 +1,17 @@
+Wrote `scripts/run_jang_dense.sh` (executable), the only file touched — `git status` shows one new untracked file and no other change.
+
+**What it does**, in the spec's order: vMLX column → sweep → Osaurus pin + column → sweep + restore/`cmp` → `ohyesmlx grid` join into `grid.md` → replicate pass (vMLX, sweep, Osaurus pin, sweep, restore/`cmp`) → summary. Logs: `exec > results/grid-jang-dense/runner.log`, per-column redirects to `log-*.log` override it. The Osaurus block (backup to `.grid-orig`, idle residency 900, INT/TERM/HUP trap, `cmp` restore fail-closed, path-only stale sweep) is copied from `run_grid.sh` verbatim.
+
+**Verified**
+- `sh -n` clean; `chmod +x` applied.
+- Cell strings expand byte-for-byte to the spec's four definitions, and all five artifact dirs exist on disk right now.
+- `newest_run_dir` (the one piece of new logic, used for step 5) returns `20260916T082354Z-format` for `results/grid-moe`, matching an independent mtime sort — and red-checked: `sort | head -1` returns `20260916T071532Z`, so the check discriminates rather than passing by luck.
+- `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **495 passed**. Baseline: I ran it once, after the write; nothing in `tests/` references `scripts/` (grep: no matches), so a new shell runner cannot move it, and no other file was modified.
+
+**Not verified**: the script has never been executed. No server, runtime or measurement was started, per the order, so the CLI invocations, the Osaurus pin/restore path, and the join are unexercised.
+
+**Deliberate readings worth your review**
+1. **No `set -e`**, against the spec's "where appropriate": a column's exit code is a fact to report, and `set -e` would kill the runner mid-flow *without* the trap firing, leaving Osaurus pinned. Every step's status is captured instead.
+2. **Exit code**: 0 only when every step succeeded; 1 otherwise (the restore path already exits 1 per rule 8). The spec's "exit 0" is read as the success path.
+3. **Step 5's directories**: taken as the newest `*-format` dir under `results/grid-jang-dense/` after each column (UTC stamps sort chronologically); the join is skipped as a failure if the Osaurus column wrote none, rather than re-joining the vMLX dir.
+4. **Two Osaurus pins, two backups**: step 4's `restore_and_check` removes the copies, so step 6's pin re-copies the host's restored files — that is the protocol applied twice, not a stale copy reused.

@@ -1,0 +1,15 @@
+Done. Final report:
+
+**Deliverable:** `docs/research/2026-09-17-jang-cross-runtime.md` — 68,050 B, 978 lines, the only file created or modified (`git status` confirms; the other three untracked docs predate this session).
+
+**Synthesis findings recorded (all eight required sections present):**
+- **Q1** — the decode outcome is a 2×2: dense `JANG_4S` leads both runtimes (R1, +13.9/+16.8% vMLX, +9.5/+9.0% Osaurus); MoE `JANG_2L` leads neither (R3 tie in vMLX, +0.87/−0.50; replicated loss in Osaurus, −5.12/−9.80). The full twelve-reading `L` matrix is tabulated with R-tie verdicts.
+- **Q2** — runtime axis on identical bytes: dense is a uniform vMLX sweep (+27.5/+28.5% decode); MoE reverses on `chat` (+12.4/+12.7% Osaurus) and prefill decode rate (+27.1/+25.0% Osaurus) while vMLX leads prompt ingestion ~2× (+97.8/+104.4%); decode publishes no ordering.
+- **Q3** — R4 triggered, with the two-variable confound (model ∧ JANG profile) named rather than smoothed.
+- **Q4** — residual is packing vs kernel vs JIT; the vMLX JIT A/B is framed as the next experiment with its own-run-directory / never-join constraints. Plus the resource-economy trade (−36% disk and 15.7–30.5% footprint for tied/slower decode; +4.8% disk for the dense speed), the twelve-item confound ledger discharged per campaign, and the Track-2 handoff.
+
+**Where I kept the studies' narrower statements over the dispatch's wider ones:** the MoE routing-dynamics explanation is published as a *candidate, not measured* (MoE §6.3c), and the prompt-throughput advantage is attributed to vMLX's implementation rather than to 2.37 bits (identical bytes give +0.8/+2.8% in Osaurus). Both narrowings are the studies' own.
+
+**Tests:** 495 passed — identical to the 495 baseline I measured before writing. No test reads `docs/` (its only references are docstring citations), so the document cannot affect them.
+
+**Not verified:** no red-check applies (no code changed, so nothing to revert); every figure was cross-checked by hand against the dense/MoE/design sections cited in Appendix B rather than recomputed from `results.jsonl`, and no measurement was re-run — no server was started, per the standing rule.
