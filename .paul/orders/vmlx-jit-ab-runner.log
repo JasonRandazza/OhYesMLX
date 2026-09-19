@@ -1,0 +1,14 @@
+Done. Files changed, and the spec's three items are in place:
+
+**`ohyesmlx/runtimes.py`** — `Vmlx.start_command` now builds `jit = ("--no-jit",)`, flipping to `("--enable-jit",)` only when `os.environ.get("OHYESMLX_VMLX_ENABLE_JIT") == "1"`; the tuple splices `*jit` in the same position the literal occupied, so flag order is untouched. The old comment that covered both JIT and MTP was narrowed to MTP and points at `jit`.
+
+**`tests/test_runtimes.py`** — added `test_vmlx_start_command_honors_enable_jit_env_var(monkeypatch)`: env `"1"` → contains `--enable-jit`, no `--no-jit`, and equals `TODAY["vmlx"]` with exactly that one element substituted; env `"0"` and env unset each equal `TODAY["vmlx"]` byte for byte.
+
+**`scripts/run_vmlx_jit_ab.sh`** — new, `chmod +x`. Sets `PY`/`PATH`/`H`/`JG`/`JM`/`CELLS`/`OUT=results/vmlx-jit-ab`; `sweep()` kills ports 8081 1337 8100 8080 8000 and stale Osaurus by the full-executable-path pattern (never the bare name); `exec > "$OUT/runner.log" 2>&1`; sequence is initial sweep → JIT-off column → sweep + 30 s cooldown → JIT-on column → final sweep → summary naming both result dirs. `set -u` without `set -e`, per the repo's runners, with per-column exit codes captured.
+
+Verification:
+- `bash -n scripts/run_vmlx_jit_ab.sh` — clean; `-rwxr-xr-x`.
+- Suite: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **496 passed**. Baseline measured by stashing `runtimes.py`: **495 passed, 1 failed** (the new test), failing with `AssertionError: assert '--enable-jit' in (...)` — the red-check, restored afterwards via `git stash pop`.
+- Independent check outside pytest: child processes with env unset vs `"0"` are byte-identical; unset vs `"1"` differ on exactly one line, `--no-jit` → `--enable-jit`.
+
+Not verified, plainly: I did not execute the runner (measurement is the coordinator's), shellcheck was not run, and the pytest run used the verify-venv interpreter since the repo has no venv with pytest.

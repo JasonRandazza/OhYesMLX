@@ -1089,6 +1089,14 @@ class Vmlx(Runtime):
         prefix = ("--enable-prefix-cache",)
         if cache_state != CACHE_STATE_ON:
             prefix = ("--disable-prefix-cache",)
+        # JIT is off unless a run asks for it. Left alone the artifact decides — JIT turns
+        # itself on for a JANG affine bundle — so the default pins it off and every command
+        # recorded before this toggle existed is byte-identical. The one run that measures JIT
+        # as its variable (the vMLX JIT A/B) sets OHYESMLX_VMLX_ENABLE_JIT=1 to move this flag
+        # and nothing else.
+        jit = ("--no-jit",)
+        if os.environ.get("OHYESMLX_VMLX_ENABLE_JIT") == "1":
+            jit = ("--enable-jit",)
         return (
             "vmlx",
             "serve",
@@ -1111,11 +1119,11 @@ class Vmlx(Runtime):
             "--continuous-batching",
             "--max-num-seqs",
             "1",
-            # Both of these are decided by the artifact when left alone — JIT turns itself on
-            # for a JANG affine bundle, MTP for a bundle carrying MTP heads — and MTP re-tunes
-            # its own depth mid-request. Either would make two cells of this runtime differ by
-            # something that is not the variable being measured.
-            "--no-jit",
+            # MTP is decided by the artifact when left alone — it turns itself on for a bundle
+            # carrying MTP heads — and it re-tunes its own depth mid-request. That would make
+            # two cells of this runtime differ by something that is not the variable being
+            # measured, which is the same hazard `jit` above defaults away from.
+            *jit,
             "--disable-native-mtp",
             *prefix,
             # A cache hit is invisible to Observation, which carries no cached_tokens, so it

@@ -443,6 +443,25 @@ def test_vmlx_pins_off_the_two_things_a_bundle_turns_on_by_itself():
     assert "--speculative-model" not in command
 
 
+def test_vmlx_start_command_honors_enable_jit_env_var(monkeypatch):
+    """The JIT A/B is a run-level pin and not a second start command: `1` moves the one flag
+    JIT owns, and every other byte is still the command recorded before the toggle existed, so
+    the two columns of that experiment differ in the variable under test and nothing else."""
+    monkeypatch.setenv("OHYESMLX_VMLX_ENABLE_JIT", "1")
+    jit_on = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID)
+    assert "--enable-jit" in jit_on
+    assert "--no-jit" not in jit_on
+    assert jit_on == tuple(
+        "--enable-jit" if part == "--no-jit" else part for part in TODAY["vmlx"]
+    )
+
+    monkeypatch.setenv("OHYESMLX_VMLX_ENABLE_JIT", "0")
+    assert RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID) == TODAY["vmlx"]
+
+    monkeypatch.delenv("OHYESMLX_VMLX_ENABLE_JIT", raising=False)
+    assert RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID) == TODAY["vmlx"]
+
+
 def test_vmlx_pins_the_stream_interval_the_batching_flag_would_otherwise_overrule():
     """Without --continuous-batching the runtime forces the interval to 1 (cli.py:2892)."""
     command = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID)
