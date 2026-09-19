@@ -124,6 +124,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | ~~Grid TTFT-ranked entries carry decode drift (same latent mislabel, `render_grid`)~~ **FIXED 2026-09-17** | Phase 6 | — | `_grid_table` passes `drift_marker=rank in DECODE_DERIVED_RANKS`. Default decode-ranked grid byte-identical; non-decode grids marker-free. |
 | ~~`CONCURRENCY_DRIFT_SENTENCE` now describes markers absent from non-decode tables~~ **FIXED 2026-09-17** | Phase 6 | — | Scoped to `rank in DECODE_DERIVED_RANKS` in `render_sweep`. |
 | TTFT-ranked concurrent table carries no queueing caveat | Phase 6 | S | The design says concurrent TTFT is a queueing measurement; the render doesn't. Minor. |
+| Thinking-Off MMLU Arm (Candidate 3) | Post-v2 | M | **Preserved for overnight execution.** Ablation study: isolate reasoning contribution on MMLU and resolve MoE HTTP 502 truncation trap. |
 
 ### Blockers/Concerns
 
@@ -141,8 +142,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-19 (Antigravity manager)
-Stopped at: Milestone v2 (0.2.0) complete. Plan 02-04 (Accuracy Pareto Tradeoff Synthesis) complete and published (`docs/research/2026-09-19-accuracy-pareto.md`). 495 tests green.
-Next action: Milestone v2 complete. Await user direction for next milestone or open experiments.
+Stopped at: Candidate 1 (Osaurus MoE MMLU extraction) COMPLETE (42.19% recovered, reconciled to 43/1140). Active: Candidate 2 (vMLX JIT A/B); Candidate 3 (Thinking-off MMLU arm queued for overnight).
+Next action: Launch Candidate 2 (vMLX JIT A/B), draft Milestone v3 Roadmap, prepare Candidate 3 overnight dispatch.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

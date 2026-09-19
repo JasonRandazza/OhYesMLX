@@ -199,19 +199,47 @@ concurrency finding that fell out along the way.
 - [x] 06-01: Concurrency and prompt-length sweeps
 - [x] 06-02: Cold/warm KV-cache split
 
-## Milestone v2: JANG Study & Accuracy Scoring (0.2.0) — IN PROGRESS
+## Milestone v2: JANG Study & Accuracy Scoring (0.2.0) — COMPLETE
 
 ### Phase 1: Track 1 — The JANG Study (COMPLETE 2026-09-17)
 - [x] 01-01: Dense JANG Study (`Qwen3.5-4B`) — `docs/research/2026-09-17-dense-jang-study.md` (R1 confirmed: JANG_4S leads portable formats by +14–17% in vMLX and +9–10% in Osaurus on sustained decode).
 - [x] 01-02: MoE JANG Study (`LFM2.5-8B-A1B`) — `docs/research/2026-09-17-moe-jang-study.md` (R4 triggered: JANG_2L ties stock4bit in vMLX and loses in Osaurus, but saves 36% disk and 16–31% memory).
 - [x] 01-03: Cross-Runtime JANG Synthesis — `docs/research/2026-09-17-jang-cross-runtime.md` (JANG Duality established: dense throughput leader vs MoE footprint/density leader).
 
-### Phase 2: Track 2 — Accuracy Scoring (IN PROGRESS)
+### Phase 2: Track 2 — Accuracy Scoring (COMPLETE 2026-09-19)
 - [x] 02-01: Harness Spike & Local Endpoint Validation — `docs/research/2026-09-18-accuracy-spike-report.md` (vMLX stop-deadlock patched, reasoning trap resolved via `enable_thinking=false`, `fewshot_as_multiturn: true` frozen).
 - [x] 02-02: Dense Accuracy Study (`Qwen3.5-4B`) — `docs/research/2026-09-18-accuracy-dense.md` (P1 Parity confirmed for JANG_4S vs stock4bit at +0.53 pp MMLU [95% CI: -0.38, +1.43 pp]; OptiQ strictly Pareto-dominated at -3.8 to -4.4 pp MMLU and +28% disk).
-- [ ] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`) — 5 formats on vMLX plus 2C MoE check.
-- [ ] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis.
+- [x] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`) — `docs/research/2026-09-19-accuracy-moe.md` (100% replicate determinism, 2.37-bit instruction following preserved, OptiQ eliminated, outlier protection mandatory).
+- [x] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis — `docs/research/2026-09-19-accuracy-pareto.md` (unified 3-coordinate recommendation table across Apple Silicon).
+
+---
+
+## Post-v2 / Candidate Experiments
+
+### Candidate 1: Osaurus MoE MMLU Extraction Resolution (Offline Analysis)
+- **Status:** COMPLETE (2026-09-19).
+- **Artifact:** `docs/research/2026-09-19-osaurus-moe-mmlu-extraction.md`, `scripts/rescore_moe_mmlu.py`.
+- **Finding:** lm-eval 3.77% was first-line regex truncation (`^(.*?)(?=\n|$)`). Five-pattern cascade on full completion recovers **42.19%** (481/1,140, 95% Wilson CI: [39.36%, 45.08%]) with 0 baseline hits lost. Strict equality reconciles exactly to 43/1,140. Outscores stock4bit (35.53%) and OptiQ (28.25%).
+
+### Candidate 2: vMLX JIT A/B Study (Single-Variable Speed Benchmark)
+- **Status:** Queued for immediate execution.
+- **Goal:** Single-variable measurement of `--enable-jit` vs `--no-jit` in `vMLX 1.6.59` on identical JANG weights (`Qwen3.5-4B-JANG_4S` and `LFM2.5-8B-A1B-JANG_2L`) across chat, prefill, and decode workloads.
+- **Budget:** ~30–45 min quiet machine time.
+
+### Candidate 3: Thinking-Off MMLU Arm (Overnight Candidate)
+- **Status:** Queued for overnight execution. Preserved here across AGY session boundaries.
+- **Goal:** Dedicated ablation study testing MMLU with reasoning channel explicitly suppressed (dense via API `enable_thinking=false`, MoE via prompt template / system prompt) to:
+  1. Isolate the exact accuracy contribution of the `<think>` reasoning trace vs raw knowledge retrieval.
+  2. Resolve the vMLX reasoning truncation trap (HTTP 502 `reasoning_only_no_content` observed on MoE item 80/1,140).
+- **Budget:** ~3.5 to 8 hours quiet machine time.
+
+---
+
+## Milestone v3: Horizon Planning
+- Scaling to larger model families (e.g. 35B models on external storage).
+- Multi-turn conversation and extended context sweeps.
+- Packaging, CLI distribution, and external publication.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-18 (Plan 02-02 complete)*
+*Last updated: 2026-09-19 (v2 Complete; Candidate 1 & 2 active; Candidate 3 queued for overnight)*

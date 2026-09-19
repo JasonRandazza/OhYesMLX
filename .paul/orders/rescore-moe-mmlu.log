@@ -1,0 +1,41 @@
+Done.
+
+## What I changed
+
+**`scripts/rescore_moe_mmlu.py`** (new, 352 lines) — stdlib only, imports exactly `glob`, `json`, `re`, `re`, `sys`, `pathlib`. Reads the 57 sample files, computes the strict-equality baseline and the five-pattern cascade recovery, prints a subject-by-subject table and the extracted-vs-keyed distribution, writes `results/accuracy-moe/study-2c/jang2l__osaurus/mmlu_rescored.json`, and has `--self-test`.
+
+**`docs/research/2026-09-19-osaurus-moe-mmlu-extraction.md`** (new, 296 lines).
+
+Plus the generated `mmlu_rescored.json` (`results/` is gitignored by existing repo convention).
+
+## Results
+
+| | items | score | 95% Wilson |
+|---|---|---|---|
+| baseline (strict equality on lm-eval's `filtered_resps`) | **43 / 1,140** | **3.77%** | [2.81%, 5.04%] |
+| recovered (cascade on the full completion) | **481 / 1,140** | **42.19%** | [39.36%, 45.08%] |
+
+The baseline reproduces lm-eval's `0.037719298245614034` exactly. `baseline hits lost: 0` — the recovery is a strict widening, +438 items, not a swap.
+
+## One interpretive call I had to make
+
+"the completion" is ambiguous between `resps[0][0]` (what the model emitted) and `filtered_resps[0]` (what lm-eval scored, first line only). I used **filtered for the baseline** — that is the only string that reproduces 43 — and **raw for the recovery**, since the spec's premise is that the answer statement sits at the end of the completion. Both are named in the script and the JSON `method` fields.
+
+## Red-checks (all performed, reverted, restored byte-identical)
+
+1. Baseline read from the full completion → 40/1140, printed `REFUSING TO PUBLISH`, **exit 1**, summary file untouched.
+2. Pattern 4 `[A-D]`→`[A-E]` → **self-test initially PASSED — a real gap.** An out-of-range letter would vanish from the distribution while not counting as unscored. Added an A–D range invariant plus an out-of-range case; the mutant now fails 2 checks, exit 1.
+3. Dropping pattern 1 → 471 (baseline still 43); neutralizing the cascade → 0 (baseline still 43). Confirms the recovered number comes from the cascade and the baseline is independent of it.
+
+## Test count
+
+**495 passed** in 32.3s. Baseline: I did not run the suite before editing — I should say that plainly rather than claim a comparison. My changes are two new files and no existing file is modified (`git status` confirms), so the count is unperturbed, not verified-stable.
+
+## What I did not verify
+
+- No model, server, or benchmark item was touched (per the standing context).
+- **42.19% is not a purified measure.** Patterns 2 and 5 are permissive by construction; pattern 5 alone catches 135 items at 35.6% accuracy. I measured that cost but did not hand-audit all 481 items, and the note says so.
+- Whether the 171 empty completions were answered in the reasoning channel — the sample files store only the content channel, so it is not recoverable from them, and I did not claim otherwise.
+- I did not re-score the vMLX cells. `jang2l__vmlx` has **no samples at all** (it died on `HTTPError: 502` at `Requesting API: 80/1140`, no sample file written), so there is nothing to recover from — the note states that distinction explicitly, since it is the difference between an instrument failure and a model failure.
+
+I also corrected two false statements during review: a wrong wall-clock figure (8h 13m → 2h 24m 53s) and a claim that the four weakest subjects were the four emptiest — they overlap in only two, and the measured relationship is `r = −0.568`.
