@@ -1,0 +1,18 @@
+Done. All tests pass (495, same as baseline) and only the one new file was added.
+
+**What I changed**
+- Created `docs/research/2026-09-19-accuracy-moe.md` — the Plan 02-03 report, structured to the dense report's sections: metadata, §1 executive summary with the 8-cell table and six findings, §2 scored matrices, §3 paired McNemar tables with exact p-values, §4 replicate determinism, §5 Pareto frontier + Q1/Q3/Q4, §6 provenance index. Nothing else touched (the modified `scripts/analyze_accuracy_moe.py` and `.paul/orders/*` were already in-flight; I left them alone).
+
+**How I verified**
+- Recomputed all 16 completed cell-task scores as k/n from the raw sample rows — exact match to manifests and `analysis_summary.json` (405/1140, 250/1140, 413/1140, 322/1140, 43/1140, plus GSM8K/IFEval counts).
+- Machine-checked every Δ/CI/K/p in §3 against fresh recomputation from the jsonl: **19 rows, 0 failures**. The exact binomial McNemar p-values are new (not in the summary) and confirm the spec's brackets: 1.3e-6 < 1e-5, 4.9e-8 < 1e-6, 2.5e-21 < 1e-10.
+- Replicate agreement (1,140/1,140 identical, 0 disagreed) and the 2C IFEval agreement (13.6%, 34/250) recomputed from response strings.
+- `pytest -q`: **495 passed** before and after. A green suite is not acceptance — see below.
+
+**Where I did not follow the order verbatim, and why**
+- **Finding 5's mechanism is wrong in the order.** The logs show the refused completions ended at **196 / 432 / 507 tokens under the 1024-token cap** (`max_gen_toks=1024`), not truncated at it. What vMLX rejects is a completion with `reasoning_content` and no visible answer. The report states the measured mechanism and carries an explicit "correction to the record's shorthand" note; the four halt points and item numbers are as specified.
+- **Finding 3's "44% more disk bytes" is directionally wrong** — the design's §5.7 figure is that *`jang2l` is 44% smaller* than OptiQ. The report says OptiQ is 78.7% larger than `jang2l` and 14.4% larger than the control, keeping the 44% in its correct direction.
+- **Q3's expected dominator cannot be used.** The design's §5.7 sentence names `jang2l` as OptiQ's dominator, but `jang2l` has no MMLU coordinate (both visits halted at item 80), so the published domination is `stock4bit`'s — stated explicitly rather than inherited.
+- **Added, as measured limits rather than findings:** the MMLU metric is exact-string-match over the content channel, and response forms differ per cell (339–845 prose of 1,140), so cell-to-cell MMLU differences carry a form component I did not quantify; two MMLU levels sit under the pre-registered 25% floor (`oq4` 21.93%, `jang2l__osaurus` 3.77%) with their causes named; the manifests' MMLU `task_hashes` field is empty; and the failed replicate's `0.0%` agreement entry is the degenerate no-common-items value, not a disagreement. No alternative re-scores were published — the extraction diagnostic is labeled as a diagnostic with its regex rule quoted.
+
+Not verified: item-identity hashes for MMLU (absent from the record), truncation/parse-failure rates (the design asks for them; the manifests don't carry them), and anything I quoted from Track 1 rather than measured.

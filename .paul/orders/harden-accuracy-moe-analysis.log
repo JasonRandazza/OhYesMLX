@@ -1,0 +1,31 @@
+Done. All five spec rules implemented in `scripts/analyze_accuracy_moe.py`; nothing else touched.
+
+**Changes (one file, +89/−14)**
+1. **Replicate stats** — `score_base`/`score_repl` read via `.get(...)` chain; `delta_pp` is `None` when either is `None`, never a fabricated `0.0`.
+2. **Replicate console line** — `primary`/`repl`/`delta` each render `N/A` when `None`.
+3. **Primary-score console (sections 2 and 3)** — new `_pct(score, fmt)` helper renders `N/A` for a null score. I took the spec's `"N/A"` option over `0.0`: these tasks died with `returncode 139` (SIGSEGV), and printing `0.00%` would publish a measurement that never happened.
+4. **Degenerate paired/agreement returns** — both n==0 returns now carry exactly the key set of their full return. This was two live crashes, not one: `ci_lower_pp` was missing (console §4/§5 KeyError) and `agreement_pct` was missing (replicate block KeyError). Dropped two keys no reader uses (`ci`, `disagreements`) — verified by grep across the repo.
+5. **`self_test()`** — builds a synthetic corpus with `score: null`, asserts `run_full_analysis` returns `delta_pp is None` / `n: 0`, then drives `main()` through a captured stdout and asserts the `N/A` rendering.
+
+**Verification**
+- `--self-test` → `analyze_accuracy_moe self-test ok`
+- full run → exit 0 on the real corpus (previously `TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'` at line 242); summary JSON confirms `delta_pp: null` for `jang2l__vmlx_repl` and complete `n: 0` dicts
+- `pytest -q` → **495 passed** (baseline I started from: **495 passed**)
+
+**Red-check** — built five staged copies from `HEAD` + the new test in the scratchpad (`$COMMANDCODE_SCRATCHPAD/redcheck/`), each adding one fix:
+
+| stage | observed failure |
+|---|---|
+| 0 | `TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'` (reported symptom) |
+| 1 | `KeyError: 'agreement_pct'` |
+| 2 | `TypeError: unsupported format string passed to NoneType.__format__` |
+| 3 | `TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'` |
+| 4 | `KeyError: 'ci_lower_pp'` |
+| 5 | pass |
+
+**Not verified / found while working**
+- The `.get("tasks", {})` chain also tolerates a *missing* task key; the self-test fixture always includes the key, so that path is unexercised.
+- Remaining cosmetic gap, not in the spec and left alone: §1 prints `agreement=0.0%` and §6 prints `agreement = 0.0%` for cells with zero common items — the n=0 default is indistinguishable from real 0% agreement in the console (n is only visible in the JSON).
+- `scripts/analyze_accuracy_dense.py` carries the identical unguarded subtraction (line 236), console formatting (line 319), and both degenerate dict shapes; its corpus has no null scores yet, so it is latent. Not touched, per "touch nothing else".
+
+Nothing was blocked.

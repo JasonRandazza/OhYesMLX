@@ -9,15 +9,24 @@ stability, and produces complete statistical summary tables.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
+import io
 import json
 import math
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+
+
+def _pct(score, fmt: str) -> str:
+    """A task score as a percentage string. A task that recorded no score reads N/A,
+    never 0%: a task that crashed did not score zero."""
+    return f"{score * 100:{fmt}}%" if score is not None else "N/A"
 
 
 def load_mmlu_samples(mmlu_dir: str) -> dict[str, dict]:
@@ -93,7 +102,19 @@ def paired_difference(
     common_ids = sorted(set(samples_a.keys()) & set(samples_b.keys()))
     n = len(common_ids)
     if n == 0:
-        return {"n": 0, "b": 0, "c": 0, "delta_pp": 0.0, "ci_half_pp": 0.0, "ci": (0.0, 0.0)}
+        return {
+            "n": 0,
+            "b": 0,
+            "c": 0,
+            "both_correct": 0,
+            "both_incorrect": 0,
+            "discordant": 0,
+            "discordance_rate": 0.0,
+            "delta_pp": 0.0,
+            "ci_half_pp": 0.0,
+            "ci_lower_pp": 0.0,
+            "ci_upper_pp": 0.0,
+        }
 
     b = 0
     c = 0
@@ -143,7 +164,14 @@ def agreement_rate(samples_a: dict, samples_b: dict) -> dict:
     common_ids = sorted(set(samples_a.keys()) & set(samples_b.keys()))
     n = len(common_ids)
     if n == 0:
-        return {"n": 0, "identical": 0, "disagreed": 0, "agreement_rate": 0.0, "disagreements": []}
+        return {
+            "n": 0,
+            "identical": 0,
+            "disagreed": 0,
+            "agreement_rate": 0.0,
+            "agreement_pct": 0.0,
+            "first_disagreement": None,
+        }
 
     identical = 0
     disagreements = []
@@ -234,12 +262,15 @@ def run_full_analysis(results_dir: str) -> dict:
         if base_key in cells and "mmlu" in cells[base_key]:
             base_samples = cells[base_key]["mmlu"]
             agr = agreement_rate(base_samples, repl_samples)
-            score_base = manifests[base_key]["tasks"]["mmlu_generative"]["score"]
-            score_repl = manifests[repl_key]["tasks"]["mmlu_generative"]["score"]
+            score_base = manifests[base_key].get("tasks", {}).get("mmlu_generative", {}).get("score")
+            score_repl = manifests[repl_key].get("tasks", {}).get("mmlu_generative", {}).get("score")
+            delta_pp = None
+            if score_base is not None and score_repl is not None:
+                delta_pp = round((score_repl - score_base) * 100, 4)
             analysis["replicates"][repl_key] = {
                 "score_primary": score_base,
                 "score_replicate": score_repl,
-                "delta_pp": round((score_repl - score_base) * 100, 4),
+                "delta_pp": delta_pp,
                 "agreement_pct": agr["agreement_pct"],
                 "disagreed": agr["disagreed"],
             }
@@ -284,6 +315,47 @@ def self_test() -> int:
     samples_2 = {0: {"doc_id": 0, "exact_match": 1.0, "filtered_resps": ["A"], "target": "A"}}
     assert paired_difference(samples_1, samples_2)["n"] == 1
     assert agreement_rate(samples_1, samples_2)["agreement_pct"] == 100.0
+    assert _pct(0.5, ".2f") == "50.00%" and _pct(None, ".2f") == "N/A"
+
+    # A task that failed before recording a score (returncode 139, score null) must not
+    # crash the analysis or the console report, and its delta is unknown, never zero.
+    with tempfile.TemporaryDirectory() as tmp:
+        null_task = {"score": None, "metric": None, "duration_s": None, "items_scored": None}
+        for parent, cell in (
+            ("column-vmlx", "jang2l__vmlx"),
+            ("column-vmlx", "stock4bit__vmlx"),
+            ("replicate", "jang2l__vmlx"),
+        ):
+            cell_dir = Path(tmp, parent, cell)
+            cell_dir.mkdir(parents=True)
+            manifest = {"tasks": {"mmlu_generative": null_task, "gsm8k": null_task}}
+            cell_dir.joinpath("manifest.json").write_text(json.dumps(manifest), "utf-8")
+
+        data = run_full_analysis(tmp)
+        assert data["primary_scores"]["jang2l__vmlx"]["mmlu_generative"]["score"] is None
+        repl = data["replicates"]["jang2l__vmlx_repl"]
+        assert repl["score_primary"] is None and repl["score_replicate"] is None
+        assert repl["delta_pp"] is None
+        assert data["vmlx_pairwise"]["jang2l__vmlx vs stock4bit__vmlx"]["mmlu"]["n"] == 0
+
+        argv = sys.argv
+        sys.argv = ["analyze_accuracy_moe.py", "--results-dir", tmp]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                rc = main()
+        finally:
+            sys.argv = argv
+        assert rc == 0
+        assert "primary=N/A repl=N/A delta=N/A" in buf.getvalue()
+        assert "MMLU=N/A" in buf.getvalue()
+
+    # Cells whose samples never landed have no common items: the degenerate return must
+    # carry every key the console reads, not just n.
+    empty_diff = paired_difference(samples_1, {})
+    assert empty_diff["n"] == 0 and empty_diff["discordant"] == 0
+    assert empty_diff["delta_pp"] == 0.0
+    assert empty_diff["ci_lower_pp"] == 0.0 and empty_diff["ci_upper_pp"] == 0.0
+
     print("analyze_accuracy_moe self-test ok")
     return 0
 
@@ -310,24 +382,27 @@ def main() -> int:
 
     print("\n--- 1. Replicate Stability (MMLU 5-shot) ---")
     for rname, rinfo in data["replicates"].items():
-        print(f"{rname:<22}: primary={rinfo['score_primary']:.4f} repl={rinfo['score_replicate']:.4f} delta={rinfo['delta_pp']:+.2f}pp agreement={rinfo['agreement_pct']}%")
+        primary = f"{rinfo['score_primary']:.4f}" if rinfo["score_primary"] is not None else "N/A"
+        repl = f"{rinfo['score_replicate']:.4f}" if rinfo["score_replicate"] is not None else "N/A"
+        delta = f"{rinfo['delta_pp']:+.2f}pp" if rinfo["delta_pp"] is not None else "N/A"
+        print(f"{rname:<22}: primary={primary} repl={repl} delta={delta} agreement={rinfo['agreement_pct']}%")
 
     print("\n--- 2. Column A (vMLX) Accuracy Scores ---")
     for c in ["stock4bit__vmlx", "jang2l__vmlx", "oq4__vmlx", "oq4e__vmlx", "optiq__vmlx"]:
         if c in data["primary_scores"]:
             ts = data["primary_scores"][c]
-            mmlu_s = ts.get('mmlu_generative', {}).get('score', 0) * 100
-            gsm_s = ts.get('gsm8k', {}).get('score', 0) * 100
-            ife_s = ts.get('ifeval', {}).get('score', 0) * 100
-            print(f"{c:<18}: MMLU={mmlu_s:.2f}% | GSM8K={gsm_s:.1f}% | IFEval={ife_s:.1f}%")
+            mmlu_s = _pct(ts.get('mmlu_generative', {}).get('score'), ".2f")
+            gsm_s = _pct(ts.get('gsm8k', {}).get('score'), ".1f")
+            ife_s = _pct(ts.get('ifeval', {}).get('score'), ".1f")
+            print(f"{c:<18}: MMLU={mmlu_s} | GSM8K={gsm_s} | IFEval={ife_s}")
 
     print("\n--- 3. Study 2C: Osaurus Accuracy Scores ---")
     if "jang2l__osaurus" in data["primary_scores"]:
         ts = data["primary_scores"]["jang2l__osaurus"]
-        mmlu_s = ts.get('mmlu_generative', {}).get('score', 0) * 100
-        gsm_s = ts.get('gsm8k', {}).get('score', 0) * 100
-        ife_s = ts.get('ifeval', {}).get('score', 0) * 100
-        print(f"jang2l__osaurus   : MMLU={mmlu_s:.2f}% | GSM8K={gsm_s:.1f}% | IFEval={ife_s:.1f}%")
+        mmlu_s = _pct(ts.get('mmlu_generative', {}).get('score'), ".2f")
+        gsm_s = _pct(ts.get('gsm8k', {}).get('score'), ".1f")
+        ife_s = _pct(ts.get('ifeval', {}).get('score'), ".1f")
+        print(f"jang2l__osaurus   : MMLU={mmlu_s} | GSM8K={gsm_s} | IFEval={ife_s}")
 
     print("\n--- 4. Q1: Vendor Parity Claim: JANG_2L vs stock4bit (vMLX) ---")
     key_q1 = "jang2l__vmlx vs stock4bit__vmlx"
