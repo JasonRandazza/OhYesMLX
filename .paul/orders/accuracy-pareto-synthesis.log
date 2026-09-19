@@ -1,0 +1,19 @@
+Done. `docs/research/2026-09-19-accuracy-pareto.md` is written (947 lines, 26 tables), and the suite is green.
+
+**What it contains** — the seven required sections plus appendices: the §6.5 framing sentence instantiated for all three drawable frontiers; the JANG-duality thesis (dense speed free, MoE density free on the measurable floor); OptiQ eliminated on both models; the outlier-protection split; the method (§5.5 coordinates, dominance bands, no-pooling, quotations-only join); the three frontier tables with per-format dominance verdicts and frontier bins; trade-rate tables with `—` for the free exchanges and priced slopes for 17 resolvable pairs; Q1–Q4 in order; the unified recommendation; and the Track 2 / Milestone v2 closeout with exit criteria and the record's outstanding gaps.
+
+**Verification**
+- Baseline 495 passed → after 495 passed (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`).
+- All 26 tables pipe-checked (escaped `\|` handled); all relative doc links resolve.
+- Every slope re-derived by script; Appendix C's published block runs and prints exactly the values in §4 (`(−0.5611, −0.9806, −9.4553)` and `(−0.4809, +4.3564, +41.3917)`).
+- No file touched other than the named one (`git status` shows only the new doc plus the pre-existing untracked order files).
+
+**Dispatch/source conflicts I resolved rather than blocked on** (all recorded in the paper: §2.7, §7.4, Appendix B):
+1. "Reasoning truncation halt" — the MoE study explicitly corrects this: it's an HTTP 502 `reasoning_only_no_content` refusal, not a cap truncation (refused at 196/432/507 tokens against a 1,024 cap). The paper names both, uses the measured mechanism.
+2. `−1.00 pp` for dense `oQ4e` vs `stock4bit` is the point-score difference; the paired estimate is `−1.01 pp [−1.86, −0.15]`, which is what every slope uses.
+3. `acc-dense §6.1`/`§6.2`'s footprint column (2,795–2,842 MB, and `jang4s__osaurus` listed at `oq4`'s 2,466 MB) matches no Track 1 quotation — the paper uses Track 1/design §5.6 values and records the discrepancy.
+4. `acc-dense §3.1` labels `oq4e`-vs-`stock4bit` "P1 (Parity)" though its interval escapes the ±1.5 pp band; the design's two-condition rule (and the MoE study's treatment of the identical shape) makes it indeterminate. The paper applies the rule, prints the source's label beside it, and prices the slope with both readings visible.
+5. `acc-dense §6.1`'s "`oq4` dominated by `JANG_4S`" cannot fire under §5.5 — their accuracy difference is a tie — so Table 1 gives `oq4` no domination.
+6. Design §5.5 is ambiguous between per-pair and all-axes elimination; §2.3 states the reading used (per-pair, matching the MoE study's precedent) and names the one bin that changes under the alternative (`oq4e` in Table 1).
+
+**Not verified / not done:** nothing was recomputed from the raw `results/accuracy-*/` sample rows — every score, interval and `K` is quoted from the two published studies; no red-check applies (docs-only, no code change); the standing "leave a runnable check behind" rule is satisfied by Appendix C, since the file scope forbade adding a test file.
