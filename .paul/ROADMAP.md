@@ -222,9 +222,9 @@ concurrency finding that fell out along the way.
 - **Finding:** lm-eval 3.77% was first-line regex truncation (`^(.*?)(?=\n|$)`). Five-pattern cascade on full completion recovers **42.19%** (481/1,140, 95% Wilson CI: [39.36%, 45.08%]) with 0 baseline hits lost. Strict equality reconciles exactly to 43/1,140. Outscores stock4bit (35.53%) and OptiQ (28.25%).
 
 ### Candidate 2: vMLX JIT A/B Study (Single-Variable Speed Benchmark)
-- **Status:** Queued for immediate execution.
-- **Goal:** Single-variable measurement of `--enable-jit` vs `--no-jit` in `vMLX 1.6.59` on identical JANG weights (`Qwen3.5-4B-JANG_4S` and `LFM2.5-8B-A1B-JANG_2L`) across chat, prefill, and decode workloads.
-- **Budget:** ~30–45 min quiet machine time.
+- **Status:** COMPLETE (2026-09-19).
+- **Artifact:** `docs/research/2026-09-19-vmlx-jit-ab.md`, `scripts/run_vmlx_jit_ab.sh`.
+- **Finding:** Across all 6 cell-workload pairs, `--enable-jit` carries a **-2.7% to -11.3% decode throughput penalty** (-1.5 to -8.7 tok/s) on Apple Silicon M2 Max. On 4B/8B models at batch size 1, memory bandwidth dominates and JIT compilation overhead hurts decode speed. TTFT and prefill throughput are indifferent ($\pm1-2\%$). Confirms that Track 1's choice to pin `--no-jit` was not only methodologically pure, but optimal for throughput.
 
 ### Candidate 3: Thinking-Off MMLU Arm (Overnight Candidate)
 - **Status:** Queued for overnight execution. Preserved here across AGY session boundaries.
@@ -236,10 +236,27 @@ concurrency finding that fell out along the way.
 ---
 
 ## Milestone v3: Horizon Planning
-- Scaling to larger model families (e.g. 35B models on external storage).
-- Multi-turn conversation and extended context sweeps.
-- Packaging, CLI distribution, and external publication.
+
+### Track 1: Large-Model Scaling (30B–70B Scale on Apple Silicon)
+- **Context:** v1/v2 evaluated 4B–8B models (resident footprint ~2.5–5 GB). Real-world Apple Silicon local deployments target 30B–70B parameters, challenging unified memory headroom (20–45 GB RAM) and Metal allocations.
+- **Plan 03-01: 35B MoE Benchmark (`Qwen3.5-35B-A3B`)** across stock 4-bit, oQ4, and JANG formats.
+- **Plan 03-02: Storage Tiering & Cold Load (Internal APFS vs External Thunderbolt NVMe)**: Measure cold load times, mmap page faults, and read latency on external drives.
+- **Plan 03-03: Expert Streaming under Memory Pressure**: OptiQ `--stream-experts` vs vMLX block paging when weights exceed 70% of physical RAM.
+
+### Track 2: Context Scaling & Conversational Dynamics
+- **Context:** v1/v2 pinned single-turn requests. Assistant workflows require multi-turn caching and long-context RAG.
+- **Plan 03-04: Multi-Turn Conversation Sweep (1 to 10 turns)** measuring turn-by-turn ITL degradation and prefix-cache retention.
+- **Plan 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV caches)** measuring memory savings vs accuracy retention at 16k and 32k context lengths.
+
+### Track 3: Speculative Decoding & Acceleration Architectures
+- **Context:** Test vendor speedup claims on unified memory where decode is memory-bandwidth bound.
+- **Plan 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`)** vs standard decode.
+- **Plan 03-07: Draft-Model Speculative Decoding in mlx-lm (`--speculative-model`)**.
+
+### Track 4: Public Distribution & Packaging (v1.0 Release)
+- **Plan 03-08: Distribution packaging** (clean CLI, uv/pip installable, zero hardcoded host paths).
+- **Plan 03-09: Automated interactive Pareto visualization generator** (HTML/SVG interactive Pareto frontier plots for Speed, Memory, and Quality).
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-19 (v2 Complete; Candidate 1 & 2 active; Candidate 3 queued for overnight)*
+*Last updated: 2026-09-19 (v2 Complete; Candidate 1 & 2 Complete; Candidate 3 queued for overnight; v3 Horizon defined)*

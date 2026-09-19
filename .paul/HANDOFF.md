@@ -1,15 +1,14 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-19 (Milestone v2 Complete: JANG Study and Accuracy Scoring)"
+description: "OhYesMLX — session handoff, 2026-09-19 (Milestone v2 Complete; Candidates 1 & 2 Complete; Candidate 3 Queued for Overnight; Milestone v3 Horizon Planned)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-19 (Milestone v2 Complete: JANG Study & Accuracy Scoring)
+# Handoff — 2026-09-19 (v2 Complete, JIT A/B Closed, Candidate 3 Queued)
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
-> decisions live in `.paul/STATE.md`; findings live in `docs/research/`. Previous handoffs are
-> in `.paul/archive/` and are not required reading.
+> decisions live in `.paul/STATE.md`; findings live in `docs/research/`.
 
 Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
@@ -17,36 +16,34 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## Where the project is
 
-- **v1 Milestone (0.1.0) is 100% closed and published.**
-- **v2 Milestone (0.2.0: JANG Study & Accuracy Scoring) is 100% COMPLETE & PUBLISHED.**
-  - **Phase 1 (Track 1: The JANG Study) Complete:**
-    - Plan 01-01: Dense JANG Study (`docs/research/2026-09-17-dense-jang-study.md`).
-    - Plan 01-02: MoE JANG Study (`docs/research/2026-09-17-moe-jang-study.md`).
-    - Plan 01-03: Cross-Runtime JANG Synthesis (`docs/research/2026-09-17-jang-cross-runtime.md`).
-  - **Phase 2 (Track 2: Accuracy Scoring) Complete:**
-    - Plan 02-01: Accuracy Harness Spike (`docs/research/2026-09-18-accuracy-spike-report.md`).
-    - Plan 02-02: Dense Accuracy Study (`docs/research/2026-09-18-accuracy-dense.md`).
-    - Plan 02-03: MoE Accuracy Study (`docs/research/2026-09-19-accuracy-moe.md`).
-    - Plan 02-04: Accuracy Pareto Tradeoff Synthesis (`docs/research/2026-09-19-accuracy-pareto.md`).
-- **Core Findings of Milestone v2:**
-  - **The Evaluation Trilogy is Complete:** Speed, Memory, and Accuracy joined across 10 artifacts, 2 models, and 2 runtimes.
-  - **JANG Duality Confirmed with Quality:**
-    - *Dense (`Qwen3.5-4B`):* `JANG_4S` delivers +14–22% decode speedup with zero quality penalty (MMLU parity, $\Delta = +0.53\text{ pp}$ [95% CI: $-0.38, +1.43\text{ pp}$], replicate-confirmed at 0.0000 pp drift).
-    - *MoE (`LFM2.5-8B-A1B`):* `JANG_2L` preserves instruction following at 2.37 bits (IFEval 56.8% vs 52.0%) with 36% disk savings and 30% footprint reduction.
-  - **OptiQ Strictly Dominated:** Eliminated across all frontiers (-3.1 to -4.4 pp on dense, -7.3 to -8.0 pp on MoE, +14% to +78% disk penalty).
-  - **Outlier Protection:** Recipe-dependent; mandatory on MoE (`oQ4e` +14.30 pp over `oQ4`).
-  - **Loader Offset:** Runtime is a live confound for accuracy (3–4 pp loader offset on identical weights; Study 2C).
-- **All Ports Free:** 8000, 1337, 8080, 8081, 8100 verified released. Stale Osaurus CLI process cleanly swept; `osaurus mcp` preserved.
-- **Test Suite:** 495 tests pass (`pytest -q` in 32.21s).
+- **v1 Milestone (0.1.0) and v2 Milestone (0.2.0) are 100% COMPLETE & PUBLISHED.**
+- **Candidate 1: Osaurus MoE MMLU Extraction Resolution (COMPLETE):**
+  - Offline re-scoring tool (`scripts/rescore_moe_mmlu.py`) recovered true MMLU score from untouched sample rows: **42.19% (481/1,140)** with 0 baseline hits lost (reconciled exactly to lm-eval's 43/1,140 under first-line truncation). Outscores stock4bit (35.53%) and OptiQ (28.25%).
+  - Research note: `docs/research/2026-09-19-osaurus-moe-mmlu-extraction.md`.
+- **Candidate 2: vMLX JIT A/B Study (COMPLETE):**
+  - Single-variable speed benchmark measuring `--no-jit` vs `--enable-jit` via `OHYESMLX_VMLX_ENABLE_JIT` on identical JANG weights (`Qwen3.5-4B-JANG_4S` and `LFM2.5-8B-A1B-JANG_2L`).
+  - Runner: `scripts/run_vmlx_jit_ab.sh`. Results: `results/vmlx-jit-ab/`.
+  - Research note: `docs/research/2026-09-19-vmlx-jit-ab.md`.
+  - **Key Finding:** JIT does NOT accelerate decode on 4B/8B models on Apple Silicon; across all 6 cell-workloads, `--enable-jit` carries a **-2.7% to -11.3% decode throughput penalty** (-1.5 to -8.7 tok/s). TTFT and prefill throughput are indifferent ($\pm1-2\%$). Confirms that Track 1's choice to pin `--no-jit` was not only methodologically sound, but delivered optimal decode throughput.
+- **Candidate 3: Thinking-Off MMLU Arm (PRESERVED FOR OVERNIGHT):**
+  - Documented in `.paul/ROADMAP.md` and `.paul/STATE.md`.
+  - Ready for overnight dispatch before sleep.
+- **Milestone v3 Horizon Plan:**
+  - 4 Tracks defined in `.paul/ROADMAP.md`: Large-Model Scaling (30B–70B on internal vs external NVMe), Context Scaling (multi-turn sweeps & quantized KV caches), Speculative Decoding (MTP & draft models), and Public Distribution (v1.0 packaging & interactive Pareto charts).
+- **All Ports Free:** 8000, 1337, 8080, 8081, 8100 verified released.
+- **Test Suite:** 496 tests pass (`pytest -q` in 32.43s).
 
 ---
 
 ## What is next
 
-Milestone v2 is fully discharged and unified. Awaiting user direction on the next objective:
-1. **vMLX JIT A/B experiment:** Single-variable test of `--enable-jit` vs `--no-jit` on identical JANG weights.
-2. **Thinking-off arm:** Dedicated small arm testing MMLU with thinking disabled to isolate reasoning channel contributions.
-3. **v3 Roadmap Planning:** New candidate models, longer sweeps, or external publishing.
+1. **Option 3 Overnight Execution:**
+   - Launch the Thinking-Off MMLU Arm before going to sleep:
+     ```sh
+     nohup scripts/run_accuracy_moe.sh > results/accuracy-moe/overnight-thinking-off.log 2>&1 &
+     ```
+2. **Milestone v3 Kickoff:**
+   - Proceed with Phase 1 of Milestone v3 (Large-Model Scaling: 35B MoE / storage tiering).
 
 ---
 

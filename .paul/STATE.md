@@ -142,8 +142,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-19 (Antigravity manager)
-Stopped at: Candidate 1 (Osaurus MoE MMLU extraction) COMPLETE (42.19% recovered, reconciled to 43/1140). Active: Candidate 2 (vMLX JIT A/B); Candidate 3 (Thinking-off MMLU arm queued for overnight).
-Next action: Launch Candidate 2 (vMLX JIT A/B), draft Milestone v3 Roadmap, prepare Candidate 3 overnight dispatch.
+Stopped at: Candidate 1 (Osaurus MoE MMLU extraction, 42.19%) and Candidate 2 (vMLX JIT A/B, -2.7% to -11.3% decode penalty under JIT) BOTH COMPLETE. Milestone v3 Horizon Plan drafted. Candidate 3 (Thinking-off MMLU arm) preserved and ready for overnight dispatch.
+Next action: Await user selection for next active task or launch Candidate 3 for overnight execution.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
