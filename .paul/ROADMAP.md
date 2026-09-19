@@ -65,9 +65,9 @@ Phases: 1 of 2 complete
 
 **Plans:**
 - [x] 02-01: Harness Spike & Local Endpoint Validation — **Complete 2026-09-18** (`docs/research/2026-09-18-accuracy-spike-report.md`)
-- [ ] 02-02: Dense Accuracy Study (`Qwen3.5-4B`) — *Next*
-- [ ] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`)
-- [ ] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis
+- [x] 02-02: Dense Accuracy Study (`Qwen3.5-4B`) — **Complete 2026-09-18** (`docs/research/2026-09-18-accuracy-dense.md`)
+- [x] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`) — **Complete 2026-09-19** (`docs/research/2026-09-19-accuracy-moe.md`)
+- [ ] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis — *Next*
 
 ## v1 Phase Details
 

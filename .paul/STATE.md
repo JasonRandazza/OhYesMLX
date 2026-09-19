@@ -16,21 +16,21 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0)
-Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-03 Launched.
-Plan: Plan 02-03 (MoE Accuracy Study: LFM2.5-8B-A1B) executing.
-Status: Plan 02-03 campaign launched across 8 cells with pre-registered budget dial (MMLU limit=20 items/subject = 1,140 items; GSM8K limit=250; IFEval limit=250 = 1,640 items/cell). 495 tests pass.
-Last activity: 2026-09-18 — **Plan 02-03 MoE Accuracy Study launched**. Pre-registered budget dial activated (MMLU 20 items/subject = 1,140 items); --no-disable-thinking preserved due to vMLX lfm2 supports_instruct_mode=False; 8 cells scheduled (~18.5h projected).
+Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-03 Complete; Plan 02-04 Next.
+Plan: Plan 02-04 (Accuracy vs Throughput Pareto Tradeoff Synthesis) next.
+Status: Plan 02-03 MoE Accuracy Study complete (docs/research/2026-09-19-accuracy-moe.md). Plan 02-04 Pareto Synthesis next (analytical/synthesis joining Track 1 speed/memory with Track 2 accuracy). 495 tests pass.
+Last activity: 2026-09-19 — **Plan 02-03 MoE Accuracy Study published**. 100.0% replicate determinism confirmed; JANG_2L instruction following preserved at 2.37 bits (IFEval 56.8% vs 52.0%); OptiQ Pareto-dominated (-7.3 pp MMLU, +14-78% disk); outlier protection mandatory (oQ4e +14.3 pp over oQ4); vMLX HTTP 502 reasoning truncation trap diagnosed; Study 2C extraction filter confound documented. 495 tests pass.
 
 Progress:
-- Milestone: [████████──] 80%
-- Phase: [███████───] 70%
+- Milestone: [████████▌─] 85%
+- Phase: [███████▌──] 75%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ◉        ○     [Applying / Measuring]
+  ◉        ○        ○     [Planning Plan 02-04]
 ```
 
 ## Performance Metrics
@@ -103,6 +103,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 103: ARC-Challenge dropped due to upstream extraction filter defect; Plan 02-02 runs on 3 validated tasks (MMLU 5-shot, GSM8K 5-shot, IFEval 0-shot; 2,780 items/cell) | v2 Phase 2 | Upstream arc_challenge_chat mandates "The best answer is [X]" while filter only strips outer whitespace, failing right answers; Jason chose to drop ARC-Challenge; Plan 02-02 executes across 8 primary + 3 replicate cells on 3 clean tasks |
 | Decision 104: Dense Accuracy Study confirms Outcome P1 (Quality Parity) for JANG_4S vs stock4bit (+0.53 pp MMLU [95% CI: -0.38, +1.43 pp]) and establishes OptiQ as strictly Pareto-dominated (-3.1 to -4.4 pp MMLU, +28% disk) | v2 Phase 2 | Q2 confirmed (zero quality loss for +14–17% decode speedup); Q3 confirmed (OptiQ eliminated from Pareto frontier); 100.0% replicate determinism observed; Study 2C shows ~3–4 pp loader offset, proving cross-runtime accuracy rankings invalid; docs/research/2026-09-18-accuracy-dense.md |
 | Decision 105: Plan 02-03 MoE Accuracy Study activates pre-registered budget dial (§3.3) and pins --no-disable-thinking due to vMLX LFM2 supports_instruct_mode=False | v2 Phase 2 | vMLX rejects enable_thinking=false with HTTP 400 for LFM2; reasoning trace active; MMLU dialed 40 -> 20 items/subject (1,140 items) to keep 8-cell campaign within ~18.5h budget; docs/research/2026-09-17-v2-track2-accuracy-study-design.md §3.3 |
+| Decision 106: Plan 02-03 MoE Accuracy Study confirms 100.0% replicate determinism, rules out collapse at 2.37 bits (IFEval 56.8% vs 52.0%), strictly eliminates OptiQ (-7.3 pp MMLU, +14-78% disk), proves outlier protection mandatory (oQ4e +14.3 pp over oQ4), and diagnoses vMLX reasoning truncation trap (HTTP 502) | v2 Phase 2 | Closes Q1-Q4 on MoE; confirms within-runtime determinism on MoE; proves 2.37-bit quantization preserves instruction following; docs/research/2026-09-19-accuracy-moe.md |
 
 ### Deferred Issues
 
@@ -138,9 +139,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-18 (Antigravity manager)
-Stopped at: Plan 02-02 (Dense Accuracy Study: `Qwen3.5-4B`) complete and published (`docs/research/2026-09-18-accuracy-dense.md`). 495 tests green.
-Next action: Execute Plan 02-03 (MoE Accuracy Study: `LFM2.5-8B-A1B`).
+Last session: 2026-09-19 (Antigravity manager)
+Stopped at: Plan 02-03 (MoE Accuracy Study: `LFM2.5-8B-A1B`) complete and published (`docs/research/2026-09-19-accuracy-moe.md`). 495 tests green.
+Next action: Execute Plan 02-04 (Accuracy vs Throughput Pareto Tradeoff Synthesis).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

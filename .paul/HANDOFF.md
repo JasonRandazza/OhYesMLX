@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-18 (Phase 2 Track 2 Accuracy Scoring: Plan 02-03 MoE Campaign In Flight)"
+description: "OhYesMLX — session handoff, 2026-09-19 (Phase 2 Track 2 Accuracy Scoring: Plan 02-03 Complete, Plan 02-04 Next)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-18 (v2 Phase 2 Track 2 Accuracy Scoring: Plan 02-03 MoE Campaign In Flight)
+# Handoff — 2026-09-19 (v2 Phase 2 Track 2 Accuracy Scoring: Plan 02-03 Complete, Plan 02-04 Next)
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
@@ -20,30 +20,32 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 - **v1 is 100% closed and published.**
 - **v2 Milestone active (0.2.0):** JANG Study and Accuracy Scoring.
 - **v2 Phase 1 (Track 1: The JANG Study) is 100% COMPLETE & PUBLISHED.**
-- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-01 & 02-02 COMPLETE & PUBLISHED:**
-  - Dense Accuracy Study published: [`docs/research/2026-09-18-accuracy-dense.md`](file:///Users/jrazz/Dev/active/OhYesMLX/docs/research/2026-09-18-accuracy-dense.md).
-- **v2 Phase 2 (Track 2: Accuracy Scoring) Plan 02-03 IS CURRENTLY IN FLIGHT:**
-  - Launched: 2026-09-18 at 17:27:12 local.
-  - Runner log: [`results/accuracy-moe/runner.log`](file:///Users/jrazz/Dev/active/OhYesMLX/results/accuracy-moe/runner.log).
-  - Target matrix: 8 cells total (Column A: 5 cells on vMLX; Replicate: 2 cells on vMLX; Study 2C: 1 cell on Osaurus).
-  - Configuration: Pre-registered budget dial activated (MMLU 20 items/subject = 1,140 items; GSM8K 250; IFEval 250); `--no-disable-thinking` pinned due to vMLX `supports_instruct_mode=False` for LFM2.
-  - Projected runtime: ~18.5 hours total.
-- **Machine State:** Quiet. **DO NOT run tests, downloads, or git operations while measurements are in flight.**
+- **v2 Phase 2 (Track 2: Accuracy Scoring) Plans 02-01, 02-02, and 02-03 COMPLETE & PUBLISHED:**
+  - Accuracy Spike published: [`docs/research/2026-09-18-accuracy-spike-report.md`](docs/research/2026-09-18-accuracy-spike-report.md).
+  - Dense Accuracy Study published: [`docs/research/2026-09-18-accuracy-dense.md`](docs/research/2026-09-18-accuracy-dense.md).
+  - MoE Accuracy Study published: [`docs/research/2026-09-19-accuracy-moe.md`](docs/research/2026-09-19-accuracy-moe.md).
+- **Plan 02-03 Findings Summary:**
+  - 100.000% replicate determinism confirmed on MoE (0 discordant items across 1,140 MMLU items).
+  - Outcome P3 rejected: JANG_2L instruction following preserved at 2.37 bits (IFEval 56.8% vs 52.0%; Osaurus 60.4%).
+  - Q3 answered: OptiQ strictly Pareto-dominated (-7.3 pp MMLU, +14% to +78% disk penalty).
+  - Q4 answered: Outlier protection vital on MoE (oQ4e +14.3 pp over oQ4).
+  - vMLX reasoning-truncation trap diagnosed (HTTP 502 when completion ends without closing `</think>`).
+  - Study 2C extraction filter confound documented for Osaurus on MMLU (prose prefix vs regex filter).
+- **All Ports Free:** 8000, 1337, 8080, 8081, 8100 verified released. Stale Osaurus CLI process cleanly swept; `osaurus mcp` preserved.
+- **Test Suite:** 495 tests pass (`pytest -q` in 32.28s). Both self-tests pass.
 
 ---
 
-## What is next (Upon Campaign Completion)
+## What is next (Plan 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis)
 
-1. Verify all 8 cells in [`results/accuracy-moe/`](file:///Users/jrazz/Dev/active/OhYesMLX/results/accuracy-moe) report `status: PASS` and release ports.
-2. Run statistical analysis via `python scripts/analyze_accuracy_moe.py`.
-3. Dispatch Command Code worker (`cc-agent`) to author `docs/research/2026-09-18-accuracy-moe.md` reporting:
-   - Q1 answer: JANG_2L (2.37 bits avg) vs stock 4-bit on MMLU.
-   - P3 collapse check: GSM8K and IFEval reasoning retention.
-   - Q3 answer: OptiQ Pareto status on MoE.
-   - Replicate stability (within-runtime determinism).
-   - Study 2C: Cross-runtime agreement on JANG_2L (`vmlx` vs `osaurus`).
-4. Update `.paul/STATE.md` and close Plan 02-03.
-5. Proceed to Plan 02-04 (Accuracy vs Throughput Pareto Tradeoff Synthesis — 0 measurement hours).
+1. **Zero live measurement hours:** Pure analytical/synthesis joining Track 1 speed/memory coordinates with Track 2 accuracy coordinates.
+2. **Execute Work Order for Plan 02-04:**
+   - Compute Pareto frontiers per Study Design §5.5 (Qwen3.5-4B vMLX, Qwen3.5-4B Osaurus, LFM2.5-8B-A1B vMLX).
+   - Compute trade rates (quality per speed, quality per memory, quality per disk) for pairs clearing the band.
+   - Formally answer questions Q1–Q4 in order per Study Design §1.3 and §5.3.
+   - Produce the 3-coordinate recommendation tables.
+   - Author [`docs/research/2026-09-19-accuracy-pareto.md`](docs/research/2026-09-19-accuracy-pareto.md) via delegated Command Code worker (`cc-agent`).
+3. **Close Phase 2 and Milestone v2:** Update state stores and Deep Wiki upon publication.
 
 ---
 
@@ -51,5 +53,5 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 - **Quiet Machine:** Nothing else runs while a cell is measured.
 - **Vary one thing at a time:** The defining rule of the project.
-- **Zero repository dependencies:** Runs exclusively via isolated `uv`.
-- **Osaurus Host Settings:** Byte-exact restoration verified with `cmp` after Osaurus execution.
+- **Single-variable framing:** Column is format axis (runtime constant); row is runtime axis (format constant).
+- **Never infer capability from absence of a flag.**
