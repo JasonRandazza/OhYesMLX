@@ -1,0 +1,25 @@
+Both files are in place and verified.
+
+**Changed**
+
+- `scripts/fetch_35b.sh` (new, `chmod +x`) — standalone bash, `HF` pinned to the verify venv, four repos in the specified order, per-repo timestamped start + `OK`/`FAILED`, `FETCHDONE` at exit, carries the exact comment "Do not run while a benchmark is measuring." Header records the phase purpose and the per-repo sizes per `AGENTS.md`'s fetch-script rule.
+- `docs/research/2026-09-19-v3-phase1-35b-study-design.md` (new, 1,065 lines) — design-only, titled and marked as specified, §1–§7 as specified plus a limits section, open questions and two appendices.
+
+**Verified**
+
+- `bash -n scripts/fetch_35b.sh` → clean; exec bit set; script **not** run.
+- `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **496 passed**. Baseline: 496, the count recorded in `.paul/STATE.md`. No Python or test file was touched.
+- `git status` shows only the two new files (plus the pre-existing untracked `.paul/orders/*` from before this session).
+- Red-check: not applicable — no code changed, so there is no behaviour to revert and watch fail.
+
+**Findings the coordinator should see before dispatching the fetch**
+
+- **The OptiQ size in the dispatch is a subset, not the artifact.** Hub says 24,693,956,069 B = **22.998 GiB**; the dispatched 20.63 is exactly that minus the two `optiq/` sidecar tensors (`−1,644,816,498 − 893,179,469 = 20.634 GiB`). `artifact_bytes` counts sidecars by design. Corrected total: **80.053 GiB, not ~77.7**. The other three dispatch figures match the current revisions once read as GiB.
+- **All four artifacts are multimodal** — 333 `vision_tower` tensors each — and **all four quantization maps name zero vision tensors**. That is byte-for-byte the shape of the dense-Qwen3.5-4B-OptiQ refusal in vMLX, so the §3.2 hazard covers every vMLX cell, not just OptiQ.
+- **The OptiQ artifact is already on this host, byte-complete** (24,693,961,658 B, flat layout). The fetch writes hub layout, so that repo buys a second ~23 GiB copy; the script and §2.2 say so.
+- **Osaurus is 0.25.9** now (v1 documents recorded 0.25.3/0.25.6). Also measured today: mlx-lm 0.31.3, oMLX 0.6.4, mlx-optiq 0.5.6, vMLX 1.6.59.
+- **No artifact overrides a single `.experts.` tensor** — all four store the routed path at the global 4-bit rule — while `stock4bit` alone leaves the shared expert, attention and embeddings at 4 bits. §1.3's ~1.98 GB read per decoded token is therefore stated on `jangtq4`'s declared plan, and H1 is not a disk-size comparison.
+
+**Not verified**
+
+Nothing was loaded, probed or measured: no server started, no model downloaded, no tensor read. §2.2's sizes are hub metadata (`?blobs=true`), not `artifact_bytes` on disk — three of the four are not on this machine. The whole compatibility matrix in §3.2 is explicitly unprobed prediction, and §7.3's probe is registered as the gate for it.
