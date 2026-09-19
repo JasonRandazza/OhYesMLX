@@ -235,28 +235,25 @@ concurrency finding that fell out along the way.
 
 ---
 
-## Milestone v3: Horizon Planning
+## Milestone v3: Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — PLANNING
 
-### Track 1: Large-Model Scaling (30B–70B Scale on Apple Silicon)
-- **Context:** v1/v2 evaluated 4B–8B models (resident footprint ~2.5–5 GB). Real-world Apple Silicon local deployments target 30B–70B parameters, challenging unified memory headroom (20–45 GB RAM) and Metal allocations.
-- **Plan 03-01: 35B MoE Benchmark (`Qwen3.5-35B-A3B`)** across stock 4-bit, oQ4, and JANG formats.
-- **Plan 03-02: Storage Tiering & Cold Load (Internal APFS vs External Thunderbolt NVMe)**: Measure cold load times, mmap page faults, and read latency on external drives.
-- **Plan 03-03: Expert Streaming under Memory Pressure**: OptiQ `--stream-experts` vs vMLX block paging when weights exceed 70% of physical RAM.
+### Phase 1: Large-Model Scaling (35B MoE Class on Apple Silicon)
+- [ ] 03-01: 35B MoE Serving Benchmark (`Qwen3.6-35B-A3B`) — Measure stock 4-bit, oQ4, OptiQ (`mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit`), and JANG formats. Pass through the coherence gate (preventing token salad), measuring decode tok/s, TTFT, and resident footprint under high parameter count.
+- [ ] 03-02: Cold vs Warm Page Cache Load & Memory Residency Attribution — Measure internal APFS cold load times (`cold_load_s`) vs OS page cache hits, wired GPU allocations (`footprint -p`), and resident memory headroom across runtimes on large models.
+- [ ] 03-03: Expert Streaming under High Memory Pressure — Evaluate OptiQ's `--stream-experts` behavior vs vMLX block paging when model resident size approaches the 70% RAM threshold.
 
-### Track 2: Context Scaling & Conversational Dynamics
-- **Context:** v1/v2 pinned single-turn requests. Assistant workflows require multi-turn caching and long-context RAG.
-- **Plan 03-04: Multi-Turn Conversation Sweep (1 to 10 turns)** measuring turn-by-turn ITL degradation and prefix-cache retention.
-- **Plan 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV caches)** measuring memory savings vs accuracy retention at 16k and 32k context lengths.
+### Phase 2: Context Scaling & Conversational Dynamics
+- [ ] 03-04: Multi-Turn Conversation Sweep (1 to 10 turns) — Measure turn-by-turn ITL degradation, cumulative prefix-cache retention, and latency progression across successive conversational turns.
+- [ ] 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV caches) — Measure unified memory savings vs accuracy retention at 16k and 32k context lengths across runtimes supporting KV cache quantization.
 
-### Track 3: Speculative Decoding & Acceleration Architectures
-- **Context:** Test vendor speedup claims on unified memory where decode is memory-bandwidth bound.
-- **Plan 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`)** vs standard decode.
-- **Plan 03-07: Draft-Model Speculative Decoding in mlx-lm (`--speculative-model`)**.
+### Phase 3: Speculative Decoding & Acceleration Architectures
+- [ ] 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`) — Measure real decode speedup, acceptance rate, and TTFT impact vs non-MTP baselines on MTP-equipped models (`Qwen3.6-35B-A3B-oQ4-mtp`).
+- [ ] 03-07: Speculative Draft-Model Decoding in mlx-lm (`--speculative-model`) — Quantify draft-model speculation speedup and memory overhead on memory-bandwidth bound Apple Silicon decode.
 
-### Track 4: Public Distribution & Packaging (v1.0 Release)
-- **Plan 03-08: Distribution packaging** (clean CLI, uv/pip installable, zero hardcoded host paths).
-- **Plan 03-09: Automated interactive Pareto visualization generator** (HTML/SVG interactive Pareto frontier plots for Speed, Memory, and Quality).
+### Phase 4: Public Distribution & Packaging (v1.0 Release)
+- [ ] 03-08: Distributable Package & Clean CLI — Package OhYesMLX for public consumption (pip/uv installable, zero hardcoded host paths, self-contained dependencies).
+- [ ] 03-09: Automated Interactive Pareto Visualization — Interactive HTML/SVG Pareto frontier charts linking Speed, Memory, and Quality coordinates across tested configurations.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-19 (v2 Complete; Candidate 1 & 2 Complete; Candidate 3 queued for overnight; v3 Horizon defined)*
+*Last updated: 2026-09-19 (v2 Complete; Candidate 1 & 2 Complete; Candidate 3 queued for overnight; Milestone v3 formally planned)*

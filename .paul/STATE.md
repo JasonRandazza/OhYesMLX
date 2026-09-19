@@ -15,22 +15,22 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0) — COMPLETE
-Phase: 2 (Track 2: Accuracy Scoring) — COMPLETE (4 of 4 plans complete)
-Plan: All v2 plans complete (01-01 through 01-03; 02-01 through 02-04).
-Status: Plan 02-04 Pareto Synthesis complete and published (docs/research/2026-09-19-accuracy-pareto.md). Milestone v2 (0.2.0) fully achieved. 495 tests pass.
-Last activity: 2026-09-19 — **Plan 02-04 Pareto Tradeoff Synthesis published**. Speed, memory, and accuracy joined across 10 artifacts, 2 models, and 2 runtimes. JANG Duality confirmed: dense JANG_4S gives free +14–22% decode speedup with zero quality loss (MMLU parity); MoE JANG_2L preserves instruction following at 2.37 bits with 36% disk savings and 30% footprint reduction. OptiQ eliminated on both models. Milestone v2 closed. 495 tests pass.
+Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
+Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon)
+Plan: Plan 03-01 (35B MoE Serving Benchmark) — in planning
+Status: Milestone v2 complete. Candidate 1 (Osaurus MoE MMLU) and Candidate 2 (vMLX JIT A/B) complete. Milestone v3 formally planned. Plan 03-01 ready for model lineup specification and fetch script. Candidate 3 queued for overnight. 496 tests pass.
+Last activity: 2026-09-19 — **Milestone v3 Planned; Candidate 2 (vMLX JIT A/B) published**. Speed benchmark confirmed JIT decode penalty (-2.7% to -11.3%) on 4B/8B models. Milestone v3 roadmap defined across 4 phases and 9 actionable plans.
 
 Progress:
-- Milestone: [██████████] 100%
-- Phase: [██████████] 100%
+- Milestone: [░░░░░░░░░░] 0%
+- Phase: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Milestone v2 Complete / Unified]
+  ◉        ○        ○     [Milestone v3 Phase 1: Plan 03-01 Planning]
 ```
 
 ## Performance Metrics
