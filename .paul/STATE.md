@@ -15,22 +15,22 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0)
-Phase: 2 (Track 2: Accuracy Scoring) — In Progress. Plan 02-03 Complete; Plan 02-04 Next.
-Plan: Plan 02-04 (Accuracy vs Throughput Pareto Tradeoff Synthesis) next.
-Status: Plan 02-03 MoE Accuracy Study complete (docs/research/2026-09-19-accuracy-moe.md). Plan 02-04 Pareto Synthesis next (analytical/synthesis joining Track 1 speed/memory with Track 2 accuracy). 495 tests pass.
-Last activity: 2026-09-19 — **Plan 02-03 MoE Accuracy Study published**. 100.0% replicate determinism confirmed; JANG_2L instruction following preserved at 2.37 bits (IFEval 56.8% vs 52.0%); OptiQ Pareto-dominated (-7.3 pp MMLU, +14-78% disk); outlier protection mandatory (oQ4e +14.3 pp over oQ4); vMLX HTTP 502 reasoning truncation trap diagnosed; Study 2C extraction filter confound documented. 495 tests pass.
+Milestone: v2 — JANG Study and Accuracy Scoring (0.2.0) — COMPLETE
+Phase: 2 (Track 2: Accuracy Scoring) — COMPLETE (4 of 4 plans complete)
+Plan: All v2 plans complete (01-01 through 01-03; 02-01 through 02-04).
+Status: Plan 02-04 Pareto Synthesis complete and published (docs/research/2026-09-19-accuracy-pareto.md). Milestone v2 (0.2.0) fully achieved. 495 tests pass.
+Last activity: 2026-09-19 — **Plan 02-04 Pareto Tradeoff Synthesis published**. Speed, memory, and accuracy joined across 10 artifacts, 2 models, and 2 runtimes. JANG Duality confirmed: dense JANG_4S gives free +14–22% decode speedup with zero quality loss (MMLU parity); MoE JANG_2L preserves instruction following at 2.37 bits with 36% disk savings and 30% footprint reduction. OptiQ eliminated on both models. Milestone v2 closed. 495 tests pass.
 
 Progress:
-- Milestone: [████████▌─] 85%
-- Phase: [███████▌──] 75%
+- Milestone: [██████████] 100%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ◉        ○        ○     [Planning Plan 02-04]
+  ○        ○        ◉     [Milestone v2 Complete / Unified]
 ```
 
 ## Performance Metrics
@@ -104,6 +104,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 104: Dense Accuracy Study confirms Outcome P1 (Quality Parity) for JANG_4S vs stock4bit (+0.53 pp MMLU [95% CI: -0.38, +1.43 pp]) and establishes OptiQ as strictly Pareto-dominated (-3.1 to -4.4 pp MMLU, +28% disk) | v2 Phase 2 | Q2 confirmed (zero quality loss for +14–17% decode speedup); Q3 confirmed (OptiQ eliminated from Pareto frontier); 100.0% replicate determinism observed; Study 2C shows ~3–4 pp loader offset, proving cross-runtime accuracy rankings invalid; docs/research/2026-09-18-accuracy-dense.md |
 | Decision 105: Plan 02-03 MoE Accuracy Study activates pre-registered budget dial (§3.3) and pins --no-disable-thinking due to vMLX LFM2 supports_instruct_mode=False | v2 Phase 2 | vMLX rejects enable_thinking=false with HTTP 400 for LFM2; reasoning trace active; MMLU dialed 40 -> 20 items/subject (1,140 items) to keep 8-cell campaign within ~18.5h budget; docs/research/2026-09-17-v2-track2-accuracy-study-design.md §3.3 |
 | Decision 106: Plan 02-03 MoE Accuracy Study confirms 100.0% replicate determinism, rules out collapse at 2.37 bits (IFEval 56.8% vs 52.0%), strictly eliminates OptiQ (-7.3 pp MMLU, +14-78% disk), proves outlier protection mandatory (oQ4e +14.3 pp over oQ4), and diagnoses vMLX reasoning truncation trap (HTTP 502) | v2 Phase 2 | Closes Q1-Q4 on MoE; confirms within-runtime determinism on MoE; proves 2.37-bit quantization preserves instruction following; docs/research/2026-09-19-accuracy-moe.md |
+| Decision 107: Plan 02-04 Pareto Tradeoff Synthesis completes evaluation trilogy (Speed, Memory, Accuracy); confirms JANG Duality (dense throughput lead at parity, MoE density/footprint lead with preserved IFEval); eliminates OptiQ across all frontiers; closes Milestone v2 | v2 Phase 2 | Establishes 3-coordinate recommendation table for Apple Silicon; closes Track 2 (Plan 02-04) and Milestone v2 (0.2.0); docs/research/2026-09-19-accuracy-pareto.md |
 
 ### Deferred Issues
 
@@ -140,8 +141,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-19 (Antigravity manager)
-Stopped at: Plan 02-03 (MoE Accuracy Study: `LFM2.5-8B-A1B`) complete and published (`docs/research/2026-09-19-accuracy-moe.md`). 495 tests green.
-Next action: Execute Plan 02-04 (Accuracy vs Throughput Pareto Tradeoff Synthesis).
+Stopped at: Milestone v2 (0.2.0) complete. Plan 02-04 (Accuracy Pareto Tradeoff Synthesis) complete and published (`docs/research/2026-09-19-accuracy-pareto.md`). 495 tests green.
+Next action: Milestone v2 complete. Await user direction for next milestone or open experiments.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

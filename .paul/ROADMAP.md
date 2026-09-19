@@ -24,13 +24,13 @@ Phases: 7 of 7 complete
 ## Current Milestone
 
 **v2 — JANG Study and Accuracy Scoring** (0.2.0)
-Status: In Progress
-Phases: 1 of 2 complete
+Status: Complete
+Phases: 2 of 2 complete
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
 | 1 | Track 1: The JANG Study | 3 | **Complete** | 2026-09-17 |
-| 2 | Track 2: Accuracy Scoring (lm-evaluation-harness) | 4 | **In Progress** | — |
+| 2 | Track 2: Accuracy Scoring (lm-evaluation-harness) | 4 | **Complete** | 2026-09-19 |
 
 ## v1 Phases (Archive)
 
@@ -67,7 +67,7 @@ Phases: 1 of 2 complete
 - [x] 02-01: Harness Spike & Local Endpoint Validation — **Complete 2026-09-18** (`docs/research/2026-09-18-accuracy-spike-report.md`)
 - [x] 02-02: Dense Accuracy Study (`Qwen3.5-4B`) — **Complete 2026-09-18** (`docs/research/2026-09-18-accuracy-dense.md`)
 - [x] 02-03: MoE Accuracy Study (`LFM2.5-8B-A1B`) — **Complete 2026-09-19** (`docs/research/2026-09-19-accuracy-moe.md`)
-- [ ] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis — *Next*
+- [x] 02-04: Accuracy vs Throughput Pareto Tradeoff Synthesis — **Complete 2026-09-19** (`docs/research/2026-09-19-accuracy-pareto.md`)
 
 ## v1 Phase Details
 
