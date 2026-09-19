@@ -17,9 +17,9 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
 Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon)
-Plan: Plan 03-01 (35B MoE Serving Benchmark) — in planning
-Status: Milestone v2 complete. Candidate 1 (Osaurus MoE MMLU) and Candidate 2 (vMLX JIT A/B) complete. Milestone v3 formally planned. Plan 03-01 ready for model lineup specification and fetch script. Candidate 3 queued for overnight. 496 tests pass.
-Last activity: 2026-09-19 — **Milestone v3 Planned; Candidate 2 (vMLX JIT A/B) published**. Speed benchmark confirmed JIT decode penalty (-2.7% to -11.3%) on 4B/8B models. Milestone v3 roadmap defined across 4 phases and 9 actionable plans.
+Plan: Plan 03-01 (35B MoE Serving Benchmark) — design specified, fetch script ready
+Status: Milestone v2 complete (all tracks and candidates 1 & 2 closed). Milestone v3 Phase 1 Plan 03-01 design specified (`docs/research/2026-09-19-v3-phase1-35b-study-design.md`) and fetch script ready (`scripts/fetch_35b.sh`). Candidate 3 queued for overnight. 496 tests pass.
+Last activity: 2026-09-19 — **Plan 03-01 Specified (Qwen3.6-35B-A3B Study Design & Fetch Script Committed)**. Architecture parity verified across all 4 formats (40 layers, 256 experts, 8 routed/tok, hidden 2048). 496 tests pass.
 
 Progress:
 - Milestone: [░░░░░░░░░░] 0%
@@ -142,8 +142,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-19 (Antigravity manager)
-Stopped at: Candidate 1 (Osaurus MoE MMLU extraction, 42.19%) and Candidate 2 (vMLX JIT A/B, -2.7% to -11.3% decode penalty under JIT) BOTH COMPLETE. Milestone v3 Horizon Plan drafted. Candidate 3 (Thinking-off MMLU arm) preserved and ready for overnight dispatch.
-Next action: Await user selection for next active task or launch Candidate 3 for overnight execution.
+Stopped at: Milestone v3 Phase 1 Plan 03-01 design specified (`docs/research/2026-09-19-v3-phase1-35b-study-design.md`) and fetch script ready (`scripts/fetch_35b.sh`). Candidate 3 (Thinking-off MMLU arm) preserved and ready for overnight dispatch. All 496 tests green.
+Next action: Resume in fresh session to execute Plan 03-01 model download (`scripts/fetch_35b.sh`), loadability probe, and serving benchmark.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
