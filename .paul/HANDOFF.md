@@ -1,51 +1,82 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-20 (Milestone v3 Phase 1 Complete [Plans 03-01, 03-02, 03-03])"
+description: "OhYesMLX — session handoff, 2026-09-20 (Milestone v3 Overnight Autonomous Execution Directive)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-20 (Milestone v3 Phase 1 Complete)
+# Handoff — 2026-09-20 (Milestone v3 Overnight Autonomous Execution Directive)
 
-> **This file is short by design and is rewritten each session, never appended to.** It holds
-> *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
-> decisions live in `.paul/STATE.md`; findings live in `docs/research/`.
-
-Read this, then `.paul/STATE.md`, then `AGENTS.md`.
+> **This file is the single session-transfer note for the incoming agent.**
+> Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ---
 
-## Where the project is
+## 🚨 AUTONOMOUS OVERNIGHT DIRECTIVE
 
-- **v1 (0.1.0) & v2 (0.2.0) Milestones:** 100% COMPLETE & PUBLISHED.
-- **Milestone v3 Phase 1 (Large-Model Scaling: 35B MoE Class):** 100% COMPLETE (3/3 plans complete):
-  - **Plan 03-01 (35B MoE Serving Benchmark):** 100% COMPLETE & PUBLISHED (`docs/research/2026-09-20-35b-moe-serving.md`). 16 live cells executed; H1–H4 confirmed.
-  - **Plan 03-02 (Cold vs Warm Page Cache Load & Memory Residency Attribution):** 100% COMPLETE & PUBLISHED (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). APFS NVMe cold read throughput at 5.40 GB/s; lazy load penalties quantified; Osaurus 0.74x memory gap solved via `IOAccelerator` region accounting.
-  - **Plan 03-03 (Expert Streaming under High Memory Pressure):** 100% COMPLETE & PUBLISHED (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`).
-    - Full SSD streaming achieves 75–88% memory reduction (footprint drops from ~20.5 GB down to 3.2–3.9 GB, isolating the 2.28 GB non-expert backbone).
-    - Decode throughput collapses 9× to 16× (from 67–75 tok/s to 4.3–8.2 tok/s) due to NVMe random `os.pread` latency for 320 slices/token.
-    - In-RAM LRU caching yields <5% speedup under 256-expert routing entropy.
-    - Smelt maintains near-native decode (62.5 tok/s) at risk of semantic degradation on omitted experts; FlashMoE preserves exact fidelity at disk-bound speed.
-    - OptiQ's static 70% RAM auto-threshold (44.8 GB on 64 GB Mac) never triggers for 35B models, making explicit flag pinning mandatory under memory pressure.
-- **Machine & Ports:** All ports (8000, 8080, 8081, 8100, 1337) free and verified swept. 105 GiB free disk.
-- **Test Suite:** 496 passed (`pytest -q`).
+**Jason is asleep. Do NOT pause, wait, or ask questions between plans.**
+Your mission is to **autonomously execute as many remaining Milestone v3 plans as possible overnight** until the milestone is fully completed or all work is exhausted.
+
+For every plan you execute, follow the established **PAUL workflow (`PLAN ──▶ APPLY ──▶ UNIFY`)**:
+1. **PLAN:** Formulate order spec (`.paul/orders/plan-03-XX-spec.md`) and pre-registered single-variable study design (`docs/research/2026-09-20-v3-...-study-design.md`) with explicit hypotheses (H1–H4/H5).
+2. **APPLY:** Implement the dedicated probe script (`scripts/probe_...py`), sweep ports (`8000, 8080, 8081, 8100, 1337`), execute the benchmark under the Quiet Machine rule, and save raw evidence to `results/plan-03-XX/`.
+3. **UNIFY:**
+   - Author the comprehensive research report (`docs/research/2026-09-20-...md`).
+   - Update `.paul/ROADMAP.md` (mark plan `[x] Complete`).
+   - Update `.paul/STATE.md` (record Decision `111+`, update Loop Position & Current Position).
+   - Update Deep Wiki (`/Users/jrazz/Documents/ObsidianNotes/10 Wiki/Projects/OhYesMLX/OhYesMLX.md`) with finding and roadmap checkbox, then run vault validator: `python3 "00 System/Automation/validate_vault.py" "/Users/jrazz/Documents/ObsidianNotes"` (never commit/push vault).
+   - Verify test suite: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` (must remain 496+ green).
+   - Commit all repo changes to git with a clear `feat(v3): ...` commit message.
+   - **Immediately proceed to the next plan in sequence.**
 
 ---
 
-## What is next in fresh session
+## Where the Project Stands Right Now
 
-1. **Enter Planning for Milestone v3 Phase 2 (Context Scaling & Conversational Dynamics):**
-   - **Plan 03-04 (Multi-Turn Conversation Sweep: 1 to 10 turns):** Measure turn-by-turn ITL degradation, cumulative prefix-cache retention, and latency progression across successive conversation turns.
-   - **Plan 03-05 (Quantized KV Caches: FP8, INT4 vs FP16):** Unified memory savings vs accuracy retention at 16k and 32k context lengths across runtimes supporting KV cache quantization.
-2. **Backlog / Deferred Items:**
-   - Candidate 3 (Thinking-Off MMLU Arm on LFM2.5-8B-A1B) remains in roadmap backlog.
+- **v1 (0.1.0) & v2 (0.2.0):** 100% COMPLETE.
+- **Milestone v3 Phase 1 (Large-Model Scaling: 35B MoE Class):** **100% COMPLETE & CLOSED**
+  - `[x]` **Plan 03-01:** 35B MoE Serving Benchmark (`docs/research/2026-09-20-35b-moe-serving.md`).
+  - `[x]` **Plan 03-02:** Cold vs Warm Page Cache Load & Memory Residency Attribution (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). APFS 5.40 GB/s cold read; lazy-load penalties; Osaurus 0.74x memory gap solved via `IOAccelerator` accounting.
+  - `[x]` **Plan 03-03:** Expert Streaming under High Memory Pressure (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). 75–88% memory reduction (footprint down to 3.2–3.9 GB, 2.28 GB backbone floor); 9×–16× decode collapse (4.3–8.2 tok/s); LRU caching <5% gain; OptiQ 70% RAM auto-threshold fragility.
+- **All Ports Free:** 8000, 8080, 8081, 8100, 1337 verified swept and clean.
+- **Working Tree:** Clean, all commits ahead of origin on `main`. 496 tests passing.
+
+---
+
+## Exact Sequential Plan Queue for Tonight
+
+### Phase 2: Context Scaling & Conversational Dynamics
+1. **Plan 03-04: Multi-Turn Conversation Sweep (1 to 10 turns)**
+   - **Goal:** Quantify turn-by-turn ITL degradation, cumulative KV / prefix-cache retention speedup, and latency progression across successive conversational turns.
+   - **Target Model:** `mlx-community/Qwen3.6-35B-A3B-4bit` (and/or `Qwen3.5-4B`).
+   - **Candidate Runtimes:** `omlx`, `osaurus`, `vmlx`, `mlxlm`.
+   - **Deliverables:** `scripts/probe_multiturn_sweep.py`, `results/plan-03-04/multiturn_results.json`, `docs/research/2026-09-20-multiturn-conversation-sweep.md`.
+
+2. **Plan 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV Caches)**
+   - **Goal:** Measure unified memory savings vs TTFT/decode latency and perplexity/accuracy retention at 16k and 32k context lengths across runtimes supporting KV cache quantization (`vmlx`, `optiq`, `mlxlm`).
+   - **Deliverables:** `scripts/probe_kv_quant.py`, `results/plan-03-05/kv_quant_results.json`, `docs/research/2026-09-20-quantized-kv-caches.md`.
+
+### Phase 3: Speculative Decoding & Acceleration Architectures
+3. **Plan 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`)**
+   - **Goal:** Measure real decode speedup, acceptance rate, and TTFT impact vs non-MTP baselines on MTP-equipped models (`Jundot/Qwen3.6-35B-A3B-oQ4-mtp`).
+   - **Deliverables:** `scripts/probe_native_mtp_35b.py`, `results/plan-03-06/mtp_results.json`, `docs/research/2026-09-20-native-mtp-vmlx.md`.
+
+4. **Plan 03-07: Speculative Draft-Model Decoding in mlx-lm (`--speculative-model`)**
+   - **Goal:** Quantify draft-model speculation speedup, token acceptance rate, and memory overhead on memory-bandwidth bound Apple Silicon decode.
+   - **Deliverables:** `scripts/probe_speculative_draft.py`, `results/plan-03-07/speculative_results.json`, `docs/research/2026-09-20-speculative-draft-decoding.md`.
+
+### Phase 4: Public Distribution & Packaging (v1.0 Release)
+5. **Plan 03-08: Distributable Package & Clean CLI**
+   - Package OhYesMLX for public consumption (`pyproject.toml`, clean CLI ergonomics, zero hardcoded host paths, self-contained).
+6. **Plan 03-09: Automated Interactive Pareto Visualization**
+   - Standalone interactive HTML/SVG Pareto frontier charts linking Speed, Memory, and Quality coordinates across tested configurations.
 
 ---
 
 ## Standing Invariants
 
-- **Quiet Machine:** Nothing else runs while a cell is measured.
-- **Vary one thing at a time:** The defining rule of the project.
-- **Single-variable framing:** Column is format axis; row is runtime axis.
+- **Quiet Machine:** Exactly one model resident at a time. No other tasks or downloads while measuring.
+- **Vary one thing at a time:** The core rule of the project.
 - **Never infer capability from absence of a flag.**
-- **Never report bare mean for latency:** Use P50 / P90 / P99.
-- **Peak memory accounting:** `footprint -p <pid>`, never `ps` RSS. Memory carries no cross-runtime ranking.
+- **Never report bare mean for latency:** Report P50 / P90 / P99.
+- **Memory Metric Discipline:** Memory has no cross-runtime ranking (`CROSS_RUNTIME_UNCOMPARABLE`). `peak_mb` is strictly within-runtime via `footprint -p <pid>`.
+- **Zero New Dependencies:** Maintain flat, lean stdlib-first architecture.
