@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-19 (Plan 03-01 Specified: 35B MoE Serving Benchmark Ready)"
+description: "OhYesMLX — session handoff, 2026-09-20 (Plan 03-01 Complete: 35B MoE Serving Benchmark Published)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-19 (Ready for Plan 03-01 Execution)
+# Handoff — 2026-09-20 (Plan 03-01 Complete & Published)
 
 > **This file is short by design and is rewritten each session, never appended to.** It holds
 > *state*: where things stand now and what is next. Durable rules live in `AGENTS.md`;
@@ -16,27 +16,30 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## Where the project is
 
-- **v1 Milestone (0.1.0) and v2 Milestone (0.2.0) are 100% COMPLETE & PUBLISHED.**
-- **Post-v2 Candidates Complete:**
-  - *Candidate 1 (Osaurus MoE MMLU):* 42.19% recovered offline, 0 baseline hits lost (`docs/research/2026-09-19-osaurus-moe-mmlu-extraction.md`).
-  - *Candidate 2 (vMLX JIT A/B):* JIT decode penalty (-2.7% to -11.3%) confirmed; `--no-jit` pin validated (`docs/research/2026-09-19-vmlx-jit-ab.md`).
-- **Milestone v3 Phase 1: Plan 03-01 Specified & Ready:**
-  - Study design: `docs/research/2026-09-19-v3-phase1-35b-study-design.md` (35B MoE `Qwen3.6-35B-A3B`).
-  - Architecture verified: 40 layers, 256 experts, 8 routed per token, 2048 hidden size.
-  - Model lineup: Stock 4-bit (`mlx-community/Qwen3.6-35B-A3B-4bit`), OptiQ (`mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit`), oQ4 (`Jundot/Qwen3.6-35B-A3B-oQ4`), and JANG (`JANGQ-AI/Qwen3.6-35B-A3B-JANGTQ4`).
-  - Fetch script: `scripts/fetch_35b.sh`.
-- **Candidate 3 (Thinking-Off MMLU Arm):** Preserved in `ROADMAP.md` and `STATE.md` for overnight run.
-- **Machine & Ports:** All ports (8000, 8080, 8081, 8100, 1337) free and verified swept. 187 GiB free disk.
-- **Test Suite:** 496 passed (`pytest -q` in 32.73s).
+- **v1 (0.1.0) & v2 (0.2.0) Milestones:** 100% COMPLETE & PUBLISHED.
+- **Milestone v3 Phase 1 (Plan 03-01: 35B MoE Serving Benchmark):** 100% COMPLETE & PUBLISHED.
+  - Research report: `docs/research/2026-09-20-35b-moe-serving.md`.
+  - Artifacts: 4 35B models downloaded cleanly into HF hub layout (~80 GB; 105 GiB free disk remaining).
+  - Probe: 20-cell loadability & coherence probe executed (`scripts/probe_grid_35b.py`), 16 live cells identified, 4 refusals recorded verbatim.
+  - Benchmark Grid: 16 live cells executed across 5 runtimes (`scripts/run_grid_35b.sh`), 100% PASS with zero failures (`results/grid-35b/grid.md`).
+  - Replication: Decisive H3 pair (`jangtq4__vmlx` vs `stock4bit__vmlx`) replicated with reversed order; findings verified cleanly outside 2.5% tie band (`scripts/run_replicate_35b.sh`).
+  - Key Findings:
+    - **H1 Confirmed (Routing-bound decode scaling):** 35B MoE decodes at 58–70 tok/s across all runtimes (~1.98 GB active bytes/step), scaling strictly with active parameters (8/256 experts) rather than dense size. `stock4bit` won decode in all runtimes.
+    - **H2 Confirmed (OptiQ strictly Pareto-dominated):** +20.8% larger disk footprint, slowest or tied on decode (56.3–61.8 tok/s), highest peak memory across all runtimes.
+    - **H3 Confirmed (JANG MoE Duality):** JANG delivers density savings on MoE (19.71 GB vs 20.43 GB disk, 19.0 GB vs 20.0 GB RAM), but loses decode throughput to stock 4-bit (-13.1% primary, -17.9% replicate).
+    - **H4 Confirmed (Memory reporting gap):** Osaurus reports ~12.3–15.4 GB (0.74x of weight bytes) due to wired GPU page allocation, while mlx-lm, oMLX, OptiQ, and vMLX report 19.5–27.6 GB. `CROSS_RUNTIME_UNCOMPARABLE` holds.
+    - **Stock mlx-lm Coherence:** Stock mlx-lm 0.31.3 produced 100% coherent output on `oQ4`. The 256-expert salad in Phase 1 was strictly caused by the unhandled speculative MTP head in `-mtp`.
+- **Runtime Fix:** `ohyesmlx/runtimes.py` patched to gracefully handle Osaurus CLI background launcher exit (`_listener_pids`).
+- **Machine & Ports:** All ports (8000, 8080, 8081, 8100, 1337) free and verified swept. 105 GiB free disk.
+- **Test Suite:** 496 passed (`pytest -q` in 32.35s).
 
 ---
 
 ## What is next in fresh session
 
-Execute Plan 03-01:
-1. **Download 35B models:** Run `scripts/fetch_35b.sh` (~80 GB download across the 4 verified models).
-2. **Pre-flight loadability & coherence probe:** Validate that each candidate runtime (`vmlx`, `osaurus`, `optiq`, `mlxlm`, `omlx`) can bind, serve, and clear the coherence floor (preventing token salad).
-3. **Execute 35B MoE serving benchmark:** Single-variable grid run across chat, prefill, and decode workloads.
+Choose one of two paths:
+1. **Candidate 3 (Thinking-Off MMLU Arm):** Preserved ablation study on LFM2.5-8B-A1B to isolate reasoning token impact on accuracy and resolve MoE HTTP 502 truncation trap (ready for overnight dispatch).
+2. **Milestone v3 Phase 2 (Context Scaling & Multi-turn Dynamics):** Plan 03-04 (Multi-turn sweeps with conversation history) and Plan 03-05 (Quantized KV caches: 4-bit vs 8-bit vs FP16 KV cache trade-offs).
 
 ---
 
@@ -46,3 +49,5 @@ Execute Plan 03-01:
 - **Vary one thing at a time:** The defining rule of the project.
 - **Single-variable framing:** Column is format axis; row is runtime axis.
 - **Never infer capability from absence of a flag.**
+- **Never report bare mean for latency:** Use P50 / P90 / P99.
+- **Peak memory accounting:** `footprint -p <pid>`, never `ps` RSS. Memory carries no cross-runtime ranking.

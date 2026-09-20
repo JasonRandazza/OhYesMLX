@@ -677,7 +677,7 @@ class Runtime:
         complaint = "no inventory yet"
         while True:
             _raise_on_log_error(self.name, log_path)
-            if not _process_alive(pid):
+            if not _process_alive(pid) and not _listener_pids(self.port):
                 raise RuntimeStartError(
                     f"{self.name} exited before it served {candidates[0]!r} "
                     f"(log: {log_path})"

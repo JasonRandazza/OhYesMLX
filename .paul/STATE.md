@@ -16,21 +16,21 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon)
-Plan: Plan 03-01 (35B MoE Serving Benchmark) — design specified, fetch script ready
-Status: Milestone v2 complete (all tracks and candidates 1 & 2 closed). Milestone v3 Phase 1 Plan 03-01 design specified (`docs/research/2026-09-19-v3-phase1-35b-study-design.md`) and fetch script ready (`scripts/fetch_35b.sh`). Candidate 3 queued for overnight. 496 tests pass.
-Last activity: 2026-09-19 — **Plan 03-01 Specified (Qwen3.6-35B-A3B Study Design & Fetch Script Committed)**. Architecture parity verified across all 4 formats (40 layers, 256 experts, 8 routed/tok, hidden 2048). 496 tests pass.
+Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — COMPLETE
+Plan: Plan 03-01 (35B MoE Serving Benchmark) — COMPLETE & PUBLISHED
+Status: Milestone v3 Phase 1 Plan 03-01 complete. 20-cell probe, 16-cell primary serving grid, and vMLX replication run executed and published (`docs/research/2026-09-20-35b-moe-serving.md`). All hypotheses H1-H4 confirmed. 496 tests pass.
+Last activity: 2026-09-20 — **Plan 03-01 Executed & Published (35B MoE Serving Benchmark: Qwen3.6-35B-A3B)**. All 16 cells PASS; stock4bit leads decode throughput across all runtimes; OptiQ strictly Pareto-dominated; JANG density lead confirmed in vMLX; Osaurus 0.74x memory reporting gap confirmed. 496 tests pass.
 
 Progress:
-- Milestone: [░░░░░░░░░░] 0%
-- Phase: [░░░░░░░░░░] 0%
+- Milestone: [██░░░░░░░░] 20%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ◉        ○        ○     [Milestone v3 Phase 1: Plan 03-01 Planning]
+  ○        ○        ◉     [Milestone v3 Phase 1: Plan 03-01 Complete & Unified]
 ```
 
 ## Performance Metrics
@@ -105,6 +105,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 105: Plan 02-03 MoE Accuracy Study activates pre-registered budget dial (§3.3) and pins --no-disable-thinking due to vMLX LFM2 supports_instruct_mode=False | v2 Phase 2 | vMLX rejects enable_thinking=false with HTTP 400 for LFM2; reasoning trace active; MMLU dialed 40 -> 20 items/subject (1,140 items) to keep 8-cell campaign within ~18.5h budget; docs/research/2026-09-17-v2-track2-accuracy-study-design.md §3.3 |
 | Decision 106: Plan 02-03 MoE Accuracy Study confirms 100.0% replicate determinism, rules out collapse at 2.37 bits (IFEval 56.8% vs 52.0%), strictly eliminates OptiQ (-7.3 pp MMLU, +14-78% disk), proves outlier protection mandatory (oQ4e +14.3 pp over oQ4), and diagnoses vMLX reasoning truncation trap (HTTP 502) | v2 Phase 2 | Closes Q1-Q4 on MoE; confirms within-runtime determinism on MoE; proves 2.37-bit quantization preserves instruction following; docs/research/2026-09-19-accuracy-moe.md |
 | Decision 107: Plan 02-04 Pareto Tradeoff Synthesis completes evaluation trilogy (Speed, Memory, Accuracy); confirms JANG Duality (dense throughput lead at parity, MoE density/footprint lead with preserved IFEval); eliminates OptiQ across all frontiers; closes Milestone v2 | v2 Phase 2 | Establishes 3-coordinate recommendation table for Apple Silicon; closes Track 2 (Plan 02-04) and Milestone v2 (0.2.0); docs/research/2026-09-19-accuracy-pareto.md |
+| Decision 108: Plan 03-01 35B MoE Serving Benchmark confirms routing-bound decode scaling (H1), OptiQ strictly Pareto-dominated (H2), JANG density lead on MoE without decode advantage (H3), and Osaurus 0.74x memory reporting gap (H4); stock4bit leads decode across all 5 runtimes; Phase 1 closed | Milestone v3 Phase 1 | Confirms 35B MoE decodes at 58–70 tok/s (~1.98 GB active bytes/step, within 2x of 8B MoE); OptiQ is +20.8% larger and slowest/tied; JANG_TQ4 provides 19.71 GB disk vs 20.43 GB stock, but loses decode to stock4bit (-13.1% primary, -17.9% replicate); Osaurus reports ~12.3-15.4 GB due to wired GPU page allocation; mlx-lm coherence on oQ4 confirmed (MTP head was root cause of Phase 1 salad); docs/research/2026-09-20-35b-moe-serving.md |
 
 ### Deferred Issues
 
@@ -141,9 +142,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-19 (Antigravity manager)
-Stopped at: Milestone v3 Phase 1 Plan 03-01 design specified (`docs/research/2026-09-19-v3-phase1-35b-study-design.md`) and fetch script ready (`scripts/fetch_35b.sh`). Candidate 3 (Thinking-off MMLU arm) preserved and ready for overnight dispatch. All 496 tests green.
-Next action: Resume in fresh session to execute Plan 03-01 model download (`scripts/fetch_35b.sh`), loadability probe, and serving benchmark.
+Last session: 2026-09-20 (Antigravity coordinator)
+Stopped at: Milestone v3 Phase 1 Plan 03-01 executed, verified, and published (`docs/research/2026-09-20-35b-moe-serving.md`). 20-cell probe, 16-cell primary grid, and vMLX replication pass complete. All 496 tests green.
+Next action: Candidate 3 (Thinking-off MMLU arm overnight) or Milestone v3 Phase 2 (Context Scaling & Multi-turn Dynamics, Plan 03-04 / 03-05).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
