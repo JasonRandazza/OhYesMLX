@@ -23,8 +23,8 @@ Phases: 1 of 4 in progress
 
 | Phase | Name | Plans | Status | Completed |
 |---|---|---|---|---|
-| 1 | Large-Model Scaling (35B MoE Class) | 3 | **In Progress** (2/3 complete) | — |
-| 2 | Context Scaling & Conversational Dynamics | 2 | Planned | — |
+| 1 | Large-Model Scaling (35B MoE Class) | 3 | **Complete** | 2026-09-20 |
+| 2 | Context Scaling & Conversational Dynamics | 2 | **In Progress** (1/2 complete) | — |
 | 3 | Speculative Decoding & Acceleration | 2 | Planned | — |
 | 4 | Public Distribution & Packaging (v1.0) | 2 | Planned | — |
 
@@ -254,7 +254,7 @@ concurrency finding that fell out along the way.
 - [x] 03-03: Expert Streaming under High Memory Pressure — **Complete 2026-09-20** (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). Evaluated OptiQ SSD streaming and vMLX FlashMoE/Smelt across 6 cells on `Qwen3.6-35B-A3B-4bit`. Confirmed H1–H5: Full streaming achieves 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, hitting the 2.28 GB backbone floor); decode throughput collapses by 9× to 16× (from 67–75 tok/s to 4.3–8.2 tok/s) due to NVMe random pread latency (320 slices/token); 64-slot LRU caching yields <5% throughput improvement under 256-expert routing entropy; Smelt maintains near-native speed (62.5 tok/s) at risk of routing degradation; OptiQ's static 70% RAM auto-threshold (44.8 GB on 64 GB Mac) never fires for 35B models, making explicit flag pinning mandatory under memory pressure.
 
 ### Phase 2: Context Scaling & Conversational Dynamics
-- [ ] 03-04: Multi-Turn Conversation Sweep (1 to 10 turns) — Measure turn-by-turn ITL degradation, cumulative prefix-cache retention, and latency progression across successive conversational turns.
+- [x] 03-04: Multi-Turn Conversation Sweep (1 to 10 turns) — **Complete 2026-09-20** (`docs/research/2026-09-20-multiturn-conversation-sweep.md`). Evaluated 50 dialogue turns across all 5 runtimes on `Qwen3.6-35B-A3B-4bit`. Confirmed H1–H5: hybrid attention prevents cross-turn stateless prefix-cache reuse, causing TTFT to scale linearly with dialogue depth (3.4×–4.2× growth from ~0.4s to 1.6–2.2s); decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) remain rock-solid invariant to context length; memory footprint is flat in steady state; 100% coherence pass rate.
 - [ ] 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV caches) — Measure unified memory savings vs accuracy retention at 16k and 32k context lengths across runtimes supporting KV cache quantization.
 
 ### Phase 3: Speculative Decoding & Acceleration Architectures
@@ -267,4 +267,4 @@ concurrency finding that fell out along the way.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-20 (Milestone v3 Phase 1 Complete [Plans 03-01, 03-02, 03-03]; Plan 03-04 next)*
+*Last updated: 2026-09-20 (Plan 03-04 Complete; Plan 03-05 next)*

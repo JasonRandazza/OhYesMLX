@@ -16,21 +16,21 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — COMPLETE (3/3 plans complete)
-Plan: Plan 03-03 (Expert Streaming under High Memory Pressure) — COMPLETE & PUBLISHED
-Status: Milestone v3 Phase 1 complete. Plan 03-03 executed and published (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). Confirmed 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, isolating the 2.28 GB backbone), 9×–16× decode collapse (from 67–75 tok/s to 4.3–8.2 tok/s), in-RAM LRU cache ineffectiveness (<5% gain), and fragility of OptiQ's static 70% RAM heuristic. Milestone v3 Phase 1 closed across all 3 plans. Ready for Phase 2 (Plan 03-04).
-Last activity: 2026-09-20 — **Plan 03-03 Executed & Published (Expert Streaming under High Memory Pressure: Qwen3.6-35B-A3B)**. All 6 cells measured; H1–H5 confirmed. Milestone v3 Phase 1 complete (3/3 plans complete). 496 tests pass.
+Phase: 2 (Context Scaling & Conversational Dynamics) — IN PROGRESS (1/2 plans complete)
+Plan: Plan 03-04 (Multi-Turn Conversation Sweep: 1 to 10 turns) — COMPLETE & PUBLISHED
+Status: Plan 03-04 executed and published (`docs/research/2026-09-20-multiturn-conversation-sweep.md`). Evaluated 50 live dialogue turns across all 5 serving runtimes (`mlxlm`, `omlx`, `optiq`, `vmlx`, `osaurus`) on `Qwen3.6-35B-A3B-4bit`. Confirmed H1–H5: hybrid attention prevents cross-turn stateless prefix-cache reuse, causing TTFT to scale linearly with dialogue depth (3.4×–4.2× growth from ~0.4s to 1.6–2.2s at Turn 10); decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) remain rock-solid invariant to context length; memory footprint is flat in steady state; 100% coherence pass rate. Ready for Phase 2 Plan 03-05 (Quantized KV Caches).
+Last activity: 2026-09-20 — **Plan 03-04 Executed & Published (Multi-Turn Conversation Sweep: 1 to 10 Turns on Qwen3.6-35B-A3B)**. 50 turns measured; H1–H5 confirmed. 496 tests pass.
 
 Progress:
-- Milestone: [████░░░░░░] 33%
-- Phase: [██████████] 100%
+- Milestone: [█████░░░░░] 44%
+- Phase: [█████░░░░░] 50%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Plan 03-03 Complete & Unified; Phase 1 closed; entering Phase 2 Plan 03-04 planning]
+  ○        ○        ◉     [Plan 03-04 Complete & Unified; entering Phase 2 Plan 03-05 planning]
 ```
 
 ## Performance Metrics
@@ -108,6 +108,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 108: Plan 03-01 35B MoE Serving Benchmark confirms routing-bound decode scaling (H1), OptiQ strictly Pareto-dominated (H2), JANG density lead on MoE without decode advantage (H3), and Osaurus 0.74x memory reporting gap (H4); stock4bit leads decode across all 5 runtimes; Phase 1 closed | Milestone v3 Phase 1 | Confirms 35B MoE decodes at 58–70 tok/s (~1.98 GB active bytes/step, within 2x of 8B MoE); OptiQ is +20.8% larger and slowest/tied; JANG_TQ4 provides 19.71 GB disk vs 20.43 GB stock, but loses decode to stock4bit (-13.1% primary, -17.9% replicate); Osaurus reports ~12.3-15.4 GB due to wired GPU page allocation; mlx-lm coherence on oQ4 confirmed (MTP head was root cause of Phase 1 salad); docs/research/2026-09-20-35b-moe-serving.md |
 | Decision 109: Plan 03-02 Cold vs Warm Page Cache Load & Memory Residency Attribution confirms APFS sequential read throughput at 5.40 GB/s (H1), quantifies lazy loading penalties in oMLX (+4.92s) and OptiQ (+8.92s) inverting startup rankings (H2), and solves the 0.74x Osaurus footprint gap via IOAccelerator region accounting (H3) | Milestone v3 Phase 1 | Verified via mincore: true cold APFS load takes 5.61s vs 2.09s warm (2.68x speedup); True Time to First Output shows Osaurus (3.42s) > mlxlm (4.64s) > omlx (7.45s) > vmlx (8.66s) > optiq (12.44s); vmmap proves Osaurus caps IOAccelerator at 12.18 GB with remaining ~7 GB allocated into wired driver pages; docs/research/2026-09-20-cold-warm-load-attribution-35b.md |
 | Decision 110: Plan 03-03 Expert Streaming under High Memory Pressure establishes the trade-offs of SSD expert streaming vs resident serving on 35B MoE: streaming achieves 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, isolating the 2.28 GB backbone) at a 9× to 16× decode collapse (from 67–75 tok/s to 4.3–8.2 tok/s); LRU caching yields <5% speedup under 256-expert routing entropy; OptiQ 70% RAM auto-threshold never triggers on 64 GB Macs; Milestone v3 Phase 1 complete | Milestone v3 Phase 1 | Establishes memory floor vs NVMe random pread latency trade-off; confirms that streaming enables 35B MoE on 16 GB Macs (~3.9 GB footprint); proves in-RAM LRU caching cannot overcome MoE routing entropy; proves unpinned auto-streaming on 64 GB Mac risks sudden OOM under pressure; closes Milestone v3 Phase 1 (Plans 03-01, 03-02, 03-03 complete); docs/research/2026-09-20-expert-streaming-high-memory-pressure.md |
+| Decision 111: Plan 03-04 Multi-Turn Conversation Sweep confirms hybrid linear-attention prefill scaling ($O(N)$ growth from ~0.4s to 1.6–2.2s across 10 turns) and establishes decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) invariance to conversational context depth | Milestone v3 Phase 2 | 50/50 turns PASS; proves hybrid attention prevents cross-request prefix reuse under stateless chat completions; confirms Apple Silicon decode memory bandwidth saturation keeps tok/s invariant to KV cache size up to 1k tokens; docs/research/2026-09-20-multiturn-conversation-sweep.md |
 
 ### Deferred Issues
 
@@ -145,8 +146,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 Phase 1 complete. Plan 03-03 executed, verified, and published (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). Decision 110 recorded. Phase 1 closed across all 3 plans.
-Next action: Enter planning for Milestone v3 Phase 2 (Context Scaling & Conversational Dynamics), starting with Plan 03-04 (Multi-Turn Conversation Sweep: 1 to 10 turns).
+Stopped at: Milestone v3 Phase 2 in progress. Plan 03-04 executed, verified, and published (`docs/research/2026-09-20-multiturn-conversation-sweep.md`). Decision 111 recorded. Phase 2 (1/2 plans complete).
+Next action: Enter planning for Milestone v3 Phase 2 Plan 03-05 (Quantized KV Caches: FP8, INT4 vs FP16 KV Caches).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
