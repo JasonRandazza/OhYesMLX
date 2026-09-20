@@ -11,26 +11,26 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** Milestone v3 Phase 1: Large-Model Scaling (Plan 03-02 complete; entering Plan 03-03 planning)
+**Current focus:** Milestone v3 Phase 2: Context Scaling & Conversational Dynamics (entering Plan 03-04 planning)
 
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — IN PROGRESS (2/3 plans complete)
-Plan: Plan 03-02 (Cold vs Warm Page Cache Load & Memory Residency Attribution) — COMPLETE & PUBLISHED
-Status: Milestone v3 Phase 1 Plan 03-02 complete. 5-runtime page cache and memory attribution probe executed and published (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). Confirmed APFS cold throughput at 5.40 GB/s, lazy-load hidden penalty in oMLX (+4.92s) and OptiQ (+8.92s), and solved Osaurus 0.74x footprint via IOAccelerator region accounting. Ready for Plan 03-03.
-Last activity: 2026-09-20 — **Plan 03-02 Executed & Published (Cold vs Warm Page Cache Load & Memory Residency Attribution: Qwen3.6-35B-A3B)**. All 5 runtimes measured and attributed; H1-H4 confirmed. 496 tests pass.
+Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — COMPLETE (3/3 plans complete)
+Plan: Plan 03-03 (Expert Streaming under High Memory Pressure) — COMPLETE & PUBLISHED
+Status: Milestone v3 Phase 1 complete. Plan 03-03 executed and published (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). Confirmed 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, isolating the 2.28 GB backbone), 9×–16× decode collapse (from 67–75 tok/s to 4.3–8.2 tok/s), in-RAM LRU cache ineffectiveness (<5% gain), and fragility of OptiQ's static 70% RAM heuristic. Milestone v3 Phase 1 closed across all 3 plans. Ready for Phase 2 (Plan 03-04).
+Last activity: 2026-09-20 — **Plan 03-03 Executed & Published (Expert Streaming under High Memory Pressure: Qwen3.6-35B-A3B)**. All 6 cells measured; H1–H5 confirmed. Milestone v3 Phase 1 complete (3/3 plans complete). 496 tests pass.
 
 Progress:
-- Milestone: [███░░░░░░░] 25%
-- Phase: [███████░░░] 67%
+- Milestone: [████░░░░░░] 33%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Plan 03-02 Complete & Unified; entering Plan 03-03 planning]
+  ○        ○        ◉     [Plan 03-03 Complete & Unified; Phase 1 closed; entering Phase 2 Plan 03-04 planning]
 ```
 
 ## Performance Metrics
@@ -107,6 +107,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 107: Plan 02-04 Pareto Tradeoff Synthesis completes evaluation trilogy (Speed, Memory, Accuracy); confirms JANG Duality (dense throughput lead at parity, MoE density/footprint lead with preserved IFEval); eliminates OptiQ across all frontiers; closes Milestone v2 | v2 Phase 2 | Establishes 3-coordinate recommendation table for Apple Silicon; closes Track 2 (Plan 02-04) and Milestone v2 (0.2.0); docs/research/2026-09-19-accuracy-pareto.md |
 | Decision 108: Plan 03-01 35B MoE Serving Benchmark confirms routing-bound decode scaling (H1), OptiQ strictly Pareto-dominated (H2), JANG density lead on MoE without decode advantage (H3), and Osaurus 0.74x memory reporting gap (H4); stock4bit leads decode across all 5 runtimes; Phase 1 closed | Milestone v3 Phase 1 | Confirms 35B MoE decodes at 58–70 tok/s (~1.98 GB active bytes/step, within 2x of 8B MoE); OptiQ is +20.8% larger and slowest/tied; JANG_TQ4 provides 19.71 GB disk vs 20.43 GB stock, but loses decode to stock4bit (-13.1% primary, -17.9% replicate); Osaurus reports ~12.3-15.4 GB due to wired GPU page allocation; mlx-lm coherence on oQ4 confirmed (MTP head was root cause of Phase 1 salad); docs/research/2026-09-20-35b-moe-serving.md |
 | Decision 109: Plan 03-02 Cold vs Warm Page Cache Load & Memory Residency Attribution confirms APFS sequential read throughput at 5.40 GB/s (H1), quantifies lazy loading penalties in oMLX (+4.92s) and OptiQ (+8.92s) inverting startup rankings (H2), and solves the 0.74x Osaurus footprint gap via IOAccelerator region accounting (H3) | Milestone v3 Phase 1 | Verified via mincore: true cold APFS load takes 5.61s vs 2.09s warm (2.68x speedup); True Time to First Output shows Osaurus (3.42s) > mlxlm (4.64s) > omlx (7.45s) > vmlx (8.66s) > optiq (12.44s); vmmap proves Osaurus caps IOAccelerator at 12.18 GB with remaining ~7 GB allocated into wired driver pages; docs/research/2026-09-20-cold-warm-load-attribution-35b.md |
+| Decision 110: Plan 03-03 Expert Streaming under High Memory Pressure establishes the trade-offs of SSD expert streaming vs resident serving on 35B MoE: streaming achieves 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, isolating the 2.28 GB backbone) at a 9× to 16× decode collapse (from 67–75 tok/s to 4.3–8.2 tok/s); LRU caching yields <5% speedup under 256-expert routing entropy; OptiQ 70% RAM auto-threshold never triggers on 64 GB Macs; Milestone v3 Phase 1 complete | Milestone v3 Phase 1 | Establishes memory floor vs NVMe random pread latency trade-off; confirms that streaming enables 35B MoE on 16 GB Macs (~3.9 GB footprint); proves in-RAM LRU caching cannot overcome MoE routing entropy; proves unpinned auto-streaming on 64 GB Mac risks sudden OOM under pressure; closes Milestone v3 Phase 1 (Plans 03-01, 03-02, 03-03 complete); docs/research/2026-09-20-expert-streaming-high-memory-pressure.md |
 
 ### Deferred Issues
 
@@ -144,8 +145,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 Phase 1 Plan 03-02 executed, verified, and published (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). 5-runtime page cache and memory attribution probe complete. Decision 109 recorded.
-Next action: Enter planning for Milestone v3 Phase 1 Plan 03-03 (Expert Streaming under High Memory Pressure).
+Stopped at: Milestone v3 Phase 1 complete. Plan 03-03 executed, verified, and published (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). Decision 110 recorded. Phase 1 closed across all 3 plans.
+Next action: Enter planning for Milestone v3 Phase 2 (Context Scaling & Conversational Dynamics), starting with Plan 03-04 (Multi-Turn Conversation Sweep: 1 to 10 turns).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

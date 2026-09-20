@@ -251,7 +251,7 @@ concurrency finding that fell out along the way.
 ### Phase 1: Large-Model Scaling (35B MoE Class on Apple Silicon)
 - [x] 03-01: 35B MoE Serving Benchmark (`Qwen3.6-35B-A3B`) — **Complete 2026-09-20** (`docs/research/2026-09-20-35b-moe-serving.md`). Confirmed H1–H4 across 16 live cells in 5 runtimes: routing-bound decode scaling (58–70 tok/s), OptiQ strictly Pareto-dominated (+20.8% disk, slowest/tied decode), JANG MoE duality (density savings without decode advantage), Osaurus 0.74x memory reporting gap (`CROSS_RUNTIME_UNCOMPARABLE`). Resolved Phase 1 founding defect: stock mlx-lm serves 256-expert oQ4 with 100% coherence; MTP head was root cause of Phase 1 salad.
 - [x] 03-02: Cold vs Warm Page Cache Load & Memory Residency Attribution — **Complete 2026-09-20** (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). Verified via `mincore`: true cold APFS load (0% cache) achieves 5.40 GB/s sequential throughput (5.61s cold vs 2.09s warm, a 2.68x speedup); lazy loading hides +4.92s in oMLX and +8.92s in OptiQ, inverting startup rankings; `vmmap` per-region accounting proves Osaurus 0.74x footprint gap is an allocation class artifact (`IOAccelerator` capped at 12.18 GB vs 18.75–19.87 GB in other runtimes).
-- [ ] 03-03: Expert Streaming under High Memory Pressure — Evaluate OptiQ's `--stream-experts` behavior vs vMLX block paging when model resident size approaches the 70% RAM threshold.
+- [x] 03-03: Expert Streaming under High Memory Pressure — **Complete 2026-09-20** (`docs/research/2026-09-20-expert-streaming-high-memory-pressure.md`). Evaluated OptiQ SSD streaming and vMLX FlashMoE/Smelt across 6 cells on `Qwen3.6-35B-A3B-4bit`. Confirmed H1–H5: Full streaming achieves 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, hitting the 2.28 GB backbone floor); decode throughput collapses by 9× to 16× (from 67–75 tok/s to 4.3–8.2 tok/s) due to NVMe random pread latency (320 slices/token); 64-slot LRU caching yields <5% throughput improvement under 256-expert routing entropy; Smelt maintains near-native speed (62.5 tok/s) at risk of routing degradation; OptiQ's static 70% RAM auto-threshold (44.8 GB on 64 GB Mac) never fires for 35B models, making explicit flag pinning mandatory under memory pressure.
 
 ### Phase 2: Context Scaling & Conversational Dynamics
 - [ ] 03-04: Multi-Turn Conversation Sweep (1 to 10 turns) — Measure turn-by-turn ITL degradation, cumulative prefix-cache retention, and latency progression across successive conversational turns.
@@ -267,4 +267,4 @@ concurrency finding that fell out along the way.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-20 (Milestone v3 Phase 1 Plan 03-02 Complete; Plan 03-03 next)*
+*Last updated: 2026-09-20 (Milestone v3 Phase 1 Complete [Plans 03-01, 03-02, 03-03]; Plan 03-04 next)*
