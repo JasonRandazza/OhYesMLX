@@ -24,7 +24,7 @@ Phases: 1 of 4 in progress
 | Phase | Name | Plans | Status | Completed |
 |---|---|---|---|---|
 | 1 | Large-Model Scaling (35B MoE Class) | 3 | **Complete** | 2026-09-20 |
-| 2 | Context Scaling & Conversational Dynamics | 2 | **In Progress** (1/2 complete) | — |
+| 2 | Context Scaling & Conversational Dynamics | 2 | **Complete** | 2026-09-20 |
 | 3 | Speculative Decoding & Acceleration | 2 | Planned | — |
 | 4 | Public Distribution & Packaging (v1.0) | 2 | Planned | — |
 
@@ -255,7 +255,7 @@ concurrency finding that fell out along the way.
 
 ### Phase 2: Context Scaling & Conversational Dynamics
 - [x] 03-04: Multi-Turn Conversation Sweep (1 to 10 turns) — **Complete 2026-09-20** (`docs/research/2026-09-20-multiturn-conversation-sweep.md`). Evaluated 50 dialogue turns across all 5 runtimes on `Qwen3.6-35B-A3B-4bit`. Confirmed H1–H5: hybrid attention prevents cross-turn stateless prefix-cache reuse, causing TTFT to scale linearly with dialogue depth (3.4×–4.2× growth from ~0.4s to 1.6–2.2s); decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) remain rock-solid invariant to context length; memory footprint is flat in steady state; 100% coherence pass rate.
-- [ ] 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV caches) — Measure unified memory savings vs accuracy retention at 16k and 32k context lengths across runtimes supporting KV cache quantization.
+- [x] 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV Caches at 16k and 32k) — **Complete 2026-09-20** (`docs/research/2026-09-20-quantized-kv-caches.md`). Evaluated 14 configurations across OptiQ, vMLX, and mlx-lm on `Llama-3.1-8B-oQ4`. Confirmed H1–H5: INT4 KV cache compresses peak footprint from 11.26 GB to 6.54 GB (saving 4.73 GB RAM, a 72% incremental KV reduction), enabling 32k context on 16 GB Macs; dynamic dequantization on 8B in OptiQ incurs an ALU decode penalty (20.0 tok/s -> 8.0 tok/s) while vMLX maintains steady decode (17.6 tok/s); 100% coherence pass rate; Phase 2 closed.
 
 ### Phase 3: Speculative Decoding & Acceleration Architectures
 - [ ] 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`) — Measure real decode speedup, acceptance rate, and TTFT impact vs non-MTP baselines on MTP-equipped models (`Qwen3.6-35B-A3B-oQ4-mtp`).
@@ -267,4 +267,4 @@ concurrency finding that fell out along the way.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-20 (Plan 03-04 Complete; Plan 03-05 next)*
+*Last updated: 2026-09-20 (Milestone v3 Phase 2 Complete [Plans 03-04, 03-05]; Plan 03-06 next)*

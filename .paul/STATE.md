@@ -16,21 +16,21 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 2 (Context Scaling & Conversational Dynamics) — IN PROGRESS (1/2 plans complete)
-Plan: Plan 03-04 (Multi-Turn Conversation Sweep: 1 to 10 turns) — COMPLETE & PUBLISHED
-Status: Plan 03-04 executed and published (`docs/research/2026-09-20-multiturn-conversation-sweep.md`). Evaluated 50 live dialogue turns across all 5 serving runtimes (`mlxlm`, `omlx`, `optiq`, `vmlx`, `osaurus`) on `Qwen3.6-35B-A3B-4bit`. Confirmed H1–H5: hybrid attention prevents cross-turn stateless prefix-cache reuse, causing TTFT to scale linearly with dialogue depth (3.4×–4.2× growth from ~0.4s to 1.6–2.2s at Turn 10); decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) remain rock-solid invariant to context length; memory footprint is flat in steady state; 100% coherence pass rate. Ready for Phase 2 Plan 03-05 (Quantized KV Caches).
-Last activity: 2026-09-20 — **Plan 03-04 Executed & Published (Multi-Turn Conversation Sweep: 1 to 10 Turns on Qwen3.6-35B-A3B)**. 50 turns measured; H1–H5 confirmed. 496 tests pass.
+Phase: 2 (Context Scaling & Conversational Dynamics) — COMPLETE (2/2 plans complete)
+Plan: Plan 03-05 (Quantized KV Caches: FP8, INT4 vs FP16 at 16k and 32k) — COMPLETE & PUBLISHED
+Status: Milestone v3 Phase 2 complete. Plan 03-05 executed and published (`docs/research/2026-09-20-quantized-kv-caches.md`). Confirmed H1–H5 across 14 configurations on `Llama-3.1-8B-oQ4`: INT4 KV cache compresses peak footprint from 11.26 GB to 6.54 GB (saving 4.73 GB RAM, a 72% incremental KV reduction), enabling 32k context on 16 GB Macs; dynamic dequantization on 8B in OptiQ incurs an ALU decode penalty (20.0 tok/s -> 8.0 tok/s) while vMLX maintains steady decode (17.6 tok/s); 100% coherence pass rate. Milestone v3 Phase 2 closed across all 2 plans. Ready for Phase 3 (Plan 03-06).
+Last activity: 2026-09-20 — **Plan 03-05 Executed & Published (Quantized KV Caches at 16k/32k on Llama-3.1-8B)**. 14 cells measured; H1–H5 confirmed. Milestone v3 Phase 2 complete (2/2 plans complete). 496 tests pass.
 
 Progress:
-- Milestone: [█████░░░░░] 44%
-- Phase: [█████░░░░░] 50%
+- Milestone: [█████░░░░░] 55%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Plan 03-04 Complete & Unified; entering Phase 2 Plan 03-05 planning]
+  ○        ○        ◉     [Plan 03-05 Complete & Unified; Phase 2 closed; entering Phase 3 Plan 03-06 planning]
 ```
 
 ## Performance Metrics
@@ -109,6 +109,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 109: Plan 03-02 Cold vs Warm Page Cache Load & Memory Residency Attribution confirms APFS sequential read throughput at 5.40 GB/s (H1), quantifies lazy loading penalties in oMLX (+4.92s) and OptiQ (+8.92s) inverting startup rankings (H2), and solves the 0.74x Osaurus footprint gap via IOAccelerator region accounting (H3) | Milestone v3 Phase 1 | Verified via mincore: true cold APFS load takes 5.61s vs 2.09s warm (2.68x speedup); True Time to First Output shows Osaurus (3.42s) > mlxlm (4.64s) > omlx (7.45s) > vmlx (8.66s) > optiq (12.44s); vmmap proves Osaurus caps IOAccelerator at 12.18 GB with remaining ~7 GB allocated into wired driver pages; docs/research/2026-09-20-cold-warm-load-attribution-35b.md |
 | Decision 110: Plan 03-03 Expert Streaming under High Memory Pressure establishes the trade-offs of SSD expert streaming vs resident serving on 35B MoE: streaming achieves 75–88% memory reduction (footprint drops from ~20.5 GB to 3.2–3.9 GB, isolating the 2.28 GB backbone) at a 9× to 16× decode collapse (from 67–75 tok/s to 4.3–8.2 tok/s); LRU caching yields <5% speedup under 256-expert routing entropy; OptiQ 70% RAM auto-threshold never triggers on 64 GB Macs; Milestone v3 Phase 1 complete | Milestone v3 Phase 1 | Establishes memory floor vs NVMe random pread latency trade-off; confirms that streaming enables 35B MoE on 16 GB Macs (~3.9 GB footprint); proves in-RAM LRU caching cannot overcome MoE routing entropy; proves unpinned auto-streaming on 64 GB Mac risks sudden OOM under pressure; closes Milestone v3 Phase 1 (Plans 03-01, 03-02, 03-03 complete); docs/research/2026-09-20-expert-streaming-high-memory-pressure.md |
 | Decision 111: Plan 03-04 Multi-Turn Conversation Sweep confirms hybrid linear-attention prefill scaling ($O(N)$ growth from ~0.4s to 1.6–2.2s across 10 turns) and establishes decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) invariance to conversational context depth | Milestone v3 Phase 2 | 50/50 turns PASS; proves hybrid attention prevents cross-request prefix reuse under stateless chat completions; confirms Apple Silicon decode memory bandwidth saturation keeps tok/s invariant to KV cache size up to 1k tokens; docs/research/2026-09-20-multiturn-conversation-sweep.md |
+| Decision 112: Plan 03-05 Quantized KV Caches establishes 72% incremental KV memory compression at 32k (saving 4.73 GB RAM, enabling 32k context on 16 GB Macs) and diagnoses ALU dequantization decode penalty on 8B models (20.0 -> 8.0 tok/s in OptiQ); Milestone v3 Phase 2 complete | Milestone v3 Phase 2 | Confirms INT4 KV cache drops 32k peak RAM from 11.26 GB to 6.54 GB in OptiQ/mlx-lm; proves ALU overhead of runtime dequantization outweighs memory bandwidth savings on 8B batch-1 decode; confirms vMLX SSD block-disk maintains flat ~5.09 GB RAM at 17.6 tok/s; 14/14 runs PASS coherence; closes Milestone v3 Phase 2; docs/research/2026-09-20-quantized-kv-caches.md |
 
 ### Deferred Issues
 
@@ -146,8 +147,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 Phase 2 in progress. Plan 03-04 executed, verified, and published (`docs/research/2026-09-20-multiturn-conversation-sweep.md`). Decision 111 recorded. Phase 2 (1/2 plans complete).
-Next action: Enter planning for Milestone v3 Phase 2 Plan 03-05 (Quantized KV Caches: FP8, INT4 vs FP16 KV Caches).
+Stopped at: Milestone v3 Phase 2 complete. Plan 03-05 executed, verified, and published (`docs/research/2026-09-20-quantized-kv-caches.md`). Decision 112 recorded. Phase 2 closed across all 2 plans.
+Next action: Enter planning for Milestone v3 Phase 3 (Speculative Decoding & Acceleration Architectures), starting with Plan 03-06 (Native Multi-Token Prediction in vMLX: `--enable-native-mtp` on `Qwen3.6-35B-A3B-oQ4-mtp`).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
