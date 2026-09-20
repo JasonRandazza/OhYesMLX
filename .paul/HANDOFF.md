@@ -37,9 +37,10 @@ Read this, then `.paul/STATE.md`, then `AGENTS.md`.
 
 ## What is next in fresh session
 
-Choose one of two paths:
-1. **Candidate 3 (Thinking-Off MMLU Arm):** Preserved ablation study on LFM2.5-8B-A1B to isolate reasoning token impact on accuracy and resolve MoE HTTP 502 truncation trap (ready for overnight dispatch).
-2. **Milestone v3 Phase 2 (Context Scaling & Multi-turn Dynamics):** Plan 03-04 (Multi-turn sweeps with conversation history) and Plan 03-05 (Quantized KV caches: 4-bit vs 8-bit vs FP16 KV cache trade-offs).
+1. **Enter Planning for Milestone v3 Phase 1 Plan 03-02 (Cold vs Warm Page Cache Load & Memory Residency Attribution):**
+   - Formulate study design measuring internal APFS cold load times (`cold_load_s`) vs OS page cache hits, purge mechanisms, wired GPU allocations (`footprint -p`), and resident memory headroom on large models across all 5 serving runtimes.
+2. **Backlog / Deferred Items:**
+   - Candidate 3 (Thinking-Off MMLU Arm on LFM2.5-8B-A1B) remains in the roadmap backlog. Note: it requires designing prompt/system-prompt reasoning suppression for LFM2 in vMLX (which rejects `enable_thinking=false`) and budgeting 3.5–8 hours of uninterrupted quiet machine time.
 
 ---
 

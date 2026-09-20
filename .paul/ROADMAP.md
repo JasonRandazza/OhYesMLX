@@ -15,22 +15,33 @@ perplexity instead of task accuracy. The runtime axis follows, and cites `mlx-Ch
 rather than pretending to be first. The third study is the one our own first spike handed
 us.
 
-## Completed Milestone
-
-**v1 — Format axis on small models** (0.1.0)
-Status: Complete
-Phases: 7 of 7 complete
-
 ## Current Milestone
 
+**v3 — Large-Model Scaling, Context Dynamics & Public Release** (0.3.0)
+Status: In Progress
+Phases: 1 of 4 in progress
+
+| Phase | Name | Plans | Status | Completed |
+|---|---|---|---|---|
+| 1 | Large-Model Scaling (35B MoE Class) | 3 | **In Progress** (1/3 complete) | — |
+| 2 | Context Scaling & Conversational Dynamics | 2 | Planned | — |
+| 3 | Speculative Decoding & Acceleration | 2 | Planned | — |
+| 4 | Public Distribution & Packaging (v1.0) | 2 | Planned | — |
+
+## Completed Milestones
+
 **v2 — JANG Study and Accuracy Scoring** (0.2.0)
-Status: Complete
+Status: Complete (2026-09-19)
 Phases: 2 of 2 complete
 
 | Phase | Name | Plans | Status | Completed |
-|-------|------|-------|--------|-----------|
+|---|---|---|---|---|
 | 1 | Track 1: The JANG Study | 3 | **Complete** | 2026-09-17 |
 | 2 | Track 2: Accuracy Scoring (lm-evaluation-harness) | 4 | **Complete** | 2026-09-19 |
+
+**v1 — Format axis on small models** (0.1.0)
+Status: Complete (2026-09-16)
+Phases: 7 of 7 complete
 
 ## v1 Phases (Archive)
 
@@ -235,10 +246,10 @@ concurrency finding that fell out along the way.
 
 ---
 
-## Milestone v3: Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — PLANNING
+## Milestone v3: Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — ACTIVE
 
 ### Phase 1: Large-Model Scaling (35B MoE Class on Apple Silicon)
-- [ ] 03-01: 35B MoE Serving Benchmark (`Qwen3.6-35B-A3B`) — Measure stock 4-bit, oQ4, OptiQ (`mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit`), and JANG formats. Pass through the coherence gate (preventing token salad), measuring decode tok/s, TTFT, and resident footprint under high parameter count.
+- [x] 03-01: 35B MoE Serving Benchmark (`Qwen3.6-35B-A3B`) — **Complete 2026-09-20** (`docs/research/2026-09-20-35b-moe-serving.md`). Confirmed H1–H4 across 16 live cells in 5 runtimes: routing-bound decode scaling (58–70 tok/s), OptiQ strictly Pareto-dominated (+20.8% disk, slowest/tied decode), JANG MoE duality (density savings without decode advantage), Osaurus 0.74x memory reporting gap (`CROSS_RUNTIME_UNCOMPARABLE`). Resolved Phase 1 founding defect: stock mlx-lm serves 256-expert oQ4 with 100% coherence; MTP head was root cause of Phase 1 salad.
 - [ ] 03-02: Cold vs Warm Page Cache Load & Memory Residency Attribution — Measure internal APFS cold load times (`cold_load_s`) vs OS page cache hits, wired GPU allocations (`footprint -p`), and resident memory headroom across runtimes on large models.
 - [ ] 03-03: Expert Streaming under High Memory Pressure — Evaluate OptiQ's `--stream-experts` behavior vs vMLX block paging when model resident size approaches the 70% RAM threshold.
 
@@ -256,4 +267,4 @@ concurrency finding that fell out along the way.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-19 (v2 Complete; Candidate 1 & 2 Complete; Candidate 3 queued for overnight; Milestone v3 formally planned)*
+*Last updated: 2026-09-20 (Milestone v3 Phase 1 Plan 03-01 Complete; Plan 03-02 next)*

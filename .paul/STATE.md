@@ -11,26 +11,26 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** v2 Phase 1: Track 1 (The JANG Study) — design complete, ready for execution
+**Current focus:** Milestone v3 Phase 1: Large-Model Scaling (Plan 03-01 complete; entering Plan 03-02 planning)
 
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — COMPLETE
-Plan: Plan 03-01 (35B MoE Serving Benchmark) — COMPLETE & PUBLISHED
-Status: Milestone v3 Phase 1 Plan 03-01 complete. 20-cell probe, 16-cell primary serving grid, and vMLX replication run executed and published (`docs/research/2026-09-20-35b-moe-serving.md`). All hypotheses H1-H4 confirmed. 496 tests pass.
+Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — IN PROGRESS (1/3 plans complete)
+Plan: Plan 03-01 (35B MoE Serving Benchmark) — COMPLETE & PUBLISHED; transitioning to Plan 03-02
+Status: Milestone v3 Phase 1 Plan 03-01 complete. 20-cell probe, 16-cell primary serving grid, and vMLX replication run executed and published (`docs/research/2026-09-20-35b-moe-serving.md`). All hypotheses H1-H4 confirmed. 496 tests pass. Ready to enter planning for Plan 03-02.
 Last activity: 2026-09-20 — **Plan 03-01 Executed & Published (35B MoE Serving Benchmark: Qwen3.6-35B-A3B)**. All 16 cells PASS; stock4bit leads decode throughput across all runtimes; OptiQ strictly Pareto-dominated; JANG density lead confirmed in vMLX; Osaurus 0.74x memory reporting gap confirmed. 496 tests pass.
 
 Progress:
 - Milestone: [██░░░░░░░░] 20%
-- Phase: [██████████] 100%
+- Phase: [████░░░░░░] 33%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Milestone v3 Phase 1: Plan 03-01 Complete & Unified]
+  ◉        ○        ○     [Transitioning to Plan 03-02 Planning: Cold vs Warm Page Cache Load & Memory Residency Attribution]
 ```
 
 ## Performance Metrics
@@ -143,8 +143,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 Phase 1 Plan 03-01 executed, verified, and published (`docs/research/2026-09-20-35b-moe-serving.md`). 20-cell probe, 16-cell primary grid, and vMLX replication pass complete. All 496 tests green.
-Next action: Candidate 3 (Thinking-off MMLU arm overnight) or Milestone v3 Phase 2 (Context Scaling & Multi-turn Dynamics, Plan 03-04 / 03-05).
+Stopped at: Milestone v3 Phase 1 Plan 03-01 executed, verified, and published (`docs/research/2026-09-20-35b-moe-serving.md`). 20-cell probe, 16-cell primary grid, and vMLX replication pass complete. All 496 tests green. ROADMAP.md and STATE.md aligned.
+Next action: Enter planning for Milestone v3 Phase 1 Plan 03-02 (Cold vs Warm Page Cache Load & Memory Residency Attribution).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
