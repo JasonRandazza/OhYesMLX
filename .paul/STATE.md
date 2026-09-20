@@ -11,26 +11,26 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** Milestone v3 Phase 1: Large-Model Scaling (Plan 03-01 complete; entering Plan 03-02 planning)
+**Current focus:** Milestone v3 Phase 1: Large-Model Scaling (Plan 03-02 complete; entering Plan 03-03 planning)
 
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — IN PROGRESS (1/3 plans complete)
-Plan: Plan 03-01 (35B MoE Serving Benchmark) — COMPLETE & PUBLISHED; transitioning to Plan 03-02
-Status: Milestone v3 Phase 1 Plan 03-01 complete. 20-cell probe, 16-cell primary serving grid, and vMLX replication run executed and published (`docs/research/2026-09-20-35b-moe-serving.md`). All hypotheses H1-H4 confirmed. 496 tests pass. Ready to enter planning for Plan 03-02.
-Last activity: 2026-09-20 — **Plan 03-01 Executed & Published (35B MoE Serving Benchmark: Qwen3.6-35B-A3B)**. All 16 cells PASS; stock4bit leads decode throughput across all runtimes; OptiQ strictly Pareto-dominated; JANG density lead confirmed in vMLX; Osaurus 0.74x memory reporting gap confirmed. 496 tests pass.
+Phase: 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon) — IN PROGRESS (2/3 plans complete)
+Plan: Plan 03-02 (Cold vs Warm Page Cache Load & Memory Residency Attribution) — COMPLETE & PUBLISHED
+Status: Milestone v3 Phase 1 Plan 03-02 complete. 5-runtime page cache and memory attribution probe executed and published (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). Confirmed APFS cold throughput at 5.40 GB/s, lazy-load hidden penalty in oMLX (+4.92s) and OptiQ (+8.92s), and solved Osaurus 0.74x footprint via IOAccelerator region accounting. Ready for Plan 03-03.
+Last activity: 2026-09-20 — **Plan 03-02 Executed & Published (Cold vs Warm Page Cache Load & Memory Residency Attribution: Qwen3.6-35B-A3B)**. All 5 runtimes measured and attributed; H1-H4 confirmed. 496 tests pass.
 
 Progress:
-- Milestone: [██░░░░░░░░] 20%
-- Phase: [████░░░░░░] 33%
+- Milestone: [███░░░░░░░] 25%
+- Phase: [███████░░░] 67%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ◉        ○        ○     [Transitioning to Plan 03-02 Planning: Cold vs Warm Page Cache Load & Memory Residency Attribution]
+  ○        ○        ◉     [Plan 03-02 Complete & Unified; entering Plan 03-03 planning]
 ```
 
 ## Performance Metrics
@@ -106,6 +106,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 106: Plan 02-03 MoE Accuracy Study confirms 100.0% replicate determinism, rules out collapse at 2.37 bits (IFEval 56.8% vs 52.0%), strictly eliminates OptiQ (-7.3 pp MMLU, +14-78% disk), proves outlier protection mandatory (oQ4e +14.3 pp over oQ4), and diagnoses vMLX reasoning truncation trap (HTTP 502) | v2 Phase 2 | Closes Q1-Q4 on MoE; confirms within-runtime determinism on MoE; proves 2.37-bit quantization preserves instruction following; docs/research/2026-09-19-accuracy-moe.md |
 | Decision 107: Plan 02-04 Pareto Tradeoff Synthesis completes evaluation trilogy (Speed, Memory, Accuracy); confirms JANG Duality (dense throughput lead at parity, MoE density/footprint lead with preserved IFEval); eliminates OptiQ across all frontiers; closes Milestone v2 | v2 Phase 2 | Establishes 3-coordinate recommendation table for Apple Silicon; closes Track 2 (Plan 02-04) and Milestone v2 (0.2.0); docs/research/2026-09-19-accuracy-pareto.md |
 | Decision 108: Plan 03-01 35B MoE Serving Benchmark confirms routing-bound decode scaling (H1), OptiQ strictly Pareto-dominated (H2), JANG density lead on MoE without decode advantage (H3), and Osaurus 0.74x memory reporting gap (H4); stock4bit leads decode across all 5 runtimes; Phase 1 closed | Milestone v3 Phase 1 | Confirms 35B MoE decodes at 58–70 tok/s (~1.98 GB active bytes/step, within 2x of 8B MoE); OptiQ is +20.8% larger and slowest/tied; JANG_TQ4 provides 19.71 GB disk vs 20.43 GB stock, but loses decode to stock4bit (-13.1% primary, -17.9% replicate); Osaurus reports ~12.3-15.4 GB due to wired GPU page allocation; mlx-lm coherence on oQ4 confirmed (MTP head was root cause of Phase 1 salad); docs/research/2026-09-20-35b-moe-serving.md |
+| Decision 109: Plan 03-02 Cold vs Warm Page Cache Load & Memory Residency Attribution confirms APFS sequential read throughput at 5.40 GB/s (H1), quantifies lazy loading penalties in oMLX (+4.92s) and OptiQ (+8.92s) inverting startup rankings (H2), and solves the 0.74x Osaurus footprint gap via IOAccelerator region accounting (H3) | Milestone v3 Phase 1 | Verified via mincore: true cold APFS load takes 5.61s vs 2.09s warm (2.68x speedup); True Time to First Output shows Osaurus (3.42s) > mlxlm (4.64s) > omlx (7.45s) > vmlx (8.66s) > optiq (12.44s); vmmap proves Osaurus caps IOAccelerator at 12.18 GB with remaining ~7 GB allocated into wired driver pages; docs/research/2026-09-20-cold-warm-load-attribution-35b.md |
 
 ### Deferred Issues
 
@@ -143,8 +144,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 Phase 1 Plan 03-01 executed, verified, and published (`docs/research/2026-09-20-35b-moe-serving.md`). 20-cell probe, 16-cell primary grid, and vMLX replication pass complete. All 496 tests green. ROADMAP.md and STATE.md aligned.
-Next action: Enter planning for Milestone v3 Phase 1 Plan 03-02 (Cold vs Warm Page Cache Load & Memory Residency Attribution).
+Stopped at: Milestone v3 Phase 1 Plan 03-02 executed, verified, and published (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). 5-runtime page cache and memory attribution probe complete. Decision 109 recorded.
+Next action: Enter planning for Milestone v3 Phase 1 Plan 03-03 (Expert Streaming under High Memory Pressure).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

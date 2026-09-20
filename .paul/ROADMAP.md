@@ -23,7 +23,7 @@ Phases: 1 of 4 in progress
 
 | Phase | Name | Plans | Status | Completed |
 |---|---|---|---|---|
-| 1 | Large-Model Scaling (35B MoE Class) | 3 | **In Progress** (1/3 complete) | — |
+| 1 | Large-Model Scaling (35B MoE Class) | 3 | **In Progress** (2/3 complete) | — |
 | 2 | Context Scaling & Conversational Dynamics | 2 | Planned | — |
 | 3 | Speculative Decoding & Acceleration | 2 | Planned | — |
 | 4 | Public Distribution & Packaging (v1.0) | 2 | Planned | — |
@@ -250,7 +250,7 @@ concurrency finding that fell out along the way.
 
 ### Phase 1: Large-Model Scaling (35B MoE Class on Apple Silicon)
 - [x] 03-01: 35B MoE Serving Benchmark (`Qwen3.6-35B-A3B`) — **Complete 2026-09-20** (`docs/research/2026-09-20-35b-moe-serving.md`). Confirmed H1–H4 across 16 live cells in 5 runtimes: routing-bound decode scaling (58–70 tok/s), OptiQ strictly Pareto-dominated (+20.8% disk, slowest/tied decode), JANG MoE duality (density savings without decode advantage), Osaurus 0.74x memory reporting gap (`CROSS_RUNTIME_UNCOMPARABLE`). Resolved Phase 1 founding defect: stock mlx-lm serves 256-expert oQ4 with 100% coherence; MTP head was root cause of Phase 1 salad.
-- [ ] 03-02: Cold vs Warm Page Cache Load & Memory Residency Attribution — Measure internal APFS cold load times (`cold_load_s`) vs OS page cache hits, wired GPU allocations (`footprint -p`), and resident memory headroom across runtimes on large models.
+- [x] 03-02: Cold vs Warm Page Cache Load & Memory Residency Attribution — **Complete 2026-09-20** (`docs/research/2026-09-20-cold-warm-load-attribution-35b.md`). Verified via `mincore`: true cold APFS load (0% cache) achieves 5.40 GB/s sequential throughput (5.61s cold vs 2.09s warm, a 2.68x speedup); lazy loading hides +4.92s in oMLX and +8.92s in OptiQ, inverting startup rankings; `vmmap` per-region accounting proves Osaurus 0.74x footprint gap is an allocation class artifact (`IOAccelerator` capped at 12.18 GB vs 18.75–19.87 GB in other runtimes).
 - [ ] 03-03: Expert Streaming under High Memory Pressure — Evaluate OptiQ's `--stream-experts` behavior vs vMLX block paging when model resident size approaches the 70% RAM threshold.
 
 ### Phase 2: Context Scaling & Conversational Dynamics

@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import collections
+import contextlib
 import ctypes
 import glob
 import json
@@ -176,7 +177,43 @@ def sweep_ports():
                 subprocess.run(["kill", "-9", pid], capture_output=True)
     except Exception:
         pass
-    time.sleep(3.0)
+@contextlib.contextmanager
+def osaurus_pin_context():
+    conf = Path.home() / ".osaurus" / "config" / "server-runtime.json"
+    server = Path.home() / ".osaurus" / "config" / "server.json"
+    baseline = Path(__file__).resolve().parents[1] / "config" / "osaurus-settings-baseline.json"
+
+    conf_orig = conf.with_suffix(".probe-orig")
+    server_orig = server.with_suffix(".probe-orig")
+
+    if conf.exists():
+        conf_orig.write_bytes(conf.read_bytes())
+    if server.exists():
+        server_orig.write_bytes(server.read_bytes())
+
+    try:
+        if conf.exists():
+            runtime_cfg = json.loads(conf.read_text())
+            runtime_cfg.setdefault("cache", {}).setdefault("prefix", {})["enabled"] = False
+            runtime_cfg.setdefault("cache", {}).setdefault("blockDisk", {})["enabled"] = False
+            conf.write_text(json.dumps(runtime_cfg, indent=2))
+
+        if server.exists():
+            server_cfg = json.loads(server.read_text())
+            server_cfg.setdefault("modelIdleResidencyPolicy", {})["seconds"] = 900
+            server.write_text(json.dumps(server_cfg, indent=2))
+
+        from ohyesmlx import osaurus_settings
+        osaurus_settings.write_baseline()
+        yield
+    finally:
+        if conf_orig.exists():
+            conf.write_bytes(conf_orig.read_bytes())
+            conf_orig.unlink()
+        if server_orig.exists():
+            server.write_bytes(server_orig.read_bytes())
+            server_orig.unlink()
+        subprocess.run(["git", "checkout", "--", str(baseline)], capture_output=True)
 
 
 def run_probe_cell(runtime_name: str, shards: list[str]) -> dict:
@@ -201,97 +238,99 @@ def run_probe_cell(runtime_name: str, shards: list[str]) -> dict:
         "vmstat_pre": vmstat_pre,
     }
 
-    try:
-        # Phase 1: Cold Load
-        print(f"--> Starting {runtime_name} (Cold Load)...")
-        handle = rt.start(ARTIFACT, f"{runtime_name}/stock4bit")
-        cold_load_s = round(handle.cold_load_s, 2)
-        result["cold_load_s"] = cold_load_s
-        print(f"    Startup / readiness time: {cold_load_s}s")
+    pin_cm = osaurus_pin_context() if runtime_name == "osaurus" else contextlib.nullcontext()
+    with pin_cm:
+        try:
+            # Phase 1: Cold Load
+            print(f"--> Starting {runtime_name} (Cold Load)...")
+            handle = rt.start(ARTIFACT, f"{runtime_name}/stock4bit")
+            cold_load_s = round(handle.cold_load_s, 2)
+            result["cold_load_s"] = cold_load_s
+            print(f"    Startup / readiness time: {cold_load_s}s")
 
-        # Phase 2: Sequential Requests (testing lazy loading)
-        req_times = []
-        for i in range(1, 4):
+            # Phase 2: Sequential Requests (testing lazy loading)
+            req_times = []
+            for i in range(1, 4):
+                t0 = time.monotonic()
+                transport.chat(
+                    handle.base_url,
+                    handle.model_id,
+                    PROMPT,
+                    max_tokens=8,
+                    temperature=0.0,
+                    seed=0,
+                    token_counter=counter,
+                    api_key=handle.api_key,
+                )
+                elapsed = round(time.monotonic() - t0, 3)
+                req_times.append(elapsed)
+                print(f"    Request #{i} latency: {elapsed}s")
+
+            result["request_latencies_s"] = req_times
+            hidden_penalty = round(req_times[0] - min(req_times[1:]), 3)
+            result["lazy_hidden_penalty_s"] = hidden_penalty
+            print(f"    Hidden first-request delta: {hidden_penalty}s")
+
+            # Phase 3: Residency Sampling
+            pid = handle.memory_pid
+            result["memory_pid"] = pid
+            result["phys_footprint_mb"] = sample.phys_footprint_mb(pid)
+            result["vmmap_summary"] = sample.vmmap_split(pid)
+            result["region_breakdown"] = sample_regions(pid)
+            result["vmstat_resident"] = sample_vmstat()
+
+            print(f"    Process phys_footprint    : {result['phys_footprint_mb']} MB")
+            print(f"    IOAccelerator (graphics)  : {result['region_breakdown'].get('ioaccelerator_resident_mb')} MB")
+            print(f"    Anonymous memory          : {result['region_breakdown'].get('anonymous_resident_mb')} MB")
+            print(f"    Mapped file memory        : {result['region_breakdown'].get('mapped_file_resident_mb')} MB")
+            print(f"    System wired increase     : {round(result['vmstat_resident']['wired_mb'] - vmstat_pre['wired_mb'], 1)} MB")
+
+        finally:
+            if handle is not None:
+                try:
+                    handle.stop()
+                except Exception:
+                    pass
+            sweep_ports()
+
+        res_post_cold = get_cache_residency(shards)
+        result["post_cold_cache_residency_pct"] = res_post_cold["pct_resident"]
+        print(f"Post-cold Buffer Cache Residency: {res_post_cold['pct_resident']:.2f}%")
+
+        # Phase 4: Warm Reload
+        print(f"--> Re-starting {runtime_name} (Warm Reload, cache={res_post_cold['pct_resident']:.1f}%)...")
+        handle_warm = None
+        try:
+            handle_warm = rt.start(ARTIFACT, f"{runtime_name}/stock4bit")
+            warm_load_s = round(handle_warm.cold_load_s, 2)
+            result["warm_load_s"] = warm_load_s
+            print(f"    Warm startup time         : {warm_load_s}s")
+
             t0 = time.monotonic()
             transport.chat(
-                handle.base_url,
-                handle.model_id,
+                handle_warm.base_url,
+                handle_warm.model_id,
                 PROMPT,
                 max_tokens=8,
                 temperature=0.0,
                 seed=0,
                 token_counter=counter,
-                api_key=handle.api_key,
+                api_key=handle_warm.api_key,
             )
-            elapsed = round(time.monotonic() - t0, 3)
-            req_times.append(elapsed)
-            print(f"    Request #{i} latency: {elapsed}s")
+            warm_req1 = round(time.monotonic() - t0, 3)
+            result["warm_request_1_s"] = warm_req1
+            print(f"    Warm Request #1 latency   : {warm_req1}s")
+        finally:
+            if handle_warm is not None:
+                try:
+                    handle_warm.stop()
+                except Exception:
+                    pass
+            sweep_ports()
 
-        result["request_latencies_s"] = req_times
-        hidden_penalty = round(req_times[0] - min(req_times[1:]), 3)
-        result["lazy_hidden_penalty_s"] = hidden_penalty
-        print(f"    Hidden first-request delta: {hidden_penalty}s")
-
-        # Phase 3: Residency Sampling
-        pid = handle.memory_pid
-        result["memory_pid"] = pid
-        result["phys_footprint_mb"] = sample.phys_footprint_mb(pid)
-        result["vmmap_summary"] = sample.vmmap_split(pid)
-        result["region_breakdown"] = sample_regions(pid)
-        result["vmstat_resident"] = sample_vmstat()
-
-        print(f"    Process phys_footprint    : {result['phys_footprint_mb']} MB")
-        print(f"    IOAccelerator (graphics)  : {result['region_breakdown'].get('ioaccelerator_resident_mb')} MB")
-        print(f"    Anonymous memory          : {result['region_breakdown'].get('anonymous_resident_mb')} MB")
-        print(f"    Mapped file memory        : {result['region_breakdown'].get('mapped_file_resident_mb')} MB")
-        print(f"    System wired increase     : {round(result['vmstat_resident']['wired_mb'] - vmstat_pre['wired_mb'], 1)} MB")
-
-    finally:
-        if handle is not None:
-            try:
-                handle.stop()
-            except Exception:
-                pass
-        sweep_ports()
-
-    res_post_cold = get_cache_residency(shards)
-    result["post_cold_cache_residency_pct"] = res_post_cold["pct_resident"]
-    print(f"Post-cold Buffer Cache Residency: {res_post_cold['pct_resident']:.2f}%")
-
-    # Phase 4: Warm Reload
-    print(f"--> Re-starting {runtime_name} (Warm Reload, cache={res_post_cold['pct_resident']:.1f}%)...")
-    handle_warm = None
-    try:
-        handle_warm = rt.start(ARTIFACT, f"{runtime_name}/stock4bit")
-        warm_load_s = round(handle_warm.cold_load_s, 2)
-        result["warm_load_s"] = warm_load_s
-        print(f"    Warm startup time         : {warm_load_s}s")
-
-        t0 = time.monotonic()
-        transport.chat(
-            handle_warm.base_url,
-            handle_warm.model_id,
-            PROMPT,
-            max_tokens=8,
-            temperature=0.0,
-            seed=0,
-            token_counter=counter,
-            api_key=handle_warm.api_key,
-        )
-        warm_req1 = round(time.monotonic() - t0, 3)
-        result["warm_request_1_s"] = warm_req1
-        print(f"    Warm Request #1 latency   : {warm_req1}s")
-    finally:
-        if handle_warm is not None:
-            try:
-                handle_warm.stop()
-            except Exception:
-                pass
-        sweep_ports()
-
-    res_post_warm = get_cache_residency(shards)
-    result["post_warm_cache_residency_pct"] = res_post_warm["pct_resident"]
-    return result
+        res_post_warm = get_cache_residency(shards)
+        result["post_warm_cache_residency_pct"] = res_post_warm["pct_resident"]
+        return result
 
 
 def main():
@@ -312,14 +351,18 @@ def main():
     print("========================================================================")
 
     all_results = []
+    out_file = out_dir / "probe_results.json"
     for rt_name in runtimes_to_probe:
-        res = run_probe_cell(rt_name, shards)
-        all_results.append(res)
+        try:
+            res = run_probe_cell(rt_name, shards)
+            all_results.append(res)
+        except Exception as e:
+            print(f"ERROR probing {rt_name}: {type(e).__name__}: {e}")
+            all_results.append({"runtime": rt_name, "error": f"{type(e).__name__}: {e}"})
+        out_file.write_text(json.dumps(all_results, indent=2), "utf-8")
         # 10s quiet cooldown between runtimes
         time.sleep(10.0)
 
-    out_file = out_dir / "probe_results.json"
-    out_file.write_text(json.dumps(all_results, indent=2), "utf-8")
     print(f"\nProbe complete. Results saved to {out_file}")
 
 
