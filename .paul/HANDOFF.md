@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-20 (Phase 3 Plan 03-07 Ready)"
+description: "OhYesMLX — session handoff, 2026-09-20 (Phase 3 Closed; Phase 4 Ready)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-20 (Phase 3 Plan 03-07 Ready)
+# Handoff — 2026-09-20 (Phase 3 Closed; Phase 4 Ready)
 
 > **This file is the single session-transfer note for the incoming agent.**
 > Read this, then `.paul/STATE.md`, then `AGENTS.md`.
@@ -13,33 +13,25 @@ about: "OhYesMLX"
 
 ## Current Project Position
 
-- **Milestone v1 (0.1.0) & Milestone v2 (0.2.0):** 100% COMPLETE.
-- **Milestone v3 Phase 1 (Large-Model Scaling: 35B MoE):** 100% COMPLETE (Plans 03-01, 03-02, 03-03).
+- **Milestone v1 (0.1.0) & Milestone v2 (0.2.0):** 100% COMPLETE & CLOSED.
+- **Milestone v3 Phase 1 (Large-Model Scaling: 35B MoE):** 100% COMPLETE & CLOSED (Plans 03-01, 03-02, 03-03).
 - **Milestone v3 Phase 2 (Context Scaling & Dynamics):** 100% COMPLETE & CLOSED (Plans 03-04, 03-05).
-- **Milestone v3 Phase 3 (Speculative Decoding & Acceleration):** IN PROGRESS (1/2 plans complete):
-  - `[x]` **Plan 03-06:** Native Multi-Token Prediction (MTP) in vMLX (`docs/research/2026-09-20-native-mtp-vmlx.md`). Proved fixed D=1 delivers +31% decode speedup (78.7 -> 103.1 tok/s) at 85% acceptance with +73 MB memory overhead; confirmed monotonic acceptance degradation (D1 [85%] > D2 [71%] > D3 [64%]); diagnosed 35B MoE MTP artifact defect (0% acceptance, 41% collapse, token salad).
-  - `[ ]` **Plan 03-07:** Speculative Draft-Model Decoding in mlx-lm (`--draft-model` / `--speculative-model`). **NEXT IN QUEUE.**
+- **Milestone v3 Phase 3 (Speculative Decoding & Acceleration):** 100% COMPLETE & CLOSED (Plans 03-06, 03-07):
+  - `[x]` **Plan 03-06:** Native Multi-Token Prediction (MTP) in vMLX (`docs/research/2026-09-20-native-mtp-vmlx.md`). Proved fixed D=1 delivers +31% decode speedup (78.7 -> 103.1 tok/s) at 85% acceptance with +73 MB memory overhead; confirmed monotonic acceptance degradation (D1 [85%] > D2 [71%] > D3 [64%]); diagnosed 35B MoE MTP artifact defect.
+  - `[x]` **Plan 03-07:** Speculative Draft-Model Decoding in mlx-lm (`docs/research/2026-09-20-speculative-draft-decoding.md`). Diagnosed stock `mlx_lm.server --draft-model` refusal on hybrid linear-attention models (`ValueError: Speculative decoding requires a trimmable prompt cache (got {'ArraysCache'})`). Evaluated 7 configurations via exact recurrent state-rollback adapter. Proved dual-model speculative drafting on Apple Silicon unified memory produces a 0.19× to 0.38× throughput collapse (64.3 -> 24.5 tok/s, 62% slowdown) and +3,072 MB RAM overhead because 35B MoE sparsity (1.98 GB active bytes/step) makes dense 4B drafting (2.54 GB/step) counterproductive (4.52 GB/cycle vs 1.98 GB AR). Established Native MTP as structurally superior to draft models on Apple Silicon.
+- **Milestone v3 Phase 4 (Public Distribution & Packaging):** NEXT IN QUEUE.
 
 ---
 
-## Immediate Next Objective: Plan 03-07
+## Immediate Next Objective: Phase 4 (Public Distribution & Packaging)
 
-**Goal:** Benchmark speculative draft-model decoding in `mlx-lm` (`--draft-model` and `--num-draft-tokens`) on Apple Silicon unified memory.
+**Goal:** Package OhYesMLX for public consumption and provide automated interactive visualizations.
 
-1. **Target Model Pair:**
-   - **Target Model:** `mlx-community/Qwen3.6-35B-A3B-4bit` (~20 GB resident)
-   - **Draft Model:** `mlx-community/Qwen3.5-4B-4bit` (~2.5 GB resident)
-   - *Verification:* Verified byte-identical tokenizer (`tokenizer.json` and `vocab.json` match 100%).
-2. **Key Comparisons:**
-   - Baseline standalone target (`mlx_lm.server --model <35B>`)
-   - Speculative draft decoding at draft tokens $K \in \{1, 2, 3, 4\}$ (`--draft-model <4B> --num-draft-tokens <K>`)
-   - Non-speculative draft model baseline (`mlx_lm.server --model <4B>`)
-3. **Primary Question:**
-   Does running a secondary 4B draft model in unified memory yield a net decode speedup on Apple Silicon, or does dual-model memory bandwidth contention wipe out draft acceptance gains?
-4. **Deliverables:**
-   - `scripts/probe_speculative_draft.py`
-   - `results/plan-03-07/speculative_results.json`
-   - `docs/research/2026-09-20-speculative-draft-decoding.md`
+1. **Plan 03-08: Distributable Package & Clean CLI:**
+   - Package OhYesMLX for public distribution (pip/uv installable, clean entry points, zero hardcoded host paths, self-contained dependencies).
+   - Harden CLI and ensure full regression test coverage.
+2. **Plan 03-09: Automated Interactive Pareto Visualization:**
+   - Standalone interactive HTML/SVG Pareto frontier charts connecting Speed (tok/s, TTFT), Memory Footprint (phys_footprint), and Quality (Accuracy benchmarks) across all evaluated models and runtimes.
 
 ---
 

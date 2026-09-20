@@ -16,21 +16,21 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — IN PROGRESS
-Phase: 3 (Speculative Decoding & Acceleration Architectures) — IN PROGRESS (1/2 plans complete)
-Plan: Plan 03-06 (Native Multi-Token Prediction in vMLX: `--enable-native-mtp`) — COMPLETE & PUBLISHED
-Status: Plan 03-06 executed and published (`docs/research/2026-09-20-native-mtp-vmlx.md`). Evaluated 8 configurations across 3 semantic workloads in vMLX 1.6.59. Confirmed H1–H5: Native MTP at Fixed Depth 1 achieves a +31.0% decode speedup (78.7 -> 103.1 tok/s, confirmed 107.6 tok/s) on structured code and +27.9% (78.4 -> 100.3 tok/s) on philosophy at high acceptance (81.4%–85.3%); acceptance degrades monotonically with depth (D=1 [85%] > D=2 [71%] > D=3 [64%]); over-speculation beyond D=1 produces net throughput degradation (-15.5% at D=3 on architecture); memory overhead is negligible (+73 MB RAM); diagnosed upstream `Qwen3.6-35B-A3B-oQ4-mtp` artifact failure (0.0% acceptance, 41% decode collapse, token salad), contrasting with 100% clean non-MTP control. Ready for Phase 3 Plan 03-07 (Speculative Draft-Model Decoding in mlx-lm).
-Last activity: 2026-09-20 — **Plan 03-06 Executed & Published (Native Multi-Token Prediction in vMLX)**. 8 cells measured; H1–H5 confirmed. Phase 3 (1/2 plans complete). 496 tests pass.
+Phase: 3 (Speculative Decoding & Acceleration Architectures) — COMPLETE & CLOSED (2/2 plans complete)
+Plan: Plan 03-07 (Speculative Draft-Model Decoding in mlx-lm) — COMPLETE & PUBLISHED
+Status: Plan 03-07 executed and published (`docs/research/2026-09-20-speculative-draft-decoding.md`). Diagnosed stock `mlx_lm.server --draft-model` refusal on hybrid linear-attention models (`ValueError: Speculative decoding requires a trimmable prompt cache (got {'ArraysCache'})`). Evaluated 7 configurations across 3 semantic workloads via exact recurrent state-rollback adapter. Confirmed H1–H5: dual-model speculative drafting with a dense 4B draft model on a 35B MoE target causes a severe throughput collapse (64.3 -> 24.5 tok/s, 0.38x at K=1; down to 12.0 tok/s, 0.19x at K=4) and consumes +3,072 MB RAM overhead; proved that 35B MoE sparsity (1.98 GB active bytes/step) renders dense drafting (2.54 GB/step) counterproductive on unified memory; demonstrated 100.000% generative fidelity; established Native MTP (Plan 03-06) as structurally superior to draft-model speculation on Apple Silicon. Phase 3 closed. Ready for Phase 4 (Public Distribution & Packaging).
+Last activity: 2026-09-20 — **Plan 03-07 Executed & Published (Speculative Draft-Model Decoding in mlx-lm)**. H1–H5 confirmed. Phase 3 Complete & Closed. 496 tests pass.
 
 Progress:
-- Milestone: [██████░░░░] 66%
-- Phase: [█████░░░░░] 50%
+- Milestone: [███████░░░] 75%
+- Phase: [██████████] 100%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Plan 03-06 Complete & Unified; entering Phase 3 Plan 03-07 planning]
+  ○        ○        ◉     [Plan 03-07 Complete & Unified; Milestone v3 Phase 3 Closed; entering Phase 4 planning]
 ```
 
 ## Performance Metrics
@@ -111,6 +111,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 111: Plan 03-04 Multi-Turn Conversation Sweep confirms hybrid linear-attention prefill scaling ($O(N)$ growth from ~0.4s to 1.6–2.2s across 10 turns) and establishes decode throughput (55–75 tok/s) and ITL (13–18 ms/tok) invariance to conversational context depth | Milestone v3 Phase 2 | 50/50 turns PASS; proves hybrid attention prevents cross-request prefix reuse under stateless chat completions; confirms Apple Silicon decode memory bandwidth saturation keeps tok/s invariant to KV cache size up to 1k tokens; docs/research/2026-09-20-multiturn-conversation-sweep.md |
 | Decision 112: Plan 03-05 Quantized KV Caches establishes 72% incremental KV memory compression at 32k (saving 4.73 GB RAM, enabling 32k context on 16 GB Macs) and diagnoses ALU dequantization decode penalty on 8B models (20.0 -> 8.0 tok/s in OptiQ); Milestone v3 Phase 2 complete | Milestone v3 Phase 2 | Confirms INT4 KV cache drops 32k peak RAM from 11.26 GB to 6.54 GB in OptiQ/mlx-lm; proves ALU overhead of runtime dequantization outweighs memory bandwidth savings on 8B batch-1 decode; confirms vMLX SSD block-disk maintains flat ~5.09 GB RAM at 17.6 tok/s; 14/14 runs PASS coherence; closes Milestone v3 Phase 2; docs/research/2026-09-20-quantized-kv-caches.md |
 | Decision 113: Plan 03-06 Native Multi-Token Prediction (MTP) in vMLX establishes fixed D=1 as the optimal speculative configuration on Apple Silicon (+31.0% decode speedup at 85% acceptance, +73 MB memory overhead); proves monotonic acceptance degradation across depths (H1); demonstrates over-speculation penalty at D>=2 (-15.5% at D=3); diagnoses 35B MoE MTP artifact failure mode (0.0% acceptance, 41% decode collapse, token salad) | Milestone v3 Phase 3 | Evaluates 8 configurations across 3 semantic workloads; confirms H1-H5; proves single-layer MTP drafts yield high returns (+31% speedup, 103 tok/s) while multi-draft chains compound rejection churn on memory-bandwidth bound M2 Max; proves uncalibrated heads produce 0% acceptance and 41% throughput collapse; docs/research/2026-09-20-native-mtp-vmlx.md |
+| Decision 114: Plan 03-07 Speculative Draft-Model Decoding reveals dual-model memory bandwidth inversion on Apple Silicon unified memory (64.3 -> 24.5 tok/s, 0.38x collapse at K=1; down to 12.0 tok/s at K=4) and diagnoses stock mlx-lm ArraysCache trimmability refusal; proves Native MTP is structurally superior to draft models; Milestone v3 Phase 3 complete | Milestone v3 Phase 3 | Diagnoses stock mlx-lm refusal on hybrid models (ValueError: Speculative decoding requires a trimmable prompt cache); evaluates 7 configurations across 3 workloads via exact recurrent state-rollback adapter (100.000% generative fidelity); proves 35B MoE active sparsity (1.98 GB/step) renders dense 4B drafting (2.54 GB/step) counterproductive (4.52 GB/cycle vs 1.98 GB standalone AR); adds +3,072 MB RAM overhead; closes Milestone v3 Phase 3; docs/research/2026-09-20-speculative-draft-decoding.md |
 
 ### Deferred Issues
 
@@ -148,8 +149,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 Phase 3 in progress. Plan 03-06 executed, verified, and published (`docs/research/2026-09-20-native-mtp-vmlx.md`). Decision 113 recorded. Phase 3 (1/2 plans complete).
-Next action: Enter planning for Milestone v3 Phase 3 Plan 03-07 (Speculative Draft-Model Decoding in mlx-lm: `--speculative-model`).
+Stopped at: Milestone v3 Phase 3 COMPLETE & CLOSED. Plan 03-07 executed, verified, and published (`docs/research/2026-09-20-speculative-draft-decoding.md`). Decision 114 recorded. Phase 3 (2/2 plans complete).
+Next action: Enter planning for Milestone v3 Phase 4 (Public Distribution & Packaging: Plan 03-08 CLI & Packaging, Plan 03-09 Interactive Pareto Visualization).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
