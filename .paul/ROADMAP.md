@@ -237,8 +237,8 @@ concurrency finding that fell out along the way.
 - **Artifact:** `docs/research/2026-09-19-vmlx-jit-ab.md`, `scripts/run_vmlx_jit_ab.sh`.
 - **Finding:** Across all 6 cell-workload pairs, `--enable-jit` carries a **-2.7% to -11.3% decode throughput penalty** (-1.5 to -8.7 tok/s) on Apple Silicon M2 Max. On 4B/8B models at batch size 1, memory bandwidth dominates and JIT compilation overhead hurts decode speed. TTFT and prefill throughput are indifferent ($\pm1-2\%$). Confirms that Track 1's choice to pin `--no-jit` was not only methodologically pure, but optimal for throughput.
 
-### Candidate 3: Thinking-Off MMLU Arm (Overnight Candidate)
-- **Status:** Queued for overnight execution. Preserved here across AGY session boundaries.
+### Candidate 3: Thinking-Off MMLU Arm (Deferred)
+- **Status:** Deferred in favor of Milestone v3 development. Blocked by vMLX endpoint rejecting `enable_thinking=false` (HTTP 400 `supports_instruct_mode=False`). Preserved here across AGY session boundaries.
 - **Goal:** Dedicated ablation study testing MMLU with reasoning channel explicitly suppressed (dense via API `enable_thinking=false`, MoE via prompt template / system prompt) to:
   1. Isolate the exact accuracy contribution of the `<think>` reasoning trace vs raw knowledge retrieval.
   2. Resolve the vMLX reasoning truncation trap (HTTP 502 `reasoning_only_no_content` observed on MoE item 80/1,140).
@@ -267,4 +267,4 @@ concurrency finding that fell out along the way.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-20 (Milestone v3 Phase 1 Plan 03-01 Complete; Plan 03-02 next)*
+*Last updated: 2026-09-20 (Milestone v3 Phase 1 Plan 03-02 Complete; Plan 03-03 next)*
