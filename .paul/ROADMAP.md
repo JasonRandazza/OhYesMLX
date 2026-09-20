@@ -258,7 +258,7 @@ concurrency finding that fell out along the way.
 - [x] 03-05: Quantized KV Caches (FP8, INT4 vs FP16 KV Caches at 16k and 32k) — **Complete 2026-09-20** (`docs/research/2026-09-20-quantized-kv-caches.md`). Evaluated 14 configurations across OptiQ, vMLX, and mlx-lm on `Llama-3.1-8B-oQ4`. Confirmed H1–H5: INT4 KV cache compresses peak footprint from 11.26 GB to 6.54 GB (saving 4.73 GB RAM, a 72% incremental KV reduction), enabling 32k context on 16 GB Macs; dynamic dequantization on 8B in OptiQ incurs an ALU decode penalty (20.0 tok/s -> 8.0 tok/s) while vMLX maintains steady decode (17.6 tok/s); 100% coherence pass rate; Phase 2 closed.
 
 ### Phase 3: Speculative Decoding & Acceleration Architectures
-- [ ] 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`) — Measure real decode speedup, acceptance rate, and TTFT impact vs non-MTP baselines on MTP-equipped models (`Qwen3.6-35B-A3B-oQ4-mtp`).
+- [x] 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`) — **Complete 2026-09-20** (`docs/research/2026-09-20-native-mtp-vmlx.md`). Evaluated 8 configurations across 3 semantic workloads in vMLX 1.6.59. Confirmed H1–H5: Native MTP at Fixed Depth 1 achieves a +31.0% decode speedup (78.7 -> 103.1 tok/s, confirmed 107.6 tok/s) on structured code and +27.9% (78.4 -> 100.3 tok/s) on philosophy at high acceptance (81.4%–85.3%); acceptance degrades monotonically with depth (D=1 [85%] > D=2 [71%] > D=3 [64%]); over-speculation beyond D=1 produces net throughput degradation (-15.5% at D=3 on architecture); memory overhead is negligible (+73 MB RAM); diagnosed upstream `Qwen3.6-35B-A3B-oQ4-mtp` artifact failure (0.0% acceptance, 41% decode collapse, token salad), contrasting with 100% clean non-MTP control.
 - [ ] 03-07: Speculative Draft-Model Decoding in mlx-lm (`--speculative-model`) — Quantify draft-model speculation speedup and memory overhead on memory-bandwidth bound Apple Silicon decode.
 
 ### Phase 4: Public Distribution & Packaging (v1.0 Release)
@@ -267,4 +267,4 @@ concurrency finding that fell out along the way.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-20 (Milestone v3 Phase 2 Complete [Plans 03-04, 03-05]; Plan 03-06 next)*
+*Last updated: 2026-09-20 (Plan 03-06 Complete; Plan 03-07 next)*
