@@ -114,7 +114,7 @@ ohyesmlx grid run_dir_1 run_dir_2 --rank decode_tps --out results/grid.md
 
 ## Model & Architecture Compatibility Guide
 
-When you clone or install OhYesMLX, **you are not restricted to the models measured in our published benchmarks.** The harness accepts any local model path via `--cells` or configuration files.
+When you clone or install OhYesMLX, **you are not restricted to the models measured in our published benchmarks.** The harness accepts any local model path via `--cells` (the only cell selector, by design).
 
 Because OhYesMLX benchmarks serving runtimes on Apple Silicon, whether a model runs depends on the requirements of the runtime you choose.
 
