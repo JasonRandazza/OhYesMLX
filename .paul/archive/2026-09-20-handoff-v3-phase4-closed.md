@@ -1,10 +1,10 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-21 (Milestone v3 Complete; Packaging & Docs Ready)"
+description: "OhYesMLX — session handoff, 2026-09-20 (Milestone v3 Complete; Phase 4 Closed)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-21 (Milestone v3 Complete; Packaging & Docs Ready)
+# Handoff — 2026-09-20 (Milestone v3 Complete; Phase 4 Closed)
 
 > **This file is the single session-transfer note for the incoming agent.**
 > Read this, then `.paul/STATE.md`, then `AGENTS.md`.

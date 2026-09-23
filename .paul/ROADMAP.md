@@ -19,14 +19,14 @@ us.
 
 **v3 — Large-Model Scaling, Context Dynamics & Public Release** (0.3.0)
 Status: In Progress
-Phases: 1 of 4 in progress
+Phases: 4 of 4 complete (Milestone v3 Complete)
 
 | Phase | Name | Plans | Status | Completed |
 |---|---|---|---|---|
 | 1 | Large-Model Scaling (35B MoE Class) | 3 | **Complete** | 2026-09-20 |
 | 2 | Context Scaling & Conversational Dynamics | 2 | **Complete** | 2026-09-20 |
-| 3 | Speculative Decoding & Acceleration | 2 | Planned | — |
-| 4 | Public Distribution & Packaging (v1.0) | 2 | Planned | — |
+| 3 | Speculative Decoding & Acceleration | 2 | **Complete** | 2026-09-20 |
+| 4 | Public Distribution & Packaging (v1.0) | 2 | **Complete** | 2026-09-20 |
 
 ## Completed Milestones
 
@@ -261,10 +261,20 @@ concurrency finding that fell out along the way.
 - [x] 03-06: Native Multi-Token Prediction (MTP) in vMLX (`--enable-native-mtp`) — **Complete 2026-09-20** (`docs/research/2026-09-20-native-mtp-vmlx.md`). Evaluated 8 configurations across 3 semantic workloads in vMLX 1.6.59. Confirmed H1–H5: Native MTP at Fixed Depth 1 achieves a +31.0% decode speedup (78.7 -> 103.1 tok/s, confirmed 107.6 tok/s) on structured code and +27.9% (78.4 -> 100.3 tok/s) on philosophy at high acceptance (81.4%–85.3%); acceptance degrades monotonically with depth (D=1 [85%] > D=2 [71%] > D=3 [64%]); over-speculation beyond D=1 produces net throughput degradation (-15.5% at D=3 on architecture); memory overhead is negligible (+73 MB RAM); diagnosed upstream `Qwen3.6-35B-A3B-oQ4-mtp` artifact failure (0.0% acceptance, 41% decode collapse, token salad), contrasting with 100% clean non-MTP control.
 - [x] 03-07: Speculative Draft-Model Decoding in mlx-lm (`--draft-model`) — **Complete 2026-09-20** (`docs/research/2026-09-20-speculative-draft-decoding.md`). Diagnosed stock `mlx_lm.server --draft-model` refusal on hybrid linear-attention models (`ValueError: Speculative decoding requires a trimmable prompt cache (got {'ArraysCache'})`). Evaluated 7 configurations across 3 semantic workloads via exact recurrent state-rollback adapter. Confirmed H1–H5: dual-model speculative drafting with a dense 4B draft model on a 35B MoE target causes a severe throughput collapse (64.3 -> 24.5 tok/s, 0.38x at K=1; down to 12.0 tok/s, 0.19x at K=4) and consumes +3,072 MB RAM overhead; proved that 35B MoE sparsity (1.98 GB active bytes/step) renders dense drafting (2.54 GB/step) counterproductive on unified memory; demonstrated 100.000% generative fidelity; established Native MTP (Plan 03-06) as structurally superior to draft-model speculation on Apple Silicon; Phase 3 closed.
 
-### Phase 4: Public Distribution & Packaging (v1.0 Release)
-- [ ] 03-08: Distributable Package & Clean CLI — Package OhYesMLX for public consumption (pip/uv installable, zero hardcoded host paths, self-contained dependencies).
-- [ ] 03-09: Automated Interactive Pareto Visualization — Interactive HTML/SVG Pareto frontier charts linking Speed, Memory, and Quality coordinates across tested configurations.
+### Phase 4: Public Distribution & Packaging (v1.0 Release) — COMPLETE & CLOSED
+- [x] 03-08: Distributable Package & Clean CLI — **Complete 2026-09-20**. Packaged OhYesMLX for public distribution (PEP 621, Hatchling, version 0.3.0, zero external dependencies, `longtext.md` bundled, `--version`/`-V` CLI flags, 504 passing tests).
+- [x] 03-09: Automated Interactive Pareto Visualization — **Complete 2026-09-20**. Built standalone zero-dependency interactive HTML5/SVG visualization (`ohyesmlx/pareto.py`, `results/pareto_frontier.html`) mapping Speed, Memory Footprint, and Quality frontiers across 18 verified configurations, added `ohyesmlx pareto` CLI subcommand, and expanded test suite to 509 passing tests. Phase 4 Closed. Milestone v3 Complete.
+
+---
+
+## Horizon Roadmap: Milestone v3.1 / v4 Candidates
+
+- **Runtime Expansion:** Non-MLX runtime adapters (`llama.cpp` server, `Ollama`) to enable rigorous, single-variable GGUF vs MLX cross-runtime evaluation.
+- **Architectural Coverage:** Support for updated MLX-LM backends (`gemma4_unified`), Vision-Language Models (VLMs), and native MTP heads.
+- **Accuracy Pipeline Integration:** Automated zero-shot / thinking-off downstream task evaluations (MMLU, GSM8k) integrated into the core harness alongside speed and memory.
 
 ---
 *Roadmap created: 2026-09-14*
-*Last updated: 2026-09-20 (Plan 03-07 Complete; Phase 3 Closed; Phase 4 next)*
+*Last updated: 2026-09-20 (Plan 03-09 Complete; Phase 4 Closed; Milestone v3 Complete; Compatibility & Horizon Roadmap Updated)*
+
+

@@ -336,3 +336,69 @@ def test_a_target_the_pin_refuses_exits_two_without_starting_a_run(measure, tmp_
     assert measure.calls == []
     assert not (tmp_path / "results").exists()
     assert "head and the tail" in capsys.readouterr().err
+
+
+def test_cli_version_flag_prints_version_and_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--version"])
+    assert exc_info.value.code == 0
+    assert "ohyesmlx 0.3.0" in capsys.readouterr().out
+
+
+def test_cli_short_version_flag_prints_version_and_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["-V"])
+    assert exc_info.value.code == 0
+    assert "ohyesmlx 0.3.0" in capsys.readouterr().out
+
+
+def test_cli_help_flag_prints_usage_and_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--help"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "usage: ohyesmlx" in out
+    assert "run" in out
+    assert "grid" in out
+    assert "sweep" in out
+    assert "pareto" in out
+
+
+def test_cli_subcommand_help_exits_zero(capsys):
+    for subcmd in ("run", "grid", "sweep", "pareto"):
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main([subcmd, "--help"])
+        assert exc_info.value.code == 0
+        assert f"usage: ohyesmlx {subcmd}" in capsys.readouterr().out
+
+
+
+def test_cli_no_args_exits_two(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([])
+    assert exc_info.value.code == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_cli_unknown_subcommand_exits_two(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["unknown_command"])
+    assert exc_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_package_version_matches():
+    import ohyesmlx
+
+    assert ohyesmlx.__version__ == "0.3.0"
+
+
+def test_package_longtext_resource_exists_and_loads():
+    assert cli.LONGTEXT.exists()
+    assert cli.LONGTEXT.is_file()
+    source = cli.sized_source()
+    assert len(source) > 10000
+    assert "1. Scope. This standard governs" in source
+    assert len(cli.LONGTEXT.read_text(encoding="utf-8")) > 100000
+
+

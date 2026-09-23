@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from ohyesmlx import report, token_counter
+from ohyesmlx import __version__, report, token_counter
 from ohyesmlx.runtimes import CACHE_STATES
 
 STUDIES = report.AXES
@@ -285,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
         return _grid(args)
     if args.command == "sweep":
         return _sweep(args)
+    if args.command == "pareto":
+        return _pareto(args)
     return _run(args)
 
 
@@ -352,6 +354,12 @@ def _parser() -> argparse.ArgumentParser:
         prog="ohyesmlx",
         description="Honest benchmarks for local LLM serving on Apple Silicon. "
         "One variable at a time.",
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -479,7 +487,33 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="also write the sweep here (default: stdout only)",
     )
+
+    pareto = commands.add_parser(
+        "pareto",
+        help="generate interactive HTML/SVG Pareto frontier visualization",
+        description="Generate a standalone, zero-dependency interactive HTML5/SVG visualization "
+        "of the multi-dimensional Pareto frontier across speed, memory footprint, and quality.",
+    )
+    pareto.add_argument(
+        "--out",
+        default="results/pareto_frontier.html",
+        help="path to write the interactive HTML report (default: results/pareto_frontier.html)",
+    )
     return parser
+
+
+def _pareto(args) -> int:
+    """Generate the standalone interactive Pareto frontier visualization."""
+    from ohyesmlx.pareto import save_pareto_html
+
+    try:
+        out_path = save_pareto_html(args.out)
+    except OSError as exc:
+        print(f"ohyesmlx pareto: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"ohyesmlx pareto: wrote interactive visualization to {out_path}")
+    return 0
 
 
 def _grid(args) -> int:

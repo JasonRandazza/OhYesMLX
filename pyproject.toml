@@ -1,10 +1,35 @@
 [project]
 name = "ohyesmlx"
-version = "0.1.0"
+version = "0.3.0"
 description = "Honest benchmarks for local LLM serving on Apple Silicon. One variable at a time."
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
+authors = [
+    { name = "Jason Randazza" },
+]
+keywords = ["apple-silicon", "mlx", "llm", "benchmark", "serving", "quantization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: MacOS X",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Benchmark",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 # Stdlib only. Adding a dependency requires naming, in the commit message, what it replaces.
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/JasonRandazza/OhYesMLX"
+Repository = "https://github.com/JasonRandazza/OhYesMLX"
+Issues = "https://github.com/JasonRandazza/OhYesMLX/issues"
 
 [project.scripts]
 ohyesmlx = "ohyesmlx.cli:main"
@@ -12,6 +37,9 @@ ohyesmlx = "ohyesmlx.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ohyesmlx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
