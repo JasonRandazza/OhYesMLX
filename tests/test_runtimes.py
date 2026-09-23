@@ -349,6 +349,14 @@ def test_optiq_start_command_is_pinned():
         "--context-scale",
         "1.0",
         "--no-stream-experts",
+        "--temp",
+        "0",
+        "--top-p",
+        "1",
+        "--top-k",
+        "0",
+        "--min-p",
+        "0",
     )
 
 
@@ -372,6 +380,26 @@ def test_omlx_catalog_token_is_in_the_command_and_carried_through_the_scratch(ar
         "127.0.0.1",
     )
     assert command[-3:] == ("--memory-guard", "off", "--no-cache")
+
+
+def test_create_omlx_scratch_removes_partial_root_on_failure(monkeypatch, artifact, tmp_path):
+    root = tmp_path / "scratch-root"
+
+    def make_root(**kwargs):
+        root.mkdir()
+        return str(root)
+
+    monkeypatch.setattr(runtimes.tempfile, "mkdtemp", make_root)
+
+    def fail_link(*args, **kwargs):
+        raise OSError("symlink failed")
+
+    monkeypatch.setattr(Path, "symlink_to", fail_link)
+
+    with pytest.raises(OSError, match="symlink failed"):
+        create_omlx_scratch(artifact, "gemma-4-12B-it-qat-4bit")
+
+    assert not root.exists()
 
 
 def test_omlx_injects_a_per_run_catalog_a_base_path_and_a_key(artifact):
@@ -505,7 +533,8 @@ TODAY = {
         "optiq", "serve", "--model", ARTIFACT, "--host", "127.0.0.1", "--port", "8080",
         "--no-anthropic", "--no-responses", "--no-auth", "--max-context", "off",
         "--max-concurrent", "1", "--idle-timeout", "0", "--context-scale", "1.0",
-        "--no-stream-experts",
+        "--no-stream-experts", "--temp", "0", "--top-p", "1", "--top-k", "0",
+        "--min-p", "0",
     ),
     "vmlx": (
         "vmlx", "serve", ARTIFACT, "--host", "127.0.0.1", "--port", "8000",
@@ -845,6 +874,65 @@ def test_start_refuses_a_port_this_run_does_not_own(rig):
     assert rig.commands == []
 
 
+def test_start_refuses_when_process_inspection_is_unavailable(rig):
+    rig.results[("ps", "-axo", "pid=,args=")] = None
+
+    with pytest.raises(RuntimeStartError, match="could not inspect running processes"):
+        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert rig.commands == []
+
+
+def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatch):
+    app = "/Applications/osaurus.app/Contents/MacOS/osaurus"
+    rig.results[("ps", "-axo", "pid=,args=")] = _completed(
+        stdout=f"111 {app} --serve\n222 osaurus mcp\n333 /tmp/osaurus\n"
+    )
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 111)
+
+    with pytest.raises(RuntimeStartError) as raised:
+        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert "111" in str(raised.value)
+    assert "222" not in str(raised.value)
+    assert rig.commands == []
+    assert ("ps", "-axo", "pid=,args=") in rig.ran
+
+
+def test_start_does_not_match_osaurus_mcp_or_other_binary(rig, monkeypatch):
+    rig.results[("ps", "-axo", "pid=,args=")] = _completed(
+        stdout="222 osaurus mcp\n333 /tmp/osaurus\n"
+    )
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid > 4242)
+    rig.inventory = (HF_ID,)
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert handle.model_id == HF_ID
+    assert rig.commands
+
+
+def test_start_surfaces_cleanup_failure_chained_from_start_error(rig, monkeypatch):
+    start_error = RuntimeStartError("readiness failed")
+
+    def fail_ready(self, **kwargs):
+        raise start_error
+
+    monkeypatch.setattr(runtimes.Runtime, "await_ready", fail_ready)
+
+    def fail_shutdown(*args, **kwargs):
+        raise RuntimeStopError("cleanup failed")
+
+    monkeypatch.setattr(runtimes, "_shutdown", fail_shutdown)
+
+    with pytest.raises(RuntimeStopError) as raised:
+        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert "cleanup failed" in str(raised.value)
+    assert "readiness failed" in str(raised.value)
+    assert raised.value.__cause__ is start_error
+
+
 def test_start_reports_the_servers_error_and_still_frees_the_port(rig):
     rig.log = "Traceback (most recent call last):\nOSError: disk full\n"
     # Free at the ownership probe, then lingering while the killed server lets go.
@@ -951,6 +1039,23 @@ def test_stop_does_not_return_while_the_port_is_still_held(rig):
     assert rig.signals == [(rig.next_pid, signal.SIGTERM)]
 
 
+def test_stop_raises_if_spawned_pid_survives_sigkill(rig, monkeypatch):
+    rig.alive[777] = True
+    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: None)
+    monkeypatch.setattr(runtimes, "_await_exit", lambda pid, timeout_s: False)
+    handle = Handle(
+        pid=777,
+        port=8081,
+        base_url="http://127.0.0.1:8081/v1",
+        model_id=HF_ID,
+        version="0.31.3",
+        cold_load_s=1.0,
+    )
+
+    with pytest.raises(RuntimeStopError, match="777.*SIGKILL"):
+        handle.stop()
+
+
 def test_stop_escalates_to_sigkill_when_sigterm_is_ignored(rig):
     rig.term_kills = False
     handle = Handle(
@@ -967,6 +1072,17 @@ def test_stop_escalates_to_sigkill_when_sigterm_is_ignored(rig):
 
     assert [sig for _pid, sig in rig.signals] == [signal.SIGTERM, signal.SIGKILL]
     assert rig.alive[777] is False
+
+
+def test_stop_refuses_handoff_cleanup_when_listener_probe_is_unavailable(rig):
+    handle = osaurus_handle()
+    rig.run_unavailable = True
+
+    with pytest.raises(RuntimeStopError) as raised:
+        handle.stop()
+
+    assert "cannot identify listeners" in str(raised.value)
+    assert rig.ran == [listener_probe(1337)]
 
 
 def test_stop_runs_the_runtimes_own_stop_command(rig):
@@ -1124,9 +1240,14 @@ def test_listener_pids_name_the_process_holding_the_port():
     assert runtimes._listener_pids(port) == ()
 
 
-def test_listener_pids_of_an_unrunnable_lsof_is_empty_rather_than_a_guess(monkeypatch):
+def test_listener_pids_of_an_unrunnable_lsof_is_unknown(monkeypatch):
     monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: None)
-    assert runtimes._listener_pids(8081) == ()
+    assert runtimes._listener_pids(8081) is None
+
+
+def test_serving_pid_keeps_spawned_pid_when_listener_probe_is_unavailable(monkeypatch):
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: None)
+    assert runtimes._serving_pid(4242, 8081) == 4242
 
 
 def test_await_port_free_returns_immediately_when_nothing_listens(rig):
@@ -1271,6 +1392,21 @@ def test_describe_drift_names_the_key_the_baseline_and_the_host():
     assert "host False" in text
 
 
+def test_baseline_missing_returns_none_but_existing_invalid_data_raises_value_error(tmp_path):
+    absent = tmp_path / "absent.json"
+    assert osaurus_settings.load_baseline(absent) is None
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not json")
+    with pytest.raises(ValueError, match=str(invalid)):
+        osaurus_settings.load_baseline(invalid)
+
+    wrong_shape = tmp_path / "wrong-shape.json"
+    wrong_shape.write_text('{"settings": []}')
+    with pytest.raises(ValueError, match=str(wrong_shape)):
+        osaurus_settings.load_baseline(wrong_shape)
+
+
 def test_baseline_round_trips_through_a_file(tmp_path, osaurus_config):
     path = tmp_path / "baseline.json"
     written = osaurus_settings.write_baseline(path, osaurus_config)
@@ -1288,6 +1424,17 @@ def test_the_checked_in_baseline_is_readable_and_complete():
         for filename, dotted in osaurus_settings.TRACKED_KEYS
     }
     assert osaurus_settings.UNREADABLE not in baseline.values()
+
+
+def test_osaurus_refuses_to_start_when_existing_baseline_is_invalid(rig, monkeypatch, tmp_path):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("not json")
+    monkeypatch.setattr(runtimes, "load_baseline", lambda: osaurus_settings.load_baseline(baseline))
+
+    with pytest.raises(RuntimeStartError, match=str(baseline)):
+        RUNTIMES["osaurus"].start(ARTIFACT, "ornith-1.0-35b-jang_4m")
+
+    assert rig.commands == []
 
 
 def test_osaurus_refuses_to_start_when_the_host_drifted_from_the_baseline(
@@ -1329,6 +1476,24 @@ def test_osaurus_starts_when_the_settings_match_the_baseline(rig, monkeypatch):
     assert handle.version == "0.25.3"
     assert handle.model_id == "ornith-1.0-35b-jang_4m"
     assert handle.stop_command == ("osaurus", "stop")
+
+
+def test_baseline_missing_file_returns_none_but_existing_unreadable_file_raises(tmp_path, monkeypatch):
+    absent = tmp_path / "absent.json"
+    assert osaurus_settings.load_baseline(absent) is None
+
+    unreadable = tmp_path / "unreadable.json"
+    unreadable.write_text('{}')
+    original_read_text = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == unreadable:
+            raise PermissionError("denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    with pytest.raises(ValueError, match=str(unreadable)):
+        osaurus_settings.load_baseline(unreadable)
 
 
 def test_osaurus_starts_when_no_baseline_has_been_recorded(rig, monkeypatch):

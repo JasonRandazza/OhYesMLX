@@ -15,11 +15,11 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — COMPLETE & CLOSED
-Phase: 4 (Public Distribution & Packaging) — COMPLETE & CLOSED (2/2 plans complete)
-Plan: Plan 03-09 — REVERTED 2026-09-23 (Decision 117); 03-08 stands
-Status: pareto removed (D117); duplicate/dead-code trim done (D118). Next: tag v0.3.0. 497 tests pass.
-Last activity: 2026-09-23 — Phase 4 committed and pushed; `pareto` removed (Decision 117).
+Milestone: v3.1 — Hardening (0.3.1) — IN PROGRESS. v0.3.0 released 2026-09-23.
+Phase: 1 (Correctness & residency fixes) — IN PROGRESS
+Plan: from the deep review, `.paul/review/2026-09-23/SUMMARY.md` (IDs A1–F below refer to it)
+Status: review verified (38 confirmed, 1 fabricated, 3 not defects); Decisions 119–121 recorded. 497 tests pass.
+Last activity: 2026-09-23 — deep review complete; hardening Phase 1 dispatch.
 
 Progress:
 - Milestone: [██████████] 100%
@@ -116,6 +116,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 116: Plan 03-09 Automated Interactive Pareto Visualization delivers standalone zero-dependency HTML5/SVG interactive visualization (results/pareto_frontier.html) linking Speed, Memory Footprint, and Quality frontiers across 18 configurations; adds ohyesmlx pareto CLI command; 509 tests pass | Milestone v3 Phase 4 | **SUPERSEDED by Decision 117.** |
 | Decision 117: Remove `ohyesmlx pareto` before v0.3.0 | Release prep 2026-09-23 | Its memory frontier ranked `peak_mb` across runtimes, which footprint accounting forbids (Osaurus 13.3 GB vs vMLX 20.5 GB at 35B is accounting, not efficiency), and it shipped a hand-copied, rounded table (20,480→20500, 13,312→13300, 19,456→19000) instead of reading results. Candidate for next milestone as `pareto <run_dirs>` built from results.jsonl, within-runtime memory only. |
 | Decision 118: Retire the ~1,000-line target; trim duplicates instead | Release prep 2026-09-23 | Size itself affects nothing measured; duplicates and dead signals do. One formula definition (report asks measure, which now refuses a negative ITL), one disk-size walk, merged join guards, `_join` in cli; removed import scaffolding, powermetrics sampling (never produced data on this host), the never-evaluated `fits` floor, unreachable transport branch. AGENTS.md now says: one definition of everything, each rationale once, ask before a new module/subcommand/pin. Package 6,619 → 6,378 lines; 497 tests. Prose dedupe (audit item 1) deferred. |
+| Decision 119: Reasoning-channel timing is kept and labelled | Hardening 2026-09-23 | A response that streams only (or mirrors) reasoning is timed on the stream it produced, and every such row says "timed on reasoning channel". AGENTS.md's TTFT definition is amended to match; docs/interfaces.md already described it. Review A5. |
+| Decision 120: No cross-runtime ranking on non-comparable metrics | Hardening 2026-09-23 | Runtime-axis readings for a metric in `CROSS_RUNTIME_UNCOMPARABLE` (`peak_mb`, `cold_load_s`) print the numbers but no ordering. Format-axis (within-runtime) ordering is unchanged. Matches AGENTS.md. Review A7. |
+| Decision 121: v3 script-based findings are annotated now, re-run later | Hardening 2026-09-23 | The KV-quant, multi-turn, native-MTP, expert-streaming and speculative papers used probe-script formulas that differ from the harness (review A3/A4). Each gets a caveat naming the formula and why it is not comparable with harness figures; re-running them through the harness is a later hardening phase. |
 
 ### Deferred Issues
 
@@ -154,7 +157,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-23 (Claude Opus coordinator)
 Stopped at: Phase 4 pushed; `pareto` removed (Decision 117); 504 tests pass.
-Next action: tag v0.3.0 → GitHub release → graphify. Deferred: audit item 1 (prose dedupe).
+Next action: hardening Phase 1 (review A1, A2, B1–B4, C1–C4, A6, D2, E1–E3), then Phase 2 (A5 label, A7 refusal, D1, D3), Phase 3 (v3 paper caveats, docs drift F), Phase 4 (re-run v3 script studies through the harness).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

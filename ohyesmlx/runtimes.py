@@ -78,6 +78,8 @@ LOG_TAIL_BYTES = 1024 * 1024
 
 LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
+OSAURUS_EXECUTABLE = "/Applications/osaurus.app/Contents/MacOS/osaurus"
+_RUN_STARTED_PIDS: set[int] = set()
 
 # The two states the cache pin may take. `None` is not a third state: it is the absence of the
 # pin, and it must never read as "off" -- the runs measured before the pin existed ran each
@@ -203,6 +205,23 @@ def _process_alive(pid: int) -> bool:
     return True
 
 
+def _resident_osaurus_pids() -> tuple[int, ...]:
+    result = _run(("ps", "-axo", "pid=,args="), STOP_TIMEOUT_S)
+    if result is None:
+        raise RuntimeStartError(
+            "could not inspect running processes for resident Osaurus app instances"
+        )
+    pids = []
+    for line in result.stdout.splitlines():
+        pid_text, _, argv = line.strip().partition(" ")
+        argv0 = argv.split(maxsplit=1)[:1]
+        if pid_text.isdigit() and argv0 and argv0[0] == OSAURUS_EXECUTABLE:
+            pid = int(pid_text)
+            if pid not in _RUN_STARTED_PIDS and _process_alive(pid):
+                pids.append(pid)
+    return tuple(pids)
+
+
 def _signal_tree(pid: int, sig: int) -> None:
     try:
         os.killpg(os.getpgid(pid), sig)
@@ -243,7 +262,7 @@ def _port_is_free(port: int) -> bool:
     return not result.stdout.strip()
 
 
-def _listener_pids(port: int) -> tuple[int, ...]:
+def _listener_pids(port: int) -> tuple[int, ...] | None:
     """The pids listening on *port* right now, per ``lsof -t``.
 
     This is how a process a runtime's launcher handed off to is named. ``osaurus serve``
@@ -257,9 +276,7 @@ def _listener_pids(port: int) -> tuple[int, ...]:
     """
     result = _run((LSOF, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"), STOP_TIMEOUT_S)
     if result is None:
-        # Unverifiable is "no process named", not "nothing is running": the port check every
-        # stop also makes refuses to treat an unanswerable lsof as free.
-        return ()
+        return None
     return tuple(
         dict.fromkeys(
             int(line) for line in result.stdout.split() if line.strip().isdigit()
@@ -281,7 +298,7 @@ def _serving_pid(spawned: int, port: int) -> int:
     port is not a licence to sample a stranger's memory and publish it as this cell's.
     """
     listeners = _listener_pids(port)
-    if len(listeners) == 1 and spawned not in listeners:
+    if listeners is not None and len(listeners) == 1 and spawned not in listeners:
         return listeners[0]
     return spawned
 
@@ -456,13 +473,17 @@ def create_omlx_scratch(artifact_dir: str, model_id: str) -> OmlxScratch:
     if not artifact.is_dir():
         raise RuntimeStartError(f"artifact is not a directory: {artifact_dir}")
     root = Path(tempfile.mkdtemp(prefix="ohyesmlx-omlx-"))
-    catalog = root / OMLX_CATALOG_DIRNAME
-    base = root / OMLX_BASE_DIRNAME
-    catalog.mkdir()
-    base.mkdir()
-    link_name = omlx_link_name(artifact_dir, model_id)
-    (catalog / link_name).symlink_to(artifact, target_is_directory=True)
-    return OmlxScratch(root=root, catalog=catalog, base=base, link_name=link_name)
+    try:
+        catalog = root / OMLX_CATALOG_DIRNAME
+        base = root / OMLX_BASE_DIRNAME
+        catalog.mkdir()
+        base.mkdir()
+        link_name = omlx_link_name(artifact_dir, model_id)
+        (catalog / link_name).symlink_to(artifact, target_is_directory=True)
+        return OmlxScratch(root=root, catalog=catalog, base=base, link_name=link_name)
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
 
 
 def remove_omlx_catalog(catalog: Path) -> None:
@@ -551,13 +572,22 @@ def _shutdown(pid: int, port: int, stop_command: tuple[str, ...] = ()) -> None:
     on its own pid rather than as a group (see :func:`_signal_process`).
     """
     listeners = _listener_pids(port)
+    if listeners is None and stop_command:
+        raise RuntimeStopError(
+            f"cannot identify listeners on port {port}; refusing handoff cleanup"
+        )
+    if listeners is None:
+        listeners = ()
     if stop_command:
         _run(stop_command, STOP_TIMEOUT_S)
     if _process_alive(pid):
         _signal_tree(pid, signal.SIGTERM)
         if not _await_exit(pid, TERM_GRACE_S):
             _signal_tree(pid, signal.SIGKILL)
-            _await_exit(pid, KILL_GRACE_S)
+            if not _await_exit(pid, KILL_GRACE_S):
+                raise RuntimeStopError(
+                    f"spawned process {pid} is still alive {KILL_GRACE_S:g}s after SIGKILL"
+                )
     _kill_resident(tuple(other for other in listeners if other != pid))
     await_port_free(port)
 
@@ -600,6 +630,9 @@ class Handle:
     def stop(self) -> None:
         """Stop the runtime. Does not return until the port is free."""
         _shutdown(self.pid, self.port, self.stop_command)
+        _RUN_STARTED_PIDS.discard(self.pid)
+        if self.serving_pid is not None:
+            _RUN_STARTED_PIDS.discard(self.serving_pid)
         _remove_scratch(self.scratch)
 
 
@@ -690,7 +723,7 @@ class Runtime:
         complaint = "no inventory yet"
         while True:
             _raise_on_log_error(self.name, log_path)
-            if not _process_alive(pid) and not _listener_pids(self.port):
+            if not _process_alive(pid) and _listener_pids(self.port) == ():
                 raise RuntimeStartError(
                     f"{self.name} exited before it served {candidates[0]!r} "
                     f"(log: {log_path})"
@@ -736,6 +769,12 @@ class Runtime:
                 f"port {self.port} is already held by a listener this run did not "
                 f"start; refusing to start {self.name} over it"
             )
+        resident_osaurus = _resident_osaurus_pids()
+        if resident_osaurus:
+            raise RuntimeStartError(
+                "resident Osaurus app process(es) not started by this run: "
+                + ", ".join(str(pid) for pid in resident_osaurus)
+            )
         self.check_host_state()
         command, scratch = self.build_command(artifact_dir, model_id, cache_state=cache_state)
         log_path = _log_path(self.name)
@@ -750,16 +789,20 @@ class Runtime:
                 model_id=model_id,
             )
             version = self.version()
-        except BaseException:
-            # A start that failed still owns a process, and that process may hold the
-            # port. Its own error is the one worth reporting, so cleanup is silent.
+        except BaseException as start_error:
             if pid is not None:
                 try:
                     _shutdown(pid, self.port, self.stop_command())
-                except RuntimeLifecycleError:
-                    pass
+                except RuntimeLifecycleError as cleanup_error:
+                    _remove_scratch(scratch)
+                    raise RuntimeStopError(
+                        f"start failed: {start_error}; cleanup failed: {cleanup_error}"
+                    ) from start_error
             _remove_scratch(scratch)
             raise
+        _RUN_STARTED_PIDS.add(pid)
+        serving_pid = _serving_pid(pid, self.port)
+        _RUN_STARTED_PIDS.add(serving_pid)
         return Handle(
             pid=pid,
             port=self.port,
@@ -911,7 +954,10 @@ class Osaurus(Runtime):
         No recorded baseline means no gate: a fresh checkout should not be unable to run,
         and an operator who has not recorded a baseline has not yet claimed one.
         """
-        baseline = load_baseline()
+        try:
+            baseline = load_baseline()
+        except ValueError as error:
+            raise RuntimeStartError(str(error)) from error
         if baseline is None:
             return
         drift = diff_against_baseline(capture_osaurus_settings(), baseline)
@@ -1015,6 +1061,14 @@ class Optiq(Runtime):
             # 0.70 * total_RAM; identical weights then decode ~5x slower with nothing in
             # the artifact explaining it. Pin it off; never leave it auto.
             "--no-stream-experts",
+            "--temp",
+            "0",
+            "--top-p",
+            "1",
+            "--top-k",
+            "0",
+            "--min-p",
+            "0",
             # The cache pin, under the same flag stock mlx-lm takes: optiq serve forwards
             # what it does not know to the mlx_lm.server underneath it.
             *prompt_cache_flags(cache_state),

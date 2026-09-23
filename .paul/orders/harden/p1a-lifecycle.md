@@ -1,0 +1,11 @@
+GOAL: Close the silent one-model-resident and cleanup holes found by the 2026-09-23 review (.paul/review/2026-09-23/SUMMARY.md, items B1-B4, C3, C4, A6). Behaviour on the happy path must not change.
+FILES: ohyesmlx/runtimes.py, ohyesmlx/osaurus_settings.py, ohyesmlx/sample.py, tests/test_runtimes.py, tests/test_sample.py (and tests/test_osaurus_settings.py only if it exists). Touch nothing else.
+ITEMS:
+(B1) Before ANY Runtime.start spawns, refuse (RuntimeStartError naming the pids) if a process whose argv[0] matches ^/Applications/osaurus.app/Contents/MacOS/osaurus is alive and is not a listener this run started. Match by full executable path only, NEVER by the name "osaurus" (Jason's `osaurus mcp` must never match). Refuse; do not kill. Use `ps -axo pid=,args=` via the existing _run helper.
+(B2) _listener_pids: return None (not ()) when lsof cannot be run. _shutdown must raise RuntimeStopError when it is None and the runtime has a stop_command (a launcher that hands off). _serving_pid keeps the spawned pid on None.
+(B3) Runtime.start: if cleanup after a failed start raises RuntimeLifecycleError, raise RuntimeStopError (chained from the start error, message naming both) instead of swallowing it.
+(B4) _shutdown: raise RuntimeStopError if the spawned pid is still alive after the post-SIGKILL _await_exit.
+(C3) osaurus_settings.load_baseline: a missing file still returns None; a file that exists but is unreadable, not JSON, or has no "settings" dict raises ValueError naming the path. Osaurus.check_host_state turns that into RuntimeStartError.
+(C4) create_omlx_scratch removes its temp root if anything after mkdtemp raises. Sampler.stop(): if the thread is still alive after join, set result["error"] saying so and keep self._thread (do not drop the reference).
+(A6) Optiq.start_command: add "--temp", "0", "--top-p", "1", "--top-k", "0", "--min-p", "0" (see docs/runtimes/optiq.md: OptiQ injects generation_config.json sampler flags unless they are already in argv). Update the pinned-command test.
+ACCEPTANCE: one test per item that fails without the change (red-check each and report it). `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` green, baseline 497; report the new count. `git diff --stat` only the files above.

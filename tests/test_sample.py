@@ -242,6 +242,28 @@ def test_vmmap_split_on_a_dead_pid_degrades():
     assert split["dirty_mb"] is None
 
 
+def test_sampler_retains_a_thread_that_does_not_join(monkeypatch):
+    sampler = Sampler(1)
+
+    class StillAlive:
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return True
+
+    thread = StillAlive()
+    sampler._thread = thread
+    monkeypatch.setattr(sample_mod, "vmmap_split", lambda pid: {})
+    monkeypatch.setattr(sample_mod, "gpu_wired_limit", lambda: {})
+    monkeypatch.setattr(sample_mod, "FOOTPRINT_TIMEOUT_S", 0)
+
+    result = sampler.stop()
+
+    assert result["error"] == "sampling thread for pid 1 is still alive after join"
+    assert sampler._thread is thread
+
+
 def test_sampler_stops_itself_when_the_process_goes_away():
     sampler = Sampler(_pid_of_exited_process(), interval_s=0.05).start()
     time.sleep(0.5)

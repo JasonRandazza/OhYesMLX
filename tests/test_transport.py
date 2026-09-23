@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from ohyesmlx.transport import Observation, chat
+from ohyesmlx.transport import Observation, chat, timing_channel
 from test_token_counter import FixedMapTokenCounter
 
 MESSAGES = [{"role": "user", "content": "hi"}]
@@ -35,6 +35,9 @@ class SseHandler(BaseHTTPRequestHandler):
     framing = "content-length"
     events: list[tuple[float, bytes]] = []
     pre_body_delay_s = 0.0
+    status = 200
+    content_type = "text/event-stream"
+    stall_after_headers_s = 0.0
     chunk_bytes = 24
     posted: list[dict] = []
     authorization: list[str | None] = []
@@ -47,8 +50,8 @@ class SseHandler(BaseHTTPRequestHandler):
         SseHandler.posted.append(json.loads(self.rfile.read(length)))
         SseHandler.authorization.append(self.headers.get("Authorization"))
         chunked = SseHandler.framing == "chunked"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
+        self.send_response(SseHandler.status)
+        self.send_header("Content-Type", SseHandler.content_type)
         if chunked:
             self.send_header("Transfer-Encoding", "chunked")
         else:
@@ -62,6 +65,8 @@ class SseHandler(BaseHTTPRequestHandler):
         # Headers are already on the wire here: the delay below is a gap between
         # the response headers and the first byte of the body, which is what
         # OptiQ's prompt-processing keepalives look like.
+        if SseHandler.stall_after_headers_s:
+            time.sleep(SseHandler.stall_after_headers_s)
         if SseHandler.pre_body_delay_s:
             time.sleep(SseHandler.pre_body_delay_s)
         for delay, piece in SseHandler.events:
@@ -93,12 +98,18 @@ class SseServer:
         *events: tuple[float, bytes],
         framing: str = "content-length",
         pre_body_delay_s: float = 0.0,
+        status: int = 200,
+        content_type: str = "text/event-stream",
+        stall_after_headers_s: float = 0.0,
     ) -> None:
         """Queue one stream. Each event's delay is slept before that event is written, so
         the delays are cumulative: ``(0.0, a), (0.2, b)`` writes ``b`` 0.2s after ``a``."""
         SseHandler.events = list(events)
         SseHandler.framing = framing
         SseHandler.pre_body_delay_s = pre_body_delay_s
+        SseHandler.status = status
+        SseHandler.content_type = content_type
+        SseHandler.stall_after_headers_s = stall_after_headers_s
         SseHandler.posted = []
         SseHandler.authorization = []
 
@@ -844,3 +855,93 @@ def test_truncated_sse_line_is_a_framing_error(server):
 
     assert observation.ok is False
     assert observation.error == "unsupported SSE framing"
+
+
+def test_one_content_delta_has_an_exact_zero_timing_window(server):
+    server.respond((0.0, _content("whole reply")), (0.0, _stop()), (0.0, DONE))
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert observation.last_content_s == observation.ttft_s
+    assert timing_channel(observation) == "content"
+
+
+@pytest.mark.parametrize(
+    ("events", "expected_channel"),
+    [
+        (
+            [
+                (0.0, _reasoning(OMLX_MIRRORED)),
+                (0.0, _content(OMLX_MIRRORED)),
+                (0.0, _stop()),
+                (0.0, DONE),
+            ],
+            "reasoning",
+        ),
+        (
+            [(0.0, _reasoning("reasoning only")), (0.0, _stop()), (0.0, DONE)],
+            "reasoning",
+        ),
+        ([(0.0, _content("content")), (0.0, _stop()), (0.0, DONE)], "content"),
+    ],
+)
+def test_observation_labels_the_channel_that_supplied_timings(
+    server, events, expected_channel
+):
+    server.respond(*events)
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok, observation.error
+    assert timing_channel(observation) == expected_channel
+
+
+def test_timing_channel_is_derived_so_old_records_answer_too():
+    """No stored field: a record written before 2026-09-23 has the same two texts."""
+    def obs(text, reasoning):
+        return Observation(ok=True, error=None, ttft_s=0.1, last_content_s=0.2, total_s=0.3,
+                           prompt_tokens=1, completion_tokens=2, reasoning_tokens=None,
+                           content_event_count=2, text=text, token_source="usage",
+                           reasoning_text=reasoning)
+
+    assert timing_channel(obs("answer", "")) == "content"
+    assert timing_channel(obs("answer", "thinking")) == "content"
+    assert timing_channel(obs("", "thinking")) == "reasoning"       # reasoning-only
+    assert timing_channel(obs("mirror", "mirror")) == "reasoning"   # oMLX mirroring
+    assert "timing_channel" not in {f.name for f in dataclasses.fields(Observation)}
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "expected_error"),
+    [
+        (401, "text/event-stream", "chat request returned HTTP 401"),
+        (500, "text/event-stream", "chat request returned HTTP 500"),
+        (200, "application/json", "chat response is not an SSE stream"),
+    ],
+)
+def test_http_status_and_content_type_errors_are_reported(
+    server, status, content_type, expected_error
+):
+    server.respond(
+        status=status,
+        content_type=content_type,
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok is False
+    assert observation.error == expected_error
+
+
+def test_headers_then_stall_respects_request_deadline(server):
+    server.respond(stall_after_headers_s=2.0)
+
+    started = time.monotonic()
+    observation = chat(
+        server.base_url, "model", MESSAGES, max_tokens=16, timeout_s=1.0
+    )
+
+    assert observation.ok is False
+    assert observation.error == "request timed out"
+    assert time.monotonic() - started < 3.0

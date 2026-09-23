@@ -66,6 +66,18 @@ class Observation:
     reasoning_text: str = ""
 
 
+def timing_channel(observation) -> str:
+    """Which stream an observation's TTFT and decode window were timed on.
+
+    ``"reasoning"`` when the runtime mirrored its reasoning into content or never reached
+    content, which is when :func:`chat` times the reasoning deltas; ``"content"`` otherwise.
+    Derived from the two texts rather than stored, so a record written before this existed
+    answers the same way as a new one.
+    """
+    reasoning, text = observation.reasoning_text, observation.text
+    return "reasoning" if reasoning and (reasoning == text or not text) else "content"
+
+
 def _parts(base_url: str) -> tuple[str, int, str]:
     normalized = base_url.rstrip("/")
     parsed = urlparse(normalized)
@@ -299,9 +311,10 @@ def chat(
                         last_reasoning = arrived
                     delta = delta_obj.get("content")
                     if delta:
+                        arrived = time.monotonic()
                         if first_token is None:
-                            first_token = time.monotonic()
-                        last_content = time.monotonic()
+                            first_token = arrived
+                        last_content = arrived
                         content_event_count += 1
                         content.append(str(delta))
                 usage = event.get("usage")

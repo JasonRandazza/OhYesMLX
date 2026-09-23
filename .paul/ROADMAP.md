@@ -277,4 +277,12 @@ concurrency finding that fell out along the way.
 *Roadmap created: 2026-09-14*
 *Last updated: 2026-09-20 (Plan 03-09 Complete; Phase 4 Closed; Milestone v3 Complete; Compatibility & Horizon Roadmap Updated)*
 
+## Milestone v3.1: Hardening (0.3.1) — IN PROGRESS
+
+Source: deep review 2026-09-23, `.paul/review/2026-09-23/SUMMARY.md`. IDs refer to it.
+
+- [ ] Phase 1: Correctness & residency. A1 (no figures on FAIL rows), A2 (single-delta timestamps; delta domain in measure), B1–B4 (stale Osaurus sweep by executable path; lsof failure; swallowed cleanup; post-SIGKILL wait), C1–C4 (persist partial visits; start/try gap; unreadable baseline fails closed; sampler/scratch/tmp), A6 (OptiQ sampler flags pinned), D2 (harness revision in header), E1–E3 (tests that can fail).
+- [ ] Phase 2: Contract decisions. A5 label (Decision 119), A7 refusal (Decision 120), D1 end-to-end latency percentiles, D3 unknown versions refused by the join.
+- [ ] Phase 3: Research & docs integrity. Caveats on the script-based v3 papers (Decision 121); probe_grid LOADS requires coherence (A4); docs/interfaces.md and README drift (F).
+- [ ] Phase 4: Re-run the v3 script-based studies through the harness.
 

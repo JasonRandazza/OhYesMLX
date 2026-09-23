@@ -282,7 +282,10 @@ class Sampler:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=FOOTPRINT_TIMEOUT_S + 1.0)
-            self._thread = None
+            if self._thread.is_alive():
+                self.error = f"sampling thread for pid {self.pid} is still alive after join"
+            else:
+                self._thread = None
 
         samples = list(self.samples)
         peak_mb = max((s["mb"] for s in samples), default=None)

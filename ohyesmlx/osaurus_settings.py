@@ -101,11 +101,19 @@ def load_baseline(path: Path | None = None) -> dict[str, object] | None:
     """Return the recorded baseline, or None when none has been recorded."""
     target = path if path is not None else BASELINE_PATH
     try:
-        payload = json.loads(target.read_text())
-    except (OSError, ValueError):
+        text = target.read_text()
+    except FileNotFoundError:
         return None
+    except OSError as error:
+        raise ValueError(f"invalid Osaurus baseline at {target}: {error}") from error
+    try:
+        payload = json.loads(text)
+    except ValueError as error:
+        raise ValueError(f"invalid Osaurus baseline at {target}: {error}") from error
     settings = payload.get("settings") if isinstance(payload, dict) else None
-    return settings if isinstance(settings, dict) else None
+    if not isinstance(settings, dict):
+        raise ValueError(f"invalid Osaurus baseline at {target}: missing settings object")
+    return settings
 
 
 def write_baseline(
