@@ -263,7 +263,7 @@ concurrency finding that fell out along the way.
 
 ### Phase 4: Public Distribution & Packaging (v1.0 Release) — COMPLETE & CLOSED
 - [x] 03-08: Distributable Package & Clean CLI — **Complete 2026-09-20**. Packaged OhYesMLX for public distribution (PEP 621, Hatchling, version 0.3.0, zero external dependencies, `longtext.md` bundled, `--version`/`-V` CLI flags, 504 passing tests).
-- [x] 03-09: Automated Interactive Pareto Visualization — **Complete 2026-09-20**. Built standalone zero-dependency interactive HTML5/SVG visualization (`ohyesmlx/pareto.py`, `results/pareto_frontier.html`) mapping Speed, Memory Footprint, and Quality frontiers across 18 verified configurations, added `ohyesmlx pareto` CLI subcommand, and expanded test suite to 509 passing tests. Phase 4 Closed. Milestone v3 Complete.
+- [~] 03-09: Automated Interactive Pareto Visualization — **REVERTED 2026-09-23 (Decision 117): ranked memory across runtimes from a hand-copied table; removed before release.** Superseded text follows. Built standalone zero-dependency interactive HTML5/SVG visualization (`ohyesmlx/pareto.py`, `results/pareto_frontier.html`) mapping Speed, Memory Footprint, and Quality frontiers across 18 verified configurations, added `ohyesmlx pareto` CLI subcommand, and expanded test suite to 509 passing tests. Phase 4 Closed. Milestone v3 Complete.
 
 ---
 

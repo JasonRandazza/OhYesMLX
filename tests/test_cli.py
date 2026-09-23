@@ -361,11 +361,10 @@ def test_cli_help_flag_prints_usage_and_exits_zero(capsys):
     assert "run" in out
     assert "grid" in out
     assert "sweep" in out
-    assert "pareto" in out
 
 
 def test_cli_subcommand_help_exits_zero(capsys):
-    for subcmd in ("run", "grid", "sweep", "pareto"):
+    for subcmd in ("run", "grid", "sweep"):
         with pytest.raises(SystemExit) as exc_info:
             cli.main([subcmd, "--help"])
         assert exc_info.value.code == 0

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from ohyesmlx import cli, measure, pareto, report
+from ohyesmlx import cli, measure, report
 
 # --- stand-ins for docs/interfaces.md (measure.py, issue #5) -------------------------------
 
@@ -1511,16 +1511,16 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
     # --study axis -- if it selected cells, one --cells could vary three things at once.
     selectors = {flag for flag in flags if flag in {"--cells"}}
     assert selectors == {"--cells"}
-    # `run` says which cells to measure with --cells and nothing else. `grid`, `sweep`, and
-    # `pareto` are not a second way to say that: they join or visualize runs that already exist,
-    # start no runtime and measure nothing -- so the selector count for a *run* is still one.
-    assert set(subcommands.choices) == {"run", "grid", "sweep", "pareto"}
-
+    # `run` says which cells to measure with --cells and nothing else. `grid` and `sweep` are
+    # not a second way to say that: both join run directories that already exist, start no
+    # runtime and measure nothing -- and `sweep`'s `--varying` names a header pin, never a cell
+    # -- so the selector count for a *run* is still one.
+    assert set(subcommands.choices) == {"run", "grid", "sweep"}
 
 
 def test_modules_stay_on_the_standard_library():
     allowed = set(sys.stdlib_module_names) | {"ohyesmlx"}
-    for module in (report, cli, pareto):
+    for module in (report, cli):
         tree = ast.parse(Path(module.__file__).read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

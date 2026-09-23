@@ -11,15 +11,15 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** Milestone v3 Complete (Phase 4 Closed; Plans 03-08 & 03-09 Complete)
+**Current focus:** v0.3.0 release prep — code-size reduction before tagging (Decision 117 removed `pareto`)
 
 ## Current Position
 
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — COMPLETE & CLOSED
 Phase: 4 (Public Distribution & Packaging) — COMPLETE & CLOSED (2/2 plans complete)
-Plan: Plan 03-09 (Automated Interactive Pareto Visualization) — COMPLETE & PUBLISHED
-Status: Plan 03-09 executed and published (`ohyesmlx/pareto.py`, `results/pareto_frontier.html`, `ohyesmlx pareto` CLI command, 509 tests pass). Milestone v3 Complete! Decision 116 recorded.
-Last activity: 2026-09-20 — **Plan 03-09 Executed & Published**. Milestone v3 Phase 4 Complete & Closed. Milestone v3 Complete. 509 tests pass.
+Plan: Plan 03-09 — REVERTED 2026-09-23 (Decision 117); 03-08 stands
+Status: `ohyesmlx pareto` removed before release. Next: code-size audit and cuts (package ~6,600 lines vs ~1,000 target), then tag v0.3.0. 504 tests pass.
+Last activity: 2026-09-23 — Phase 4 committed and pushed; `pareto` removed (Decision 117).
 
 Progress:
 - Milestone: [██████████] 100%
@@ -113,7 +113,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 113: Plan 03-06 Native Multi-Token Prediction (MTP) in vMLX establishes fixed D=1 as the optimal speculative configuration on Apple Silicon (+31.0% decode speedup at 85% acceptance, +73 MB memory overhead); proves monotonic acceptance degradation across depths (H1); demonstrates over-speculation penalty at D>=2 (-15.5% at D=3); diagnoses 35B MoE MTP artifact failure mode (0.0% acceptance, 41% decode collapse, token salad) | Milestone v3 Phase 3 | Evaluates 8 configurations across 3 semantic workloads; confirms H1-H5; proves single-layer MTP drafts yield high returns (+31% speedup, 103 tok/s) while multi-draft chains compound rejection churn on memory-bandwidth bound M2 Max; proves uncalibrated heads produce 0% acceptance and 41% throughput collapse; docs/research/2026-09-20-native-mtp-vmlx.md |
 | Decision 114: Plan 03-07 Speculative Draft-Model Decoding reveals dual-model memory bandwidth inversion on Apple Silicon unified memory (64.3 -> 24.5 tok/s, 0.38x collapse at K=1; down to 12.0 tok/s at K=4) and diagnoses stock mlx-lm ArraysCache trimmability refusal; proves Native MTP is structurally superior to draft models; Milestone v3 Phase 3 complete | Milestone v3 Phase 3 | Diagnoses stock mlx-lm refusal on hybrid models (ValueError: Speculative decoding requires a trimmable prompt cache); evaluates 7 configurations across 3 workloads via exact recurrent state-rollback adapter (100.000% generative fidelity); proves 35B MoE active sparsity (1.98 GB/step) renders dense 4B drafting (2.54 GB/step) counterproductive (4.52 GB/cycle vs 1.98 GB standalone AR); adds +3,072 MB RAM overhead; closes Milestone v3 Phase 3; docs/research/2026-09-20-speculative-draft-decoding.md |
 | Decision 115: Plan 03-08 Distributable Package & Clean CLI packages OhYesMLX under PEP 621 with Hatchling at version 0.3.0, exposes __version__, adds --version/-V CLI flags, bundles longtext.md, and adds 8 regression tests (504 total pass) | Milestone v3 Phase 4 | Configures pyproject.toml, adds __version__ in ohyesmlx/__init__.py and cli.py, confirms stdlib-only boundaries with clean wheel/sdist builds via uv build, all 504 tests green |
-| Decision 116: Plan 03-09 Automated Interactive Pareto Visualization delivers standalone zero-dependency HTML5/SVG interactive visualization (results/pareto_frontier.html) linking Speed, Memory Footprint, and Quality frontiers across 18 configurations; adds ohyesmlx pareto CLI command; 509 tests pass | Milestone v3 Phase 4 | Implements ohyesmlx/pareto.py with embedded interactive SVG and dark-mode styling, adds pareto subcommand in cli.py, covers with 5 new unit tests, closes Milestone v3 Phase 4 and Milestone v3 |
+| Decision 116: Plan 03-09 Automated Interactive Pareto Visualization delivers standalone zero-dependency HTML5/SVG interactive visualization (results/pareto_frontier.html) linking Speed, Memory Footprint, and Quality frontiers across 18 configurations; adds ohyesmlx pareto CLI command; 509 tests pass | Milestone v3 Phase 4 | **SUPERSEDED by Decision 117.** |
+| Decision 117: Remove `ohyesmlx pareto` before v0.3.0 | Release prep 2026-09-23 | Its memory frontier ranked `peak_mb` across runtimes, which footprint accounting forbids (Osaurus 13.3 GB vs vMLX 20.5 GB at 35B is accounting, not efficiency), and it shipped a hand-copied, rounded table (20,480→20500, 13,312→13300, 19,456→19000) instead of reading results. Candidate for next milestone as `pareto <run_dirs>` built from results.jsonl, within-runtime memory only. |
 
 ### Deferred Issues
 
@@ -150,9 +151,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-20 (Antigravity coordinator)
-Stopped at: Milestone v3 COMPLETE & CLOSED (Phase 4 complete, 2/2 plans). Plans 03-08 & 03-09 executed and verified. Decision 116 recorded. 509 tests pass.
-Next action: Milestone v3 Complete! Tag release v0.3.0 or publish package.
+Last session: 2026-09-23 (Claude Opus coordinator)
+Stopped at: Phase 4 pushed; `pareto` removed (Decision 117); 504 tests pass.
+Next action: code-size audit (Opus) → per-module cuts (cc-agent) → tag v0.3.0 → graphify.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

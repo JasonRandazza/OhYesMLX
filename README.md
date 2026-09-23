@@ -26,9 +26,9 @@ Choosing the right local LLM serving configuration on Apple Silicon usually invo
 | **Tight Unified Memory (16 GB / 24 GB / 32 GB)** | True kernel `phys_footprint`, on-disk sidecars, INT4/FP8 KV cache compression, and NVMe expert streaming floors. | Know with certainty whether a 35B MoE or 8B model will fit in unified memory without OS memory paging or swap thrashing. |
 | **Interactive Chat & Coding (Snappy UX)** | Time-to-First-Token (TTFT), cold vs warm KV cache hit speedups, and multi-turn context latency growth. | Identify runtimes that deliver sub-20ms inter-token latency and preserve prompt cache across conversation turns without re-prefill penalties. |
 | **Long-Document & RAG Ingestion** | Prompt prefill throughput (tok/s), chunked prefill stability up to 32k/64k, and GPU watchdog resilience. | Avoid runtimes that deadlock or hit macOS Metal watchdog timeouts during heavy prefill batches. |
-| **Quality vs Storage Optimization** | 2D/3D Pareto frontiers comparing Decode Speed, Memory Footprint, and Downstream Task Accuracy (MMLU, IFEval). | Determine empirically whether a 2-bit or proprietary quant saves enough disk/RAM to justify its quality trade-off, or if uniform 4-bit strictly dominates. |
+| **Quality vs Storage Optimization** | Decode speed, memory footprint and on-disk size per format; the published accuracy studies add MMLU, IFEval and GSM8K. | Determine empirically whether a 2-bit or proprietary quant saves enough disk/RAM to justify its quality trade-off, or if uniform 4-bit strictly dominates. |
 
-Instead of spending weeks guessing or writing throwaway test scripts, you can run a single-variable study in an afternoon and get reproducible, Pareto-optimal data to select the best setup for your exact needs.
+Instead of spending weeks guessing or writing throwaway test scripts, you can run a single-variable study in an afternoon and get reproducible data to select the best setup for your exact needs.
 
 ## The two studies
 
@@ -105,14 +105,11 @@ ohyesmlx run --study runtime \
   --rank decode_tps
 ```
 
-### Comparing Runs & Generating Visualizations
+### Comparing Runs
 
 ```bash
 # Join multiple runs into a comparative markdown grid
 ohyesmlx grid run_dir_1 run_dir_2 --rank decode_tps --out results/grid.md
-
-# Generate the standalone interactive HTML5/SVG Pareto frontier visualization
-ohyesmlx pareto --out results/pareto_frontier.html
 ```
 
 ## Model & Architecture Compatibility Guide
@@ -157,7 +154,7 @@ We plan to expand the harness's scope in upcoming releases:
 
 - **v1 — Small-Model Format Axis & Sweeps (v0.1.0):** Dense (`Qwen3.5-4B`) and MoE (`LFM2.5-8B-A1B`) format benchmarks across 4 runtimes, concurrency and prompt-length sweeps, and KV cache reuse.
 - **v2 — The JANG Study & Task Accuracy Scoring (v0.2.0):** Single-variable evaluation of JANG proprietary quantizations, cross-runtime performance synthesis, and automated MMLU accuracy scoring via `lm-evaluation-harness`.
-- **v3 — Large-Model Scaling, Context Dynamics & Public Release (v0.3.0):** 35B MoE scaling (`Qwen3.6-35B-A3B`), NVMe expert streaming under high memory pressure, multi-turn conversational dynamics, quantized KV caches (INT4/FP8), native Multi-Token Prediction (MTP) vs speculative draft decoding, zero-dependency distribution, and interactive Pareto frontier visualization.
+- **v3 — Large-Model Scaling, Context Dynamics & Public Release (v0.3.0):** 35B MoE scaling (`Qwen3.6-35B-A3B`), NVMe expert streaming under high memory pressure, multi-turn conversational dynamics, quantized KV caches (INT4/FP8), native Multi-Token Prediction (MTP) vs speculative draft decoding and zero-dependency distribution.
 
 Key findings are published in `docs/research/`:
 - [Dense format axis](docs/research/2026-09-16-phase5-joined-grid.md)
@@ -172,7 +169,6 @@ Key findings are published in `docs/research/`:
 - [Quantized KV Caches (INT4 / FP8)](docs/research/2026-09-20-quantized-kv-caches.md)
 - [Native MTP Acceleration](docs/research/2026-09-20-native-mtp-vmlx.md)
 - [Speculative Draft Decoding Analysis](docs/research/2026-09-20-speculative-draft-decoding.md)
-- [Interactive Pareto Frontier Visualization](results/pareto_frontier.html)
 
 ## License
 
