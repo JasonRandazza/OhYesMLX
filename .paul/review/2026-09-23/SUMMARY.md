@@ -57,7 +57,7 @@ and a decision is needed), **not a defect** (see the reason given).
 ## F. Documentation drift
 
 `docs/interfaces.md` record and header schema (docs F1, F7, F9, F12); README runtime tables omit
-vMLX and list MLX Studio (docs F2, F5, F8); README status says prototype 0.0.1 (docs F10); stale
+vMLX and list MLX Studio (docs F2, F5, F8); stale
 line citations in `docs/runtimes/*.md` (docs F11). All confirmed as drift, with no measurement impact.
 
 ## Not defects
@@ -67,10 +67,13 @@ line citations in `docs/runtimes/*.md` (docs F11). All confirmed as drift, with 
 - invariants F5: the quiet-machine rule is declared unenforceable in AGENTS.md. A cheap
   pre-run check (another runtime or download process alive) is a possible addition, not a defect.
 - invariants F10: discarding runs is a process rule, not code.
+- **docs F10 is fabricated.** It quotes `| Version | 0.0.1 |` / `| Status | Prototype |` at README.md:27-34, and no such lines exist anywhere in README.md (`grep -i "0.0.1\|prototype"` finds nothing). Rejected.
 
 ## Reviewer quality (gpt-6-luna, first use)
 
 All 6 workers finished, and none changed anything outside its output file (checked with `git status`). Every
-finding carried quoted evidence that matched the code. One severity was overstated (C2), and one
+finding but one carried quoted evidence that matched the code; **docs F10 quoted README lines that do
+not exist** (a fabricated finding, caught only by checking). That is the failure the fleet policy
+warns about, and the reason every luna finding and diff is verified against the repo, not its report. One severity was overstated (C2), and one
 design decision was reported as a defect (scripts F1). The tests reviewer did not run the
 coverage command it was offered. This is an observation, not the owed route trial.
