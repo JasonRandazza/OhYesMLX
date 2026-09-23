@@ -1,0 +1,52 @@
+Done. Both transformations are in, and the suite is green.
+
+## What changed
+
+**`ohyesmlx/cli.py`** (628 → 597 lines, −31)
+- `_grid` and `_sweep` merged into `_join(args, name, render)`. `main` calls it with `lambda runs: report.render_grid(runs, rank=args.rank)` / `lambda runs: report.render_sweep(runs, varying=args.varying, rank=args.rank)`. Error prefixes are `f"ohyesmlx {name}: …"`, exit codes unchanged; `--out`, the printed text and the "wrote …" line are byte-identical.
+- Deleted `PROMPT_TOKEN_TARGETS` and its comment (dead — the grep found only the doc mention, no code or test reference).
+
+**`ohyesmlx/runtimes.py`** (1163 → 1171 lines, +8)
+- Deleted `Vmlx.stop_command` and `Vmlx.api_key`; each comment's substance is now one sentence in the `Vmlx` docstring.
+- New `_hub_repo_parts(name)` holds the single `models--<org>--<name>` parse; `hub_repo_name` lowercases `found[1]`, `vmlx_served_name` keeps original case as `f"{found[0]}/{found[1]}"`.
+
+`tests/test_cli.py` and `tests/test_runtimes.py` needed no change — no test called `_grid`/`_sweep` or `PROMPT_TOKEN_TARGETS`.
+
+## Verification
+
+- **Baseline**: 504 passed at session start.
+- **Equivalence**: loaded HEAD's `cli.py`/`runtimes.py` beside the working-tree ones and compared every observable result — 22 artifact paths × all five runtimes (start commands at `None`/`off`/`on`, stop, api_key, candidates, version) plus 8 CLI invocations (both error paths, guard refusals, `--out`, renderer kwargs, exit codes, stdout/stderr/file bytes). **1174 comparisons identical** (`$COMMANDCODE_SCRATCHPAD/trim-c-equivalence.py`).
+- **Red-checks**: hardcoding `ohyesmlx grid:` into `_join` → harness diverged on the sweep case and `test_the_sweep_command_reports_a_directory_it_cannot_read` failed; lowercasing `_hub_repo_parts` → 15 divergences and `test_vmlx_strips_a_path_to_the_name_it_actually_serves_under` failed (`jangq-ai/…` vs `JANGQ-AI/…`). Both reverted.
+- **Acceptance**: `pytest -q` → **496 passed, 0 failed**. My change applied to pristine HEAD in an isolated copy → **504 passed**, i.e. my change moves no test.
+
+## Two things you need to know
+
+- **The acceptance count is 496, not 504, because two sibling dispatches are editing this same working directory.** `trim-a-report-measure` and `trim-b-sample-transport-tokens` (order files written 13:17:48, same batch as mine) modified `measure.py`, `report.py`, `sample.py`, `token_counter.py`, `transport.py` and their tests. My first in-place acceptance run was 38 failed — all in `test_transport.py`, all from trim-b's in-flight `transport.py`, which pristine HEAD passed 504/504. The tree is now green with all three applied, and the 8-test drop is their test deletions. `git diff --stat` therefore touches 12 files; **my diff is confined to the four named files** (two of them unchanged).
+- **Doc references left stale by design, outside my four files**: `docs/interfaces.md:682` still pins `PROMPT_TOKEN_TARGETS`, and `tests/test_report.py` docstrings (lines 3492, 3631) still say `_grid`/`_sweep`. I did not touch them.
+
+Not verified: anything requiring a runtime, a model or a tensor — no server was started, and I never ran `grid`/`sweep` against real run directories (the equivalence harness drives the real `report.render_grid`/`render_sweep` only through stubs for the failure paths).
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 class MeasureError
+   1 def _check_one_artifact_per_label
+   1 def _check_one_version_per_runtime
+   1 def _check_sweep_cells_appear_once
+   1 def _grid
+   1 def _observation_record
+   1 def _require_modules
+   1 def _sweep
+   1 def api_key
+   1 def dir_bytes
+   1 def passwordless_sudo
+   1 def power_sample
+   1 def stop_command
+   1 def test_a_missing_module_is_named_rather_than_measured
+   1 def test_dir_bytes_counts_sidecars_and_subdirectories
+   1 def test_dir_bytes_on_a_missing_directory_is_none
+   1 def test_disk_bytes_falls_back_to_walking_the_artifact_dir
+   1 def test_power_sample_never_prompts_and_never_hangs
+   1 def test_stop_reports_power_absent_without_sudo
+   1 def test_the_fits_floor_is_reported_as_not_evaluated_and_excludes_nothing
+   1 def test_the_runtimes_own_split_is_unchanged
+EXIT 0

@@ -1,0 +1,65 @@
+Done — 496 tests pass, diff confined to the four files.
+
+## What changed
+
+**(a) One formula definition.** `report._per_request` now calls `measure.decode_tps` / `prefill_tps` / `itl_s` with only report's `MIN_CONTENT_DELTAS` gate in front. Probe of old-vs-new across the disagreeing inputs — measure's side kept in all three:
+
+| input | old (report's copy) | new (measure's) |
+|---|---|---|
+| `completion_tokens == 0`, stream carried ≥2 deltas | `decode_tps=0.0`, `itl_s=span` | `None`, `None` |
+| `prompt_tokens == 0` | `prefill_tps=0.0` | `None` |
+| negative span (`last_content_s < ttft_s`) | `itl_s=None` | the negative interval |
+
+**Test expectations changed by (a): none.** No fixture in either file drives those three inputs (`last == ttft` is unchanged: `None` / `None` / `0.0`), which the red-check confirms — every old report test that fails against the new source is a dir_bytes or floor test.
+
+**(b)** `dir_bytes` deleted (and `import os` with it, its only user); `_row` publishes `result.disk_bytes` alone.
+
+**(c)** `_check_cells_appear_once` now takes a key function (`key_of`, `key_fields`, `twice`) and serves both joins; `_check_one_value_per_key` replaces guards 3 and 4; `_shared_pins` replaces the duplicated pins/workloads lines; `_entry_table` is the one row builder behind `_grid_table`/`_sweep_table` (both keep their docstrings); `_format_labels`/`_sweep_cells`/`_columns` use `dict.fromkeys`; `ENTRY_LEGEND` is one constant. Both tables and both provenance blocks keep their own docstrings and their own rules.
+
+**(d)** `from . import coherence, runtimes, sample, token_counter, transport` + `from .runtimes import CACHE_STATES`; `MeasureError`, `_require_modules`, its call in `run_cells` and all three `try/except ImportError` blocks deleted; `_observation_record` inlined as `asdict`.
+
+**(e)** `FLOORS = ("coherence", "metrics")`, `FITS_DETAIL` and `FLOOR_STATES` deleted, `FLOOR_CLEARED = frozenset({"pass"})`, `_floor_verdicts` down to two gates, footnote paragraph rewritten.
+
+**Deleted tests (5):** `test_dir_bytes_counts_sidecars_and_subdirectories`, `test_dir_bytes_on_a_missing_directory_is_none`, `test_disk_bytes_falls_back_to_walking_the_artifact_dir` (its subject was the deleted fallback), `test_the_fits_floor_is_reported_as_not_evaluated_and_excludes_nothing`, `test_a_missing_module_is_named_rather_than_measured`.
+
+**Count:** 504 baseline − 3 deleted by the two other orders running in this same tree (`test_stop_reports_power_absent_without_sudo`, `test_power_sample_never_prompts_and_never_hangs`, `test_the_runtimes_own_split_is_unchanged`) − 5 mine = **496 passed**.
+
+**Net line change (mine):** `report.py` +212/−249 = **−37**; `measure.py` +4/−53 = **−49**; `tests/test_report.py` 0/−49 = **−49**; `tests/test_measure.py` 0/−8 = **−8** (numstat reads −9 because trim-b removed the fake sampler's `"power"` key in the same file).
+
+## How I verified
+
+- **Differential render**, 2406 lines of leaderboard (2 axes × 5 ranks), grid (4 ranks) and sweep (3 pins × 2 ranks) through HEAD's `report.py` and the new one. With every cell carrying a recorded size the *only* differences are the fits lines — the card's `| floor fits | … |` rows and the footnote paragraph. No rank, entry, ordering or note moved. With one fixture whose record carries no size, the only other difference is that row's disk figure (`6,144` → `—`) and the ordering that follows from it — item (b), invisible on any record `run_cells` writes since it stamps `artifact_bytes` on every cell.
+- **Helper equivalence probe**: 20/24 identical, including full exception text byte-for-byte for all four guards, `_format_labels`, `_columns`, `_sweep_cells`, both provenance blocks (prompt-pin variant and empty-runs case) and both tables across ranks. The 4 differences are `_floor_verdicts` — item (e).
+- **Red-check**: HEAD's `test_report.py` + `test_measure.py` against the new source → exactly the 9 tests I touched fail (dir_bytes `AttributeError`, `assert None == 6144`, `['fail','not reached'] != […,'not evaluated']`, `FLOOR_STATES` `AttributeError`, missing `| floor fits |`, `MeasureError` `AttributeError`), 291 others pass; then green after the edits.
+- Not verified: no runtime was started and no model loaded, so nothing here rests on a live run; the grid/sweep CLI paths were exercised through the tests and the rendered fixtures, not a real run directory.
+
+## Scope notes (left untouched, per "change nothing else")
+
+1. `report.py:593-594` — the metric-card header still ends "…and a floor this build cannot evaluate says so rather than counting as cleared." (e) listed the card/footnote fits lines and the footnote sentence only, so I left this prose; it is now the only surviving reference to a "not evaluated" floor.
+2. `tests/test_report.py:1938` — that test's name still says "including the one it cannot evaluate" (body updated; no renames were authorized).
+3. `tests/test_report.py:7` — the module docstring still says "the disk sizes are real files in a tmp directory"; no test in that file walks a directory for a size any more. (`summarize`'s docstring, `report.py:344`, has the same mild staleness: "joined from measure, the sampler and disk".)
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 class MeasureError
+   1 def _check_one_artifact_per_label
+   1 def _check_one_version_per_runtime
+   1 def _check_sweep_cells_appear_once
+   1 def _grid
+   1 def _observation_record
+   1 def _require_modules
+   1 def _sweep
+   1 def api_key
+   1 def dir_bytes
+   1 def passwordless_sudo
+   1 def power_sample
+   1 def stop_command
+   1 def test_a_missing_module_is_named_rather_than_measured
+   1 def test_dir_bytes_counts_sidecars_and_subdirectories
+   1 def test_dir_bytes_on_a_missing_directory_is_none
+   1 def test_disk_bytes_falls_back_to_walking_the_artifact_dir
+   1 def test_power_sample_never_prompts_and_never_hangs
+   1 def test_stop_reports_power_absent_without_sudo
+   1 def test_the_fits_floor_is_reported_as_not_evaluated_and_excludes_nothing
+   1 def test_the_runtimes_own_split_is_unchanged
+EXIT 0

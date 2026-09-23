@@ -18,8 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from ohyesmlx.token_counter import FixedMapTokenCounter
 from ohyesmlx.transport import Observation, chat
+from test_token_counter import FixedMapTokenCounter
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 DONE = b"data: [DONE]\n\n"

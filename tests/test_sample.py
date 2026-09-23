@@ -23,9 +23,7 @@ from ohyesmlx.sample import (
     parse_footprint_text,
     parse_mb,
     parse_vmmap_summary,
-    passwordless_sudo,
     phys_footprint_mb,
-    power_sample,
     vmmap_split,
 )
 
@@ -253,27 +251,6 @@ def test_sampler_stops_itself_when_the_process_goes_away():
     assert result["samples"] == []
     assert result["error"]
     assert sampler.running is False
-
-
-def test_stop_reports_power_absent_without_sudo(sampled):
-    if passwordless_sudo():
-        pytest.skip("host has passwordless sudo; the no-sudo path is not exercised here")
-    assert sampled["power"]["available"] is False
-    assert sampled["power"]["raw"] is None
-    assert sampled["power"]["reason"]
-
-
-def test_power_sample_never_prompts_and_never_hangs():
-    started = time.perf_counter()
-    power = power_sample(timeout_s=10.0)
-    elapsed = time.perf_counter() - started
-
-    assert elapsed < 15.0
-    assert set(power) == {"available", "reason", "samplers", "raw"}
-    assert power["samplers"] == "gpu_power,thermal,smc"
-    if not power["available"]:
-        assert power["reason"]
-        assert power["raw"] is None
 
 
 def test_sampler_records_whether_the_gpu_wired_limit_is_raised(sampled):

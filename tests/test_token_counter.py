@@ -17,10 +17,19 @@ total — reconciliation stays exact and a disagreement still publishes nothing.
 
 from __future__ import annotations
 
-from ohyesmlx.token_counter import (
-    FixedMapTokenCounter,
-    resolve_token_accounting,
-)
+from collections.abc import Mapping
+
+from ohyesmlx.token_counter import resolve_token_accounting
+
+
+class FixedMapTokenCounter:
+    """Test/helper counter: exact string → count; unknown strings → 0."""
+
+    def __init__(self, counts: Mapping[str, int]) -> None:
+        self._counts = dict(counts)
+
+    def count(self, text: str) -> int:
+        return int(self._counts.get(text, 0))
 
 
 class ExplodingCounter:
@@ -35,7 +44,6 @@ def test_empty_reasoning_publishes_the_runtimes_own_completion_count():
         reasoning_text="",
         visible_text="The capital of France is Paris.",
         completion_tokens=8,
-        usage_reasoning_tokens=None,
         token_counter=ExplodingCounter(),
     ) == (0, 8, "EXACT_VISIBLE")
 
@@ -47,7 +55,6 @@ def test_an_empty_reasoning_channel_never_consults_the_counter():
             reasoning_text=reasoning_text,
             visible_text="anything at all",
             completion_tokens=42,
-            usage_reasoning_tokens=None,
             token_counter=ExplodingCounter(),
         ) == (0, 42, "EXACT_VISIBLE")
 
@@ -57,7 +64,6 @@ def test_whitespace_only_reasoning_is_empty_reasoning():
         reasoning_text="\n\n\t ",
         visible_text="ok",
         completion_tokens=3,
-        usage_reasoning_tokens=None,
         token_counter=FixedMapTokenCounter({"ok": 3}),
     ) == (0, 3, "EXACT_VISIBLE")
 
@@ -69,7 +75,6 @@ def test_a_truncated_response_publishes_usage_rather_than_the_local_recount():
         reasoning_text="",
         visible_text=text,
         completion_tokens=256,
-        usage_reasoning_tokens=None,
         token_counter=FixedMapTokenCounter({text: 257}),
     ) == (0, 256, "EXACT_VISIBLE")
 
@@ -80,7 +85,6 @@ def test_an_empty_reasoning_channel_publishes_without_a_counter_at_all():
         reasoning_text="",
         visible_text="ok",
         completion_tokens=2,
-        usage_reasoning_tokens=None,
         token_counter=None,
     ) == (0, 2, "EXACT_VISIBLE")
 
@@ -90,7 +94,6 @@ def test_a_non_empty_reasoning_channel_still_reconciles_exactly():
         reasoning_text="think hard",
         visible_text="ok",
         completion_tokens=5,
-        usage_reasoning_tokens=None,
         token_counter=FixedMapTokenCounter({"think hard": 3, "ok": 2}),
     ) == (3, 2, "DERIVED_REASONING_CONTENT")
 
@@ -100,7 +103,6 @@ def test_a_non_empty_reasoning_channel_that_does_not_reconcile_still_refuses():
         reasoning_text="think hard",
         visible_text="ok",
         completion_tokens=9,
-        usage_reasoning_tokens=None,
         token_counter=FixedMapTokenCounter({"think hard": 3, "ok": 2}),
     ) == (None, None, "INCOMPARABLE_TOKEN_ACCOUNTING")
 
@@ -111,7 +113,6 @@ def test_a_derived_split_off_by_one_still_refuses():
         reasoning_text="think hard",
         visible_text="ok",
         completion_tokens=6,
-        usage_reasoning_tokens=None,
         token_counter=FixedMapTokenCounter({"think hard": 3, "ok": 2}),
     ) == (None, None, "INCOMPARABLE_TOKEN_ACCOUNTING")
 
@@ -121,7 +122,6 @@ def test_completion_tokens_none_with_empty_reasoning_is_unchanged():
         reasoning_text="",
         visible_text="ok",
         completion_tokens=None,
-        usage_reasoning_tokens=None,
         token_counter=FixedMapTokenCounter({"ok": 2}),
     ) == (None, None, "INCOMPARABLE_TOKEN_ACCOUNTING")
 
@@ -129,24 +129,5 @@ def test_completion_tokens_none_with_empty_reasoning_is_unchanged():
         reasoning_text="",
         visible_text="ok",
         completion_tokens=None,
-        usage_reasoning_tokens=None,
         token_counter=None,
     ) == (None, None, "INCOMPARABLE_TOKEN_ACCOUNTING")
-
-
-def test_the_runtimes_own_split_is_unchanged():
-    assert resolve_token_accounting(
-        reasoning_text="think hard",
-        visible_text="ok",
-        completion_tokens=5,
-        usage_reasoning_tokens=3,
-        token_counter=ExplodingCounter(),
-    ) == (3, 2, "EXACT_VISIBLE")
-
-    assert resolve_token_accounting(
-        reasoning_text="think hard",
-        visible_text="ok",
-        completion_tokens=9,
-        usage_reasoning_tokens=3,
-        token_counter=ExplodingCounter(),
-    ) == (3, 6, "EXACT_VISIBLE")

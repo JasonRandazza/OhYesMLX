@@ -1,0 +1,72 @@
+Done — the transformation is in, suite green, and one part of the order needed a documented correction.
+
+## The one place I did not follow the order literally
+
+Item (b) says "coverage shows the peek branch and the `response.fp` fallback never run. Remove the peek/settimeout(0) branch and the fallback." There are **two** `response.fp` fallbacks in that region, and the never-run one is the **reader** fallback (`stream_reader = getattr(response, "fp", None)`), which I removed. The **socket** fallback is live:
+
+- Measured on the verify venv (3.14.7): when the server sends `Connection: close`, `getresponse()` closes the connection itself, so `connection.sock is None` and `response.fp.raw._sock` is the only handle on the stream. Probe output: `connection.sock: None` / `response.fp.raw._sock: <socket.socket ...>`.
+- Red-check: with it removed, `tests/test_transport.py` went **29 failed, 3 passed**, every failure `chat stream failed` (= `stream_setup_failed`); restored, **32 passed**.
+- Deleting it changes behaviour on real HTTPResponse streams, which the CONSTRAINT forbids, so I kept `stream_socket = connection.sock` + its `_sock` fallback untouched. If you did mean that fallback, say so and I'll remove it and the 29 tests with it — that is a behaviour change, not dead code.
+- I did delete the now-unreachable `stream_reader is None or not hasattr(stream_reader, "read1")` guard (it only validated the removed fallback's product), and the "Also: never non-blocking-peek a real HTTPResponse…" comment (it describes the removed peek). Every comment explaining a kept line is intact.
+
+Also beyond the letter, all inside the named files: deleted `POWERMETRICS`/`POWER_TIMEOUT_S`/`SUDO_PROBE_TIMEOUT_S`/`import os` (only users were the deleted functions); dropped the first bullet of `resolve_token_accounting`'s docstring and "Two ways" → "One way"; `Mapping` import moved with the class.
+
+## Net line change (mine)
+
+| file | +/− | net |
+|---|---|---|
+| `ohyesmlx/sample.py` | +1/−67 | −66 |
+| `ohyesmlx/transport.py` | +30/−74 | −44 |
+| `ohyesmlx/token_counter.py` | +1/−24 | −23 |
+| `tests/test_sample.py` | +0/−23 | −23 |
+| `tests/test_transport.py` | +1/−1 | 0 |
+| `tests/test_token_counter.py` | +13/−32 | −19 |
+| `tests/test_measure.py` | +0/−1 | −1 (the file's other 8 deleted lines are trim-a's) |
+
+## Tests deleted, by name
+
+- `tests/test_sample.py::test_stop_reports_power_absent_without_sudo`
+- `tests/test_sample.py::test_power_sample_never_prompts_and_never_hangs`
+- `tests/test_token_counter.py::test_the_runtimes_own_split_is_unchanged` (it only exercised the deleted `usage_reasoning_tokens=3` branch)
+
+`tests/test_transport.py` imports the moved helper as `from test_token_counter import FixedMapTokenCounter` (pytest's basedir insertion; `tests/` has no `__init__.py`).
+
+## Verification
+
+Baseline **504 passed** → now **496 passed**, stable over three consecutive runs. **My change alone is 504 → 501**; the further 5 are trim-a's landed deletions (`dir_bytes`, `MeasureError`, fits-floor tests) — trim-a and trim-c were editing this same checkout while I worked, and mid-flight they put the tree at 9 failed/492 passed (I watched `report.dir_bytes` and `measure.MeasureError` disappear under me). My files in isolation: test_sample 27, test_transport 32, test_token_counter 9, test_measure 123, all green.
+
+- **Differential vs HEAD** (scratchpad `diff_transport.py`, HEAD's modules extracted to a side package): 23 stream cases — chunked, keepalive >1s, missing `[DONE]`, bad framing, mirrored, reasoning-only, derived split and its refusal, all three invalid-accounting messages, bool/float/null counters, two-usage events, api key, seed — **23/23 identical** on every `Observation` field but the three clocks, plus the posted body and `Authorization`.
+- **Red-check of that differential:** removing the `isinstance(value, bool)` exclusion in `_usage_count` flipped exactly the three bool cases (20/23); restored → 23/23.
+- Real `Sampler.stop()` on a live process: keys are `duration_s, error, gpu_wired_limit, interval_s, memory_split, n_samples, peak_mb, pid, samples` — `power` gone, every other reading populated.
+
+## What I did not verify
+
+- The invalid-accounting raise path has **no test coverage** in the suite (it had none before either); I pinned it differentially, not by a test. I did not add one, since the order asked for deletions and updates only — say the word if you want it pinned.
+- `docs/interfaces.md:119` still lists `"power": {...}` in sample.py's result shape. Not in FILES, so untouched → **stale doc reference**.
+- Old `results/*.jsonl` records still carry `memory.power`; nothing in `ohyesmlx/` reads that key (grepped).
+- No git operations, no servers or models started, nothing touched outside this directory.
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 class MeasureError
+   1 def _check_one_artifact_per_label
+   1 def _check_one_version_per_runtime
+   1 def _check_sweep_cells_appear_once
+   1 def _grid
+   1 def _observation_record
+   1 def _require_modules
+   1 def _sweep
+   1 def api_key
+   1 def dir_bytes
+   1 def passwordless_sudo
+   1 def power_sample
+   1 def stop_command
+   1 def test_a_missing_module_is_named_rather_than_measured
+   1 def test_dir_bytes_counts_sidecars_and_subdirectories
+   1 def test_dir_bytes_on_a_missing_directory_is_none
+   1 def test_disk_bytes_falls_back_to_walking_the_artifact_dir
+   1 def test_power_sample_never_prompts_and_never_hangs
+   1 def test_stop_reports_power_absent_without_sudo
+   1 def test_the_fits_floor_is_reported_as_not_evaluated_and_excludes_nothing
+   1 def test_the_runtimes_own_split_is_unchanged
+EXIT 0

@@ -18,7 +18,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 Milestone: v3 — Large-Model Scaling, Context Dynamics & Public Release (0.3.0) — COMPLETE & CLOSED
 Phase: 4 (Public Distribution & Packaging) — COMPLETE & CLOSED (2/2 plans complete)
 Plan: Plan 03-09 — REVERTED 2026-09-23 (Decision 117); 03-08 stands
-Status: `ohyesmlx pareto` removed before release. Next: code-size audit and cuts (package ~6,600 lines vs ~1,000 target), then tag v0.3.0. 504 tests pass.
+Status: pareto removed (D117); duplicate/dead-code trim done (D118). Next: tag v0.3.0. 497 tests pass.
 Last activity: 2026-09-23 — Phase 4 committed and pushed; `pareto` removed (Decision 117).
 
 Progress:
@@ -115,6 +115,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 115: Plan 03-08 Distributable Package & Clean CLI packages OhYesMLX under PEP 621 with Hatchling at version 0.3.0, exposes __version__, adds --version/-V CLI flags, bundles longtext.md, and adds 8 regression tests (504 total pass) | Milestone v3 Phase 4 | Configures pyproject.toml, adds __version__ in ohyesmlx/__init__.py and cli.py, confirms stdlib-only boundaries with clean wheel/sdist builds via uv build, all 504 tests green |
 | Decision 116: Plan 03-09 Automated Interactive Pareto Visualization delivers standalone zero-dependency HTML5/SVG interactive visualization (results/pareto_frontier.html) linking Speed, Memory Footprint, and Quality frontiers across 18 configurations; adds ohyesmlx pareto CLI command; 509 tests pass | Milestone v3 Phase 4 | **SUPERSEDED by Decision 117.** |
 | Decision 117: Remove `ohyesmlx pareto` before v0.3.0 | Release prep 2026-09-23 | Its memory frontier ranked `peak_mb` across runtimes, which footprint accounting forbids (Osaurus 13.3 GB vs vMLX 20.5 GB at 35B is accounting, not efficiency), and it shipped a hand-copied, rounded table (20,480→20500, 13,312→13300, 19,456→19000) instead of reading results. Candidate for next milestone as `pareto <run_dirs>` built from results.jsonl, within-runtime memory only. |
+| Decision 118: Retire the ~1,000-line target; trim duplicates instead | Release prep 2026-09-23 | Size itself affects nothing measured; duplicates and dead signals do. One formula definition (report asks measure, which now refuses a negative ITL), one disk-size walk, merged join guards, `_join` in cli; removed import scaffolding, powermetrics sampling (never produced data on this host), the never-evaluated `fits` floor, unreachable transport branch. AGENTS.md now says: one definition of everything, each rationale once, ask before a new module/subcommand/pin. Package 6,619 → 6,378 lines; 497 tests. Prose dedupe (audit item 1) deferred. |
 
 ### Deferred Issues
 
@@ -153,7 +154,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-23 (Claude Opus coordinator)
 Stopped at: Phase 4 pushed; `pareto` removed (Decision 117); 504 tests pass.
-Next action: code-size audit (Opus) → per-module cuts (cc-agent) → tag v0.3.0 → graphify.
+Next action: tag v0.3.0 → GitHub release → graphify. Deferred: audit item 1 (prose dedupe).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

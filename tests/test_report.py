@@ -1170,38 +1170,11 @@ def test_a_row_with_no_lost_visit_carries_neither_note():
 # --- disk size -----------------------------------------------------------------------------
 
 
-def test_dir_bytes_counts_sidecars_and_subdirectories(tmp_path):
-    artifact = tmp_path / "jangtq"
-    (artifact / "weights").mkdir(parents=True)
-    (artifact / "model.safetensors").write_bytes(b"x" * 1000)
-    (artifact / "jangtq_runtime.safetensors").write_bytes(b"y" * 500)
-    (artifact / "config.json").write_bytes(b"{}")
-    (artifact / "weights").mkdir(exist_ok=True)
-    (artifact / "weights" / "extra.safetensors").write_bytes(b"z" * 250)
-
-    total = report.dir_bytes(artifact)
-
-    assert total == 1000 + 500 + 2 + 250
-    assert total > 1000 + 2 + 250, "the JANGTQ sidecar must count against the format"
-
-
-def test_dir_bytes_on_a_missing_directory_is_none(tmp_path):
-    assert report.dir_bytes(tmp_path / "not-here") is None
-
-
 def test_disk_bytes_prefers_what_measure_recorded(tmp_path):
     measured = cell_result([obs()], artifact_dir=str(tmp_path), status="PASS")
     measured.disk_bytes = 7_000_000_000
 
     assert report.summarize([measured])[0]["disk_bytes"] == 7_000_000_000
-
-
-def test_disk_bytes_falls_back_to_walking_the_artifact_dir(tmp_path):
-    (tmp_path / "model.safetensors").write_bytes(b"x" * 4096)
-    (tmp_path / "jangtq_runtime.safetensors").write_bytes(b"y" * 2048)
-    walked = cell_result([obs()], artifact_dir=str(tmp_path))
-
-    assert report.summarize([walked])[0]["disk_bytes"] == 6144
 
 
 # --- leaderboard ---------------------------------------------------------------------------
@@ -1633,7 +1606,6 @@ def test_a_cell_that_failed_the_coherence_gate_is_excluded_and_names_its_floor()
     assert [floor["state"] for floor in gagged["floors"]] == [
         "fail",
         "not reached",
-        "not evaluated",
     ]
 
     printed = leaderboard_rows(report.render_markdown(rows, axis="runtime"))
@@ -1688,7 +1660,6 @@ def test_a_cell_that_lost_a_published_metric_is_excluded_by_the_metrics_floor():
     assert [floor["state"] for floor in gagged["floors"]] == [
         "pass",
         "fail",
-        "not evaluated",
     ]
     notes = leaderboard_rows(report.render_markdown(rows, axis="runtime"))[1]["notes"]
     assert "excluded by metrics" in notes
@@ -1723,28 +1694,9 @@ def test_a_cell_that_never_ran_is_shown_and_says_it_was_not_measured():
     assert "port 8100 never opened" in printed[1]["notes"]
 
 
-def test_the_fits_floor_is_reported_as_not_evaluated_and_excludes_nothing():
-    """No source for a total-memory figure here, so the floor says so instead of passing."""
-    row = report.summarize([cell_result([obs()])])[0]
-    fits, = [floor for floor in row["floors"] if floor["floor"] == "fits"]
-
-    assert fits["state"] == "not evaluated"
-    assert "sample.py" in fits["detail"]
-    assert row["rankable"] is True, "a floor nobody can ask does not exclude a row"
-    assert "fits" in report.FLOORS
-    assert report.FLOOR_STATES == (
-        "pass",
-        "fail",
-        "not reached",
-        "not measured",
-        "not evaluated",
-    )
-
-
 def test_the_floors_are_pass_fail_and_never_weighted(rows):
     for row in rows:
         assert [floor["floor"] for floor in row["floors"]] == list(report.FLOORS)
-        assert all(floor["state"] in report.FLOOR_STATES for floor in row["floors"])
         assert row["rankable"] is all(
             floor["state"] in report.FLOOR_CLEARED for floor in row["floors"]
         )
@@ -2001,7 +1953,6 @@ def test_the_card_prints_every_floor_verdict_including_the_one_it_cannot_evaluat
     healthy = card[("chat", "oq4__mlxlm")]
     assert "| floor coherence | pass |" in healthy
     assert "| floor metrics | pass |" in healthy
-    assert "| floor fits | not evaluated |" in healthy
 
     gagged = card[("chat", "oq4__omlx")]
     assert "| floor coherence | fail |" in gagged

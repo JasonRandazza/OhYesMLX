@@ -18,7 +18,6 @@ responses published no tok/s at all.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -77,45 +76,23 @@ class TokenCounter:
         return len(encoded)
 
 
-class FixedMapTokenCounter:
-    """Test/helper counter: exact string → count; unknown strings → 0."""
-
-    def __init__(self, counts: Mapping[str, int]) -> None:
-        self._counts = dict(counts)
-
-    def count(self, text: str) -> int:
-        return int(self._counts.get(text, 0))
-
-
 def resolve_token_accounting(
     *,
     reasoning_text: str,
     visible_text: str,
     completion_tokens: int | None,
-    usage_reasoning_tokens: int | None,
     token_counter: TokenCounter | None,
 ) -> tuple[int | None, int | None, str]:
     """Return (reasoning_tokens, visible_output_tokens,
     token_accounting_status).
 
-    Two ways to be exact, and one way to derive a split:
+    One way to be exact, and one way to derive a split:
 
-    * The runtime reports the reasoning count itself, so content is the remainder.
     * The runtime reports no reasoning channel at all, so there is no split to derive and
       its ``completion_tokens`` is the content count — the counter is not consulted.
     * The stream mixes both and the runtime reports one total, so the counter splits it
       and the two parts must sum to that total exactly.
     """
-    if usage_reasoning_tokens is not None:
-        if completion_tokens is None:
-            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
-        if usage_reasoning_tokens > completion_tokens:
-            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
-        visible = completion_tokens - usage_reasoning_tokens
-        if visible <= 0:
-            return None, None, "INCOMPARABLE_TOKEN_ACCOUNTING"
-        return usage_reasoning_tokens, visible, "EXACT_VISIBLE"
-
     if not reasoning_text.strip() and completion_tokens is not None:
         return 0, completion_tokens, "EXACT_VISIBLE"
 

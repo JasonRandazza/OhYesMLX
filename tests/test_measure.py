@@ -236,7 +236,6 @@ class FakeSampler:
             "peak_mb": peak,
             "samples": [{"t": 0.0, "mb": peak}],
             "memory_split": {},
-            "power": {"available": False},
             "gpu_wired_limit": {"mb": 0, "raised": False},
             "error": None,
         }
@@ -385,6 +384,11 @@ def test_itl_never_divides_by_zero_on_a_single_token():
     assert measure.itl_s(one_token) == pytest.approx(0.1)
 
 
+def test_itl_is_none_when_the_last_delta_precedes_the_first():
+    backwards = FakeObservation(ttft_s=0.6, last_content_s=0.5, completion_tokens=8)
+    assert measure.itl_s(backwards) is None
+
+
 def test_prefill_needs_usage_prompt_tokens():
     assert measure.prefill_tps(FakeObservation(prompt_tokens=None)) is None
     assert measure.prefill_tps(FakeObservation(prompt_tokens=0)) is None
@@ -484,14 +488,6 @@ def test_two_workloads_cannot_share_an_id(harness):
             [harness.cell("oq__mlxlm", "mlxlm")],
             workloads=[workload("chat", max_tokens=128), workload("chat", max_tokens=512)],
         )
-
-
-def test_a_missing_module_is_named_rather_than_measured(harness, monkeypatch):
-    harness.add_runtime("mlxlm")
-    monkeypatch.setattr(measure, "transport", None)
-
-    with pytest.raises(measure.MeasureError, match="transport.py"):
-        harness.run([harness.cell("oq__mlxlm", "mlxlm")])
 
 
 # ---------------------------------------------------------------------- the warmup window

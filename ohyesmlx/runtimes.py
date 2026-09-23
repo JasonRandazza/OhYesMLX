@@ -350,6 +350,21 @@ def _inventory(base_url: str, *, api_key: str | None = None) -> tuple[str, ...]:
     )
 
 
+def _hub_repo_parts(name: str) -> tuple[str, str] | None:
+    """``(organization, repository)`` out of one ``models--<org>--<name>`` path component.
+
+    The hub's flat layout, parsed in one place for both spellings that need it: Osaurus
+    takes the repository alone and lowercases it, and vMLX takes the pair as the path holds
+    it. ``None`` when the component is not a repo directory or either half is empty.
+    """
+    if not name.startswith("models--"):
+        return None
+    organization, _, repository = name[len("models--") :].partition("--")
+    if organization and repository:
+        return organization, repository
+    return None
+
+
 def hub_repo_name(artifact_dir: str) -> str | None:
     """The repo an HF-cache artifact belongs to, lowercased, or ``None`` if it is not one.
 
@@ -360,11 +375,9 @@ def hub_repo_name(artifact_dir: str) -> str | None:
     the live inventory reads ``qwen3.5-4b-oq4``, ``ornith-1.0-35b-jang_4m``, and so on.
     """
     for part in Path(os.path.abspath(artifact_dir)).parts:
-        if not part.startswith("models--"):
-            continue
-        organization, _, repository = part[len("models--") :].partition("--")
-        if organization and repository:
-            return repository.lower()
+        found = _hub_repo_parts(part)
+        if found is not None:
+            return found[1].lower()
     return None
 
 
@@ -1052,10 +1065,9 @@ def vmlx_served_name(artifact_dir: str) -> str:
         return artifact_dir
     parts = artifact_dir.rstrip("/").split("/")
     for part in parts:
-        if part.startswith("models--") and "--" in part[len("models--") :]:
-            organization, _, repository = part[len("models--") :].partition("--")
-            if organization and repository:
-                return f"{organization}/{repository}"
+        found = _hub_repo_parts(part)
+        if found is not None:
+            return f"{found[0]}/{found[1]}"
     if len(parts) >= 2:
         return f"{parts[-2]}/{parts[-1]}"
     return parts[-1]
@@ -1070,6 +1082,12 @@ class Vmlx(Runtime):
     would make request 1 differ from requests 2+), and ``--kv-cache-quantization`` — omitting
     it selects production auto mode while passing it *disables* loader-level TurboQuant, so
     neither choice is neutral and this omission is the recorded one.
+
+    No stop subcommand exists, so the base class's empty ``stop_command`` stands and SIGTERM
+    to the spawned pid is the stop -- shutdown can take up to ~10s to flush disk caches, which
+    :func:`_shutdown` already waits out. With no ``--api-key`` its ``verify_api_key`` returns
+    True for everyone, so the base class's ``api_key`` of ``None`` stands and measured requests
+    carry no credential, the opposite of oMLX, where an unauthenticated request 401s.
     """
 
     def start_command(
@@ -1132,11 +1150,6 @@ class Vmlx(Runtime):
             "--disable-block-disk-cache",
         )
 
-    def stop_command(self) -> tuple[str, ...]:
-        # No stop subcommand exists, so SIGTERM to the spawned pid is the stop. Shutdown may
-        # take up to ~10s to flush disk caches; _shutdown already waits that out.
-        return ()
-
     def version_command(self) -> tuple[str, ...]:
         # `vmlx --version` is not a flag: the parser rejects it and exits 2. Read the engine's
         # own constant out of the shipped source instead of importing it — the import pulls in
@@ -1147,11 +1160,6 @@ class Vmlx(Runtime):
     def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
         # vMLX strips a path to its last two components, or to org/repo for an HF cache path.
         return _ordered((vmlx_served_name(artifact_dir), model_id), name_forms(artifact_dir))
-
-    def api_key(self) -> str | None:
-        # No --api-key means verify_api_key returns True for everyone, so measured requests
-        # need no credential. The opposite of oMLX, where an unauthenticated request 401s.
-        return None
 
 
 RUNTIMES: dict[str, Runtime] = {

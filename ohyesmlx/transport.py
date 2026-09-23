@@ -120,6 +120,13 @@ def _call_before_deadline(
     return result[0]
 
 
+def _usage_count(value: object, message: str) -> int:
+    """A usage counter: a non-negative int, or a refusal naming *message*."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise TransportError(message, reason="invalid_token_accounting")
+    return value
+
+
 def chat(
     base_url: str,
     model: str,
@@ -218,17 +225,7 @@ def chat(
         # Prefer HTTPResponse.read1 so Transfer-Encoding: chunked
         # (Osaurus) is decoded. Reading response.fp raw exposes hex chunk
         # sizes as SSE lines.
-        http_response = isinstance(response, http.client.HTTPResponse)
-        if http_response or (
-            hasattr(response, "read1") and hasattr(response, "peek")
-        ):
-            stream_reader = response
-        else:
-            stream_reader = getattr(response, "fp", None)
-        if stream_reader is None or not hasattr(stream_reader, "read1"):
-            raise TransportError(
-                "chat stream failed", reason="stream_setup_failed"
-            )
+        stream_reader = response
         pending = bytearray()
         stream_done = False
         # Never apply a short socket timeout to the stream makefile:
@@ -237,42 +234,22 @@ def chat(
         # peeks/reads.
         # Wait with select() instead so OptiQ prompt-processing keepalives
         # that arrive >1s after headers do not abort the cohort.
-        # Also: never non-blocking-peek a real HTTPResponse — settimeout(0)
-        # before peek corrupts chunked decoding on the next read1.
         stream_socket.settimeout(None)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TransportError("request timed out", reason="timeout")
-            buffered = b""
-            if not http_response:
-                try:
-                    stream_socket.settimeout(0)
-                    buffered = stream_reader.peek(1)
-                except (
-                    BlockingIOError,
-                    InterruptedError,
-                    TimeoutError,
-                    OSError,
-                ):
-                    buffered = b""
-                finally:
-                    try:
-                        stream_socket.settimeout(None)
-                    except OSError:
-                        pass
-            if not buffered:
-                try:
-                    readable, _, _ = select.select(
-                        [stream_socket],
-                        [],
-                        [],
-                        min(1.0, remaining),
-                    )
-                except (ValueError, OSError):
-                    break
-                if not readable:
-                    continue
+            try:
+                readable, _, _ = select.select(
+                    [stream_socket],
+                    [],
+                    [],
+                    min(1.0, remaining),
+                )
+            except (ValueError, OSError):
+                break
+            if not readable:
+                continue
             try:
                 chunk = stream_reader.read1(4096)
             except (BlockingIOError, InterruptedError, TimeoutError):
@@ -331,44 +308,24 @@ def chat(
                 if isinstance(usage, dict):
                     prompt_value = usage.get("prompt_tokens")
                     if prompt_value is not None:
-                        if (
-                            not isinstance(prompt_value, int)
-                            or isinstance(prompt_value, bool)
-                            or prompt_value < 0
-                        ):
-                            raise TransportError(
-                                "prompt-token accounting is invalid",
-                                reason="invalid_token_accounting",
-                            )
-                        prompt_tokens = prompt_value
+                        prompt_tokens = _usage_count(
+                            prompt_value, "prompt-token accounting is invalid"
+                        )
                     completion_value = usage.get("completion_tokens")
                     if completion_value is not None:
-                        if (
-                            not isinstance(completion_value, int)
-                            or isinstance(completion_value, bool)
-                            or completion_value < 0
-                        ):
-                            raise TransportError(
-                                "completion-token accounting is invalid",
-                                reason="invalid_token_accounting",
-                            )
-                        completion_tokens = completion_value
+                        completion_tokens = _usage_count(
+                            completion_value,
+                            "completion-token accounting is invalid",
+                        )
                     details = usage.get("completion_tokens_details")
                     if (
                         isinstance(details, dict)
                         and "reasoning_tokens" in details
                     ):
-                        reasoning_value = details["reasoning_tokens"]
-                        if (
-                            not isinstance(reasoning_value, int)
-                            or isinstance(reasoning_value, bool)
-                            or reasoning_value < 0
-                        ):
-                            raise TransportError(
-                                "reasoning-token accounting is invalid",
-                                reason="invalid_token_accounting",
-                            )
-                        usage_reasoning_tokens = reasoning_value
+                        usage_reasoning_tokens = _usage_count(
+                            details["reasoning_tokens"],
+                            "reasoning-token accounting is invalid",
+                        )
             if stream_done:
                 break
         if not stream_done:
@@ -462,7 +419,6 @@ def chat(
                 reasoning_text=accounting_reasoning_text,
                 visible_text=joined,
                 completion_tokens=completion_tokens,
-                usage_reasoning_tokens=None,
                 token_counter=token_counter,
             )
             token_source = _TOKEN_SOURCES[accounting_status]

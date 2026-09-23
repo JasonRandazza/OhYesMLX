@@ -116,7 +116,7 @@ resolved one.
 sampler = Sampler(pid, interval_s=1.0).start()
 result = sampler.stop()
 # {"peak_mb": float, "samples": [{"t": float, "mb": float}], "n_samples": int,
-#  "duration_s": float, "memory_split": {...}, "power": {...},
+#  "duration_s": float, "memory_split": {...},
 #  "gpu_wired_limit": {...}, "error": str | None}
 ```
 
@@ -219,7 +219,10 @@ A cell is ranked only after it clears every floor, and floors are pass/fail, nev
 
 1. **Coherence** — the gate in `coherence.py`. Already enforced.
 2. **Every published metric present** — already enforced by `_set_status`.
-3. **Fits** — `peak_mb` did not exceed available unified memory.
+
+A third floor, **fits** (`peak_mb` within available unified memory), was specified here and
+removed 2026-09-23: nothing in the package reads total unified memory, so it only ever printed
+"not evaluated". Re-add it with a real source, not as a placeholder.
 
 `report.render_markdown(rows, *, axis, rank="decode_tps")` — `rank` is keyword-only with a
 default, so a call that predates it still works. One table per workload, each ranked
@@ -679,7 +682,7 @@ Findings behind it, from the runtimes' shipped source: `docs/research/2026-09-16
 ```python
 # cli.py
 LONGTEXT = Path(__file__).with_name("longtext.md")   # frozen; sha256 3ed2c160…a8a3
-PROMPT_TOKEN_TARGETS = (128, 1024, 4096, 16384, 32768)  # documentation, not a selector
+# Phase 6 walked 128, 1024, 4096, 16384 and 32768; --prompt-tokens takes any N.
 
 def sized_prompt(counter, target: int) -> tuple[str, int]: ...
 # -> (prompt text, achieved token count). achieved <= target, and achieved is what

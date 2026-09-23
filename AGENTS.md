@@ -54,7 +54,9 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 - **No new dependency** without naming, in the commit message, what it replaces.
 - **Downloads need a reason and a record.** The original rule was "no model downloads", because free disk was 36 GiB. That constraint is gone (238 GiB free), and Jason lifted the rule on 2026-09-16 for what v1 needs — 21.9 GB of LFM2.5-8B-A1B was fetched under it. A download still needs a stated purpose tied to a phase, and the repo ids go in a committed script (`scripts/fetch_moe.sh` is the pattern). **Never download while a measurement is running** — it competes for the disk that `cold_load_s` is timing.
 - **No accuracy scoring in v1.** It is out of scope until v1 ships, however tempting.
-- **Target size is ~1,000 lines.** If a module is growing past its share, that is the signal to stop and ask, not to keep going.
+- **One definition of everything.** A formula, a guard, a size or a constant lives in exactly one place and every caller asks it. Two copies drift: `report.py` and `measure.py` once carried two decode-rate formulas that disagreed on edge cases, and two disk-size walks, one of which miscounted HF-cache snapshots. A second copy gets deleted in the commit that notices it.
+- **Each rationale is written once, where the thing it explains is defined.** Callers point at it; they do not restate it. A rule restated in seven docstrings has seven places to go stale.
+- **Stop and ask before adding a module, a subcommand, or a header pin.** Code size is not the metric (the old ~1,000-line target predates v2/v3 and was retired 2026-09-23); a new surface is the thing that grows maintenance, so a new surface is the thing that needs Jason's yes.
 
 ## Runtime hazards, already paid for
 

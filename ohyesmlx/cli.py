@@ -143,10 +143,6 @@ PREFILL_PROMPT = (
 # regenerated from `docs/`, reformatted, or edited.
 LONGTEXT = Path(__file__).with_name("longtext.md")
 
-# The lengths Phase 6 walks. Documentation, not a selector: `--prompt-tokens` takes any N, and
-# there is no second flag that names a set of them.
-PROMPT_TOKEN_TARGETS = (128, 1024, 4096, 16384, 32768)
-
 # The markers around the MS-7 excerpt in PREFILL_PROMPT. The excerpt body between them is the
 # first half of the source a sized prompt is cut from, and longtext.md is the rest. The head
 # asks the model to read the document; the tail asks, in one sentence, what the document is
@@ -282,9 +278,13 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns the process exit code."""
     args = _parser().parse_args(argv)
     if args.command == "grid":
-        return _grid(args)
+        return _join(args, "grid", lambda runs: report.render_grid(runs, rank=args.rank))
     if args.command == "sweep":
-        return _sweep(args)
+        return _join(
+            args,
+            "sweep",
+            lambda runs: report.render_sweep(runs, varying=args.varying, rank=args.rank),
+        )
     return _run(args)
 
 
@@ -488,11 +488,14 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _grid(args) -> int:
-    """Join the named run directories and render the grid.
+def _join(args, name: str, render) -> int:
+    """Join the named run directories and render them with *render*.
 
-    The join guards live in report.render_grid, not here: refusing to join two runs that
-    disagree is a statement about the data, and the CLI is not where that is decided.
+    ``grid`` and ``sweep`` are two joins over one file format: the same ``load_run``, the same
+    ``summarize``, the same run-directory name as the label, differing only in the renderer
+    that puts the joined runs on the page. The guards live in ``report``, not here: refusing
+    to join runs that disagree, or runs whose swept pin never moved, is a statement about the
+    data, and the CLI is not where that is decided.
     """
     measure = _load_measure()
     runs = []
@@ -500,56 +503,22 @@ def _grid(args) -> int:
         try:
             header, results = measure.load_run(run_dir)
         except (OSError, ValueError) as exc:
-            print(f"ohyesmlx grid: {run_dir}: {exc}", file=sys.stderr)
+            print(f"ohyesmlx {name}: {run_dir}: {exc}", file=sys.stderr)
             return 2
         # The run's own batch pin, from its header: a row that landed fewer batches than the
-        # run asked for carries the count into the grid beside its number.
+        # run asked for carries the count into the table beside its number.
         rows = report.summarize(results, measured=header.get("measured"))
         runs.append((Path(run_dir).name, header, rows))
 
     try:
-        grid = report.render_grid(runs, rank=args.rank)
+        joined = render(runs)
     except ValueError as exc:
-        print(f"ohyesmlx grid: {exc}", file=sys.stderr)
+        print(f"ohyesmlx {name}: {exc}", file=sys.stderr)
         return 2
 
-    print(grid)
+    print(joined)
     if args.out:
-        Path(args.out).write_text(grid, encoding="utf-8")
-        print(f"wrote {args.out}")
-    return 0
-
-
-def _sweep(args) -> int:
-    """Join the named run directories and render the sweep.
-
-    The run directories are read exactly as ``_grid`` reads them -- the same ``load_run``, the
-    same ``summarize``, the same run-directory name as the label -- because a sweep and a grid
-    are two joins over one file format. The guards live in ``report.render_sweep``, not here:
-    refusing to join runs that disagree, or runs whose swept pin never moved, is a statement
-    about the data, and the CLI is not where that is decided.
-    """
-    measure = _load_measure()
-    runs = []
-    for run_dir in args.run_dirs:
-        try:
-            header, results = measure.load_run(run_dir)
-        except (OSError, ValueError) as exc:
-            print(f"ohyesmlx sweep: {run_dir}: {exc}", file=sys.stderr)
-            return 2
-        # The run's own batch pin, from its header, exactly as `_grid` reads it.
-        rows = report.summarize(results, measured=header.get("measured"))
-        runs.append((Path(run_dir).name, header, rows))
-
-    try:
-        sweep = report.render_sweep(runs, varying=args.varying, rank=args.rank)
-    except ValueError as exc:
-        print(f"ohyesmlx sweep: {exc}", file=sys.stderr)
-        return 2
-
-    print(sweep)
-    if args.out:
-        Path(args.out).write_text(sweep, encoding="utf-8")
+        Path(args.out).write_text(joined, encoding="utf-8")
         print(f"wrote {args.out}")
     return 0
 

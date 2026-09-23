@@ -96,33 +96,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import coherence, sample
+from . import coherence, runtimes, sample, token_counter, transport
+from .runtimes import CACHE_STATES
 
 # Imported at runtime, not under TYPE_CHECKING: load_run rebuilds a record with the class
 # that wrote it, from transport.py itself rather than from a re-bound module handle.
 from .transport import Observation
-
-# runtimes.py (issue #3) and token_counter.py are written concurrently against
-# docs/interfaces.md, so this module has to stay importable while they are absent. A real
-# run refuses to start without them; see _require_modules.
-try:
-    from . import token_counter
-except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
-    token_counter = None
-
-try:
-    from . import runtimes
-    from .runtimes import CACHE_STATES
-except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
-    runtimes = None
-    # The runtime module owns these two values; this copy exists only for the import that
-    # finds it absent, where every run fails in _require_modules regardless.
-    CACHE_STATES = ("off", "on")
-
-try:
-    from . import transport
-except ImportError:  # pragma: no cover - cleared as issues #2/#3 merge
-    transport = None
 
 # Warmup is measured, not pinned: a workload's window keeps issuing requests until its decode
 # rate stops moving. The 2026-09-15 grid, per-column median ``change_pct`` across the MEASURED
@@ -200,10 +179,6 @@ STILL_THINKING = "still thinking: no content within max_tokens"
 
 # Indirection so a test can watch cooldowns without waiting for them.
 _sleep = time.sleep
-
-
-class MeasureError(RuntimeError):
-    """The run cannot start: a module it measures through is missing."""
 
 
 @dataclass(frozen=True)
@@ -318,6 +293,8 @@ def itl_s(observation) -> float | None:
     if not observation.completion_tokens:
         return None
     span = observation.last_content_s - observation.ttft_s
+    if span < 0:
+        return None  # a last delta before the first is a broken clock, not an interval
     return span / max(1, observation.completion_tokens - 1)
 
 
@@ -483,7 +460,6 @@ def run_cells(
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
     workloads = _workloads(workloads)
-    _require_modules()
 
     results_path = Path(results_dir) / RESULTS_FILENAME
     results_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1170,24 +1146,6 @@ def _workloads(workloads: list[Workload]) -> list[Workload]:
     return checked
 
 
-def _require_modules() -> None:
-    missing = [
-        name
-        for name, module in (
-            ("transport", transport),
-            ("runtimes", runtimes),
-            ("token_counter", token_counter),
-        )
-        if module is None
-    ]
-    if missing:
-        raise MeasureError(
-            "cannot measure without ohyesmlx/"
-            + ", ohyesmlx/".join(f"{name}.py" for name in missing)
-            + " — issues #2 and #3 provide them"
-        )
-
-
 def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> None:
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
@@ -1240,12 +1198,12 @@ def _record(result: CellResult) -> dict:
         # budget as if it were a warm cell.
         "warmup_plateau": result.warmup_plateau,
         "drift": measured_drift(result.observations),
-        "observations": [_observation_record(observation) for observation in result.observations],
+        "observations": [asdict(observation) for observation in result.observations],
         # Warmups are not samples of the measured quantity — averaging a cold-start TTFT
         # into a percentile would be a lie — but they are still raw observations, so they
         # are kept here rather than thrown away.
         "warmup_observations": [
-            _observation_record(observation) for observation in result.warmup_observations
+            asdict(observation) for observation in result.warmup_observations
         ],
     }
     # One span per measured batch, and the key is absent on a cell that ran none -- which is
@@ -1265,11 +1223,6 @@ def _record(result: CellResult) -> dict:
     if result.cold_load_after_lost_visit:
         record["cold_load_after_lost_visit"] = result.cold_load_after_lost_visit
     return record
-
-
-def _observation_record(observation) -> dict:
-    """The observation's own fields, and nothing derived from them."""
-    return asdict(observation)
 
 
 def load_run(path: str | Path) -> tuple[dict, list[CellResult]]:

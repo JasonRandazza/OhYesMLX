@@ -17,7 +17,6 @@ is never blocked by a poll.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import threading
@@ -25,17 +24,13 @@ import time
 
 FOOTPRINT = "/usr/bin/footprint"
 VMMAP = "/usr/bin/vmmap"
-POWERMETRICS = "/usr/bin/powermetrics"
 SYSCTL = "/usr/sbin/sysctl"
 
 DEFAULT_INTERVAL_S = 1.0
-DEFAULT_SAMPLERS = "gpu_power,thermal,smc"
 
 FOOTPRINT_TIMEOUT_S = 10.0
 VMMAP_TIMEOUT_S = 30.0
-POWER_TIMEOUT_S = 20.0
 SYSCTL_TIMEOUT_S = 5.0
-SUDO_PROBE_TIMEOUT_S = 5.0
 CONSECUTIVE_MISSES_BEFORE_STOP = 3
 
 VMMAP_COMPRESSED_NOTE = (
@@ -219,55 +214,6 @@ def gpu_wired_limit(*, timeout_s=SYSCTL_TIMEOUT_S):
     return result
 
 
-def passwordless_sudo(*, timeout_s=SUDO_PROBE_TIMEOUT_S):
-    """Whether ``sudo -n`` works right now, without ever prompting.
-
-    ``-n`` makes sudo fail immediately instead of asking, and stdin is ``/dev/null`` so a
-    prompt can never be answered or waited on.
-    """
-    if os.geteuid() == 0:
-        return True
-    proc = _run(["sudo", "-n", "true"], timeout_s)
-    return proc is not None and proc.returncode == 0
-
-
-def power_sample(samplers=DEFAULT_SAMPLERS, *, sample_ms=1000, timeout_s=POWER_TIMEOUT_S):
-    """One ``powermetrics --samplers <samplers>`` sample, or power reported as absent.
-
-    powermetrics needs root. The availability test never prompts and never hangs, and the
-    absence is returned as data so a benchmark run degrades instead of failing.
-    """
-    result = {"available": False, "reason": None, "samplers": samplers, "raw": None}
-    if not os.path.exists(POWERMETRICS):
-        result["reason"] = f"{POWERMETRICS} is not present on this host"
-        return result
-
-    if os.geteuid() == 0:
-        cmd = [POWERMETRICS]
-    elif passwordless_sudo():
-        cmd = ["sudo", "-n", POWERMETRICS]
-    else:
-        result["reason"] = "powermetrics needs root and `sudo -n` requires a password"
-        return result
-
-    cmd += ["--samplers", samplers, "-n", "1", "-i", str(int(sample_ms))]
-    proc = _run(cmd, timeout_s)
-    if proc is None:
-        result["reason"] = f"powermetrics did not complete within {timeout_s}s"
-        return result
-    if proc.returncode != 0:
-        result["reason"] = _reason(proc)
-        return result
-
-    result["available"] = True
-    # ponytail: raw text, deliberately unparsed. This host has no passwordless sudo, so the
-    # real powermetrics format could not be observed and guessing it would be worse than
-    # withholding it. Ceiling: callers get a string, not fields. Upgrade path: parse the
-    # recorded sample into named gpu/thermal fields once one real sample has been seen.
-    result["raw"] = proc.stdout
-    return result
-
-
 class Sampler:
     """Polls ``footprint -p <pid>`` on a background thread for the life of a run.
 
@@ -276,14 +222,11 @@ class Sampler:
     ``None`` if the process was never sampled successfully.
     """
 
-    def __init__(self, pid, interval_s=DEFAULT_INTERVAL_S, *, samplers=DEFAULT_SAMPLERS,
-                 power=True):
+    def __init__(self, pid, interval_s=DEFAULT_INTERVAL_S):
         if interval_s <= 0:
             raise ValueError("interval_s must be > 0")
         self.pid = int(pid)
         self.interval_s = float(interval_s)
-        self.samplers = samplers
-        self.sample_power = power
         self.result = None
         # ponytail: plain list appended from the worker thread. CPython list.append is
         # atomic, so reading it mid-run is safe for inspection. Ceiling: no snapshot
@@ -351,15 +294,6 @@ class Sampler:
             "peak_mb": peak_mb,
             "samples": samples,
             "memory_split": vmmap_split(self.pid),
-            # ponytail: one powermetrics sample, taken at stop, rather than a power/thermal
-            # series across the run. Ceiling: a short run can miss its own thermal rise.
-            # Upgrade path: run powermetrics for the run's duration (`-n <k> -i <ms>`) on
-            # its own thread and merge its timestamps into the sample series.
-            "power": (
-                power_sample(self.samplers)
-                if self.sample_power
-                else {"available": False, "reason": "power sampling disabled", "samplers": self.samplers, "raw": None}
-            ),
             "gpu_wired_limit": gpu_wired_limit(),
             "error": self.error,
         }

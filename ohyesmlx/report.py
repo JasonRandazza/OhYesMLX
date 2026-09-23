@@ -58,7 +58,7 @@ measured — so the metric card carries every measured value behind the ordering
 the ordering can always be checked against the numbers that produced it.
 
 A row is ranked only after it clears every floor, and the floors are pass/fail, never
-weighted: coherence, every published metric present, and fits. A row that fails one is
+weighted: coherence, and every published metric present. A row that fails one is
 excluded from the ordering, still printed, and named against the floor that kept it out —
 an excluded cell is a result, not an absence.
 
@@ -68,7 +68,6 @@ from the file.
 
 from __future__ import annotations
 
-import os
 import statistics
 from typing import TYPE_CHECKING
 
@@ -160,23 +159,12 @@ CAVEAT = {
 
 # The gates a (cell, workload) row clears before it is ranked. Pass/fail, never weighted: a
 # weighted gate is a score, and a score is what hides which one failed.
-FLOORS = ("coherence", "metrics", "fits")
+FLOORS = ("coherence", "metrics")
 
-# A floor's verdict. "not reached" is a gate an earlier failure never got to, "not measured"
-# is a cell that never ran here, and "not evaluated" is one this build has no source for.
-# None of those three is a pass, and none of them excludes a row: a floor nobody asked is
-# not a floor to rank against, it is a hole to print.
-FLOOR_STATES = ("pass", "fail", "not reached", "not measured", "not evaluated")
-FLOOR_CLEARED = frozenset({"pass", "not evaluated"})
-
-# Floor (c) has no source in this build. Nothing under ``ohyesmlx/`` reads the host's total
-# unified memory — ``sample.py`` reads ``phys_footprint`` per pid, the ``vmmap --summary``
-# regions and ``iogpu.wired_limit_mb`` — so ``peak_mb`` has nothing to be tested against.
-# The floor reports that as "not evaluated" rather than passing a check nobody made.
-FITS_DETAIL = (
-    "sample.py exposes no total unified-memory figure, so peak_mb has nothing to be "
-    "tested against"
-)
+# A floor's verdict. "not reached" is a gate an earlier failure never got to and "not
+# measured" is a cell that never ran here. Neither is a pass, and neither excludes a row: a
+# floor nobody asked is not a floor to rank against, it is a hole to print.
+FLOOR_CLEARED = frozenset({"pass"})
 
 # --- ordering -----------------------------------------------------------------------------
 
@@ -352,28 +340,6 @@ def median(values):
     return float(statistics.median(values))
 
 
-def dir_bytes(path):
-    """Total size of every file under *path*, sidecars included.
-
-    Every file, not just the weights: JANGTQ ships a ``jangtq_runtime.safetensors`` next to
-    its shards, and a walk that collected shards by name would credit that format with a
-    smaller footprint than it has. Symlinked directories are not followed (``os.walk``'s
-    default), so the walk stays finite. ``None`` if *path* is not a directory.
-    """
-    root = os.path.expanduser(str(path))
-    if not os.path.isdir(root):
-        return None
-
-    total = 0
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for name in filenames:
-            try:
-                total += os.path.getsize(os.path.join(dirpath, name))
-            except OSError:
-                continue  # a file that went away mid-walk is not a reason to fail a run
-    return total
-
-
 def summarize(results: list[CellResult], *, measured: int | None = None) -> list[dict]:
     """One row per (cell, workload): the contract's fields, joined from measure, the sampler
     and disk.
@@ -487,9 +453,29 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         raise ValueError(_rank_error(rank))
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
     _check_pins(runs)
-    _check_cells_appear_once(runs)
-    _check_one_artifact_per_label(runs)
-    _check_one_version_per_runtime(runs)
+    _check_cells_appear_once(
+        runs,
+        lambda _header, row: (row.get("label"), row.get("runtime"), row.get("workload_id")),
+        key_fields="label, runtime, workload_id",
+        twice="measured one cell",
+    )
+    _check_one_value_per_key(
+        runs,
+        field="artifact_dir",
+        kind="format",
+        key_of=lambda row: (row.get("label"), row.get("artifact_dir")),
+        verb="measured",
+        clause="one format name pointing at two artifacts is two formats",
+    )
+    _check_one_value_per_key(
+        runs,
+        field="runtime_version",
+        kind="runtime",
+        key_of=lambda row: (row.get("runtime"), row.get("runtime_version")),
+        verb="ran",
+        clause="the same runtime at two versions means the column's held-constant variable "
+        "moved",
+    )
 
     columns = _columns(runs)
     labels = _format_labels(runs)
@@ -520,14 +506,7 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         f"Each table is one workload and carries one metric: `{rank}` "
         f"({_direction(rank)}).",
         "",
-        "| entry | means |",
-        "|---|---|",
-        "| a number | a measured cell that cleared every floor |",
-        "| `no value` | a cell that cleared every floor and has no value for this metric; "
-        "its run's leaderboard carries the note saying why |",
-        "| `FAIL` | a measured cell that did not clear one |",
-        "| `—` | a combination no run measured |",
-        "",
+        *ENTRY_LEGEND,
         "The matrix is ragged by design — no runtime loads every format — so `—` is ordinary "
         "and does not read as a failure. " + marker_note,
         "",
@@ -611,8 +590,7 @@ def render_cards(rows: list[dict], *, rank: str = DEFAULT_RANK) -> str:
         "",
         f"Every value behind the ordering, per (cell, workload), ranked by `{rank}` "
         f"({_direction(rank)}) under the same floors the tables use. The raw inputs are "
-        "listed beside the figures derived from them, and a floor this build cannot evaluate "
-        "says so rather than counting as cleared.",
+        "listed beside the figures derived from them.",
         "",
     ]
     for workload, group in _by_workload(rows):
@@ -782,9 +760,7 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "cold_load_s": result.cold_load_s,
         "first_request_s": result.first_request_s,
         "peak_mb": (result.memory or {}).get("peak_mb"),
-        "disk_bytes": result.disk_bytes
-        if result.disk_bytes is not None
-        else dir_bytes(cell.artifact_dir),
+        "disk_bytes": result.disk_bytes,
         "runtime_version": result.runtime_version,
         "percentile_note": None
         if n >= MIN_PERCENTILE_N
@@ -960,9 +936,9 @@ def _drift_card_row(row: dict) -> str:
 
 
 def _floor_verdicts(status, reason) -> dict:
-    """The three gates, their verdicts, and what they leave this row.
+    """The two gates, their verdicts, and what they leave this row.
 
-    The first two floors are measure's already: ``_set_status`` decides PASS only when every
+    Both floors are measure's already: ``_set_status`` decides PASS only when every
     measured request came back carrying what the published metrics need and the responses are
     language. This re-runs neither check — it reads the verdict measure recorded and names the
     gate that wrote it, which is what the table and the card print and what a status string
@@ -971,25 +947,22 @@ def _floor_verdicts(status, reason) -> dict:
     if status == "N/A":
         # The cell never ran here, so no gate was faced. It cannot rank, and the row says the
         # cell was not measured rather than blaming a gate it never reached. The reason is on
-        # the row itself; repeating it under all three floors would bury it.
+        # the row itself; repeating it under both floors would bury it.
         floors = [_verdict(floor, "not measured", "not measured") for floor in FLOORS]
     elif _coherence_failed(status, reason):
         floors = [
             _verdict("coherence", "fail", reason),
             _verdict("metrics", "not reached"),
-            _verdict("fits", "not evaluated", FITS_DETAIL),
         ]
     elif status != "PASS":
         floors = [
             _verdict("coherence", "pass"),
             _verdict("metrics", "fail", reason),
-            _verdict("fits", "not evaluated", FITS_DETAIL),
         ]
     else:
         floors = [
             _verdict("coherence", "pass"),
             _verdict("metrics", "pass"),
-            _verdict("fits", "not evaluated", FITS_DETAIL),
         ]
 
     excluded_by = next((floor["floor"] for floor in floors if floor["state"] == "fail"), None)
@@ -1052,36 +1025,24 @@ def _content_deltas(observation) -> int:
 def _per_request(observation) -> dict:
     """One observation's three per-request metrics, exactly as the contract defines them.
 
-    A metric whose inputs are missing — no token count, a decode window of zero length, a
-    stream with no inter-token interval — is ``None``. It is never faked from a leftover
-    number.
+    The three formulas are measure's, asked for rather than respelled: one definition each,
+    in the module that owns the raw fields. A metric whose inputs are missing — no token
+    count, a decode window of zero length, a stream with no inter-token interval — is
+    ``None``. It is never faked from a leftover number.
     """
-    ttft = observation.ttft_s
-    last = observation.last_content_s
-    tokens = observation.completion_tokens
-    prompt = observation.prompt_tokens
-    span = last - ttft if last is not None and ttft is not None else None
-    counted = tokens is not None
-    streamed = _content_deltas(observation) >= MIN_CONTENT_DELTAS
-
-    decode_tps = (
-        tokens / span if counted and streamed and span is not None and span > 0 else None
-    )
     # prefill_tps divides the prompt by TTFT, which is only prefill time when TTFT is a
     # first-token latency. In a one-delta stream TTFT spans the whole generation, so the
     # same arithmetic reports a prefill rate several times slower than the runtime's real
-    # one — wrong in the believable direction, which is worse than wrong absurdly.
-    prefill_tps = (
-        prompt / ttft
-        if prompt is not None and streamed and ttft is not None and ttft > 0
-        else None
-    )
-    itl_s = (
-        span / max(1, tokens - 1)
-        if counted and streamed and span is not None and span >= 0
-        else None
-    )
-    return {"decode_tps": decode_tps, "prefill_tps": prefill_tps, "itl_s": itl_s}
+    # one — wrong in the believable direction, which is worse than wrong absurdly. This is
+    # the one gate report applies on top of measure's definitions: the domain rule the
+    # metrics are published under, not a second way of computing them.
+    if _content_deltas(observation) < MIN_CONTENT_DELTAS:
+        return {"decode_tps": None, "prefill_tps": None, "itl_s": None}
+    return {
+        "decode_tps": measure.decode_tps(observation),
+        "prefill_tps": measure.prefill_tps(observation),
+        "itl_s": measure.itl_s(observation),
+    }
 
 
 def _aggregate_tps(observations: list, batch_spans: list[float]) -> float | None:
@@ -1254,12 +1215,10 @@ def _footnotes() -> list[str]:
         "value — so the metric card below carries every number behind it.",
         "",
         "A row is ranked only after it clears every floor, and the floors are pass/fail, "
-        "never weighted: coherence (the gate in `coherence.py`), every published metric "
-        "present, and fits. The first two are measure's, recorded as the row's status. Fits "
-        "is not evaluated in this build: nothing under `ohyesmlx/` reads the host's total "
-        "unified memory, so peak MB has nothing to be tested against, and the floor prints "
-        "itself as not evaluated rather than as cleared. A row that fails a floor is "
-        "excluded from the ordering, still printed, and names the floor in its notes.",
+        "never weighted: coherence (the gate in `coherence.py`) and every published metric "
+        "present, both of them measure's and both recorded as the row's status. A row that "
+        "fails a floor is excluded from the ordering, still printed, and names the floor in "
+        "its notes.",
         "",
         "decode tok/s is the median per-request rate, "
         "`completion_tokens / (last content − TTFT)`. aggregate tok/s is every completion "
@@ -1318,6 +1277,19 @@ def _footnotes() -> list[str]:
 # the Osaurus grid columns ran with its prefix cache ON -- so reading the absence as a state
 # would fold two different cache states into one column and call them a sweep.
 ABSENT_PINS = {"concurrency": 1, "prompt_tokens": None, "cache_state": None}
+
+# The four entry states as the two joined tables spell them out: the grid and the sweep print
+# the same legend, and two copies of it are two places for one reading to drift.
+ENTRY_LEGEND = (
+    "| entry | means |",
+    "|---|---|",
+    "| a number | a measured cell that cleared every floor |",
+    "| `no value` | a cell that cleared every floor and has no value for this metric; "
+    "its run's leaderboard carries the note saying why |",
+    "| `FAIL` | a measured cell that did not clear one |",
+    "| `—` | a combination no run measured |",
+    "",
+)
 
 
 def _check_pins(runs: list[tuple], *, varying: str | None = None) -> None:
@@ -1403,72 +1375,68 @@ def _shapes(header: dict) -> dict:
     return {shape.get("id"): shape for shape in header.get("workloads") or ()}
 
 
-def _check_cells_appear_once(runs: list[tuple]) -> None:
-    """Guard 2: no ``(label, runtime, workload_id)`` measured by two run directories.
+def _check_cells_appear_once(
+    runs: list[tuple], key_of, *, key_fields: str, twice: str
+) -> None:
+    """Guard 2: no cell measured by two run directories, in either join.
 
     There is no "latest wins" rule: which run is newer is not which run is right, so a cell
     measured twice is ambiguous rather than superseded and the join refuses instead of
     choosing one of the two.
+
+    *key_of* is what a cell is keyed on, and the two joins key it differently: the grid on the
+    cell's own three fields, the sweep on those three plus the value of its swept pin, because
+    one cell at two values is a sweep's table working as intended while one cell at one value
+    twice is the same ambiguity the grid refuses. *key_fields* names that key as the refusal
+    prints it and *twice* says what the two directories did to it.
     """
     seen: dict[tuple, str] = {}
-    for label, _header, rows in runs:
+    for label, header, rows in runs:
         for row in rows:
-            key = (row.get("label"), row.get("runtime"), row.get("workload_id"))
+            key = key_of(header, row)
             if key in seen:
                 raise ValueError(
-                    f"duplicate cell: (label, runtime, workload_id) = {key!r} appears in both "
-                    f"{seen[key]} and {label}; two run directories measured one cell, and "
-                    "there is no latest-wins rule because which run is newer is not which run "
-                    "is right"
+                    f"duplicate cell: ({key_fields}) = {key!r} appears in both "
+                    f"{seen[key]} and {label}; two run directories {twice}, and there is no "
+                    "latest-wins rule because which run is newer is not which run is right"
                 )
             seen[key] = label
 
 
-def _check_one_artifact_per_label(runs: list[tuple]) -> None:
-    """Guard 3: one format label, one artifact — across columns as well as inside a table.
+def _check_one_value_per_key(
+    runs: list[tuple], *, field: str, kind: str, key_of, verb: str, clause: str
+) -> None:
+    """Guards 3 and 4: one value per key, across columns as well as inside a table.
 
-    Two rows agreeing on the format's name and pointing at different bytes are two formats.
-    ``_held_constant`` makes that check within one table; this makes it across the grid.
+    Guard 3: one format label, one artifact. Two rows agreeing on the format's name and
+    pointing at different bytes are two formats. ``_held_constant`` makes that check within one
+    table; this makes it across the grid.
+
+    Guard 4: one runtime, one version. Two *different* runtimes at different versions is the
+    grid working as intended. The same runtime at 0.25.3 in one directory and 0.25.4 in another
+    is the grid's held-constant variable moving — Osaurus measured 1.15x across exactly that
+    step — so it is refused rather than joined. Guard 4 compares ``runtime_version`` as an exact
+    string: mlx-optiq reports ``"mlx-optiq, version 0.5.6"`` rather than a bare ``0.5.6``, and a
+    runtime that rephrases its ``--version`` output would read as a version change here.
+
+    *key_of* returns the row's ``(key, value)``, *field* is the value's name in the refusal,
+    *kind* names the key, and *verb* and *clause* say what the two directories did with it and
+    what the disagreement means. A row missing either half is skipped: a cell that never ran
+    cannot disagree about which build the others ran on.
     """
     seen: dict[str, tuple] = {}
     for label, _header, rows in runs:
         for row in rows:
-            name, artifact = row.get("label"), row.get("artifact_dir")
-            if not name or not artifact:
+            key, value = key_of(row)
+            if not key or not value:
                 continue
-            if name in seen and seen[name][0] != artifact:
-                previous, previous_run = seen[name]
+            if key in seen and seen[key][0] != value:
+                previous, previous_run = seen[key]
                 raise ValueError(
-                    f"artifact_dir disagrees for format `{name}`: {previous_run} measured "
-                    f"{previous} and {label} measured {artifact}; one format name pointing at "
-                    "two artifacts is two formats"
+                    f"{field} disagrees for {kind} `{key}`: {previous_run} {verb} "
+                    f"{previous} and {label} {verb} {value}; {clause}"
                 )
-            seen.setdefault(name, (artifact, label))
-
-
-def _check_one_version_per_runtime(runs: list[tuple]) -> None:
-    """Guard 4: one runtime, one version, across columns.
-
-    Two *different* runtimes at different versions is the grid working as intended. The same
-    runtime at 0.25.3 in one directory and 0.25.4 in another is the grid's held-constant
-    variable moving — Osaurus measured 1.15x across exactly that step — so it is refused
-    rather than joined. A row carrying no version never started a runtime, and a cell that
-    never ran cannot disagree about which build the others ran on.
-    """
-    seen: dict[str, tuple] = {}
-    for label, _header, rows in runs:
-        for row in rows:
-            runtime, version = row.get("runtime"), row.get("runtime_version")
-            if not runtime or not version:
-                continue
-            if runtime in seen and seen[runtime][0] != version:
-                previous, previous_run = seen[runtime]
-                raise ValueError(
-                    f"runtime_version disagrees for runtime `{runtime}`: {previous_run} ran "
-                    f"{previous} and {label} ran {version}; the same runtime at two versions "
-                    "means the column's held-constant variable moved"
-                )
-            seen.setdefault(runtime, (version, label))
+            seen.setdefault(key, (value, label))
 
 
 def _columns(runs: list[tuple]) -> list[dict]:
@@ -1486,8 +1454,7 @@ def _columns(runs: list[tuple]) -> list[dict]:
             if not runtime:
                 continue
             column = columns.setdefault(runtime, {"runtime": runtime, "runs": [], "version": None})
-            if run_label not in column["runs"]:
-                column["runs"].append(run_label)
+            column["runs"] = list(dict.fromkeys([*column["runs"], run_label]))
             if column["version"] is None and row.get("runtime_version"):
                 column["version"] = row["runtime_version"]
     return list(columns.values())
@@ -1501,13 +1468,12 @@ def _format_labels(runs: list[tuple]) -> list[str]:
     becomes a row: a row of `—` says a combination does not exist, and a format no runtime
     loaded is not a combination.
     """
-    labels: list[str] = []
-    for _run_label, _header, rows in runs:
-        for row in rows:
-            label = row.get("label")
-            if label and label not in labels:
-                labels.append(label)
-    return labels
+    return list(dict.fromkeys(
+        row.get("label")
+        for _run_label, _header, rows in runs
+        for row in rows
+        if row.get("label")
+    ))
 
 
 def _provenance(runs: list[tuple], columns: list[dict]) -> list[str]:
@@ -1534,18 +1500,67 @@ def _provenance(runs: list[tuple], columns: list[dict]) -> list[str]:
             f"{_text(column['version'])} |"
         )
     lines.append("")
-    if runs:
-        header = runs[0][1]
-        pins = ", ".join(f"{field} `{_text(header.get(field, ABSENT_PINS.get(field)))}`" for field in PIN_FIELDS)
-        lines.append(f"Pins all columns share: {pins}.")
-        lines.append("")
-        shapes = ", ".join(
-            f"`{_text(shape.get('id'))}` (max_tokens {_text(shape.get('max_tokens'))})"
-            for shape in header.get("workloads") or ()
-        )
-        lines.append(f"Workloads all columns ran, with identical messages: {shapes}.")
-        lines.append("")
+    lines += _shared_pins(runs, varying=None)
     return lines
+
+
+def _shared_pins(runs: list[tuple], *, varying: str | None) -> list[str]:
+    """The two lines every provenance block ends with: the pins the runs shared, and the shapes.
+
+    Each block's prose above them is the join's own — the grid names what every column shares,
+    a sweep names the one pin its columns differ on — but these two lines are the same reading
+    in both, because they are what guard 1 actually compared. *varying* is the pin the runs were
+    allowed to differ on, named as the exception rather than listed among the shared ones;
+    ``None`` is the grid, which permits none.
+    """
+    if not runs:
+        return []
+    header = runs[0][1]
+    pins = ", ".join(
+        f"{field} `{_text(header.get(field, ABSENT_PINS.get(field)))}`"
+        for field in PIN_FIELDS
+        if field != varying
+    )
+    shapes = ", ".join(
+        f"`{_text(shape.get('id'))}` (max_tokens {_text(shape.get('max_tokens'))})"
+        for shape in header.get("workloads") or ()
+    )
+    if varying is None:
+        return [
+            f"Pins all columns share: {pins}.",
+            "",
+            f"Workloads all columns ran, with identical messages: {shapes}.",
+            "",
+        ]
+    shapes_line = (
+        f"Workloads all runs ran: {shapes}."
+        if varying == "prompt_tokens"
+        else f"Workloads all runs ran, with identical messages: {shapes}."
+    )
+    return [
+        f"Pins all runs shared, with `{varying}` the one pin they differ on: {pins}.",
+        "",
+        shapes_line,
+        "",
+    ]
+
+
+def _entry_table(head: str, columns: list[tuple], rows: list[tuple], entry_for) -> str:
+    """One joined table: a head column, one column per key and one row per key.
+
+    The two joins key their cells differently — the grid on ``(label, runtime)``, the sweep on
+    ``(cell, workload, pin value)`` — so *columns* and *rows* arrive as ``(text, key)`` pairs and
+    *entry_for* is handed the row's key and the column's. Everything between the keys is one
+    rendering: the heads, the divider and the cells, so an entry is the same string in either
+    table.
+    """
+    header = "| " + " | ".join([head, *(text for text, _key in columns)]) + " |"
+    divider = "|" + "---|" * (header.count("|") - 1)
+    lines = [header, divider]
+    for text, row_key in rows:
+        cells = [text, *(entry_for(row_key, key) for _head, key in columns)]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
 
 
 def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: str) -> str:
@@ -1560,21 +1575,15 @@ def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: 
     for row in rows:
         index.setdefault((row.get("label"), row.get("runtime")), row)
 
-    header = "| format | " + " | ".join(_text(c["runtime"]) for c in columns) + " |"
-    divider = "|" + "---|" * (header.count("|") - 1)
-    lines = [header, divider]
-    for label in labels:
-        cells = [_text(label)]
-        cells += [
-            _entry(
-                index.get((label, column["runtime"])),
-                rank,
-                drift_marker=rank in DECODE_DERIVED_RANKS,
-            )
-            for column in columns
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
+    marker = rank in DECODE_DERIVED_RANKS
+    return _entry_table(
+        "format",
+        [(_text(column["runtime"]), column["runtime"]) for column in columns],
+        [(_text(label), label) for label in labels],
+        lambda label, runtime: _entry(
+            index.get((label, runtime)), rank, drift_marker=marker
+        ),
+    )
 
 
 def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
@@ -1874,7 +1883,17 @@ def render_sweep(
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
     _check_pins(runs, varying=varying)
     _check_sweep_varies(runs, varying)
-    _check_sweep_cells_appear_once(runs, varying)
+    _check_cells_appear_once(
+        runs,
+        lambda header, row: (
+            row.get("label"),
+            row.get("runtime"),
+            row.get("workload_id"),
+            _pin_key(header, varying),
+        ),
+        key_fields=f"label, runtime, workload_id, {varying}",
+        twice="measured one cell at one value of the swept pin",
+    )
 
     columns = _sweep_columns(runs, varying)
     cells = _sweep_cells(runs)
@@ -1888,14 +1907,7 @@ def render_sweep(
         "",
         f"Each table is one workload and carries one metric: `{rank}` ({_direction(rank)}).",
         "",
-        "| entry | means |",
-        "|---|---|",
-        "| a number | a measured cell that cleared every floor |",
-        "| `no value` | a cell that cleared every floor and has no value for this metric; "
-        "its run's leaderboard carries the note saying why |",
-        "| `FAIL` | a measured cell that did not clear one |",
-        "| `—` | a combination no run measured |",
-        "",
+        *ENTRY_LEGEND,
     ]
     if rank in DECODE_DERIVED_RANKS and (
         varying == "concurrency"
@@ -1994,29 +2006,6 @@ def _check_sweep_varies(runs: list[tuple], varying: str) -> None:
     )
 
 
-def _check_sweep_cells_appear_once(runs: list[tuple], varying: str) -> None:
-    """Guard 2: no ``(cell, workload, pin value)`` measured by two run directories.
-
-    The pin value joins the grid's key because a sweep's columns are the pin: one cell at two
-    values is the table working as intended, and one cell at one value twice is ambiguous rather
-    than superseded. There is no latest-wins rule here either -- which run is newer is not which
-    run is right -- so the join refuses and names both directories.
-    """
-    seen: dict[tuple, str] = {}
-    for label, header, rows in runs:
-        value = _pin_key(header, varying)
-        for row in rows:
-            key = (row.get("label"), row.get("runtime"), row.get("workload_id"), value)
-            if key in seen:
-                raise ValueError(
-                    f"duplicate cell: (label, runtime, workload_id, {varying}) = {key!r} "
-                    f"appears in both {seen[key]} and {label}; two run directories measured one "
-                    "cell at one value of the swept pin, and there is no latest-wins rule "
-                    "because which run is newer is not which run is right"
-                )
-            seen[key] = label
-
-
 def _sweep_columns(runs: list[tuple], varying: str) -> list[dict]:
     """The sweep's columns: one per value of the swept pin, smallest first.
 
@@ -2066,13 +2055,12 @@ def _sweep_cells(runs: list[tuple]) -> list[str]:
     row for the same reason a label never does in the grid: a row of `—` says a combination does
     not exist, and a cell nobody ran is not a combination.
     """
-    cells: list[str] = []
-    for _label, _header, rows in runs:
-        for row in rows:
-            cell_id = row.get("cell_id")
-            if cell_id and cell_id not in cells:
-                cells.append(cell_id)
-    return cells
+    return list(dict.fromkeys(
+        row.get("cell_id")
+        for _label, _header, rows in runs
+        for row in rows
+        if row.get("cell_id")
+    ))
 
 
 def _sweep_index(runs: list[tuple], varying: str) -> dict:
@@ -2112,27 +2100,7 @@ def _sweep_provenance(runs: list[tuple], varying: str) -> list[str]:
     for label, header, _rows in runs:
         lines.append(f"| {_text(label)} | {_pin_note(header, varying)} |")
     lines.append("")
-    if runs:
-        header = runs[0][1]
-        pins = ", ".join(
-            f"{field} `{_text(header.get(field, ABSENT_PINS.get(field)))}`"
-            for field in PIN_FIELDS
-            if field != varying
-        )
-        lines.append(
-            f"Pins all runs shared, with `{varying}` the one pin they differ on: {pins}."
-        )
-        lines.append("")
-        shapes = ", ".join(
-            f"`{_text(shape.get('id'))}` (max_tokens {_text(shape.get('max_tokens'))})"
-            for shape in header.get("workloads") or ()
-        )
-        lines.append(
-            f"Workloads all runs ran: {shapes}."
-            if varying == "prompt_tokens"
-            else f"Workloads all runs ran, with identical messages: {shapes}."
-        )
-        lines.append("")
+    lines += _shared_pins(runs, varying=varying)
     return lines
 
 
@@ -2153,21 +2121,15 @@ def _sweep_table(
     The marker therefore rides only a rank in ``DECODE_DERIVED_RANKS``, and every other rank's
     entries print their numbers alone.
     """
-    header = "| cell | " + " | ".join(_sweep_head(column, varying) for column in columns) + " |"
-    divider = "|" + "---|" * (header.count("|") - 1)
-    lines = [header, divider]
-    for cell in cells:
-        entry = [_text(cell)]
-        entry += [
-            _entry(
-                index.get((cell, workload, column["key"])),
-                rank,
-                drift_marker=rank in DECODE_DERIVED_RANKS,
-            )
-            for column in columns
-        ]
-        lines.append("| " + " | ".join(entry) + " |")
-    return "\n".join(lines)
+    marker = rank in DECODE_DERIVED_RANKS
+    return _entry_table(
+        "cell",
+        [(_sweep_head(column, varying), column["key"]) for column in columns],
+        [(_text(cell), cell) for cell in cells],
+        lambda cell, key: _entry(
+            index.get((cell, workload, key)), rank, drift_marker=marker
+        ),
+    )
 
 
 def _sweep_head(column: dict, varying: str) -> str:
