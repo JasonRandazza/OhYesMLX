@@ -1,41 +1,40 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-21 (Milestone v3 Complete; Packaging & Docs Ready)"
+description: "OhYesMLX — session handoff, 2026-09-23 (v0.3.0 released)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-21 (Milestone v3 Complete; Packaging & Docs Ready)
+# Handoff — 2026-09-23 (v0.3.0 released)
 
-> **This file is the single session-transfer note for the incoming agent.**
-> Read this, then `.paul/STATE.md`, then `AGENTS.md`.
+> Session-transfer note. Read this, then `.paul/STATE.md` (Decisions 117–118), then `AGENTS.md`.
+> Where this and STATE disagree, STATE wins.
 
----
+## Where things stand
 
-## Current Project Position
+- **v0.3.0 is tagged and released:** https://github.com/JasonRandazza/OhYesMLX/releases/tag/v0.3.0
+  (wheel + sdist on GitHub Releases; not published to PyPI). `main` is pushed.
+- **Plan 03-09 (`ohyesmlx pareto`) was withdrawn before release** (Decision 117). It ranked
+  `peak_mb` across runtimes and shipped a hand-copied, rounded table.
+- **Duplicate and dead code trimmed** (Decision 118). There is now one decode/prefill/ITL definition
+  (`measure.py`; `report._per_request` asks it), one disk-size walk (`measure.artifact_bytes`),
+  shared grid/sweep join guards, and one `cli._join`. Powermetrics sampling and the `fits` floor are gone.
+- **AGENTS.md's ~1,000-line target is retired** and replaced by three rules: one definition of everything,
+  each rationale written once, and stop and ask before any new module, subcommand or header pin.
+- **Tests:** 497 pass (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`).
+- **Knowledge graph:** `graphify-out/` (gitignored). Code-only (package, tests, scripts), 1,807 nodes.
+  Rebuild with `graphify update .` after code changes.
 
-- **Milestone v1 (0.1.0) & Milestone v2 (0.2.0):** 100% COMPLETE & CLOSED.
-- **Milestone v3 (0.3.0) — Large-Model Scaling, Context Dynamics & Public Release:** 100% COMPLETE & CLOSED (4/4 phases complete):
-  - **Phase 1 (Large-Model Scaling: 35B MoE):** Plans 03-01, 03-02, 03-03 Complete.
-  - **Phase 2 (Context Scaling & Dynamics):** Plans 03-04, 03-05 Complete.
-  - **Phase 3 (Speculative Decoding & Acceleration):** Plans 03-06, 03-07 Complete.
-  - **Phase 4 (Public Distribution & Packaging):** Plans 03-08, 03-09 Complete:
-    - `[x]` **Plan 03-08 (Distributable Package & Clean CLI):** Packaged OhYesMLX under PEP 621 with Hatchling at version `0.3.0`. Enforced zero external runtime dependencies (stdlib only). Added top-level `--version` / `-V` CLI flags, exposed `__version__ = "0.3.0"` in `ohyesmlx/__init__.py`, guaranteed bundling of package data (`longtext.md`), and expanded test coverage with 8 new regression tests.
-    - `[x]` **Plan 03-09 (Automated Interactive Pareto Visualization):** Delivered standalone, zero-dependency interactive HTML5/SVG visualization (`ohyesmlx/pareto.py`, `results/pareto_frontier.html`) mapping Speed (decode tok/s), Memory Footprint (`phys_footprint`, disk size), and Quality (MMLU, IFEval, GSM8K accuracy) across 18 verified configurations. Integrated `ohyesmlx pareto [--out <path>]` CLI command. Added 5 dedicated unit tests. All 509 tests pass.
+## Next moves
 
----
+1. `/paul:discuss-milestone` for the next milestone. Decide first whether non-MLX adapters
+   (llama.cpp / Ollama) are in scope: they stretch the project's "MLX on a Mac" core value.
+2. Optional: audit item 1, removing rationale restated across `report.py`/`measure.py` docstrings
+   (~−800 lines, prose only). Deferred as low value per line of review.
+3. README says `--cells` "or configuration files". There is no config-file selector, so fix the wording.
+4. A pareto view rebuilt as `pareto <run_dirs>` from `results.jsonl`, within-runtime memory only,
+   is a candidate if wanted.
 
-## Next Steps
+## Standing invariants
 
-- Documentation updated: [README.md](README.md) contains the Model & Architecture Compatibility Guide and Horizon Roadmap (v3.1 / v4 Candidates).
-- Tag release `v0.3.0` (or `v1.0.0` public release).
-- Publish wheel and sdist packages to PyPI / GitHub Releases.
-- Future horizon work: evaluate non-MLX adapters (`llama.cpp` / GGUF, `Ollama`) and new architecture backends.
-
----
-
-## Standing Invariants
-
-- **Quiet Machine:** Exactly one model resident at a time. Sweep ports `8000, 8080, 8081, 8100, 1337` before starting.
-- **Python Environment:** Prepend `PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"` so python resolves to the venv with `mlx_lm` and `tokenizers`.
-- **Test Suite:** `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` must remain 509+ green.
-- **Deep Wiki:** Update `/Users/jrazz/Documents/ObsidianNotes/10 Wiki/Projects/OhYesMLX/OhYesMLX.md` and run `validate_vault.py` after verified runs. Never commit/push the vault.
+Unchanged from AGENTS.md: one model resident at a time, a quiet machine while measuring, no
+`ohyesmlx/*.py` edits during a grid, and the coherence gate before any number counts.
