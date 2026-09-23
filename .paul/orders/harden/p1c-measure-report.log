@@ -1,0 +1,4 @@
+Implemented A1, A2, B3, C1/C2, C4, D2, and E1 in the four authorized files. Added red-checked regressions for each; the API-key test confirmed failure when forwarding was removed, then passed after restoration.
+
+Full suite: **529 passed** (wave 1 baseline: 497). `compileall` and `git diff --check` passed; the diff contains only the four specified files. I did not verify against live runtimes.
+EXIT 0

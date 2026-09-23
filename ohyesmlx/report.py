@@ -80,11 +80,6 @@ AXES = ("runtime", "format")
 
 MIN_PERCENTILE_N = 5
 
-# A rate needs an interval. A runtime that returns the entire completion in a single content
-# delta has none, and dividing by the float noise between two identical timestamps is how 256
-# tokens were published at 1.5 billion tok/s.
-MIN_CONTENT_DELTAS = 2
-
 # How far above the median measured request the cold visit's first request has to sit before
 # the row says a load was deferred into it, in SECONDS rather than as a ratio. The ratio this
 # replaced was workload-dependent and the deferral is not: oMLX 0.6.4's deferral read as 9.4x
@@ -204,6 +199,12 @@ DEFAULT_RANK = "decode_tps"
 # rest are latency, memory and disk. A metric added to `RANK_METRICS` later belongs here only
 # when it is a decode rate or is computed from one.
 DECODE_DERIVED_RANKS = frozenset({"decode_tps"})
+
+_UNPUBLISHED_FIELDS = frozenset({
+    "ttft_p50_s", "ttft_p90_s", "ttft_p99_s", "itl_s", "decode_tps",
+    "drift_pct", "aggregate_tps", "prefill_tps",
+})
+
 
 # Every value the row carries, in one place, so the card cannot drift from the table.
 CARD_FIELDS = (
@@ -348,7 +349,7 @@ def summarize(results: list[CellResult], *, measured: int | None = None) -> list
     recorded them — this module has no warmup marker to filter on, so keeping warmups out
     of a cell's summary is measure's job. Percentiles below ``MIN_PERCENTILE_N`` samples
     are omitted rather than guessed, and ``percentile_note`` says so; a request that
-    streamed fewer than ``MIN_CONTENT_DELTAS`` content deltas carries no rate to report, and
+    streamed fewer than ``measure.MIN_CONTENT_DELTAS`` content deltas carries no rate to report, and
     ``delta_note`` and ``ttft_note`` say that instead.
 
     *measured* is the run's batch pin: a row that landed fewer batches than that carries
@@ -452,6 +453,7 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
     if rank not in RANK_METRICS:
         raise ValueError(_rank_error(rank))
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
+    _check_harness(runs)
     _check_pins(runs)
     _check_cells_appear_once(
         runs,
@@ -648,10 +650,15 @@ def _card(row: dict, rank: str) -> list[str]:
         ),
         _card_row("token_source", _text(row.get("token_source"))),
     ]
+    unpublished = _not_published_note(row)
     for field, places in CARD_FIELDS:
         value = row.get(field)
-        shown = _bytes(value) if field == "disk_bytes" else _number(value, places)
-        lines.append(_card_row(field, shown, _card_note(row, field, rank)))
+        if unpublished and field in _UNPUBLISHED_FIELDS:
+            shown, note = "—", unpublished
+        else:
+            shown = _bytes(value) if field == "disk_bytes" else _number(value, places)
+            note = _card_note(row, field, rank)
+        lines.append(_card_row(field, shown, note))
         if field == "decode_tps":
             # Beside the rate it qualifies: whether the cell had settled by the time its window
             # closed is part of reading that rate, and a card that listed the rate alone would
@@ -663,6 +670,11 @@ def _card(row: dict, rank: str) -> list[str]:
         "",
     ]
     return lines
+
+
+def _not_published_note(row: dict) -> str | None:
+    status = row.get("status")
+    return None if status == "PASS" else f"not published: {status} row"
 
 
 def _card_row(field: str, value: str, note: str | None = None) -> str:
@@ -726,7 +738,7 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
     n = len(ttft)
     deltas = [_content_deltas(observation) for observation in samples]
     single_delta = deltas.count(1)
-    too_few = sum(1 for count in deltas if count < MIN_CONTENT_DELTAS)
+    too_few = sum(1 for count in deltas if count < measure.MIN_CONTENT_DELTAS)
     # measure's own dict off the raw observations, which is what ``results.jsonl`` recorded for
     # this row: asking for it rather than recomputing it here is what keeps the two in step.
     drift = measure.measured_drift(result.observations)
@@ -768,7 +780,7 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "delta_note": None
         if not too_few
         else f"n={len(decode)}: decode tok/s, ITL and prefill tok/s omitted (fewer than "
-        f"{MIN_CONTENT_DELTAS} content deltas in {too_few} of {len(samples)} measured "
+        f"{measure.MIN_CONTENT_DELTAS} content deltas in {too_few} of {len(samples)} measured "
         "requests)",
         "ttft_note": None
         if not single_delta
@@ -932,7 +944,12 @@ def _drift_card_row(row: dict) -> str:
     A reader comparing two cells needs to see that one of them was still climbing while the
     other had settled, and a card that printed the rate alone would render the two identically.
     """
-    return _card_row("drift_pct", _drift_cell(row), row.get("drift_note"))
+    unpublished = _not_published_note(row)
+    return _card_row(
+        "drift_pct",
+        "—" if unpublished else _drift_cell(row),
+        unpublished or row.get("drift_note"),
+    )
 
 
 def _floor_verdicts(status, reason) -> dict:
@@ -1030,14 +1047,6 @@ def _per_request(observation) -> dict:
     count, a decode window of zero length, a stream with no inter-token interval — is
     ``None``. It is never faked from a leftover number.
     """
-    # prefill_tps divides the prompt by TTFT, which is only prefill time when TTFT is a
-    # first-token latency. In a one-delta stream TTFT spans the whole generation, so the
-    # same arithmetic reports a prefill rate several times slower than the runtime's real
-    # one — wrong in the believable direction, which is worse than wrong absurdly. This is
-    # the one gate report applies on top of measure's definitions: the domain rule the
-    # metrics are published under, not a second way of computing them.
-    if _content_deltas(observation) < MIN_CONTENT_DELTAS:
-        return {"decode_tps": None, "prefill_tps": None, "itl_s": None}
     return {
         "decode_tps": measure.decode_tps(observation),
         "prefill_tps": measure.prefill_tps(observation),
@@ -1149,12 +1158,14 @@ def _table(rows: list[dict], rank: str) -> str:
 
 def _cells(row: dict) -> list[str]:
     n, total = row.get("n_measured"), row.get("n_requests")
+    unpublished = _not_published_note(row)
     notes = _unrepeated(
         [
             part
             for part in (
                 row.get("rank_note"),
                 row.get("exclusion"),
+                unpublished,
                 row.get("reason"),
                 row.get("lost_visit_note"),
                 row.get("short_note"),
@@ -1168,6 +1179,15 @@ def _cells(row: dict) -> list[str]:
             if part
         ]
     )
+    unpublished = _not_published_note(row)
+    figures = {
+        field: "—" if unpublished else _number(row.get(field), places)
+        for field, places in (
+            ("ttft_p50_s", 3), ("ttft_p90_s", 3), ("ttft_p99_s", 3),
+            ("itl_s", 4), ("decode_tps", 1), ("aggregate_tps", 1),
+            ("prefill_tps", 1),
+        )
+    }
     return [
         _text(row.get("cell_id")),
         _text(row.get("runtime")),
@@ -1176,14 +1196,14 @@ def _cells(row: dict) -> list[str]:
         _text(row.get("rank")),
         _text(row.get("status")),
         _text(n) if total in (None, n) else f"{n}/{total}",
-        _number(row.get("ttft_p50_s"), 3),
-        _number(row.get("ttft_p90_s"), 3),
-        _number(row.get("ttft_p99_s"), 3),
-        _number(row.get("itl_s"), 4),
-        _number(row.get("decode_tps"), 1),
-        _drift_cell(row),
-        _number(row.get("aggregate_tps"), 1),
-        _number(row.get("prefill_tps"), 1),
+        figures["ttft_p50_s"],
+        figures["ttft_p90_s"],
+        figures["ttft_p99_s"],
+        figures["itl_s"],
+        figures["decode_tps"],
+        "—" if unpublished else _drift_cell(row),
+        figures["aggregate_tps"],
+        figures["prefill_tps"],
         _number(row.get("cold_load_s"), 2),
         _number(row.get("first_request_s"), 2),
         _number(row.get("peak_mb"), 1),
@@ -1256,7 +1276,7 @@ def _footnotes() -> list[str]:
         f"p90 and p99 need at least {MIN_PERCENTILE_N} samples; below that the cell shows "
         "`—` and the row says `n=<k>` rather than inventing a percentile.",
         "",
-        f"decode tok/s, ITL and prefill tok/s need at least {MIN_CONTENT_DELTAS} content deltas in the "
+        f"decode tok/s, ITL and prefill tok/s need at least {measure.MIN_CONTENT_DELTAS} content deltas in the "
         "stream: a runtime that returns the whole completion in one delta has no inter-token "
         "interval, so the cell shows `—` and the row says why. A response that arrived whole "
         "in one delta also makes that cell's TTFT a time-to-completion rather than a "
@@ -1290,6 +1310,22 @@ ENTRY_LEGEND = (
     "| `—` | a combination no run measured |",
     "",
 )
+
+
+def _check_harness(runs: list[tuple]) -> None:
+    seen = None
+    for label, header, _rows in runs:
+        harness = header.get("harness")
+        if harness is None:
+            continue
+        source_sha256 = harness.get("source_sha256")
+        if seen is not None and seen[1] != source_sha256:
+            raise ValueError(
+                f"harness source_sha256 disagrees: {seen[0]} used {seen[1]!r} and {label} "
+                f"used {source_sha256!r}; runs with different harness source are not one join"
+            )
+        if seen is None:
+            seen = (label, source_sha256)
 
 
 def _check_pins(runs: list[tuple], *, varying: str | None = None) -> None:
@@ -1500,8 +1536,19 @@ def _provenance(runs: list[tuple], columns: list[dict]) -> list[str]:
             f"{_text(column['version'])} |"
         )
     lines.append("")
+    lines += _harness_provenance(runs)
     lines += _shared_pins(runs, varying=None)
     return lines
+
+
+def _harness_provenance(runs: list[tuple]) -> list[str]:
+    provenance = [
+        f"Harness `{_text(header['harness'].get('version'))}` source_sha256 "
+        f"`{_text(header['harness'].get('source_sha256'))}` for `{label}`."
+        for label, header, _rows in runs
+        if header.get("harness") is not None
+    ]
+    return provenance + [""] if provenance else []
 
 
 def _shared_pins(runs: list[tuple], *, varying: str | None) -> list[str]:
@@ -1881,6 +1928,7 @@ def render_sweep(
         raise ValueError(_rank_error(rank))
 
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
+    _check_harness(runs)
     _check_pins(runs, varying=varying)
     _check_sweep_varies(runs, varying)
     _check_cells_appear_once(
@@ -2100,6 +2148,7 @@ def _sweep_provenance(runs: list[tuple], varying: str) -> list[str]:
     for label, header, _rows in runs:
         lines.append(f"| {_text(label)} | {_pin_note(header, varying)} |")
     lines.append("")
+    lines += _harness_provenance(runs)
     lines += _shared_pins(runs, varying=varying)
     return lines
 

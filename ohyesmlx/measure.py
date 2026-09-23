@@ -88,6 +88,7 @@ unknown runtime, a runtime that will not load the artifact, no tokenizer.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import statistics
@@ -96,8 +97,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import coherence, runtimes, sample, token_counter, transport
-from .runtimes import CACHE_STATES
+from . import __version__, coherence, runtimes, sample, token_counter, transport
+from .runtimes import CACHE_STATES, RuntimeStopError
 
 # Imported at runtime, not under TYPE_CHECKING: load_run rebuilds a record with the class
 # that wrote it, from transport.py itself rather than from a re-bound module handle.
@@ -163,6 +164,13 @@ VISIT_ROUNDS = 2
 TEMPERATURE = 0.0
 SEED = 0
 RESULTS_FILENAME = "results.jsonl"
+
+# A rate needs an interval. A runtime that returns the entire completion in a single content
+# delta has none, and dividing by the float noise between two timestamps is how 256 tokens were
+# published at 1.5 billion tok/s. Prefill is gated too: in a one-delta stream TTFT spans the whole
+# generation, so prompt / TTFT reports a prefill rate several times too slow -- wrong in the
+# believable direction. Owned here so drift and warmup never read an out-of-domain rate either.
+MIN_CONTENT_DELTAS = 2
 
 INCOHERENT_PREFIX = "incoherent output: "
 
@@ -271,6 +279,8 @@ def decode_tps(observation) -> float | None:
     ``total_s`` is deliberately not a fallback: it includes the final usage chunk,
     ``[DONE]`` and stream teardown, and dividing by it is the fork this project deleted.
     """
+    if observation.content_event_count < MIN_CONTENT_DELTAS:
+        return None
     if observation.ttft_s is None or observation.last_content_s is None:
         return None
     span = observation.last_content_s - observation.ttft_s
@@ -281,6 +291,8 @@ def decode_tps(observation) -> float | None:
 
 def prefill_tps(observation) -> float | None:
     """Prompt tokens per second of prefill, from ``usage.prompt_tokens``."""
+    if observation.content_event_count < MIN_CONTENT_DELTAS:
+        return None
     if observation.ttft_s is None or observation.ttft_s <= 0 or not observation.prompt_tokens:
         return None
     return observation.prompt_tokens / observation.ttft_s
@@ -288,6 +300,8 @@ def prefill_tps(observation) -> float | None:
 
 def itl_s(observation) -> float | None:
     """Mean gap between successive output tokens after the first."""
+    if observation.content_event_count < MIN_CONTENT_DELTAS:
+        return None
     if observation.ttft_s is None or observation.last_content_s is None:
         return None
     if not observation.completion_tokens:
@@ -389,6 +403,13 @@ def _warmup_pin(warmup: int | str) -> int | dict:
         "cap": WARMUP_CAP,
         "plateau_pct": WARMUP_PLATEAU_PCT,
     }
+
+
+def _source_sha256() -> str:
+    digest = hashlib.sha256()
+    for path in sorted(Path(__file__).parent.glob("*.py"), key=lambda item: item.name):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def run_cells(
@@ -509,8 +530,12 @@ def run_cells(
 
         cell_results = _results_for(cell, workloads, by_key, results, measured=measured)
         measured_before = sum(len(result.observations) for result in cell_results)
-        outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
-                         concurrency=concurrency, cache_state=cache_state, counters=counters)
+        try:
+            outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
+                             concurrency=concurrency, cache_state=cache_state, counters=counters)
+        except BaseException:
+            write_jsonl(results, results_path, run=run)
+            raise
         if outcome == "measured":
             reason = lost.pop(cell.id, None)
             for result in cell_results:
@@ -645,55 +670,50 @@ def _visit(
             _na(result, refusal)
         return "skip"
 
+    handle = None
     try:
-        # The artifact directory doubles as the model-id hint; the runtime resolves it to
-        # whatever it calls those weights, and that resolved name is what gets recorded.
-        handle = runtime.start(
-            cell.artifact_dir, cell.artifact_dir, cache_state=cache_state
-        )
-    except Exception as error:  # noqa: BLE001 - a runtime that will not load is a result
-        reason = f"runtime {cell.runtime!r} did not start: {type(error).__name__}: {error}"
+        try:
+            # The artifact directory doubles as the model-id hint; the runtime resolves it to
+            # whatever it calls those weights, and that resolved name is what gets recorded.
+            handle = runtime.start(
+                cell.artifact_dir, cell.artifact_dir, cache_state=cache_state
+            )
+        except RuntimeStopError:
+            raise
+        except Exception as error:  # noqa: BLE001 - a runtime that will not load is a result
+            reason = f"runtime {cell.runtime!r} did not start: {type(error).__name__}: {error}"
+            for result in results:
+                if result.observations:
+                    result.status, result.reason = "FAIL", reason
+                else:
+                    _na(result, reason)
+            return "retry"
+
+        cold_visit = all(result.cold_load_s is None for result in results)
+
         for result in results:
-            if result.observations:
-                result.status, result.reason = "FAIL", reason
-            else:
-                _na(result, reason)
-        return "retry"
+            if result.cold_load_s is None:
+                result.cold_load_s = handle.cold_load_s
+                result.runtime_version = handle.version
 
-    # The same rule decides the cold visit for the first request: it is the one whose load has
-    # not been recorded yet. Read before the rows take their cold load, because by then every
-    # one of them carries it.
-    cold_visit = all(result.cold_load_s is None for result in results)
-
-    for result in results:
-        if result.cold_load_s is None:
-            # The first visit's load is the cold one; a later visit starts from a warm page
-            # cache. One load is shared by the cell's workloads, so it is recorded on every
-            # one of their rows rather than on whichever shape happened to run first.
-            result.cold_load_s = handle.cold_load_s
-            result.runtime_version = handle.version
-
-    try:
         for result, workload in zip(results, workloads):
             memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
                                      concurrency=concurrency, counter=counter)
             result.memory = _highest_peak(result.memory, memory)
+
+        if cold_visit:
+            carrier = _first_warmup_result(results)
+            handle.first_request_s = _first_warmup_latency(results)
+            for result in results:
+                result.first_request_s = handle.first_request_s
+                result.first_request_workload_id = (
+                    None if carrier is None else carrier.workload_id
+                )
+
+        return "measured"
     finally:
-        handle.stop()
-
-    if cold_visit:
-        # Warmup #1 is where a lazy loader pays for its weights. One load is shared by the
-        # cell's workloads, so the cost is recorded on the handle and on every one of their
-        # rows rather than on whichever shape happened to run first -- and beside it the one
-        # shape that made that request, because a row that did not make it has no latency of
-        # its own to read against its own measured requests.
-        carrier = _first_warmup_result(results)
-        handle.first_request_s = _first_warmup_latency(results)
-        for result in results:
-            result.first_request_s = handle.first_request_s
-            result.first_request_workload_id = None if carrier is None else carrier.workload_id
-
-    return "measured"
+        if handle is not None:
+            handle.stop()
 
 
 def _first_warmup_result(results: list[CellResult]) -> CellResult | None:
@@ -1098,6 +1118,13 @@ def _incoherent(observations) -> str | None:
 def _missing_metric(observation) -> str | None:
     """Which published metric this observation cannot carry, or ``None`` when it can."""
     if decode_tps(observation) is None:
+        if observation.content_event_count < MIN_CONTENT_DELTAS:
+            if observation.ttft_s is None or observation.last_content_s is None:
+                return "no content-delta timing, so decode tok/s is undefined"
+            return (
+                f"fewer than {MIN_CONTENT_DELTAS} content deltas, so decode tok/s "
+                "is undefined"
+            )
         if observation.ttft_s is None or observation.last_content_s is None:
             return "no content-delta timing, so decode tok/s is undefined"
         if not observation.completion_tokens:
@@ -1168,13 +1195,18 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name + ".tmp")
-    with open(temporary, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps(run, sort_keys=True) + "\n")
-        for result in results:
-            handle.write(json.dumps(_record(result), sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
+    try:
+        header = run | {"harness": {"version": __version__, "source_sha256": _source_sha256()}}
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(header, sort_keys=True) + "\n")
+            for result in results:
+                handle.write(json.dumps(_record(result), sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _record(result: CellResult) -> dict:

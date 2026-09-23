@@ -262,6 +262,41 @@ def test_five_samples_produce_real_percentiles_and_no_note():
     assert row["percentile_note"] is None
 
 
+@pytest.mark.parametrize("status", ["FAIL", "N/A"])
+def test_non_pass_rows_keep_values_in_summary_but_publish_no_request_figures(status):
+    result = cell_result(
+        [obs(ttft=0.4, last=1.4) for _ in range(5)],
+        status=status,
+        reason="diagnostic reason",
+        batch_spans=[1.0],
+    )
+    row, = report.summarize([result])
+
+    assert row["ttft_p50_s"] == pytest.approx(0.4)
+    assert row["decode_tps"] == pytest.approx(101.0)
+    assert row["aggregate_tps"] is not None
+    assert row["drift"] is not None
+
+    printed, = leaderboard_rows(report.render_markdown([row], axis="runtime"))
+    for field in (
+        "TTFT p50 s", "TTFT p90 s", "TTFT p99 s", "ITL s", "decode tok/s",
+        "drift %", "aggregate tok/s", "prefill tok/s",
+    ):
+        assert printed[field] == "—", field
+    assert f"not published: {status} row" in printed["notes"]
+
+    card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+    for field in (
+        "ttft_p50_s", "ttft_p90_s", "ttft_p99_s", "itl_s", "decode_tps",
+        "aggregate_tps", "prefill_tps",
+    ):
+        assert f"| {field} | — | not published: {status} row |" in card
+    assert f"| drift_pct | — | not published: {status} row |" in card
+    assert "| cold_load_s | 12.50 |" in card
+    assert "| peak_mb | 9150.0 |" in card
+    assert "| runtime_version | mlx-lm 0.31.3 |" in card
+
+
 def test_a_cell_with_no_observations_reports_nothing_rather_than_zero():
     row = report.summarize([cell_result([], status="FAIL", reason="port 8100 never opened")])[0]
 
@@ -2207,6 +2242,55 @@ def assert_refused(runs, *fragments):
     for fragment in fragments:
         assert fragment in message, f"{fragment!r} is missing from the refusal: {message}"
     return message
+
+
+def test_harness_source_mismatch_refuses_grid_and_sweep_joins():
+    grid = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",),
+                 header=run_header(("chat",), harness={"version": "0.3.0", "source_sha256": "aaa"})),
+        grid_run(RUN_B, "omlx", "oMLX 0.6.4", ("oq4",), workload_ids=("chat",),
+                 header=run_header(("chat",), harness={"version": "0.3.0", "source_sha256": "bbb"})),
+    ]
+    with pytest.raises(ValueError) as raised:
+        report.render_grid(grid)
+    assert RUN_A in str(raised.value) and RUN_B in str(raised.value)
+    assert "source_sha256" in str(raised.value)
+
+    sweep = [
+        concurrency_run(SWEEP_RUNS[0], 1, header=run_header(
+            ("chat",), concurrency=1,
+            harness={"version": "0.3.0", "source_sha256": "aaa"},
+        )),
+        concurrency_run(SWEEP_RUNS[1], 8, header=run_header(
+            ("chat",), concurrency=8,
+            harness={"version": "0.3.0", "source_sha256": "bbb"},
+        )),
+    ]
+    with pytest.raises(ValueError) as raised:
+        report.render_sweep(sweep, varying="concurrency")
+    assert SWEEP_RUNS[0] in str(raised.value) and SWEEP_RUNS[1] in str(raised.value)
+    assert "source_sha256" in str(raised.value)
+
+
+def test_legacy_runs_without_harness_provenance_still_join():
+    rendered = report.render_grid([
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+    ])
+    assert "Grid" in rendered
+    assert "Harness" not in rendered
+
+    pinned = grid_run(
+        RUN_A,
+        "mlxlm",
+        "mlx-lm 0.31.3",
+        ("oq4",),
+        workload_ids=("chat",),
+        header=run_header(
+            ("chat",), harness={"version": "0.3.0", "source_sha256": "abc123"}
+        ),
+    )
+    rendered = report.render_grid([pinned])
+    assert "Harness `0.3.0` source_sha256 `abc123`" in rendered
 
 
 def test_a_legal_five_column_join_renders_one_table_per_workload():

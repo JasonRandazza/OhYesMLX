@@ -18,7 +18,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 Milestone: v3.1 — Hardening (0.3.1) — IN PROGRESS. v0.3.0 released 2026-09-23.
 Phase: 1 (Correctness & residency fixes) — IN PROGRESS
 Plan: from the deep review, `.paul/review/2026-09-23/SUMMARY.md` (IDs A1–F below refer to it)
-Status: review verified (38 confirmed, 1 fabricated, 3 not defects); Decisions 119–121 recorded. 497 tests pass.
+Status: Phase 1 COMPLETE 2026-09-23 (waves 1 and 2 committed; 530 tests). Next: Phase 2 (A5 label, A7 refusal, D1, D3).
 Last activity: 2026-09-23 — deep review complete; hardening Phase 1 dispatch.
 
 Progress:

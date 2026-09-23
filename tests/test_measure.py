@@ -13,6 +13,7 @@ requests, and results that survive the process that wrote them.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import threading
@@ -24,6 +25,7 @@ from types import SimpleNamespace
 import pytest
 
 from ohyesmlx import cli, measure, report
+from ohyesmlx.runtimes import RuntimeStopError
 
 WARMUPS = 3
 MEASURED = 5
@@ -110,7 +112,7 @@ class FakeRuntime:
 
     def __init__(self, name, recorder, *, port=8081, version="0.31.3", cold_load_s=7.5,
                  start_error=None, fail_from_attempt=None, fail_attempts=(),
-                 cache_state_refusals=None):
+                 cache_state_refusals=None, api_key=None):
         self.name = name
         self.port = port
         self.version = version
@@ -125,6 +127,7 @@ class FakeRuntime:
         # default: every real runtime but Osaurus reaches both with a start flag, and the
         # absent pin reaches both everywhere.
         self.cache_state_refusals = dict(cache_state_refusals or {})
+        self.api_key = api_key
 
     def cache_state_refusal(self, cache_state):
         return self.cache_state_refusals.get(cache_state)
@@ -141,6 +144,7 @@ class FakeRuntime:
             self.version,
             self.cold_load_s,
             self.recorder,
+            api_key=self.api_key,
         )
         self.handles.append(handle)
         return handle
@@ -182,6 +186,7 @@ class FakeTransport:
             temperature=temperature,
             seed=seed,
             timeout_s=timeout_s,
+            api_key=api_key,
             token_counter=token_counter,
             visit=visit,
             visit_index=sum(1 for kind in since_start if kind == "chat"),
@@ -377,6 +382,10 @@ def test_decode_never_falls_back_to_total_s():
 def test_a_single_content_delta_has_no_decode_window():
     buffered = FakeObservation(ttft_s=2.5, last_content_s=2.5, total_s=2.6, content_event_count=1)
     assert measure.decode_tps(buffered) is None
+    assert measure.prefill_tps(buffered) is None
+    assert measure.itl_s(buffered) is None
+    assert measure.measured_drift([buffered] * 5) is None
+    assert measure._warmup_rate([buffered], None, concurrency=1) is None
 
 
 def test_itl_never_divides_by_zero_on_a_single_token():
@@ -873,6 +882,15 @@ def test_every_request_carries_its_workload_s_max_tokens(harness):
     assert {call.messages[0]["content"] for call in harness.transport.calls} == {"hi"}
 
 
+def test_an_omlx_handle_api_key_reaches_transport_chat(harness):
+    harness.add_runtime("omlx", port=8100, api_key="ohyesmlx-local")
+
+    harness.run([harness.cell("oq__omlx", "omlx")], measured=1)
+
+    assert harness.transport.calls
+    assert {call.api_key for call in harness.transport.calls} == {"ohyesmlx-local"}
+
+
 def test_the_token_counter_is_wired_into_every_request(harness):
     """The predecessor's exact token path existed and no production caller ever passed it."""
     harness.add_runtime("mlxlm")
@@ -1200,6 +1218,42 @@ def test_an_unknown_runtime_is_na_and_the_run_continues(harness):
     assert results[1].observations == []
 
 
+def test_a_runtime_stop_error_on_start_is_persisted_and_ends_the_run(harness):
+    runtime = harness.add_runtime("omlx", start_error=RuntimeStopError("cleanup uncertain"))
+    next_runtime = harness.add_runtime("mlxlm", port=8081)
+
+    with pytest.raises(RuntimeStopError, match="cleanup uncertain"):
+        harness.run(
+            [harness.cell("oq__omlx", "omlx"), harness.cell("oq__mlxlm", "mlxlm")]
+        )
+
+    assert runtime.attempts == 1
+    assert next_runtime.attempts == 0
+    assert harness.results_file().exists()
+    assert len(harness.lines()) == 1
+
+
+def test_a_stop_error_while_finishing_a_visit_is_persisted_and_ends_the_run(harness):
+    failing = harness.add_runtime("omlx", port=8100)
+    succeeding = harness.add_runtime("mlxlm", port=8081)
+    original_start = failing.start
+
+    def start_with_stop_failure(artifact_dir, model_id, *, cache_state=None):
+        handle = original_start(artifact_dir, model_id, cache_state=cache_state)
+        handle.stop = lambda: (_ for _ in ()).throw(RuntimeStopError("stop unverified"))
+        return handle
+
+    failing.start = start_with_stop_failure
+    with pytest.raises(RuntimeStopError, match="stop unverified"):
+        harness.run(
+            [harness.cell("oq__omlx", "omlx"), harness.cell("oq__mlxlm", "mlxlm")]
+        )
+
+    assert succeeding.attempts == 0
+    assert harness.results_file().exists()
+    assert len(harness.lines()) == 1
+
+
 def test_a_runtime_that_will_not_start_is_na_and_does_not_end_the_run(harness):
     harness.add_runtime("mlxlm")
     broken = harness.add_runtime("omlx", start_error=RuntimeError("model type not supported"))
@@ -1412,6 +1466,68 @@ def test_a_cell_that_cannot_be_measured_costs_no_cooldown(harness):
 # ------------------------------------------------------------------------- persistence
 
 
+def test_exception_during_visit_persists_partial_observations_and_stops(harness, monkeypatch):
+    runtime = harness.add_runtime("mlxlm")
+
+    def fail_after_partial_sample(handle, result, *args, **kwargs):
+        result.observations.append(FakeObservation(text="partial"))
+        raise RuntimeError("visit interrupted")
+
+    monkeypatch.setattr(measure, "_workload_visit", fail_after_partial_sample)
+    with pytest.raises(RuntimeError, match="visit interrupted"):
+        harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert runtime.handles[0].stops == 1
+    record, = harness.lines()
+    assert record["observations"][0]["text"] == "partial"
+
+
+def test_exception_after_runtime_start_still_stops_handle(harness):
+    runtime = harness.add_runtime("mlxlm")
+    original_start = runtime.start
+    handles = []
+
+    class BrokenVersionHandle:
+        def __init__(self, handle):
+            self._handle = handle
+            self.cold_load_s = handle.cold_load_s
+            self.stop = handle.stop
+
+        @property
+        def version(self):
+            raise RuntimeError("version unavailable")
+
+        def __getattr__(self, name):
+            return getattr(self._handle, name)
+
+    def start(artifact_dir, model_id, *, cache_state=None):
+        handle = BrokenVersionHandle(original_start(artifact_dir, model_id, cache_state=cache_state))
+        handles.append(handle)
+        return handle
+
+    runtime.start = start
+    with pytest.raises(RuntimeError, match="version unavailable"):
+        harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert len(handles) == 1
+    assert runtime.handles[0].stops == 1
+    assert harness.results_file().exists()
+
+
+def test_keyboard_interrupt_during_visit_persists_before_reraising(harness, monkeypatch):
+    harness.add_runtime("mlxlm")
+
+    def interrupt(handle, result, *args, **kwargs):
+        result.observations.append(FakeObservation(text="before interrupt"))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(measure, "_workload_visit", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert harness.lines()[0]["observations"][0]["text"] == "before interrupt"
+
+
 def test_results_are_persisted_after_every_visit(harness):
     results_dir = harness.tmp_path / "results"
     seen: list[int | None] = []
@@ -1535,6 +1651,23 @@ def cell_result(observations=(), *, cell_id="oq__mlxlm", runtime="mlxlm",
     )
 
 
+def test_write_jsonl_failure_removes_tmp_and_preserves_previous_file(tmp_path, monkeypatch):
+    path = tmp_path / "results.jsonl"
+    path.write_text("previous results\n")
+    original_replace = measure.os.replace
+
+    def fail_replace(source, target):
+        raise OSError("cannot replace")
+
+    monkeypatch.setattr(measure.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="cannot replace"):
+        measure.write_jsonl([], path, run={"temperature": 0.0})
+
+    assert path.read_text() == "previous results\n"
+    assert not path.with_name(path.name + ".tmp").exists()
+    monkeypatch.setattr(measure.os, "replace", original_replace)
+
+
 def test_write_jsonl_writes_a_header_and_one_object_per_result(tmp_path):
     observations = [
         FakeObservation(),
@@ -1562,7 +1695,10 @@ def test_write_jsonl_writes_a_header_and_one_object_per_result(tmp_path):
     measure.write_jsonl(results, str(path), run=run)
 
     header, *lines = [json.loads(line) for line in path.read_text().splitlines()]
-    assert header == run
+    assert header == run | {"harness": {"version": "0.3.0", "source_sha256": hashlib.sha256(b"".join(
+        (Path(measure.__file__).parent / name).read_bytes()
+        for name in sorted(path.name for path in Path(measure.__file__).parent.glob("*.py"))
+    )).hexdigest()}}
     assert len(lines) == 2
     # One line per (cell, workload) pair, each naming the shape that produced it.
     assert [line["workload_id"] for line in lines] == ["chat", "decode"]
@@ -1702,7 +1838,8 @@ def test_the_run_directory_and_its_file_read_the_same(tmp_path):
 
     header, results = measure.load_run(path.parent)
 
-    assert header == run
+    assert header == run | {"harness": header["harness"]}
+    assert set(header["harness"]) == {"version", "source_sha256"}
     assert measure.load_run(path) == (header, results)
 
 
@@ -2685,3 +2822,12 @@ def test_a_sequential_warmup_still_settles_on_the_request_s_own_rate(harness):
     assert results[0].warmup_plateau is False
     assert len(results[0].warmup_observations) == measure.WARMUP_CAP
     assert results[0].batch_spans == []
+
+
+def test_drift_ignores_one_delta_rates():
+    """Review A2: a one-chunk response once reached drift as a bogus near-infinite rate."""
+    whole = FakeObservation(ttft_s=1.0, last_content_s=1.0 + 1e-7, content_event_count=1)
+    streamed = [FakeObservation(ttft_s=0.5, last_content_s=2.5) for _ in range(4)]
+    assert measure.decode_tps(whole) is None
+    assert measure.measured_drift([whole, *streamed]) == measure.measured_drift(streamed)
+
