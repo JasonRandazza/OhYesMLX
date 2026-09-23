@@ -56,6 +56,7 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 - **No accuracy scoring in v1.** It is out of scope until v1 ships, however tempting.
 - **One definition of everything.** A formula, a guard, a size or a constant lives in exactly one place and every caller asks it. Two copies drift: `report.py` and `measure.py` once carried two decode-rate formulas that disagreed on edge cases, and two disk-size walks, one of which miscounted HF-cache snapshots. A second copy gets deleted in the commit that notices it.
 - **Each rationale is written once, where the thing it explains is defined.** Callers point at it; they do not restate it. A rule restated in seven docstrings has seven places to go stale.
+- **Keep the code graph current.** After changing any `.py` file, run `graphify update .` so `graphify-out/` (gitignored, local) matches the code. A stale graph misleads the next agent the same way a stale docstring does. It is AST-only and costs no tokens.
 - **Stop and ask before adding a module, a subcommand, or a header pin.** Code size is not the metric (the old ~1,000-line target predates v2/v3 and was retired 2026-09-23); a new surface is the thing that grows maintenance, so a new surface is the thing that needs Jason's yes.
 
 ## Runtime hazards, already paid for
