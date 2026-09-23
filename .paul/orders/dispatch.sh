@@ -3,7 +3,7 @@
 #
 #   .paul/orders/dispatch.sh implement order-file.md [logfile]
 #
-# The preamble is byte-identical on every call, so it lands as a DeepSeek prompt-cache
+# The preamble is byte-identical on every call, so it lands as a prompt-cache
 # prefix at $0.003/M instead of $0.15/M. Order text goes AFTER it — never before, or the
 # prefix stops matching and every order pays full input price.
 #

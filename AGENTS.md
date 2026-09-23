@@ -78,8 +78,9 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 
 ## Delegation contract
 
-Implementation is delegated to Command Code workers on `deepseek/deepseek-v4.1-flash`
-via `cc-agent`. Claude Opus 5 orchestrates and is the final reviewer.
+Implementation is delegated to Command Code workers via `cc-agent`, on whatever route the fleet
+policy makes the default (`orca-fleet routes`; `gpt-6-luna` since 2026-09-23, not yet trialled,
+so check its diffs against `git` with extra care). Claude Opus 5 orchestrates and is the final reviewer.
 
 A worker dispatch always carries: the plan's acceptance criteria, the exact files it may
 touch, and "touch nothing else."
@@ -107,9 +108,9 @@ ran a command against an explicit capitalised warning and left a server holding 
 
 Work orders go out through `.paul/orders/dispatch.sh <role> <order-file>`, which prepends
 `.paul/orders/PREAMBLE.md` verbatim. The preamble carries the project's standing rules and
-is byte-identical on every dispatch, so DeepSeek V4.1 Flash bills it as a cache read at
-$0.003/M rather than fresh input at $0.15/M — a 50x difference on the part of the prompt
-that never changes. Order-specific text goes after it, never before: anything prepended
+is byte-identical on every dispatch, so the worker bills it as a cache read rather than fresh
+input — 10x cheaper on GPT-6 Luna ($0.01/M vs $0.10/M), 50x on DeepSeek — on the part of the
+prompt that never changes. Order-specific text goes after it, never before: anything prepended
 breaks the shared prefix and every order that follows pays full price.
 
 Editing PREAMBLE.md costs one full re-read on the next dispatch. Edit it when the standing
@@ -119,7 +120,7 @@ Traps worth keeping:
 
 - `cc-agent` defaults to 40 turns; set `CC_AGENT_MAX_TURNS=200` for anything non-trivial.
   Scope each dispatch to one deliverable and forbid tangents explicitly. A DeepSeek peak window
-  is a price bump the launcher announces and proceeds through, not a blocker.
+  (when routed there) is a price bump the launcher announces and proceeds through, not a blocker.
 - `explain` and `review` run in plan mode and cannot write. Research that must produce a
   file needs `implement`.
 - The collateral-deletion guard compares definition snapshots and misfires under fan-out —

@@ -1,7 +1,7 @@
 # Standing context for every OhYesMLX work order
 
-This block is byte-identical across every dispatch. It is the cached prefix: DeepSeek
-V4.1 Flash bills a cache read at $0.003/M against $0.15/M for fresh input, so everything
+This block is byte-identical across every dispatch. It is the cached prefix: the worker model
+bills a cache read at a fraction of fresh input, so everything
 invariant belongs here and only the task-specific part is ever re-read at full price.
 Do not reorder, reword, or "improve" it — an edit costs a full re-read on every order
 that follows.
@@ -12,8 +12,8 @@ OhYesMLX measures local LLM serving on Apple Silicon and answers one question: i
 serving runtime or your quantization costing you speed and memory? Two single-variable
 studies. Every run declares which axis it varies; nothing varies both.
 
-Eight modules in `ohyesmlx/`: `transport.py` (SSE measurement client), `runtimes.py`
-(uniform lifecycle over four heterogeneous servers), `measure.py` (the measurement loop),
+Nine modules in `ohyesmlx/`: `transport.py` (SSE measurement client), `runtimes.py`
+(uniform lifecycle over five heterogeneous servers), `osaurus_settings.py` (host-settings drift gate), `measure.py` (the measurement loop),
 `coherence.py` (the gate), `report.py` (join and leaderboard), `sample.py` (macOS unified
 memory sampling), `token_counter.py`, `cli.py`. Tests mirror them in `tests/`.
 
