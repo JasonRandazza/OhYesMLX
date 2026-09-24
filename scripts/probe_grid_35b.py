@@ -164,7 +164,7 @@ def main() -> None:
                     text = obs.text or obs.reasoning_text or ""
                     row["ok"] = bool(obs.ok)
                     row["deltas"] = obs.content_event_count
-                    row["text"] = text[:70]
+                    row["text"] = text  # whole: the sample is what audits the verdict
                     if text.strip():
                         coh_ok, coh_reason = coherence.is_coherent(text)
                         row["coherent"] = coh_ok

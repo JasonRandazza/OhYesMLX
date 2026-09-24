@@ -33,7 +33,7 @@ varied and carries the caveat naming what it therefore cannot claim.
 
 ## Metric definitions — do not redefine these
 
-- **TTFT** — request sent → first *content* token. Includes prefill. Reasoning tokens are not content.
+- **TTFT** — request sent → first *content* token. Includes prefill. Reasoning tokens are not content. Exception (Decision 119): a response that streams only reasoning, or mirrors reasoning into content, is timed on the stream it produced (`transport.timing_channel`), and every such row is labelled "timed on reasoning channel".
 - **ITL / TPOT** — mean gap between successive output tokens after the first.
 - **End-to-end latency** — P50 / P90 / P99. Never report a bare mean.
 - **Output throughput** — per-request and aggregate are separate numbers and are reported separately.

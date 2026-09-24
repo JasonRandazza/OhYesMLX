@@ -1,5 +1,7 @@
 # Plan 03-05: Quantized KV Caches (FP8, INT4 vs FP16 at 16k and 32k Context)
 
+> **Caveat added 2026-09-23 (hardening review A3, Decision 121).** The figures in this paper come from `scripts/probe_kv_quant.py`, a probe script, not the OhYesMLX harness. Decode is `(completion_tokens - 1) / span`, not the harness's `completion_tokens / (last_content_s - ttft_s)`; an undefined window is reported as `0.0` rather than as unavailable; each context/config point is one request with no warmup plateau; coherence is annotated but does not withhold numbers; raw observations were reduced to derived summaries; runtime versions were not recorded. They are therefore **not comparable with harness-produced figures** (grids, sweeps, leaderboards), and within-paper comparisons hold only to the extent that the same formula applied to every arm. Re-running this study through the harness is hardening Phase 4. See `.paul/review/2026-09-23/scripts.md`.
+
 **Date:** 2026-09-20  
 **Status:** COMPLETE & PUBLISHED  
 **Phase:** Milestone v3 Phase 2 (Context Scaling & Conversational Dynamics)  

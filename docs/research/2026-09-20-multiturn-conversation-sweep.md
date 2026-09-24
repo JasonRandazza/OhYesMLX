@@ -1,5 +1,7 @@
 # Plan 03-04: Multi-Turn Conversation Sweep (1 to 10 Turns)
 
+> **Caveat added 2026-09-23 (hardening review A3, Decision 121).** The figures in this paper come from `scripts/probe_multiturn_sweep.py`, a probe script, not the OhYesMLX harness. Decode is `(completion_tokens - 1) / span` with `0.0` substituted for undefined windows; the published means include cold turns, incoherent turns and those zeros, and are bare means rather than P50/P90/P99; coherence is aggregated but does not gate publication; there is no warmup plateau; raw observations were reduced to derived values and truncated text; runtime versions were not recorded. They are therefore **not comparable with harness-produced figures** (grids, sweeps, leaderboards), and within-paper comparisons hold only to the extent that the same formula applied to every arm. Re-running this study through the harness is hardening Phase 4. See `.paul/review/2026-09-23/scripts.md`.
+
 **Date:** 2026-09-20  
 **Status:** COMPLETE & PUBLISHED  
 **Phase:** Milestone v3 Phase 2 (Context Scaling & Conversational Dynamics)  

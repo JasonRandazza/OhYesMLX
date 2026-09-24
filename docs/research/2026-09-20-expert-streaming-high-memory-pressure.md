@@ -1,5 +1,7 @@
 # Plan 03-03 — Expert Streaming under High Memory Pressure on 35B MoE
 
+> **Caveat added 2026-09-23 (hardening review A3, Decision 121).** The figures in this paper come from `scripts/probe_expert_streaming_35b.py`, a probe script, not the OhYesMLX harness. Decode rate and ITL are recomputed by the script rather than taken from the harness, and an undefined window is reported as `0.0`; each arm is two requests with no warmup plateau; coherence is checked on request 1 only and does not gate the result; raw samples were reduced to truncated text and derived statistics; runtime versions were not recorded. They are therefore **not comparable with harness-produced figures** (grids, sweeps, leaderboards), and within-paper comparisons hold only to the extent that the same formula applied to every arm. Re-running this study through the harness is hardening Phase 4. See `.paul/review/2026-09-23/scripts.md`.
+
 **Date:** 2026-09-20  
 **Phase:** Milestone v3 Phase 1 (Large-Model Scaling: 35B MoE Class on Apple Silicon)  
 **Status:** COMPLETE & PUBLISHED  

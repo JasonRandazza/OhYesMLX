@@ -37,9 +37,15 @@ for fmt, rel in FORMATS.items():
             text = obs.text or obs.reasoning_text
             row["ok"] = bool(obs.ok)
             row["deltas"] = obs.content_event_count
-            row["text"] = (text or "")[:70]
+            row["text"] = text or ""  # whole: the sample is what audits the verdict
             row["coherent"] = coherence.is_coherent(text)[0] if text.strip() else None
-            row["verdict"] = "LOADS" if obs.ok else f"answered: {obs.error}"
+            if not obs.ok:
+                row["verdict"] = f"answered: {obs.error}"
+            elif not row["coherent"]:
+                # HTTP 200 with token salad is a failed cell, not one that loads (AGENTS.md).
+                row["verdict"] = "FAIL (incoherent)"
+            else:
+                row["verdict"] = "LOADS"
         except Exception as e:
             row["verdict"] = f"{type(e).__name__}: {e}"[:220]
         finally:

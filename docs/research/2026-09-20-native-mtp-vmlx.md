@@ -1,5 +1,7 @@
 # Native Multi-Token Prediction (MTP) in vMLX: Decode Speedup, Acceptance Dynamics, and Coherence Floor Diagnostic
 
+> **Caveat added 2026-09-23 (hardening review A3, Decision 121).** The figures in this paper come from `scripts/probe_native_mtp_35b.py`, a probe script, not the OhYesMLX harness. Decode is `completion_tokens / (total_s - ttft_s)`, a window that includes the final usage chunk and stream teardown, read by the script's own SSE reader at chunk (not token) granularity; memory falls back to `ps` RSS when `footprint` fails, which AGENTS.md forbids; coherence is recorded but does not gate the reported rates; the request does not pin a seed; there is no warmup plateau; runtime versions were not recorded. They are therefore **not comparable with harness-produced figures** (grids, sweeps, leaderboards), and within-paper comparisons hold only to the extent that the same formula applied to every arm. Re-running this study through the harness is hardening Phase 4. See `.paul/review/2026-09-23/scripts.md`.
+
 **Author:** Antigravity Coordinator  
 **Date:** 2026-09-20  
 **Milestone:** v3 (Phase 3: Speculative Decoding & Acceleration Architectures)  

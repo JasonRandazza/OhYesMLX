@@ -1,5 +1,7 @@
 # Speculative Draft-Model Decoding on Apple Silicon: Engine Refusal, Memory Bandwidth Inversion, and Native MTP Synthesis
 
+> **Caveat added 2026-09-23 (hardening review A3, Decision 121).** The figures in this paper come from `scripts/probe_speculative_draft.py`, a probe script, not the OhYesMLX harness. Decoding runs in an in-process speculative decoder with self-computed rates timed at chunk arrival (whether chunks are single tokens was not audited); memory falls back to `ps` RSS; coherence is a label, not a gate; no seed is pinned; runtime versions were not recorded. Both models are resident at once **by design** — the paper is about dual-model residency — so these cells are an explicit exception to the one-model rule and can never join a harness grid. They are therefore **not comparable with harness-produced figures** (grids, sweeps, leaderboards), and within-paper comparisons hold only to the extent that the same formula applied to every arm. Re-running this study through the harness is hardening Phase 4. See `.paul/review/2026-09-23/scripts.md`.
+
 **Author:** Antigravity Coordinator  
 **Date:** 2026-09-20  
 **Milestone:** v3 (Phase 3: Speculative Decoding & Acceleration Architectures)  
