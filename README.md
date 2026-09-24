@@ -38,24 +38,27 @@ either axis in isolation. Instead:
 
 | Study | Held constant | Varied | Answers |
 |---|---|---|---|
-| **A — Runtime axis** | the quantization format | `mlx_lm.server`, Osaurus, oMLX, `optiq serve` | Does the *server* matter? Swift vs Python overhead, continuous batching, prefix and KV caching. |
-| **B — Format axis** | the runtime (oMLX, which loads the most formats) | mlx-lm 4-bit, oQ, OptiQ, JANG | Does the *quantization* matter? |
+| **A — Runtime axis** | the quantization format — one artifact for the whole run | the serving runtimes: `mlxlm`, `osaurus`, `omlx`, `optiq`, `vmlx` | Does the *server* matter? Swift vs Python overhead, continuous batching, prefix and KV caching. |
+| **B — Format axis** | the runtime — whichever one you select, the same for every cell in the run | mlx-lm 4-bit, oQ, OptiQ, JANG | Does the *quantization* matter? |
 
 What loads where, as of today:
 
-| Format | Stock `mlx-lm` can load it? | Runtimes |
+| Format | Stock `mlx_lm.server` can load it? | Registered runtimes measured with it here |
 |---|---|---|
-| mlx-lm 4bit/8bit (affine) | yes | all MLX runtimes |
-| oQ / oQe / oQ+ | **yes** — plain mlx-lm safetensors | all MLX runtimes |
-| OptiQ | mostly | `optiq serve`, likely others |
-| JANG / JANGTQ | **no** — needs the JANG_Q runtime | MLX Studio, Osaurus, oMLX |
-| GGUF | no | llama.cpp, LM Studio |
+| mlx-lm 4bit/8bit (affine) | yes | all five: `mlxlm`, `omlx`, `optiq`, `vmlx`, `osaurus` |
+| oQ / oQe / oQ+ | **yes** — plain mlx-lm safetensors | the same five |
+| OptiQ | yes | the same five — `optiq` is the runtime built for it |
+| JANG / JANGTQ | **no** | `vmlx` and `osaurus`; no other registered runtime loads it |
+| GGUF | no | none of the five — GGUF needs llama.cpp or LM Studio, which this harness does not drive |
 
 Anything that varies both axes at once is a press release, not a benchmark.
 
 ## What gets measured
 
-- **TTFT** — request sent → first *content* token. Includes prefill.
+- **TTFT** — request sent → first token of the runtime's *output stream*. Includes prefill.
+  When a runtime answers only in its reasoning channel, or mirrors its reasoning into content,
+  that channel is the output stream and the row prints `timed on reasoning channel` beside the
+  number (`transport.timing_channel`, `report._reasoning_timed_note`).
 - **ITL / TPOT** — mean gap between output tokens after the first. The "feels fast" number.
 - **End-to-end latency** — P50 / P90 / P99. Never a bare mean.
 - **Output throughput** — reported **per-request and aggregate separately**, because
@@ -67,10 +70,14 @@ Anything that varies both axes at once is a press release, not a benchmark.
 - **On-disk size** — including sidecar files, so no format gets credited with a smaller
   footprint than it has.
 
-Every run pins temperature 0, a fixed seed, a fixed chat template, a fixed output length,
-and records every runtime version. Runtimes ship different default `top_p` and
-`repetition_penalty`; silently different defaults are the most common way these
-comparisons get faked.
+Every run pins temperature 0 and a fixed seed **in the request body**, records each workload's
+prompt and output cap, and records every runtime version. OptiQ is started with its sampler
+flags pinned too (`--temp 0 --top-p 1 --top-k 0 --min-p 0`, `runtimes.Optiq.start_command`):
+left to itself, `optiq serve` injects an artifact's own `generation_config.json` sampling
+values into the command. The other four runtimes are asked for temperature 0 and the seed and
+nothing else, so their `top_p`, `top_k`, `min_p` and `repetition_penalty` are whatever those
+servers default to — which is why a row is read beside the runtime version it was measured
+under.
 
 Raw observations are never discarded, so every summary stays recomputable.
 
@@ -128,11 +135,16 @@ Verified working architecture families:
 - **Dense architectures:** Llama (3, 3.1, 3.2), Qwen (2.5, 3.5), Mistral, Phi (3, 4), DeepSeek-R1-Distill (Qwen & Llama), Gemma 2.
 - **Mixture-of-Experts (MoE):** LFM 2.5 (e.g. `LFM2.5-8B-A1B` with 16 experts), Qwen 3.6 MoE (e.g. `Qwen3.6-35B-A3B` with 256 fine-grained routed experts), Mixtral (8x7B, 8x22B).
 
-**Quantization format compatibility:**
-- **Standard MLX 4-bit / 8-bit (`mlx-lm` affine):** Loads in all MLX runtimes (`mlx_lm.server`, Osaurus, oMLX, `optiq serve`, vMLX).
-- **oQ / oQe / oQ+:** Plain MLX safetensors; loads in all MLX runtimes.
-- **OptiQ:** Optimized for `optiq serve`; supported by `vMLX`.
-- **JANG / JANGTQ (`JANG_4S`, `JANG_2L`):** Proprietary quantized format; requires JANG-aware runtimes (vMLX, Osaurus, MLX Studio). Not loadable in stock `mlx_lm.server` or `optiq serve`.
+**Quantization format compatibility** — stated for the five registered runtimes
+(`runtimes.RUNTIMES`: `mlxlm`, `omlx`, `optiq`, `vmlx`, `osaurus`), which is the whole of what
+this harness can drive and therefore the whole of what it can claim to have measured:
+- **Standard MLX 4-bit / 8-bit (`mlx-lm` affine):** plain safetensors; all five load it.
+- **oQ / oQe / oQ+:** plain MLX safetensors; all five load it.
+- **OptiQ:** built for `optiq serve`; the other four have served it in the runs recorded here.
+- **JANG / JANGTQ (`JANG_4S`, `JANG_2L`):** proprietary quantized format; it needs a JANG-aware
+  runtime, which among the registered five means `vmlx` or `osaurus`. Not loadable in `mlxlm`,
+  `omlx` or `optiq`. MLX Studio is a separate application outside this registry; no harness
+  run drives it.
 
 ### What Does Not Work (Known Limitations)
 

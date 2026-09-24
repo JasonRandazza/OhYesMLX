@@ -15,15 +15,15 @@ class Observation:
     ok: bool
     error: str | None
     ttft_s: float | None            # send -> first delta of the OUTPUT stream (see below)
-    last_content_s: float | None    # send -> final content delta
+    last_content_s: float | None    # send -> last delta of the OUTPUT stream
     total_s: float                  # send -> stream closed
     prompt_tokens: int | None       # from usage
     completion_tokens: int | None   # from usage, content only
     reasoning_tokens: int | None    # from usage.completion_tokens_details, if present
     content_event_count: int        # deltas of the OUTPUT stream, not always the content channel
     text: str                       # CONTENT deltas only
-    reasoning_text: str             # reasoning deltas joined; "" when the model emitted none
     token_source: str               # "usage" | "local_tokenizer" | "none"
+    reasoning_text: str = ""        # reasoning deltas joined; "" when the model emitted none
 
 def chat(base_url: str, model: str, messages: list[dict], *,
          max_tokens: int, temperature: float = 0.0, seed: int | None = None,
@@ -33,6 +33,17 @@ def chat(base_url: str, model: str, messages: list[dict], *,
 
 `base_url` is `http://127.0.0.1:<port>/v1`. Streaming is always on internally with
 `stream_options.include_usage`; `Observation` is what the caller sees.
+
+**The three timing and count fields describe the OUTPUT stream, whichever channel it was.**
+`ttft_s`, `last_content_s` and `content_event_count` are the output stream's, and the output
+stream is the content deltas in the ordinary case and the reasoning deltas when the runtime
+streamed only in that channel or mirrored it into content (see below). `text` is only ever the
+content channel and `reasoning_text` only ever the reasoning one, so read those three as
+statements about the output stream and never as statements about `text` — they keep their
+content-channel names because that is the ordinary case. `reasoning_text` is declared **last**
+in the dataclass, after `token_source`, with a default: a field with a default cannot precede
+one without, and that default is what lets the failure path build an `Observation` with no
+reasoning to report.
 
 **`api_key` must be wired at every call site.** oMLX refuses an unauthenticated
 `/v1/chat/completions` with HTTP 401 and `Runtime.api_key()` already supplies the key the
@@ -46,11 +57,11 @@ a thinking model: before this was handled, all 24 of their grid rows failed with
 content-delta timing". A response with neither channel still raises `empty_content`.
 
 Normally it is the content channel: `ttft_s` is the
-first content delta, `last_content_s` the last, `content_event_count` how many. The exception
-is a runtime that **mirrors** — one whose accumulated reasoning text is identical to its
-accumulated content, meaning it streamed incrementally in the reasoning channel and then
-repeated the whole text once as a single content delta. There the reasoning deltas *are* the
-output stream, and all three fields are taken from them.
+first content delta, `last_content_s` the last, `content_event_count` how many. A runtime that
+**mirrors** — one whose accumulated reasoning text is identical to its accumulated content,
+meaning it streamed incrementally in the reasoning channel and then repeated the whole text
+once as a single content delta — is the case where that reading is wrong: there the reasoning
+deltas *are* the output stream, and all three fields are taken from them.
 
 Measured — oMLX 0.6.4, one request: 15 reasoning deltas spanning 0.685 s to 2.352 s, against
 one content delta at 2.352 s. Timing the content channel reported a TTFT of 5.499 s for a
@@ -81,7 +92,7 @@ class TokenCounter:            # ohyesmlx/token_counter.py
 ```python
 @dataclass(frozen=True)
 class Runtime:
-    name: str                      # "mlxlm" | "osaurus" | "omlx" | "optiq"
+    name: str                      # "mlxlm" | "osaurus" | "omlx" | "optiq" | "vmlx"
     port: int
     def start(self, artifact_dir: str, model_id: str, *,
               cache_state: str | None = None) -> "Handle": ...    # see "Phase 6 plan 06-02"
@@ -96,10 +107,25 @@ class Handle:
     version: str                   # runtime version, recorded as provenance
     cold_load_s: float             # spawn -> ready. Its own metric, never folded in.
     first_request_s: float | None  # the cold visit's FIRST warmup latency. See below.
+    serving_pid: int | None        # pid to sample; None means the spawned pid is the server
+    stop_command: tuple[str, ...]  # ("osaurus", "stop"), or () when SIGTERM is the stop
+    scratch: str | None            # per-run tree a stop removes (oMLX's catalog and base)
+    api_key: str | None            # the credential the runtime was started with
     def stop(self) -> None: ...    # must not return until the port is free
 
 RUNTIMES: dict[str, Runtime]       # keyed by name
 ```
+
+**The lifecycle fields are not measurements, and vice versa.** `serving_pid` exists because a
+launcher can hand the port to another process — Osaurus's does — so the pid to sample
+(`Handle.memory_pid`) is not always the pid that was spawned. `stop_command` and `scratch` are
+what `stop()` needs to release the port and remove the per-run tree; `api_key` is the credential
+a measured request must send (`measure._request` passes it through). `first_request_s` is the
+odd one: it is a field with a default of `None`, and it is
+**written by the measurement loop** — `measure._visit` fills it in via
+`measure._first_warmup_latency` when the cold visit's first warmup request lands, and copies it,
+with `first_request_workload_id`, onto every `CellResult` of that cell. It is never passed at
+construction, and a `CellResult` is where a report reads it.
 
 **Readiness is decided by the runtime's log, not by the port.** Observed on mlx-lm 0.31.3:
 on a model-load failure the server still binds its port and logs `Starting httpd` after the
@@ -133,21 +159,22 @@ class Cell:
 @dataclass
 class CellResult:
     cell: Cell
+    workload_id: str               # which shape this row is: a result is one (cell, workload) pair
     status: str                    # "PASS" | "FAIL" | "N/A"
     reason: str | None
     observations: list[Observation]   # EVERY raw sample. Never truncated.
-    warmup_observations: list[Observation]
     batch_spans: list[float]       # one per measured batch; [] for a sequential cell (06-01b)
+    warmup_observations: list[Observation]
     warmup_plateau: bool | None
-    lost_visit_reason: str | None  # a planned visit that never measured. See the short-window section.
-    cold_load_after_lost_visit: bool
-    measured_pin: int | None       # the run's batch pin; not written to the record
     cold_load_s: float | None
     first_request_s: float | None
     first_request_workload_id: str | None   # which shape made it. See below.
     memory: dict                   # the sample.py result dict
     runtime_version: str | None
     disk_bytes: int | None
+    lost_visit_reason: str | None = None    # a planned visit that never measured. See the short-window section.
+    cold_load_after_lost_visit: bool = False
+    measured_pin: int | None = None         # the run's batch pin; not written to the record
 
 def run_cells(cells: list[Cell], workloads: list[Workload], *,
               warmup: int | str = "plateau", measured: int = 9, concurrency: int = 1,
@@ -157,6 +184,13 @@ def run_cells(cells: list[Cell], workloads: list[Workload], *,
 # warmup/measured/concurrency: see "Phase 6 plan 06-01b"; prompt_tokens: 06-01c;
 # cache_state: 06-02. Every one of them is a run header pin and none is a cell property.
 ```
+
+A **record** carries every `CellResult` field except `measured_pin`, adds three derived ones
+(`measured_count`, `warmup_count`, `drift`), and omits three keys when they are not true of the
+cell: `batch_spans` (a sequential cell ran no batch and took no clock), `lost_visit_reason` (no
+visit was lost) and `cold_load_after_lost_visit`. `load_run` reads those three back leniently;
+`measured_pin` is never in the file at all, because the run header owns it — one copy per run,
+and a result rebuilt by `load_run` carries `None`.
 
 ### `cold_load_s` alone cannot be compared across runtimes
 
@@ -240,8 +274,16 @@ on a 64 GB machine saturate unified memory and quietly poison every number in th
 while the run still completes and still looks plausible.
 
 Cell order is **interleaved**, never config order — otherwise thermal drift aliases
-perfectly onto runtime identity. Persist after every cell. `max_tokens` is fixed so tok/s
+perfectly onto runtime identity. Persist after every visit. `max_tokens` is fixed so tok/s
 is never compared across different generation lengths.
+
+**Two visits are the plan, not a guarantee.** `visit_plan` names `VISIT_ROUNDS` orderings of
+the cells and `_visits` splits the run's `measured` across them — five batches then four at the
+default. A visit whose quota is zero is **dropped** rather than run: starting a runtime to
+measure nothing costs a full model load for no sample. At `measured=1` the second visit is the
+one dropped, so no cell is visited twice, and the samples on disk are one visit's. A run that
+lands fewer batches than its own pin says so in the row (`short_note`) instead of reading as a
+full window; see "the lost visit and the short measured window".
 
 ## `ohyesmlx/report.py` — issue #6
 
@@ -257,13 +299,12 @@ def summarize(results: list[CellResult], *, measured: int | None = None) -> list
 def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) -> str: ...
 ```
 
-**`measure.py` owns `results.jsonl`, and is the only thing that writes it.** The
-serializer (`write_jsonl`, and the per-cell record it builds) lives in `measure.py`
-alongside `CellResult`, which owns the shape. `run_cells` calls it after every cell so a
-run that dies still has its completed cells on disk; `report.py` imports it if it needs
-it, and never defines a second one.
-
-Two writers for one artifact is the exact pattern this project exists to avoid.
+**`measure.py` owns `results.jsonl`, and is the only thing that writes it.** The serializer
+(`write_jsonl`, and the per-cell record it builds) and the shape it serializes (`CellResult`)
+both live there; `run_cells` calls it after every **visit**, so a run that dies still has
+everything it had measured up to that point on disk, and a reader never sees half a file. Why a
+second writer for one artifact is unacceptable is `AGENTS.md`'s rule, "One definition of
+everything" — this document names the owner and points at the rule rather than restating it.
 
 ### The raw record stays raw
 
@@ -271,8 +312,13 @@ Two writers for one artifact is the exact pattern this project exists to avoid.
 def write_jsonl(results: list[CellResult], path: str, *, run: dict) -> None: ...
 ```
 
-Line 1 of the file is the **run header**: the pins (`temperature`, `seed`, `max_tokens`,
-`warmup`, `measured`, `cooldown_s`, `workload`). Every line after it is one cell.
+Line 1 of the file is the **run header**: the pins — `temperature`, `seed`, `warmup`,
+`measured`, `concurrency`, `prompt_tokens`, `cache_state`, `cooldown_s` — the `workloads` the
+run measured, each with its own `messages` and `max_tokens` (`max_tokens` is a workload field,
+never a run-level pin), and the `harness` block (`version`, `source_sha256`). Every line after
+it is one (cell, workload) pair. A header written before a pin existed simply lacks that key —
+`load_run` returns a header as the dict it is and callers `.get` what they need, so an absent
+key reads as the absence it was.
 
 A stored observation carries **only the `Observation` fields** — never `decode_tps`,
 `prefill_tps`, or `itl_s`. Those are derived, and `report.summarize` computes them from the
@@ -550,12 +596,13 @@ one more time.
 `warmup_count` already records how many requests it took, so the budget each runtime needed
 becomes a published number rather than a constant in a source file.
 
-`load_run` reads `warmup_plateau` **leniently** — the only field it does. A record written
-before the rule existed was measured under a fixed budget, so the rule did not run on it and
-`None` is exactly true of those rows rather than a default standing in for something unknown.
-That is what separates it from `first_request_workload_id`, whose absence is refused: a
-default there would claim the cold visit made no request, which is false about rows whose
-visit did. A default is honest when the absence is the fact, and the five 2026-09-16 columns
+`load_run` reads `warmup_plateau` **leniently** — the first field it did that for, and
+`batch_spans`, `lost_visit_reason` and `cold_load_after_lost_visit` are read the same way. A
+record written before the rule existed was measured under a fixed budget, so the rule did not
+run on it and `None` is exactly true of those rows rather than a default standing in for
+something unknown. That is what separates it from `first_request_workload_id`, whose absence is
+refused: a default there would claim the cold visit made no request, which is false about rows
+whose visit did. A default is honest when the absence is the fact, and the five 2026-09-16 columns
 the Phase 5 write-up published stay readable by the tool that published them.
 
 ### The pins change, so every column re-runs

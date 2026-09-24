@@ -397,8 +397,9 @@ database. On this machine the table currently holds:
 Two facts worth carrying forward:
 
 - **The GUI's default port is 8081, which collides with `mlx_lm.server`.** The harness registry
-  assigns `mlxlm` port 8081 (`ohyesmlx/runtimes.py:735`). A GUI-launched vMLX and an `mlxlm`
-  cell cannot run at the same time. The CLI default is 8000, which is free in the registry.
+  assigns `mlxlm` port 8081 and `vmlx` port 8000 (`runtimes.RUNTIMES`). A GUI-launched vMLX on
+  its 8081 default and an `mlxlm` cell cannot run at the same time; on its 8000 default it
+  collides with the `vmlx` cell instead.
 - **The GUI's defaults diverge from the CLI's in at least one place.** `DEFAULT_CONFIG`
   (`app.asar:53528`) sets `cacheMemoryPercent: 15`, and the arg builder divides by 100
   (`app.asar:133153`), so the GUI sends `--cache-memory-percent 0.15` — the same effective
@@ -1557,12 +1558,17 @@ before spending a load on it.
 
 ---
 
-## 9. What a `Runtime` subclass would need
+## 9. What a `Runtime` subclass would need (**historical**)
 
-vMLX is not in `RUNTIMES` (`ohyesmlx/runtimes.py:733-738`), which currently holds `mlxlm`
-(8081), `osaurus` (1337), `omlx` (8100) and `optiq` (8080). This section states exactly what a
-fifth entry needs, against the `Runtime` interface (`runtimes.py:421-566`) and the `Handle`
-fields (`runtimes.py:393-418`).
+> **Historical.** vMLX has since been integrated: it is `runtimes.Vmlx`, registered as
+> `RUNTIMES["vmlx"]` on port 8000, alongside `mlxlm` (8081), `osaurus` (1337), `omlx` (8100) and
+> `optiq` (8080). This section is kept because it is the analysis the subclass was written from
+> — where it disagrees with `ohyesmlx/runtimes.py`, the code is the authority. Most of the flags
+> it recommends are what the shipped `Vmlx.start_command` pins; the environment scrub below is
+> the one recommendation it does not implement.
+
+This section states what a fifth entry needs, against the `Runtime` interface
+(`runtimes.Runtime`) and the `Handle` fields (`runtimes.Handle`).
 
 ### 9.1 Start command
 
@@ -1580,11 +1586,12 @@ class Vmlx(Runtime):
         )
 ```
 
-**Port.** The CLI default is `8000`, which is **free** in the current registry — `optiq` is 8080
-and `mlxlm` is 8081, so `--port 8000` collides with nothing. Do **not** use 8081: that is
-`mlxlm`'s port *and* the GUI's `gateway_port` default (§3.2). The harness already refuses to
-start over a port it does not own (`runtimes.py:527-531`), so a collision fails loudly rather
-than silently — but choosing 8000 avoids the question.
+**Port.** The CLI default is `8000`, which was free in the registry when this was written and is
+where the shipped subclass took its port (`RUNTIMES["vmlx"]`) — `optiq` is 8080 and `mlxlm` is
+8081, so 8000 collided with nothing then. Do **not** use 8081: that is `mlxlm`'s port *and* the
+GUI's `gateway_port` default (§3.2). The harness refuses to start over a port it does not own
+(`Runtime.start`), so a collision fails loudly rather than silently — but choosing 8000 avoided
+the question.
 
 **What to pin, and why** (each is justified above):
 
@@ -1724,9 +1731,9 @@ def version_command(self) -> tuple[str, ...]:
 ```
 
 with `parse_version` taking the first line. **Note that `version()` is called after
-`await_ready` (`runtimes.py:545`), so the running server's `/openapi.json` is also available at
-that moment** — but reading the module constant is cheaper and works even if the server never
-reaches readiness, which is exactly when provenance matters most.
+`await_ready`, both from `Runtime.start`, so the running server's `/openapi.json` is also
+available at that moment** — but reading the module constant is cheaper and works even if the
+server never reaches readiness, which is exactly when provenance matters most.
 
 `GET /v1/models` reports **no version field** (`server.py:16162-16185`; `ModelInfo` at
 `api/models.py:747-753` has only `id`, `object`, `created`, `owned_by`), so the model inventory
@@ -1809,7 +1816,7 @@ This is the opposite of oMLX, where the readiness probe authenticating while the
 not is a recorded failure. Here the failure mode is inverted and harmless: the handle records
 `None`, `_inventory` sends no credential, and the server accepts. **If the harness ever passes
 `--api-key`, it must also override `api_key()` to match, or the readiness probe will 401** —
-`await_ready` already treats 401/403 as fatal and explained (`runtimes.py:503-509`), which is the
+`await_ready` already treats 401/403 as fatal and explained (`Runtime.await_ready`), which is the
 right behaviour.
 
 ### 9.7 The one thing the subclass cannot pin

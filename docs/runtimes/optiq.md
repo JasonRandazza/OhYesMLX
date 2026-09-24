@@ -138,8 +138,9 @@ optiq [OPTIONS] COMMAND [ARGS]...
   --help
 ```
 
-`optiq --version` is the harness's `version_command` (`ohyesmlx/runtimes.py:720`) and prints
-`0.5.6`.
+`optiq --version` is the harness's `version_command` (`runtimes.Optiq.version_command`) and
+answers in the runtime's own phrasing, `mlx-optiq, version <X>`; `Optiq.parse_version` records
+the version alone.
 
 ### 2.2 `optiq serve` — OptiQ's own flags
 
@@ -385,7 +386,7 @@ they make the `model` string carry control data:
 
 `precise` / `creative` / `balanced` overwrite the handler's sampler attributes for that request
 (`variants.py:83-85`), so they beat both the body and the CLI. The harness uses
-`:no-think` (`ohyesmlx/runtimes.py:727`) — which is sound, and is the variant whose text lands in
+`:no-think` (`Optiq.model_id_candidates`) — which is sound, and is the variant whose text lands in
 `delta.content` rather than `delta.reasoning` (see §5).
 
 ### 4.4 Accepted but ignored
@@ -590,7 +591,7 @@ p, c = u.get("prompt_tokens"), u.get("completion_tokens")
 ```
 
 Installed only when `context_scale != 1.0` (`cli.py:2965-2968`). The harness passes
-`--context-scale 1.0` (`ohyesmlx/runtimes.py:711-712`), so this is a **no-op today** — but it is
+`--context-scale 1.0` (`Optiq.start_command`), so this is a **no-op today** — but it is
 one keystroke from silently multiplying every published token count, and the module docstring is
 explicit that generation is untouched (`context_scale.py:11-13`).
 
@@ -736,20 +737,18 @@ optiq/runtime/gen_config.py:143            continue
 optiq/runtime/gen_config.py:144        out += [flag, str(value)]
 ```
 
-**This directly threatens the harness's "temperature 0" pin.** The harness's start command
-(`ohyesmlx/runtimes.py:694-717`) passes `--no-stream-experts`, `--max-context`, `--max-concurrent`,
-`--idle-timeout`, `--context-scale` — and **no sampler flag at all**. Therefore:
+**This was the harness's "temperature 0" hazard, and four flags close it.**
+`Optiq.start_command` passes `--temp 0 --top-p 1 --top-k 0 --min-p 0` explicitly, so every key
+`merge_into_argv` can forward is already in argv, `already` is true for all of them, and the
+injection is a no-op. The three that matter most are the ones the request body does not carry:
+`measure._request` sends `temperature` and `seed` and nothing else, so an injected `--top-p`,
+`--top-k` or `--min-p` would otherwise set the sampling distribution from a line in the
+artifact, with nothing in the recorded command saying so.
 
-- mlx-lm's `--temp` default is `0.0` (`mlx_lm/server.py:1818-1821`);
-- if the served artifact ships a `generation_config.json` with a `temperature` key, `--temp`
-  becomes that value instead;
-- a request that omits `temperature` in the body inherits it (`server.py:1174-1175`).
-
-`AGENTS.md` requires temperature 0 pinned and every runtime's version recorded. **Today the
-harness pins temperature 0 by accident — via a default it does not control.** One artifact with
-a `generation_config.json` changes the sampling distribution with a single line in the startup
-log. The fix is one flag: pass `--temp 0 --top-p 1 --top-k 0 --min-p 0` explicitly, which makes
-`already` true and short-circuits the injection.
+`merge_into_argv` forwards only `--temp`, `--top-p`, `--top-k` and `--min-p` — its `flag_for`
+map holds those four and nothing else. So of the five keys `_SAMPLER_KEYS` reads, four are
+pinned by the harness and the fifth, `repetition_penalty`, cannot reach this command line at
+all: it is exposed to clients, not forwarded to `mlx_lm.server`.
 
 The injection is not fully silent — it prints
 `[optiq.serve] applying model-recommended sampler: temperature=…` — but it does not appear in
@@ -973,18 +972,22 @@ weight index.
 
 ## 9. What this harness should pin, and why
 
-The harness currently passes (`ohyesmlx/runtimes.py:694-717`):
+The harness currently passes (`Optiq.start_command`):
 `--model`, `--host`, `--port`, `--no-anthropic`, `--no-responses`, `--no-auth`,
-`--max-context off` (8192 before 2026-09-16), `--max-concurrent 1`, `--idle-timeout 0`, `--context-scale 1.0`,
-`--no-stream-experts`.
+`--max-context off` (8192 before 2026-09-16), `--max-concurrent 1`, `--idle-timeout 0`,
+`--context-scale 1.0`, `--no-stream-experts`, `--temp 0 --top-p 1 --top-k 0 --min-p 0`, and
+`--prompt-cache-size 0` or `10` when the run pins a cache state.
+
+**Done since this document was written:** the four sampler flags, which this table used to list
+as its first priority, are now in the command — every key `merge_into_argv` forwards is already
+in argv, so nothing is injected (§7.2).
 
 | Add | Why |
 |---|---|
-| **`--temp 0 --top-p 1 --top-k 0 --min-p 0`** | **Highest priority.** Without them, `generation_config.json` silently overwrites the sampler (§7.2). `AGENTS.md` requires temperature 0 pinned; today it is pinned only by a default the artifact can override. Passing them explicitly makes `merge_into_argv` a no-op. |
 | `--prompt-cache-bytes <N>` | Otherwise a RAM- and weights-derived value is injected (§7.3), differing across machines and not recorded in the start command. |
 | `--decode-concurrency 1 --prompt-concurrency 1` | `--max-concurrent 1` already produces these, but recording the real flags removes the indirection. |
 | Confirm `OPTIQ_*` unset | `OPTIQ_NO_THINK`, `OPTIQ_STREAM_PREFETCH`, `OPTIQ_FLASH_ATTN` etc. are not flags and would not show in the recorded command (§3.2). Capture `optiq config` output into the run artifact. |
-| Record `generation_config.json` | If present in the artifact, its contents decide sampling whenever the sampler flags above are absent. Snapshot it like the Osaurus settings baseline. |
+| Record `generation_config.json` | Provenance: it is the file whose sampler recommendations the four flags in the start command now pre-empt (§7.2). Snapshot it like the Osaurus settings baseline. |
 | Record the `quantization` block | Per-layer overrides mean the headline bit-width is not the format (§8.2). |
 
 Not needed, and why: `--no-fused-kv` only matters with KV quantization (§7.7);
