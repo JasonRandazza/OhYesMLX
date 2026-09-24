@@ -303,6 +303,37 @@ CROSS_RUNTIME_UNCOMPARABLE = {
     "two, not this column alone.",
 }
 
+# The rank metrics whose value depends on the timing channel — which stream the request was
+# timed on — and so cannot carry a runtime-axis ordering across rows that do not share one.
+# Jason's decision, 2026-09-24: the refusal `CROSS_RUNTIME_UNCOMPARABLE` makes, for the same
+# reason, one level down.
+#
+# The channel is which stream supplied an observation's `ttft_s`, `last_content_s` and
+# `content_event_count`: the content deltas ordinarily, and the reasoning deltas when a runtime
+# streamed its whole answer in that channel or mirrored it into content
+# (`transport.timing_channel`, and "Which channel is the output stream" in
+# docs/interfaces.md). So a row timed on reasoning measures the model's first token out of it,
+# and one timed on content measures the first *content* token — which on a thinking model lands
+# after the whole reasoning run, seconds later. Read side by side on a runtime axis those are
+# two definitions of first-token latency, and the ordering would compare them rather than the
+# runtimes. Within one channel the same column is one quantity and orders as it always did.
+#
+# `ttft_p50_s` is such a metric directly. `prefill_tps` is one because the code computes it
+# from TTFT — `prompt_tokens / ttft_s`, `measure.prefill_tps` — so it divides a prompt by
+# whichever span the row was timed on. Nothing else in `RANK_METRICS` is, and each neighbour is
+# out for a reason of its own: `decode_tps` and `itl_s` are read off the window between
+# `ttft_s` and `last_content_s`, two timestamps of one output stream, so within a row they are
+# that stream's own and the 2026-09-24 decision leaves them rankable across a mixed group;
+# `aggregate_tps` divides every completion token by wall-clock spans no channel moves; the rest
+# are memory, disk and end-to-end latency. A metric added to `RANK_METRICS` later belongs here
+# only when it is a first-token latency or is computed from one.
+#
+# Enforced in two places and named here once: `_ordering` withholds the runtime-axis positions
+# where a group does not share one channel, `_channel_note` says so in the section, and
+# `_recommendation` names no best cell from a workload whose rows mix channels. A
+# partly-reasoning row is a channel of its own rather than either one — see `_mixes_channels`.
+CHANNEL_DEPENDENT_RANKS = frozenset({"ttft_p50_s", "prefill_tps"})
+
 # A cold load recorded by a later start says which start it came from; a rate's, TTFT's and a
 # cold visit's first request carry the caveats above.
 _METRIC_CAVEAT = {
@@ -786,6 +817,7 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "e2e_p50_s": percentile(e2e, 50),
         "e2e_p90_s": percentile(e2e, 90) if len(e2e) >= MIN_PERCENTILE_N else None,
         "e2e_p99_s": percentile(e2e, 99) if len(e2e) >= MIN_PERCENTILE_N else None,
+        "timing_channel": _timing_channel(samples),
         "reasoning_timed_note": _reasoning_timed_note(samples),
         "itl_s": median(itl),
         "decode_tps": median(decode),
@@ -833,6 +865,33 @@ def _reasoning_timed_note(samples) -> str | None:
         f"timed on reasoning channel: {reasoning} of {len(samples)} measured requests "
         "(TTFT and decode are the reasoning stream's, not content's)"
     )
+
+
+def _timing_channel(samples) -> str | None:
+    """Which stream this row's measured requests were timed on, in ``transport``'s words.
+
+    One observation's channel is ``transport.timing_channel``'s answer and a row's is the one
+    answer its measured requests shared. A row whose own requests did not all answer in one
+    channel is ``"mixed"`` — a channel of its own rather than either of the two it mixes,
+    because it is not the measurement a wholly-content row is and not the measurement a
+    wholly-reasoning one is. ``None`` when nothing was measured: a row with no request was timed
+    on no channel, and it carries no latency for a channel to qualify.
+    """
+    channels = {transport.timing_channel(observation) for observation in samples}
+    if not channels:
+        return None
+    return channels.pop() if len(channels) == 1 else "mixed"
+
+
+def _mixes_channels(rows: list[dict]) -> bool:
+    """Whether these rows were not all timed on one channel.
+
+    Read off the rows' own ``timing_channel``, so a join decides it from what each run recorded
+    rather than from observations it does not hold. A row that measured nothing contributes
+    none: it carries no first-token latency, so it cannot put two definitions in one ordering.
+    """
+    channels = {row.get("timing_channel") for row in rows if row.get("timing_channel")}
+    return len(channels) > 1
 
 
 def _measured_batches(result: CellResult) -> int:
@@ -1816,13 +1875,55 @@ def _readings(groups: list[tuple], columns: list[dict], labels: list[str], rank:
                 f"{CROSS_RUNTIME_UNCOMPARABLE[rank]}",
                 "",
             ]
-        for label in labels:
-            group = [row for row in rows if row.get("label") == label]
+        # One group per format, built once and read by both the note and the lines below it, so
+        # the note cannot name a format the readings were not grouped by.
+        by_label = [
+            (label, [row for row in rows if row.get("label") == label]) for label in labels
+        ]
+        if rank in CHANNEL_DEPENDENT_RANKS:
+            mixed = [label for label, group in by_label if _mixes_channels(group)]
+            if mixed:
+                lines += [_channel_note(rank, mixed), ""]
+        for label, group in by_label:
             lines.append(f"- `{_text(label)}`: {_ordering(group, rank, 'runtime')}")
         recommendation = _recommendation(rows, rank)
         if recommendation is not None:
             lines += ["", recommendation, ""]
     return lines
+
+
+def _uncomparable_across_runtimes(rows: list[dict], rank: str) -> bool:
+    """Whether a runtime-axis ordering of *rank* over these rows would compare two quantities.
+
+    Two ways it can, and both are read off the metric against the rows rather than assumed of
+    the rendering. ``CROSS_RUNTIME_UNCOMPARABLE``'s metrics are not one quantity across runtimes
+    whatever the rows are; ``CHANNEL_DEPENDENT_RANKS``' are one quantity within a group timed on
+    one channel and two definitions across a group that does not share one. Each refusal's
+    rationale is written once, at its own constant. Either way the ordering keeps the values and
+    withholds the positions, and the reading says which of the two it was.
+    """
+    if rank in CROSS_RUNTIME_UNCOMPARABLE:
+        return True
+    return rank in CHANNEL_DEPENDENT_RANKS and _mixes_channels(rows)
+
+
+def _channel_note(rank: str, mixed: list[str]) -> str:
+    """The one note a runtime-axis section whose rows mix channels prints.
+
+    One note for the section rather than one above each line: the refusal is one fact about the
+    section, and the labels it applies to are named inside it. The values stay printed —
+    alphabetically, with no position — because they are still measurements a reader is owed;
+    what is withheld is the ordering, which would read two definitions as one number.
+    """
+    named = ", ".join(f"`{_text(label)}`" for label in mixed)
+    return (
+        f"> **`{rank}` is not one quantity across rows timed on different channels.** In "
+        f"{named} the rows are not all timed on one channel (`transport.timing_channel`): a "
+        "first-token latency timed on the content channel is the time to the first *content* "
+        "token, which on a thinking model lands after its whole reasoning run, and one timed "
+        "on the reasoning channel is the model's first token out of it. Two definitions are "
+        "two quantities, so the values are listed with no positions."
+    )
 
 
 def _ordering(rows: list[dict], rank: str, key: str) -> str:
@@ -1834,9 +1935,10 @@ def _ordering(rows: list[dict], rank: str, key: str) -> str:
     """
     if not rows:
         return "—"
-    # Decision 120: across runtimes these metrics are not one quantity, so the values are listed
-    # alphabetically by runtime with no position. Within one runtime they still order.
-    if rank in CROSS_RUNTIME_UNCOMPARABLE and key == "runtime":
+    # Decision 120 and the 2026-09-24 channel decision: across runtimes these metrics are not one
+    # quantity, so the values are listed alphabetically by runtime with no position. Within one
+    # runtime — the format axis — they still order.
+    if key == "runtime" and _uncomparable_across_runtimes(rows, rank):
         return "; ".join(
             f"`{_text(row.get(key))}` = {_rank_number(row, rank)}"
             for row in sorted(rows, key=lambda row: str(row.get(key) or ""))
@@ -1860,9 +1962,26 @@ def _recommendation(rows: list[dict], rank: str) -> str | None:
     be read as an attribution: the cell that won won under one format and one runtime at once,
     and the number carries no way to split the win between them. Which of the two earned it is
     what the column and the row above this line are for.
+
+    Two ranks name no best cell rather than a wrong one, and they refuse differently because the
+    facts differ. A metric that is not one quantity across runtimes at all
+    (``CROSS_RUNTIME_UNCOMPARABLE``) gets no line: the runtime-axis note above it already says
+    why, and every reading in the section is values-without-positions. A channel-dependent rank
+    (``CHANNEL_DEPENDENT_RANKS``) over a workload whose rows mix channels gets the "none"
+    sentence, because the rest of the section still orders and only this line spans the two
+    definitions.
     """
     if rank in CROSS_RUNTIME_UNCOMPARABLE:
         return None
+    if rank in CHANNEL_DEPENDENT_RANKS and _mixes_channels(rows):
+        return (
+            "**Recommendation — none.** The rows of this workload were not all timed on one "
+            f"channel, so no cell can lead an ordering at `{rank}`: this figure is read off the "
+            "request's first-token latency, and a latency timed on the content channel is a "
+            "different measurement from one timed on the reasoning channel. Which cells "
+            "answered in which channel is each row's `reasoning timed` note in its own run's "
+            "leaderboard, and the marker the grid prints beside the entries that carry one."
+        )
     ranked = [row for row in order_rows(rows, rank) if row.get("rank") is not None]
     if not ranked:
         return (

@@ -2640,6 +2640,197 @@ def test_the_runtime_axis_reading_orders_one_formats_runtimes():
     assert "- `mlxlm`: `oq4` (1)" in grid
 
 
+# --- the channel a request was timed on ---------------------------------------------------------
+#
+# TTFT is send -> the first delta of the OUTPUT stream, and the output stream is the content deltas
+# ordinarily and the reasoning deltas when a runtime streamed only in that channel or mirrored it
+# into content (`transport.timing_channel`). A row timed on content therefore measures the first
+# *content* token, which on a thinking model lands after its whole reasoning run, and one timed on
+# reasoning measures the model's first token out of it: two definitions of first-token latency, and
+# the runtime axis is where they would be read as one number. Jason's decision of 2026-09-24 refuses
+# that ordering the way Decision 120 refuses `peak_mb` and `cold_load_s` across runtimes --
+# `CHANNEL_DEPENDENT_RANKS` names the metrics whose value is that latency or is computed from it,
+# the values stay printed alphabetically with no position, and no best cell is named from a workload
+# whose rows mix channels.
+
+
+def channel_run(run_label, runtime, *, channel="content", ttft=0.4, window=2.0):
+    """One run directory holding one cell, its requests timed on *channel*.
+
+    A reasoning-timed response is the shape stock mlx-lm and vMLX answer in on a thinking model:
+    the whole answer arrives in the reasoning channel and `text` stays empty. `"mixed"` answers
+    three of its five requests in the content channel and two in the reasoning one. Each request
+    decodes 101 tokens over *window* seconds and first lands at *ttft*, so the cell's decode rate
+    is 101 / window.
+    """
+    observation = obs(ttft=ttft, last=ttft + window)
+    reasoning = dataclasses.replace(
+        observation, text="", reasoning_text="the whole answer, in the reasoning channel"
+    )
+    observations = {
+        "content": [observation] * 5,
+        "reasoning": [reasoning] * 5,
+        "mixed": [observation, observation, observation, reasoning, reasoning],
+    }[channel]
+    return (
+        run_label,
+        run_header(("chat",)),
+        report.summarize(
+            [
+                cell_result(
+                    observations,
+                    cell_id=f"oq4__{runtime}",
+                    runtime=runtime,
+                    artifact_dir=ARTIFACTS["oq4"],
+                    label="oq4",
+                    runtime_version=f"{runtime} 1.0",
+                    workload_id="chat",
+                    disk_bytes=1_000_000,
+                )
+            ]
+        ),
+    )
+
+
+def channel_runs(*, first_channel, second_channel):
+    """Two run directories of one format, each timed on the channel it is handed.
+
+    mlx-lm's cell is the faster one on both counts -- 101 tokens over a 2.0 s window against
+    Osaurus's 1.0 s one, and a first token at 0.4 s against 0.9 s -- so the two ranks order these
+    two rows oppositely, and an ordering read off the wrong one is visible rather than plausible.
+    """
+    return [
+        channel_run(RUN_A, "mlxlm", channel=first_channel, ttft=0.4, window=2.0),
+        channel_run(RUN_B, "osaurus", channel=second_channel, ttft=0.9, window=1.0),
+    ]
+
+
+# The two channel-dependent ranks' printed values on those runs: mlx-lm's 0.400 s first token and
+# its 250 prompt tokens over it, against Osaurus's 0.900 s and the 250 over that.
+CHANNEL_VALUES = {"ttft_p50_s": ("0.400", "0.900"), "prefill_tps": ("625.0", "277.8")}
+
+
+def test_the_channel_dependent_ranks_are_the_ones_read_off_the_timed_latency():
+    """`ttft_p50_s` is the timed latency itself and `prefill_tps` is computed from it; every other
+    rank reads something no channel moves."""
+    assert report.CHANNEL_DEPENDENT_RANKS <= set(report.RANK_METRICS)
+    assert report.CHANNEL_DEPENDENT_RANKS == {"ttft_p50_s", "prefill_tps"}
+    # decode_tps and itl_s are read off the window between two timestamps of one output stream, so
+    # within a row they are that stream's own: the 2026-09-24 decision leaves them rankable.
+    assert {"decode_tps", "itl_s", "aggregate_tps"} & report.CHANNEL_DEPENDENT_RANKS == set()
+
+
+@pytest.mark.parametrize("rank", sorted(CHANNEL_VALUES))
+def test_a_runtime_axis_ordering_is_withheld_where_the_rows_mix_channels(rank):
+    """One row timed on reasoning, one on content: no positions, one note naming why and which
+    format, and no best cell named across the two definitions."""
+    runs = list(reversed(channel_runs(first_channel="reasoning", second_channel="content")))
+    rendered = report.render_grid(runs, rank=rank)
+    runtime_axis = rendered.split("**Runtime axis", 1)[1].split("## Notes", 1)[0]
+    line = next(line for line in runtime_axis.splitlines() if line.startswith("- `oq4`:"))
+
+    # Alphabetically by runtime with no position, as the uncomparable branch lists them -- and the
+    # runs were handed over the other way round, so this order is the listing's.
+    first, second = CHANNEL_VALUES[rank]
+    assert line == f"- `oq4`: `mlxlm` = {first}; `osaurus` = {second}"
+    assert " (1)" not in line and " > " not in line
+    # One note for the section, naming the rank, the reason, and the format it applies to.
+    assert rendered.count(
+        f"**`{rank}` is not one quantity across rows timed on different channels.**"
+    ) == 1
+    assert "In `oq4` the rows are not all timed on one channel" in rendered
+    # And the recommendation is the refusal, not a best cell.
+    assert "**Recommendation — none.**" in rendered
+    assert "no cell can lead an ordering at" in rendered
+    assert "no best cell to name" not in rendered, "the channel refusal, not the empty-ranking one"
+    # The format axis is one runtime's formats and is untouched by any of this.
+    assert "- `mlxlm`: `oq4` (1)" in rendered
+
+
+def test_an_unmixed_runtime_axis_still_orders():
+    """The refusal is about a group that does not share one channel, not about the reasoning
+    channel itself: a column that answered wholly in it is one quantity and orders as it always
+    did -- mlx-lm's and vMLX's own runtime-axis columns are that shape on a thinking model."""
+    for first, second in (("content", "content"), ("reasoning", "reasoning")):
+        rendered = report.render_grid(
+            channel_runs(first_channel=first, second_channel=second), rank="ttft_p50_s"
+        )
+
+        assert "- `oq4`: `mlxlm` (1) > `osaurus` (2)" in rendered
+        assert "is not one quantity" not in rendered
+        assert "**Recommendation — none.**" not in rendered
+        assert "leads all 2 ranked cells at `ttft_p50_s` = 0.400" in rendered
+
+
+def test_a_decode_rank_orders_a_mixed_group_because_its_value_is_not_the_timed_latency():
+    """The same two rows, ordered: a decode rate is read off the window between two timestamps of
+    one output stream rather than off the latency, so a mixed group is not two definitions of it.
+    The cell that answered in the reasoning channel carries that marker into the table beside its
+    number, which is what the refusal above points a reader at."""
+    runs = channel_runs(first_channel="reasoning", second_channel="content")
+    rendered = report.render_grid(runs, rank="decode_tps")
+    runtime_axis = rendered.split("**Runtime axis", 1)[1].split("## Notes", 1)[0]
+
+    assert "- `oq4`: `osaurus` (1) > `mlxlm` (2)" in runtime_axis
+    assert "is not one quantity" not in rendered
+    assert "leads all 2 ranked cells at `decode_tps` = 101.0" in rendered
+    assert grid_tables(rendered)["chat"]["oq4"]["mlxlm"] == "50.5 (reasoning timed)"
+
+
+def test_a_partly_reasoning_row_counts_as_a_channel_of_its_own():
+    """A row whose own requests did not all answer in one channel is neither a content row nor a
+    reasoning one: it shares a channel with another row of its own kind, and with neither of the
+    two it mixes."""
+    partly = report.summarize([cell_result([obs(), obs(), reasoning_only()])])[0]
+
+    assert partly["timing_channel"] == "mixed"
+    # Two of them are one channel, so their group orders ...
+    both_partly = report.render_grid(
+        [
+            channel_run(RUN_A, "mlxlm", channel="mixed", ttft=0.4, window=2.0),
+            channel_run(RUN_B, "osaurus", channel="mixed", ttft=0.9, window=1.0),
+        ],
+        rank="ttft_p50_s",
+    )
+    assert "- `oq4`: `mlxlm` (1) > `osaurus` (2)" in both_partly
+    # ... and one of them read against a wholly-content row is two definitions, and is refused.
+    against_content = report.render_grid(
+        [
+            channel_run(RUN_A, "mlxlm", channel="mixed", ttft=0.4, window=2.0),
+            channel_run(RUN_B, "osaurus", channel="content", ttft=0.9, window=1.0),
+        ],
+        rank="ttft_p50_s",
+    )
+    assert "- `oq4`: `mlxlm` = 0.400; `osaurus` = 0.900" in against_content
+
+
+def test_a_cell_that_never_ran_is_not_a_channel_of_its_own():
+    """A row with nothing measured was timed on no channel and carries no first-token latency, so
+    it cannot put two definitions into an ordering: the row that did measure still orders, and the
+    empty one is named beside it with the reason it is empty."""
+    dead = (
+        RUN_B,
+        run_header(("chat",)),
+        report.summarize(
+            [
+                cell_result(
+                    [], cell_id="oq4__osaurus", runtime="osaurus",
+                    artifact_dir=ARTIFACTS["oq4"], label="oq4", runtime_version="Osaurus 0.25.4",
+                    workload_id="chat", status="N/A", reason="port 8100 never opened",
+                )
+            ]
+        ),
+    )
+    measured = channel_run(RUN_A, "mlxlm", ttft=0.4, window=2.0)
+
+    assert measured[2][0]["timing_channel"] == "content"
+    assert dead[2][0]["timing_channel"] is None
+    rendered = report.render_grid([measured, dead], rank="ttft_p50_s")
+
+    assert "- `oq4`: `mlxlm` (1) > `osaurus` (not ranked: not measured)" in rendered
+    assert "is not one quantity" not in rendered
+
+
 def test_the_best_cell_is_labelled_a_recommendation_across_the_grid():
     """One line per workload, and the one reading that spans both axes says so: the winning
     cell won under one format and one runtime at once, and the number cannot split them."""
