@@ -71,7 +71,7 @@ from __future__ import annotations
 import statistics
 from typing import TYPE_CHECKING
 
-from ohyesmlx import measure
+from ohyesmlx import measure, transport
 
 if TYPE_CHECKING:  # measure.py owns the shapes; report reads a CellResult and two strings.
     from ohyesmlx.measure import CellResult
@@ -177,6 +177,9 @@ RANK_METRICS = {
     "peak_mb": "lower",
     "cold_load_s": "lower",
     "disk_bytes": "lower",
+    "e2e_p50_s": "lower",
+    "e2e_p90_s": "lower",
+    "e2e_p99_s": "lower",
 }
 
 DEFAULT_RANK = "decode_tps"
@@ -201,7 +204,8 @@ DEFAULT_RANK = "decode_tps"
 DECODE_DERIVED_RANKS = frozenset({"decode_tps"})
 
 _UNPUBLISHED_FIELDS = frozenset({
-    "ttft_p50_s", "ttft_p90_s", "ttft_p99_s", "itl_s", "decode_tps",
+    "ttft_p50_s", "ttft_p90_s", "ttft_p99_s", "e2e_p50_s", "e2e_p90_s", "e2e_p99_s",
+    "itl_s", "decode_tps",
     "drift_pct", "aggregate_tps", "prefill_tps",
 })
 
@@ -211,6 +215,9 @@ CARD_FIELDS = (
     ("ttft_p50_s", 3),
     ("ttft_p90_s", 3),
     ("ttft_p99_s", 3),
+    ("e2e_p50_s", 3),
+    ("e2e_p90_s", 3),
+    ("e2e_p99_s", 3),
     ("itl_s", 4),
     ("decode_tps", 1),
     ("aggregate_tps", 1),
@@ -310,6 +317,9 @@ _METRIC_CAVEAT = {
 # The note that explains a missing value instead: a rate's absence is the delta rule's, and a
 # percentile's absence is the sample count's.
 _METRIC_ABSENCE = {
+    "e2e_p50_s": "percentile_note",
+    "e2e_p90_s": "percentile_note",
+    "e2e_p99_s": "percentile_note",
     "decode_tps": "delta_note",
     "prefill_tps": "delta_note",
     "itl_s": "delta_note",
@@ -454,6 +464,7 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         raise ValueError(_rank_error(rank))
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
     _check_harness(runs)
+    _check_known_runtime_versions(runs)
     _check_pins(runs)
     _check_cells_appear_once(
         runs,
@@ -494,6 +505,9 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         lines += ["No run directories were named, so there was nothing to join.", ""]
         return "\n".join(lines) + "\n"
 
+    reasoning_note = (
+        "A `reasoning timed` marker means TTFT and decode use the reasoning stream, not content."
+    )
     marker_note = (
         "A cell whose drift moved more than "
         f"{DRIFT_ANNOTATION_PCT:g}% across its own window carries its marker beside its "
@@ -511,6 +525,7 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
         *ENTRY_LEGEND,
         "The matrix is ragged by design — no runtime loads every format — so `—` is ordinary "
         "and does not read as a failure. " + marker_note,
+        reasoning_note,
         "",
     ]
     lines += _provenance(runs, columns)
@@ -685,6 +700,8 @@ def _card_note(row: dict, field: str, rank: str) -> str | None:
     """What a card row has to say for itself: its caveat, why it is empty, or that it is the
     metric the ordering used."""
     notes = []
+    if field == "ttft_p50_s":
+        notes.append(row.get("reasoning_timed_note"))
     if field == rank:
         notes.append("the ranking metric")
     if row.get(field) is None:
@@ -725,6 +742,8 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
     samples = [o for o in observations if measure.came_back(o)]
 
     ttft = [o.ttft_s for o in samples if o.ttft_s is not None]
+    # End-to-end latency: request sent -> stream closed, for requests that came back only.
+    e2e = [o.total_s for o in samples]
     decode, prefill, itl = [], [], []
     for observation in samples:
         per_request = _per_request(observation)
@@ -764,6 +783,10 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "ttft_p50_s": percentile(ttft, 50),
         "ttft_p90_s": percentile(ttft, 90) if n >= MIN_PERCENTILE_N else None,
         "ttft_p99_s": percentile(ttft, 99) if n >= MIN_PERCENTILE_N else None,
+        "e2e_p50_s": percentile(e2e, 50),
+        "e2e_p90_s": percentile(e2e, 90) if len(e2e) >= MIN_PERCENTILE_N else None,
+        "e2e_p99_s": percentile(e2e, 99) if len(e2e) >= MIN_PERCENTILE_N else None,
+        "reasoning_timed_note": _reasoning_timed_note(samples),
         "itl_s": median(itl),
         "decode_tps": median(decode),
         "drift": drift,
@@ -800,6 +823,16 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
     }
     row.update(_floor_verdicts(row["status"], row["reason"]))
     return row
+
+
+def _reasoning_timed_note(samples) -> str | None:
+    reasoning = sum(transport.timing_channel(observation) == "reasoning" for observation in samples)
+    if not reasoning:
+        return None
+    return (
+        f"timed on reasoning channel: {reasoning} of {len(samples)} measured requests "
+        "(TTFT and decode are the reasoning stream's, not content's)"
+    )
 
 
 def _measured_batches(result: CellResult) -> int:
@@ -1146,6 +1179,7 @@ def _table(rows: list[dict], rank: str) -> str:
     header = (
         f"| cell | runtime | format | workload | rank by {rank} | status | n "
         "| TTFT p50 s | TTFT p90 s | TTFT p99 s "
+        "| E2E p50 s | E2E p90 s | E2E p99 s "
         "| ITL s | decode tok/s | drift % | aggregate tok/s | prefill tok/s | cold load s "
         "| first request s | peak MB "
         "| disk bytes | runtime version | notes |"
@@ -1171,6 +1205,7 @@ def _cells(row: dict) -> list[str]:
                 row.get("short_note"),
                 row.get("percentile_note"),
                 row.get("ttft_note"),
+                row.get("reasoning_timed_note"),
                 row.get("delta_note"),
                 row.get("drift_note"),
                 row.get("cold_load_note"),
@@ -1184,6 +1219,7 @@ def _cells(row: dict) -> list[str]:
         field: "—" if unpublished else _number(row.get(field), places)
         for field, places in (
             ("ttft_p50_s", 3), ("ttft_p90_s", 3), ("ttft_p99_s", 3),
+            ("e2e_p50_s", 3), ("e2e_p90_s", 3), ("e2e_p99_s", 3),
             ("itl_s", 4), ("decode_tps", 1), ("aggregate_tps", 1),
             ("prefill_tps", 1),
         )
@@ -1199,6 +1235,9 @@ def _cells(row: dict) -> list[str]:
         figures["ttft_p50_s"],
         figures["ttft_p90_s"],
         figures["ttft_p99_s"],
+        figures["e2e_p50_s"],
+        figures["e2e_p90_s"],
+        figures["e2e_p99_s"],
         figures["itl_s"],
         figures["decode_tps"],
         "—" if unpublished else _drift_cell(row),
@@ -1310,6 +1349,22 @@ ENTRY_LEGEND = (
     "| `—` | a combination no run measured |",
     "",
 )
+
+
+def _check_known_runtime_versions(runs: list[tuple]) -> None:
+    """Refuse a joined row whose runtime would not state its version (review D3).
+
+    ``runtimes`` records ``unknown: <why>`` when a version command fails. Guard 4 holds each
+    runtime's version constant across a join, and a version nobody stated cannot be held.
+    """
+    for label, _header, rows in runs:
+        for row in rows:
+            version = row.get("runtime_version")
+            if isinstance(version, str) and version.startswith("unknown"):
+                raise ValueError(
+                    f"{label} cell {row.get('cell_id')!r} has runtime_version {version!r}; "
+                    "joined runs require a stated runtime version"
+                )
 
 
 def _check_harness(runs: list[tuple]) -> None:
@@ -1633,6 +1688,11 @@ def _grid_table(rows: list[dict], labels: list[str], columns: list[dict], rank: 
     )
 
 
+def _reasoning_timed_marker(row: dict) -> str | None:
+    note = row.get("reasoning_timed_note")
+    return "reasoning timed" if note else None
+
+
 def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
     """One grid entry, in one of the four states a cell can be in.
 
@@ -1676,6 +1736,9 @@ def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
     short = _short_marker(row)
     if short is not None:
         markers.append(short)
+    reasoning_timed = _reasoning_timed_marker(row)
+    if reasoning_timed is not None:
+        markers.append(reasoning_timed)
     return number if not markers else f"{number} ({') ('.join(markers)})"
 
 
@@ -1756,7 +1819,9 @@ def _readings(groups: list[tuple], columns: list[dict], labels: list[str], rank:
         for label in labels:
             group = [row for row in rows if row.get("label") == label]
             lines.append(f"- `{_text(label)}`: {_ordering(group, rank, 'runtime')}")
-        lines += ["", _recommendation(rows, rank), ""]
+        recommendation = _recommendation(rows, rank)
+        if recommendation is not None:
+            lines += ["", recommendation, ""]
     return lines
 
 
@@ -1769,6 +1834,13 @@ def _ordering(rows: list[dict], rank: str, key: str) -> str:
     """
     if not rows:
         return "—"
+    # Decision 120: across runtimes these metrics are not one quantity, so the values are listed
+    # alphabetically by runtime with no position. Within one runtime they still order.
+    if rank in CROSS_RUNTIME_UNCOMPARABLE and key == "runtime":
+        return "; ".join(
+            f"`{_text(row.get(key))}` = {_rank_number(row, rank)}"
+            for row in sorted(rows, key=lambda row: str(row.get(key) or ""))
+        )
     parts = []
     for row in order_rows(rows, rank):
         name = f"`{_text(row.get(key))}`"
@@ -1781,7 +1853,7 @@ def _ordering(rows: list[dict], rank: str, key: str) -> str:
     return " > ".join(parts)
 
 
-def _recommendation(rows: list[dict], rank: str) -> str:
+def _recommendation(rows: list[dict], rank: str) -> str | None:
     """The best cell in one workload's grid, labelled as a recommendation.
 
     It is the one line in the document that spans both axes, and that is exactly why it cannot
@@ -1789,6 +1861,8 @@ def _recommendation(rows: list[dict], rank: str) -> str:
     and the number carries no way to split the win between them. Which of the two earned it is
     what the column and the row above this line are for.
     """
+    if rank in CROSS_RUNTIME_UNCOMPARABLE:
+        return None
     ranked = [row for row in order_rows(rows, rank) if row.get("rank") is not None]
     if not ranked:
         return (
@@ -1929,6 +2003,7 @@ def render_sweep(
 
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
     _check_harness(runs)
+    _check_known_runtime_versions(runs)
     _check_pins(runs, varying=varying)
     _check_sweep_varies(runs, varying)
     _check_cells_appear_once(
@@ -1956,6 +2031,10 @@ def render_sweep(
         f"Each table is one workload and carries one metric: `{rank}` ({_direction(rank)}).",
         "",
         *ENTRY_LEGEND,
+    ]
+    lines += [
+        "A `reasoning timed` marker means TTFT and decode use the reasoning stream, not content.",
+        "",
     ]
     if rank in DECODE_DERIVED_RANKS and (
         varying == "concurrency"

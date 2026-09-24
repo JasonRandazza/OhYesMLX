@@ -247,9 +247,12 @@ is never compared across different generation lengths.
 
 ```python
 def summarize(results: list[CellResult], *, measured: int | None = None) -> list[dict]: ...
-# one row per cell: ttft_p50_s/p90/p99, itl_s, decode_tps, prefill_tps,
-# cold_load_s, peak_mb, disk_bytes, runtime_version, status — plus the short-window
-# fields in "the lost visit and the short measured window" below.
+# one row per cell: ttft_p50_s/p90/p99, e2e_p50_s/p90/p99, reasoning_timed_note,
+# itl_s, decode_tps, prefill_tps, cold_load_s, peak_mb, disk_bytes, runtime_version,
+# status — plus the short-window
+# fields in "the lost visit and the short measured window" below. E2E percentiles use
+# returned samples' total_s, share MIN_PERCENTILE_N and percentile() with TTFT, and are not
+# produced for failed requests.
 
 def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) -> str: ...
 ```
@@ -416,13 +419,18 @@ without noticing, so the join refuses rather than renders when:
    different versions is the grid working as intended; the *same* runtime at 0.25.3 in one
    directory and 0.25.4 in another is the held-constant variable moving, and Osaurus
    measured 1.15x across exactly that step.
+5. **A joined row has an unknown runtime version.** A shared check refuses any
+   `runtime_version` beginning with `unknown` in `render_grid` or `render_sweep`, naming the
+   run directory, cell and value; a join cannot establish that the runtime stayed constant
+   when its version is not stated. Single-run leaderboards render these rows unchanged.
 
 Guard 4 compares `runtime_version` as an exact string. mlx-optiq reports
 `"mlx-optiq, version 0.5.6"` rather than a bare `0.5.6` — uniform within its column today,
 so the guard does not misfire, but a runtime that rephrases its `--version` output would
 read as a version change. Normalise here if it ever does.
 
-Every guard names both run directories in its message. A grid that refuses must say which
+Every guard names the offending run directory or both disagreeing directories in its message.
+A grid or sweep that refuses must say which
 two files disagreed and on what.
 
 ### Provenance

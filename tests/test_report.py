@@ -171,6 +171,9 @@ def test_row_carries_every_field_the_contract_names(rows):
         "ttft_p50_s",
         "ttft_p90_s",
         "ttft_p99_s",
+        "e2e_p50_s",
+        "e2e_p90_s",
+        "e2e_p99_s",
         "itl_s",
         "decode_tps",
         "aggregate_tps",
@@ -180,6 +183,7 @@ def test_row_carries_every_field_the_contract_names(rows):
         "disk_bytes",
         "runtime_version",
         "status",
+        "reasoning_timed_note",
     }
 
 
@@ -279,8 +283,8 @@ def test_non_pass_rows_keep_values_in_summary_but_publish_no_request_figures(sta
 
     printed, = leaderboard_rows(report.render_markdown([row], axis="runtime"))
     for field in (
-        "TTFT p50 s", "TTFT p90 s", "TTFT p99 s", "ITL s", "decode tok/s",
-        "drift %", "aggregate tok/s", "prefill tok/s",
+        "TTFT p50 s", "TTFT p90 s", "TTFT p99 s", "E2E p50 s", "E2E p90 s",
+        "E2E p99 s", "ITL s", "decode tok/s", "drift %", "aggregate tok/s", "prefill tok/s",
     ):
         assert printed[field] == "—", field
     assert f"not published: {status} row" in printed["notes"]
@@ -339,6 +343,78 @@ def test_peak_memory_comes_from_the_sampler_dict():
 
 def test_summarize_keeps_the_order_the_cells_arrived_in(rows):
     assert [row["runtime"] for row in rows] == ["mlxlm", "osaurus"]
+
+
+# --- Phase 2 reasoning-channel reporting ----------------------------------------------------
+
+
+def test_end_to_end_latency_percentiles_require_five_returned_samples():
+    row, = report.summarize([cell_result([obs(total=1.0), obs(total=3.0)])])
+    assert row["e2e_p50_s"] == 2.0
+    assert row["e2e_p90_s"] is None
+    assert row["e2e_p99_s"] is None
+    assert "n=2" in row["percentile_note"]
+
+
+def test_end_to_end_latency_uses_only_returned_samples_and_is_reported_everywhere():
+    returned = [dataclasses.replace(obs(total=float(value)), total_s=float(value))
+                for value in (1, 2, 3, 4, 5)]
+    failed = obs(ok=False, total=99.0, error="HTTP 500")
+    row, = report.summarize([cell_result(returned + [failed])])
+
+    assert (row["e2e_p50_s"], row["e2e_p90_s"], row["e2e_p99_s"]) == (3.0, 4.6, 4.96)
+    assert "e2e_p50_s" in report.RANK_METRICS
+    assert report.RANK_METRICS["e2e_p50_s"] == "lower"
+    printed, = leaderboard_rows(report.render_markdown([row], axis="runtime", rank="e2e_p50_s"))
+    assert (printed["E2E p50 s"], printed["E2E p90 s"], printed["E2E p99 s"]) == (
+        "3.000", "4.600", "4.960"
+    )
+    card = card_blocks(report.render_markdown([row], axis="runtime"))[("chat", "oq4__mlxlm")]
+    assert all(f"| {field} |" in card for field in ("e2e_p50_s", "e2e_p90_s", "e2e_p99_s"))
+    assert row["n_measured"] == 5
+
+
+@pytest.mark.parametrize("status", ["FAIL", "N/A"])
+def test_non_pass_end_to_end_latency_is_not_published(status):
+    row, = report.summarize([cell_result([obs(total=2.0)] * 5, status=status) ])
+    printed, = leaderboard_rows(report.render_markdown([row], axis="runtime"))
+    assert [printed[field] for field in ("E2E p50 s", "E2E p90 s", "E2E p99 s")] == ["—"] * 3
+    card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
+    assert all(f"| {field} | — | not published: {status} row |" in card for field in (
+        "e2e_p50_s", "e2e_p90_s", "e2e_p99_s"
+    ))
+
+
+def test_reasoning_timed_requests_are_labelled_in_every_report():
+    reasoning = dataclasses.replace(
+        obs(), text="", reasoning_text="the complete response", content_event_count=4
+    )
+    row, = report.summarize([cell_result([reasoning, obs()])])
+    expected = (
+        "timed on reasoning channel: 1 of 2 measured requests "
+        "(TTFT and decode are the reasoning stream's, not content's)"
+    )
+
+    assert row["reasoning_timed_note"] == expected
+    markdown = report.render_markdown([row], axis="runtime")
+    assert expected in leaderboard_rows(markdown)[0]["notes"]
+    assert expected in card_blocks(markdown)[("chat", "oq4__mlxlm")]
+
+    grid_row = dict(row)
+    grid_row.update(runtime="mlxlm", label="oq4", workload_id="chat")
+    grid = report.render_grid([(RUN_A, run_header(("chat",)), [grid_row])])
+    assert "reasoning timed" in grid_tables(grid)["chat"]["oq4"]["mlxlm"]
+    assert "reasoning timed` marker means TTFT and decode use the reasoning stream, not content" in grid
+
+    sweep = report.render_sweep(
+        [
+            (SWEEP_RUNS[0], run_header(("chat",), cache_state="off"), [dict(grid_row)]),
+            (SWEEP_RUNS[1], run_header(("chat",), cache_state="on"), [dict(grid_row)]),
+        ],
+        varying="cache_state",
+    )
+    assert "reasoning timed" in sweep_tables(sweep)["chat"]["oq4__mlxlm"]["off"]
+    assert "reasoning timed` marker means TTFT and decode use the reasoning stream, not content" in sweep
 
 
 # --- what came back -------------------------------------------------------------------------
@@ -1059,7 +1135,8 @@ def test_the_drift_column_is_the_only_column_added():
 
     assert header == (
         "| cell | runtime | format | workload | rank by decode_tps | status | n "
-        "| TTFT p50 s | TTFT p90 s | TTFT p99 s | ITL s | decode tok/s | drift % "
+        "| TTFT p50 s | TTFT p90 s | TTFT p99 s | E2E p50 s | E2E p90 s | E2E p99 s "
+        "| ITL s | decode tok/s | drift % "
         "| aggregate tok/s | prefill tok/s | cold load s | first request s | peak MB "
         "| disk bytes | runtime version | notes |"
     )
@@ -1786,9 +1863,13 @@ def test_every_rank_metric_is_named_and_carries_its_direction():
         "peak_mb",
         "cold_load_s",
         "disk_bytes",
+        "e2e_p50_s",
+        "e2e_p90_s",
+        "e2e_p99_s",
     }
     assert report.RANK_METRICS["decode_tps"] == "higher"
-    for metric in ("ttft_p50_s", "itl_s", "peak_mb", "cold_load_s", "disk_bytes"):
+    for metric in ("ttft_p50_s", "itl_s", "peak_mb", "cold_load_s", "disk_bytes",
+                   "e2e_p50_s", "e2e_p90_s", "e2e_p99_s"):
         assert report.RANK_METRICS[metric] == "lower"
 
     row = report.summarize([cell_result(HEALTHY)])[0]
@@ -1900,6 +1981,9 @@ def test_the_row_carries_no_blended_or_normalised_figure(rows):
         "ttft_p50_s",
         "ttft_p90_s",
         "ttft_p99_s",
+        "e2e_p50_s",
+        "e2e_p90_s",
+        "e2e_p99_s",
         "itl_s",
         "decode_tps",
         "aggregate_tps",
@@ -1936,6 +2020,9 @@ def test_the_card_carries_every_metric_for_every_cell_and_workload():
             "ttft_p50_s",
             "ttft_p90_s",
             "ttft_p99_s",
+            "e2e_p50_s",
+            "e2e_p90_s",
+            "e2e_p99_s",
             "itl_s",
             "decode_tps",
             "aggregate_tps",
@@ -2482,6 +2569,9 @@ RANK_COLUMNS = {
     "peak_mb": "peak MB",
     "cold_load_s": "cold load s",
     "disk_bytes": "disk bytes",
+    "e2e_p50_s": "E2E p50 s",
+    "e2e_p90_s": "E2E p90 s",
+    "e2e_p99_s": "E2E p99 s",
 }
 
 
@@ -2834,6 +2924,86 @@ def test_two_different_runtimes_at_two_versions_are_the_grid_working_as_intended
 
     assert len(set(versions)) == len(versions)
     assert "mlx-lm 0.31.3" in report.render_grid(grid_runs())
+
+
+def test_cross_runtime_uncomparable_axis_readings_print_unordered_values_without_recommendation():
+    runs = grid_runs(plan=(
+        (RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",)),
+        (RUN_B, "osaurus", "Osaurus 0.25.4", ("oq4",)),
+    ))
+    for metric in report.CROSS_RUNTIME_UNCOMPARABLE:
+        rendered = report.render_grid(runs, rank=metric)
+        runtime_axis = rendered.split("**Runtime axis", 1)[1].split("## Notes", 1)[0]
+        reading_lines = [line for line in runtime_axis.splitlines() if line.startswith("- `oq4`:")]
+        assert len(reading_lines) == 3
+        assert all(" (1)" not in line and " (2)" not in line for line in reading_lines)
+        assert all("fastest" not in line and " > " not in line for line in reading_lines)
+        assert "Recommendation —" not in rendered
+        assert "Runtime axis" in rendered and "not one quantity across runtimes" in rendered
+        assert all("`mlxlm` =" in line and "`osaurus` =" in line for line in reading_lines)
+        assert all(line.index("`mlxlm` =") < line.index("`osaurus` =") for line in reading_lines)
+        assert all(" = " in line for line in reading_lines)
+
+    comparable = report.render_grid(runs, rank="decode_tps")
+    assert "Recommendation —" in comparable
+
+
+@pytest.mark.parametrize("join", ["grid", "sweep"])
+def test_join_renders_refuse_unknown_runtime_versions_with_context(join):
+    row = {
+        "cell_id": "oq4__mlxlm", "runtime": "mlxlm", "label": "oq4",
+        "artifact_dir": ARTIFACTS["oq4"], "workload_id": "chat",
+        "status": "PASS", "rankable": True, "decode_tps": 100.0,
+        "runtime_version": "unknown: version command failed", "drift": None,
+    }
+    if join == "grid":
+        runs = [("run-unknown", run_header(("chat",)), [row])]
+        render = lambda: report.render_grid(runs)
+    else:
+        runs = [
+            (SWEEP_RUNS[0], run_header(("chat",), concurrency=1), [row]),
+            (SWEEP_RUNS[1], run_header(("chat",), concurrency=8), [row]),
+        ]
+        render = lambda: report.render_sweep(runs, varying="concurrency")
+
+    with pytest.raises(ValueError) as raised:
+        render()
+    message = str(raised.value)
+    assert "run-unknown" in message or SWEEP_RUNS[0] in message
+    assert "oq4__mlxlm" in message
+    assert "unknown: version command failed" in message
+
+
+def test_single_run_leaderboard_keeps_unknown_runtime_version():
+    row = report.summarize([
+        cell_result([obs()], runtime_version="unknown: version command failed")
+    ])[0]
+    assert "unknown: version command failed" in report.render_markdown([row], axis="runtime")
+
+
+def test_cross_runtime_uncomparable_metric_never_drives_a_recommendation():
+    rows = [
+        {"cell_id": "oq4__osaurus", "runtime": "osaurus", "label": "oq4",
+         "status": "PASS", "rankable": True, "peak_mb": 100.0, "cold_load_s": 1.0,
+         "decode_tps": 10.0, "drift": None},
+        {"cell_id": "oq4__omlx", "runtime": "omlx", "label": "oq4",
+         "status": "PASS", "rankable": True, "peak_mb": 1000.0, "cold_load_s": 2.0,
+         "decode_tps": 100.0, "drift": None},
+    ]
+    for metric in report.CROSS_RUNTIME_UNCOMPARABLE:
+        assert report._recommendation(rows, metric) is None
+
+
+def test_every_rank_metric_is_named_and_carries_its_direction():
+    """The metric keys are the ones a row already carries, and each says which end is good."""
+    assert set(report.RANK_METRICS) == {
+        "decode_tps", "aggregate_tps", "prefill_tps", "ttft_p50_s", "itl_s",
+        "peak_mb", "cold_load_s", "disk_bytes", "e2e_p50_s", "e2e_p90_s", "e2e_p99_s",
+    }
+    for metric in ("e2e_p50_s", "e2e_p90_s", "e2e_p99_s"):
+        assert report.RANK_METRICS[metric] == "lower"
+    row = report.summarize([cell_result(HEALTHY)])[0]
+    assert set(report.RANK_METRICS) <= set(row)
 
 
 def test_a_rankable_row_with_no_value_for_the_metric_is_not_a_ragged_cell():
