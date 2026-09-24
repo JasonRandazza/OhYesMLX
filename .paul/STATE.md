@@ -16,10 +16,10 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 ## Current Position
 
 Milestone: v3.1 — Hardening (0.3.1) — IN PROGRESS. v0.3.0 released 2026-09-23.
-Phase: 4 (Re-run v3 script studies through the harness) — NOT STARTED, needs header-pin approval
+Phase: 4 (Re-run v3 script studies through the harness) — CODE COMPLETE 2026-09-24; the overnight sweeps are not yet run
 Plan: from the deep review, `.paul/review/2026-09-23/SUMMARY.md` (IDs A1–F below refer to it)
 Status: Phases 1–3 COMPLETE 2026-09-24 (543 tests). Validation grids (35B, dense, MoE) re-run on the hardened harness: `docs/research/2026-09-24-hardening-validation-grids.md`.
-Last activity: 2026-09-24 — overnight validation grids; docs drift closed; Osaurus relaunch cause found.
+Last activity: 2026-09-24 — Phase 4 pins landed (`--kv-quant`, `--mtp-depth`, `--stream-experts`, `--workloads multiturn`; 618 tests); mixed-channel TTFT refusal; vMLX KV rows of the 09-20 paper marked inert.
 
 Progress:
 - Milestone: [██████████] 100%
@@ -119,6 +119,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 119: Reasoning-channel timing is kept and labelled | Hardening 2026-09-23 | A response that streams only (or mirrors) reasoning is timed on the stream it produced, and every such row says "timed on reasoning channel". AGENTS.md's TTFT definition is amended to match; docs/interfaces.md already described it. Review A5. |
 | Decision 120: No cross-runtime ranking on non-comparable metrics | Hardening 2026-09-23 | Runtime-axis readings for a metric in `CROSS_RUNTIME_UNCOMPARABLE` (`peak_mb`, `cold_load_s`) print the numbers but no ordering. Format-axis (within-runtime) ordering is unchanged. Matches AGENTS.md. Review A7. |
 | Decision 121: v3 script-based findings are annotated now, re-run later | Hardening 2026-09-23 | The KV-quant, multi-turn, native-MTP, expert-streaming and speculative papers used probe-script formulas that differ from the harness (review A3/A4). Each gets a caveat naming the formula and why it is not comparable with harness figures; re-running them through the harness is a later hardening phase. |
+| Decision 122: Runtime-axis TTFT orderings refuse mixed timing channels | Phase 4 2026-09-24 | `CHANNEL_DEPENDENT_RANKS` = `ttft_p50_s`, `prefill_tps`. A group whose rows do not share a channel lists values without positions, and the recommendation is none. Jason's call. |
+| Decision 123: Phase 4 pins approved and landed | Phase 4 2026-09-24 | `--kv-quant off\|affine8\|affine4` (`fp8` is false for every runtime: all affine int codes; live KV quant is OptiQ only; vMLX q4/q8 is prefix-cache storage only and inert under `--disable-prefix-cache`, so the vMLX rows of the 09-20 KV paper are marked as not a codec comparison). `--mtp-depth off\|1\|2\|3` (vMLX, fixed depth policy, refused unless the artifact has wired MTP heads). `--stream-experts off\|on` (OptiQ/vMLX; `on` is FAIL unless the server log shows the streaming banner). Multi-turn is `--workloads multiturn`: ten fixed turns with literal assistant replies, not a pin. 03-07 speculative decoding is not re-run (it needs two resident models). None of this has been exercised live yet. |
 
 ### Deferred Issues
 
