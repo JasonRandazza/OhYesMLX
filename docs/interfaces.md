@@ -252,8 +252,9 @@ class Workload:
 ```
 
 One workload measures one corner. Prefill-heavy and decode-heavy work can have **different
-winners**, so a figure from a single shape is not a ranking. v1 pins exactly three and no
-more; a richer suite is v2's.
+winners**, so a figure from a single shape is not a ranking. The default set is exactly these
+three and no more; `--workloads multiturn` selects a second pinned set of ten turns (see
+"Phase 4 study 03-04"), and there is no config file and no flag that invents a third.
 
 | id | prompt | max_tokens | what it exposes |
 |---|---|---|---|
@@ -1127,3 +1128,46 @@ before `3`, and `stream_experts` `off` before `on`: the baseline column first, a
 codec sweeps read. Neither relaxes anything — the same prompt answered at one depth and then
 another, or resident and then streamed — so two runs whose prompts differ are refused like any
 other grid.
+
+## Phase 4 study 03-04 — multi-turn as fixed workloads
+
+The multi-turn study's probe (`scripts/probe_multiturn_sweep.py`) measured the same ten
+questions in one run per runtime, feeding **each runtime's own replies** back into the next
+turn. Every runtime therefore saw a different history, and a difference between two runtimes at
+turn N could belong to the reply text as easily as to the runtime: two things varying at once.
+Re-running it through the harness means the conversation has to be something the harness pins.
+
+```
+ohyesmlx run ... --workloads {pinned,multiturn}
+```
+
+```python
+# cli.py
+def multiturn_workloads(measure) -> list: ...
+# ten Workloads, `turn-01`…`turn-10`, each at `chat`'s 128-token cap
+```
+
+**The workload set is a selector, not a pin** — the same shape as `--prompt-tokens`, one level
+up. `pinned` is the default and is the three shapes above, byte-identical. `multiturn` is ten
+workloads: turn N's `messages` are the first N questions and the N−1 replies between them,
+ending on question N, so turn N's prompt is turn N−1's with one exchange appended. The
+accumulating history is the thing under study and the output cap is not allowed to move with it,
+which is why all ten carry `chat`'s 128 rather than the probe's 64.
+
+**Nothing new is in the header, because the header already carries it.** A run records every
+workload it measured with its own `messages` and `max_tokens` (`write_jsonl`), so the set that
+ran is provenance as it stands and a name for it would be a second copy of the same fact. It
+also means the join guards already cover it: guard 1 compares two headers' workload sets by id
+and by prompt, so a `pinned` run and a `multiturn` run are refused a shared table rather than
+merged, and so are two `multiturn` runs measured from different literals.
+
+**The replies are literals, and that is the fix.** `cli.DIALOGUE` holds the ten questions of the
+probe's `DIALOGUE_TURNS` and nine short neutral replies between them. A probe that fed the model
+its own text gave turn N a different prompt on every runtime; a fixed reply makes turn N the
+same prompt everywhere, which is what makes one runtime's turns comparable with another's — and
+it is the only way a `turn-07` figure across two columns is about one request.
+
+**`--workloads` and `--prompt-tokens` are mutually exclusive** in argparse. The prompt-length
+pin measures its own single sized `prefill` shape and says so in its own header field, so a run
+that named both would be a run that measured one of them with no record of which.
+

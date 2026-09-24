@@ -1590,6 +1590,7 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
     assert flags == {
         "-h", "--help", "--study", "--cells", "--results-dir", "--rank", "--concurrency",
         "--prompt-tokens", "--cache-state", "--kv-quant", "--mtp-depth", "--stream-experts",
+        "--workloads",
     }
     # --concurrency is a PIN, not a selector: it says how the named cells are driven, never
     # which cells run. That distinction is the whole reason concurrency is not a third

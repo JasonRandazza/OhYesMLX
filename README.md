@@ -110,7 +110,21 @@ ohyesmlx run --study format \
 ohyesmlx run --study runtime \
   --cells "oq4__mlxlm=/path/to/model-oQ4,oq4__omlx=/path/to/model-oQ4" \
   --rank decode_tps
+
+# 3. Multi-turn Study: the same pinned ten-turn conversation on every runtime
+ohyesmlx run --study runtime \
+  --cells "oq4__mlxlm=/path/to/model-oQ4,oq4__omlx=/path/to/model-oQ4" \
+  --workloads multiturn --rank ttft_p50_s
 ```
+
+`--workloads {pinned,multiturn}` chooses the workload set. `pinned` (the default) is the three
+shapes — `chat`, `prefill`, `decode` — and `multiturn` is ten workloads, `turn-01`…`turn-10`,
+each one turn longer than the last: the ten questions of the multi-turn study with a fixed reply
+between them, so turn N is the same prompt on every runtime instead of whatever each runtime
+answered the turn before. The set is a **selector, not a pin**: the run header records every
+shape it measured, messages and output caps included, so nothing new is pinned and a join
+compares the shapes that actually ran. It is mutually exclusive with `--prompt-tokens`, which
+measures one `prefill` shape sized to a length.
 
 ### Comparing Runs
 

@@ -30,6 +30,13 @@ CELLS_HELP = (
     "e.g. oq4__mlxlm=~/.cache/huggingface/hub/models--avneetsb--gemma-4-12B-it-qat-oQ4-fp16"
 )
 
+# The two workload sets `--workloads` chooses between. `pinned` is the default and the three
+# shapes of v1; `multiturn` is the ten turns of `DIALOGUE`. The set is a selector and not a pin,
+# the way `--prompt-tokens` is a selector: the run header already lists every workload the run
+# measured with its own messages and `max_tokens`, so the shapes are the provenance and a name
+# for them would be a second copy of the same fact.
+WORKLOAD_SETS = ("pinned", "multiturn")
+
 # Pinned for v1: three workload shapes, and no more. One shape measures one corner of the
 # space, and a column keyed by shape is the only honest way to publish them: prefill-heavy and
 # decode-heavy work can have different winners, so a figure averaged across shapes describes
@@ -134,6 +141,159 @@ PREFILL_PROMPT = (
     "damage.\n\n"
     "--- END EXCERPT ---\n\n"
     "Question: which single rule does the standard treat as non-negotiable, and why?"
+)
+
+# The ten-turn conversation `--workloads multiturn` measures, as literal role/content pairs:
+# the ten questions of `scripts/probe_multiturn_sweep.py`'s DIALOGUE_TURNS, each followed by a
+# fixed reply. The replies are literal because the probe this replaces fed each runtime's own
+# replies back into the next turn, so every runtime saw a different history and a difference
+# between two turns could belong to the history rather than to the runtime. Fixed replies are
+# what make turn N the same prompt on every runtime, which is what makes one runtime's turns
+# comparable with another's.
+DIALOGUE = (
+    (
+        "user",
+        "What are the core differences between monolithic and microservice software "
+        "architectures?"
+    ),
+    (
+        "assistant",
+        "A monolith is deployed as one process: its modules share memory, a database connection "
+        "pool, and a release cycle. A microservice architecture splits that process into "
+        "independently deployed services, each owning its data and talking to the others over the "
+        "network. The monolith trades granularity of scaling for simpler operations, "
+        "transactions, and debugging, since a call between modules stays a function call. "
+        "Microservices trade operational complexity for independent scaling and release, and they "
+        "make partial failure an ordinary condition rather than an exception. Neither is a "
+        "default: the split earns its cost only where independent scaling, team autonomy, or "
+        "release cadence actually demands it."
+    ),
+    (
+        "user",
+        "Considering those differences, how does service discovery work in a microservice setup?"
+    ),
+    (
+        "assistant",
+        "Because instances are created and destroyed dynamically, a client cannot hardcode "
+        "addresses. Service discovery keeps a registry of healthy instances, and callers resolve "
+        "a logical name to a current address. Registration happens either as instances start and "
+        "heartbeat, or through a separate registrar that watches the platform. The registry then "
+        "answers queries for the set of healthy endpoints and drops entries that fail their "
+        "health checks. Consul, etcd, and Eureka are typical registries. DNS-based discovery is "
+        "common in Kubernetes, where a service name resolves to a stable address that the "
+        "platform's proxy load balances across the pods behind it."
+    ),
+    (
+        "user",
+        "How does client-side service discovery compare to server-side service discovery in terms "
+        "of load balancing?"
+    ),
+    (
+        "assistant",
+        "In client-side discovery the caller queries the registry directly and picks an instance "
+        "itself, so load balancing lives in the client library and the caller knows the full set "
+        "of endpoints. It saves a network hop and lets the client apply locality or latency-aware "
+        "policies, at the cost of a discovery client in every language and of each client holding "
+        "registry state. In server-side discovery the caller sends each request to a stable "
+        "address and a router or proxy chooses the instance. That keeps clients simple and "
+        "centralises policy and health checking, but it adds a hop and makes the router itself a "
+        "component whose scaling and availability must be managed."
+    ),
+    (
+        "user",
+        "What consensus algorithms (like Raft or Paxos) are typically used by service registries "
+        "like Consul or etcd?"
+    ),
+    (
+        "assistant",
+        "Consul and etcd both use Raft; ZooKeeper uses ZAB, which is close in structure to Paxos. "
+        "These algorithms keep a replicated log consistent across a quorum of servers, so the "
+        "registry has one agreed order of writes. A leader appends entries and replicates them, "
+        "and once a majority has stored an entry it is committed and applied to the state machine "
+        "that holds the key-value data. Reads are served either from the leader or, with care, "
+        "from a follower whose log is known to be current. The quorum requirement is what sets "
+        "the tolerance: a three-node cluster survives one failure, a five-node cluster two."
+    ),
+    (
+        "user",
+        "Explain the leader election phase in Raft in detail."
+    ),
+    (
+        "assistant",
+        "Raft nodes are followers, candidates, or leaders, and every message carries a term "
+        "number that only ever increases. A follower that hears nothing from a leader within its "
+        "randomised election timeout becomes a candidate, increments the term, votes for itself, "
+        "and asks the others for votes. A node grants at most one vote per term, and only to a "
+        "candidate whose log is at least as up to date as its own. A candidate holding a majority "
+        "becomes leader and starts sending heartbeats. Randomised timeouts make a split vote "
+        "unlikely; when one happens the term ends with no leader and a fresh election begins."
+    ),
+    (
+        "user",
+        "What happens if a network partition splits the Raft cluster into two equal halves?"
+    ),
+    (
+        "assistant",
+        "Neither half can elect a leader, because a majority of the whole cluster is required and "
+        "each half holds exactly half the nodes. The cluster stops accepting writes and waits, "
+        "which is the safe outcome: no value committed on the minority side can later be lost, "
+        "because nothing on that side is ever committed. When the partition heals, the nodes "
+        "exchange terms, the side with the higher term or the more complete log wins, and any "
+        "uncommitted entry from the old leader is discarded and overwritten by replication from "
+        "the new one. Even cluster sizes make this stall likelier, which is why production "
+        "clusters use odd numbers of voters."
+    ),
+    (
+        "user",
+        "How do vector clocks help detect concurrent updates during network partitions in "
+        "distributed key-value stores?"
+    ),
+    (
+        "assistant",
+        "A vector clock is a per-node counter vector attached to a value. Each node increments "
+        "its own component on every write and carries the incoming vector forward, so the vector "
+        "records how many events each node has contributed. Comparing two vectors gives three "
+        "cases: one dominates and is therefore newer, or neither dominates and the writes are "
+        "concurrent. During a partition two replicas accept writes independently, so their "
+        "vectors diverge and neither dominates. On reconciliation the store can tell an overwrite "
+        "from a genuine conflict and return both versions rather than silently dropping one, "
+        "which is exactly the loss a partition makes possible."
+    ),
+    (
+        "user",
+        "Can you provide a simple concrete example of two conflicting vector clock states?"
+    ),
+    (
+        "assistant",
+        "Take nodes A, B and C, and a value first written at A and tagged {A:1}. Replica one "
+        "sends that value to B, which updates it and tags it {A:1, B:1}. Meanwhile replica two "
+        "sends the original value to C, which updates it and tags it {A:1, C:1}. Compare the two "
+        "tags: B's component is absent from C's vector and C's is absent from B's, so neither "
+        "dominates the other and the two writes are concurrent, and a client reading both sees a "
+        "conflict. Had each replica received the other's version before writing, both tags would "
+        "carry A, B and C, and the comparison would resolve cleanly."
+    ),
+    (
+        "user",
+        "How does Dynamo-style eventual consistency resolve such vector clock conflicts using "
+        "Last-Write-Wins or CRDTs?"
+    ),
+    (
+        "assistant",
+        "Dynamo leaves the resolution to the application by returning every conflicting version "
+        "with its vector clock. Many applications then apply last-write-wins, comparing "
+        "timestamps or version numbers and keeping the newer value. It is simple and always "
+        "resolves, but it discards the losing write silently, and clock skew can make an older "
+        "write look newer. CRDTs instead resolve inside the data type: a grow-only set, a "
+        "counter, or a multi-value register defines a merge that is commutative, associative and "
+        "idempotent, so replicas that receive the same updates in any order converge on the same "
+        "state without a coordinator and without a clock."
+    ),
+    (
+        "user",
+        "Summarize the key architectural lessons learned from these ten discussion points into "
+        "three golden rules."
+    ),
 )
 
 # The prompt-length pin's second source. A frozen package file rather than text assembled from
@@ -347,6 +507,31 @@ def workloads(measure) -> list:
     ]
 
 
+def multiturn_workloads(measure) -> list:
+    """The ten turns of :data:`DIALOGUE`, one workload each, built against *measure*.
+
+    ``turn-N``'s messages are the first N questions and the N-1 replies between them, ending on
+    question N, so turn N's prompt is turn N-1's with the reply and the question after it
+    appended: a strictly growing history, which is what the multi-turn study is about, and every
+    turn's prompt is the same on every runtime because the history is the pinned conversation
+    rather than whatever a runtime happened to answer.
+
+    One cap for all ten, ``chat``'s 128. The conversation grows and the output cap does not,
+    because a turn measured at 512 tokens would be a different request from the one before it.
+    """
+    turns = (len(DIALOGUE) + 1) // 2
+    return [
+        measure.Workload(
+            id=f"turn-{turn:02d}",
+            messages=[
+                {"role": role, "content": content} for role, content in DIALOGUE[: 2 * turn - 1]
+            ],
+            max_tokens=128,
+        )
+        for turn in range(1, turns + 1)
+    ]
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ohyesmlx",
@@ -391,7 +576,23 @@ def _parser() -> argparse.ArgumentParser:
         "at N=8 a run of 9 makes 72 requests. A sweep is several runs differing only in this "
         "pin, joined afterwards; it is not a second cell selector and not a third --study axis.",
     )
-    run.add_argument(
+    # Two ways to choose the workload set and they cannot both choose it: `--prompt-tokens`
+    # measures one `prefill` shape sized against the serving tokenizer, and `--workloads` names
+    # a set of shapes pinned in this file. argparse refuses the pair before a run directory
+    # exists, which is where a selection that names two sets belongs.
+    selection = run.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--workloads",
+        choices=WORKLOAD_SETS,
+        default="pinned",
+        help="which workload set the run measures: `pinned` is the three shapes every column so "
+        "far ran (`chat`, `prefill`, `decode`), `multiturn` is the ten turns of the conversation "
+        "`cli.DIALOGUE` pins, whose fixed replies make turn N the same prompt on every runtime. "
+        "A selector, not a pin: the header lists whichever set ran, with its messages and caps, "
+        "and a join compares those. Mutually exclusive with --prompt-tokens, which measures one "
+        "sized `prefill` workload of its own.",
+    )
+    selection.add_argument(
         "--prompt-tokens",
         type=int,
         default=None,
@@ -568,10 +769,12 @@ def _run(args) -> int:
         _check_axis(cells, args.study)
         # The prompt is sized, and the tokenizers are made to agree on its length, before a
         # run directory exists and before any runtime is started for it.
-        if args.prompt_tokens is None:
-            shapes, prompt_tokens = workloads(measure), None
-        else:
+        if args.prompt_tokens is not None:
             shapes, prompt_tokens = sized_workload(measure, cells, args.prompt_tokens)
+        elif args.workloads == "multiturn":
+            shapes, prompt_tokens = multiturn_workloads(measure), None
+        else:
+            shapes, prompt_tokens = workloads(measure), None
     except ValueError as exc:
         print(f"ohyesmlx run: {exc}", file=sys.stderr)
         return 2

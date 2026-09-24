@@ -347,6 +347,126 @@ def test_a_run_without_the_flag_measures_the_three_pinned_workloads_unchanged(
     assert call["prompt_tokens"] is None
 
 
+# --- the workload set -------------------------------------------------------------------------
+
+
+def test_turn_n_is_the_first_n_questions_and_the_replies_between_them(measure):
+    """The conversation is the pinned one, turn by turn: turn N's messages are the first N
+    questions of the dialogue and the N-1 fixed replies between them, ending on question N.
+
+    The replies are literals on purpose. The probe this replaces fed each runtime's own reply
+    back into the next turn, so every runtime saw a different history and a difference between
+    two turns could belong to the history rather than to the runtime; a literal reply is what
+    makes turn N the same prompt everywhere, and the word budget keeps them short enough to sit
+    between two questions without dwarfing them.
+    """
+    users = [content for role, content in cli.DIALOGUE if role == "user"]
+    replies = [content for role, content in cli.DIALOGUE if role == "assistant"]
+
+    assert len(users) == 10 and len(replies) == 9
+    assert all(60 <= len(reply.split()) <= 120 for reply in replies)
+
+    shapes = cli.multiturn_workloads(measure)
+    assert len(shapes) == 10
+
+    for turn, workload in enumerate(shapes, start=1):
+        expected = []
+        for index in range(turn - 1):
+            expected += [
+                {"role": "user", "content": users[index]},
+                {"role": "assistant", "content": replies[index]},
+            ]
+        expected.append({"role": "user", "content": users[turn - 1]})
+
+        assert workload.messages == expected
+        assert workload.messages[-1]["role"] == "user", "a turn ends on the question it asks"
+
+
+def test_the_multiturn_set_is_ten_growing_turns_under_one_cap(measure, tmp_path):
+    code = run(tmp_path, "--workloads", "multiturn")
+
+    assert code == 0
+    assert len(measure.calls) == 1
+    shapes = measure.calls[0]["workloads"]
+
+    assert [workload.id for workload in shapes] == [
+        f"turn-{turn:02d}" for turn in range(1, 11)
+    ]
+    assert {workload.max_tokens for workload in shapes} == {128}
+    assert all(workload.messages[-1]["role"] == "user" for workload in shapes)
+
+    for previous, workload in zip(shapes, shapes[1:]):
+        assert len(workload.messages) == len(previous.messages) + 2
+        assert workload.messages[: len(previous.messages)] == previous.messages
+
+
+def test_the_multiturn_set_is_a_selector_and_not_a_header_pin(measure, tmp_path):
+    """The header already lists every workload a run measured with its messages and its cap, so
+    the set needs no field of its own: the flag changes the workload list handed to the loop and
+    nothing else, and `prompt_tokens` stays `None` -- the prompt-length pin not taken."""
+    assert run(tmp_path) == 0
+    assert run(tmp_path, "--workloads", "multiturn") == 0
+
+    default, multiturn = measure.calls
+    assert multiturn["prompt_tokens"] is None
+    assert {key: value for key, value in multiturn.items() if key != "workloads"} == {
+        key: value for key, value in default.items() if key != "workloads"
+    }
+
+
+def test_naming_the_default_set_changes_nothing(measure, tmp_path):
+    assert run(tmp_path) == 0
+    assert run(tmp_path, "--workloads", "pinned") == 0
+
+    default, named = (call["workloads"] for call in measure.calls)
+
+    assert [workload.id for workload in named] == ["chat", "prefill", "decode"]
+    assert [(w.id, w.messages, w.max_tokens) for w in named] == [
+        (w.id, w.messages, w.max_tokens) for w in default
+    ]
+
+
+def test_the_two_workload_selectors_cannot_both_choose_the_set(measure, tmp_path, capsys):
+    """A run measures one set: argparse refuses the pair whichever order it is given, before a
+    run directory exists and before any runtime is started."""
+    for flags in (
+        ("--workloads", "multiturn", "--prompt-tokens", "500"),
+        ("--prompt-tokens", "500", "--workloads", "multiturn"),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            run(tmp_path, *flags)
+        assert exc_info.value.code == 2
+
+        err = capsys.readouterr().err
+        assert "not allowed with" in err
+        assert "--workloads" in err and "--prompt-tokens" in err
+
+    assert measure.calls == [], "the refused selection started a run"
+    assert not (tmp_path / "results").exists()
+
+
+def test_a_workload_set_that_is_not_one_of_the_two_is_refused(measure, tmp_path, capsys):
+    """`pinned` and `multiturn` are the whole set: a third is refused as an invalid choice
+    rather than taken as a name for shapes nobody pinned."""
+    with pytest.raises(SystemExit) as exc_info:
+        run(tmp_path, "--workloads", "turn-10")
+
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "invalid choice" in err and "turn-10" in err
+    assert measure.calls == []
+
+
+def test_the_run_help_lists_the_workload_selector(capsys, monkeypatch):
+    # Python 3.14 argparse colours help when FORCE_COLOR is set; the assertion is on the text.
+    monkeypatch.setenv("NO_COLOR", "1")
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["run", "--help"])
+
+    assert exc_info.value.code == 0
+    assert "--workloads {pinned,multiturn}" in capsys.readouterr().out
+
+
 def test_the_prompt_is_sized_once_per_distinct_artifact(monkeypatch, tmp_path):
     """Two cells over one artifact is one tokenizer and one prompt: the counter is the
     tokenizer that will serve the prompt, and there is one of those to build."""
