@@ -170,8 +170,8 @@ which is what makes the forwarding in §2.3 possible.
 | `--context-scale FLOAT` | `1.0` | **Multiplies reported usage token counts** — see §6.3 | `cli.py:2366` |
 | `--max-concurrent INTEGER` | `8` | Decode parallelism; also sets prompt-concurrency to `max(1, n//4)` | `cli.py:2374` |
 | `--auth/--no-auth` | **on** | Requires `Bearer sk-optiq-*` **if a header is present** | `cli.py:2382` |
-| `--mtp` | off | MTP speculative decoding via `OptiqEngine` | `cli.py:2386` |
-| `--mtp-depth INTEGER` | `2` | Draft tokens per verify cycle | `cli.py:2391` |
+| `--mtp` | off | MTP speculative decoding via `OptiqEngine`; **the header pin's road in — §9.2** | `cli.py:2554-2558` |
+| `--mtp-depth INTEGER` | `2` | Draft tokens per verify cycle; fixed for the whole call — §9.2 | `cli.py:2559-2563` |
 | `--drafter TEXT` | `None` | Separate drafter model (γ=1 greedy); **mutually exclusive with `--mtp`** | `cli.py:2396` |
 | `--no-fused-kv` | off | Opts out of the tight-RAM KV-quant path — see §7.7 | `cli.py:2593` |
 | `--stream-experts/--no-stream-experts` | `None` = **auto** | SSD expert streaming — see §7.1 | `cli.py:2418` |
@@ -926,7 +926,7 @@ mostly mlx-lm questions.
 | Legacy `quantization_config` | `quant_method`: `bitnet`, `mxfp4`, `compressed-tensors`, `awq`, `gptq` | `mlx_lm/utils.py:368-390` |
 | Static mixed recipes | `mixed_2_6`, `mixed_3_4`, `mixed_3_6`, `mixed_4_6` | `mlx_lm/convert.py:20-80`; OptiQ's default is `mixed_3_6` (`optiq/backends/mlx_backend.py:655`) |
 | Repo-name convention | `…-OptiQ-<N>bit` (parsed, not a loader key) | `optiq/lab/optiq_models.py:136-138` |
-| Sidecars | `optiq/mtp.safetensors`, `optiq/optiq_vision.safetensors` | `optiq/sidecar_layout.py:28-31` |
+| Sidecars | `optiq/mtp.safetensors`, `optiq/optiq_vision.safetensors` — the MTP one is a **gate** on the depth pin, §9.2 | `optiq/sidecar_layout.py:28-31`; resolution at `optiq/runtime/mtp/artifacts.py:104-115` |
 | MTP quant block | `mtplx_mtp_quantization` (`prequantized`, `policy`) | `optiq/runtime/mtp/artifacts.py:44-46` |
 | Architecture | `model_type` (`diffusion_gemma`, `llada2_moe`, `dhara_ar`) | `optiq/models/diffusion.py:50`; `optiq/cli.py:2771` |
 
@@ -976,6 +976,13 @@ Other silent degradations:
 - A per-layer predicate returning false leaves that layer unquantized, unreported
   (`mlx_lm/utils.py:353-355`).
 
+**`--mtp` is not on that list: it fails, but late.** The engine is built on the first request,
+and with no attachable head one warning is logged (`MTP head not attached …`,
+`optiq/runtime/engine.py:297-304`) before `--mtp requested but … has no MTP head` is raised
+(`serve.py:459-464`) and answered to the client as HTTP 404 (`mlx_lm/server.py:1424-1427`).
+Nothing is served AR while the header says MTP — the cell fails loudly, one model load into the
+run.
+
 ### 8.5 Explicit refusals
 
 OptiQ has **no base-model quant-format refusal table of its own**; the refusals are inherited:
@@ -1017,6 +1024,7 @@ The harness currently passes (`Optiq.start_command`):
 `--model`, `--host`, `--port`, `--no-anthropic`, `--no-responses`, `--no-auth`,
 `--max-context off` (8192 before 2026-09-16), `--max-concurrent 1`, `--idle-timeout 0`,
 `--context-scale 1.0`, `--no-stream-experts` or `--stream-experts` (header pin 03-03, below),
+`--mtp --mtp-depth N` when the run pins a draft depth (header pin 03-06, §9.2),
 `--temp 0 --top-p 1 --top-k 0 --min-p 0`, and
 `--prompt-cache-size 0` or `10` when the run pins a cache state.
 
@@ -1059,6 +1067,64 @@ not a success.
 is the uncached streaming path; and `--kv-bits` still installs the fused streaming-KV path
 (§7.7), which is a different mechanism with a similar name.
 
+### 9.2 `--mtp --mtp-depth` is the second runtime the MTP-depth pin drives (03-06)
+
+`--mtp` is an opt-in flag defaulting to off (`is_flag=True, default=False`, `cli.py:2554-2558`) and
+`--mtp-depth` defaults to `2` (`cli.py:2559-2563`), so the header pin
+`--mtp-depth {off,1,2,3}` maps straight onto the pair: **`off` and an absent pin pass neither
+flag** — OptiQ's own off *is* the absence — and a depth passes `--mtp --mtp-depth N`. Every
+recorded OptiQ command is unchanged by this, byte for byte, which is the pin's rule everywhere.
+
+**The depth is fixed for the whole request, so no policy flag travels with it.** The draft/verify
+cycle takes `cycle_K = depth` once and keeps it (`optiq/runtime/engine.py:920`), and the
+HuggingFace-style dynamic-depth adapter that would have moved K mid-call was measured 4-17%
+slower on Apple Silicon and removed (`engine.py:897-905`) — the opposite of vMLX, whose
+`adaptive` default is why that runtime needs `--native-mtp-depth-policy fixed` beside every
+depth.
+
+**Two artifact conditions, both OptiQ's own, and the harness refuses a cell that fails either**
+(`runtimes.optiq_mtp_refusal`):
+
+| condition | source | what it costs otherwise |
+|---|---|---|
+| the head file is where the resolver looks | `expected_mtp_file`: the path the config names under `mlx_lm_extra_tensors.mtp_file`, else `optiq/mtp.safetensors`, `mtp.safetensors`, `mtp/weights.safetensors`, `model-mtp.safetensors` (`mtp/artifacts.py:104-115`; the subfolder-first/root-fallback pair at `sidecar_layout.py:39-50`) | `--mtp` attaches an engine with no draft head, warns once (`engine.py:297-304`) and answers every request as HTTP 404 (`serve.py:459-464`, `mlx_lm/server.py:1424-1427`) |
+| the config declares an MTP layer | `_num_mtp_layers` reads `text_config.mtp_num_hidden_layers`, `text_config.num_nextn_predict_layers`, then `num_nextn_predict_layers` (`mtp_patch.py:69-76`); zero returns before any head is looked for (`:382-385`) | the same 404, with a sidecar sitting on disk unread |
+
+Both OptiQ quants on this host satisfy both: they name `optiq/mtp.safetensors` in
+`mlx_lm_extra_tensors.mtp_file` and declare `mtp_num_hidden_layers: 1`. The 35B's sidecar is
+1,644,816,560 B. An artifact carrying `mtp.*` tensors in its *main* weights is refused here even
+though OptiQ can read those too (`_embedded_mtp_weight_map`, `mtp_patch.py:277-299`) — the
+sidecar is the shape every OptiQ quant ships, and a false refusal costs a cell rather than a
+number.
+
+**The flag is not evidence that a head drafted, and the line that says so arrives late.** The
+startup echo `[optiq.serve] MTP speculation enabled (depth=N, model=…)` (`cli.py:3057-3060`) is
+printed before any model is touched, and the engine it names is built on the **first request**
+(`_get_engine` runs from the patched `stream_generate`, `serve.py:443-471`). So the harness reads
+the log head **after the first workload of the visit has answered**, and **FAILs the cell with
+the log quoted** unless it carries:
+
+```
+[optiq.serve] MTP engine ready (depth=N).
+```
+
+taken verbatim from `serve.py:465`, with the pinned depth interpolated — a cell that asked for 3
+and got an engine built at 2 is a FAIL, not a number under a depth the decode did not hold. The
+fallback lines quoted when it is missing are the engine's own warning that it attached without a
+head (`MTP head not attached …`, `MTP engine…`; `engine.py:297-304`); the HTTP 404 that follows
+goes to the client and never to the log.
+
+**How a depth cell reaches the MTP generate path at all — and the one way it would not.** MTP is
+installed by patching `mlx_lm.server.stream_generate` (`serve.py:470-471`), which the **sequential**
+path calls (`_serve_single`, `mlx_lm/server.py:976`) and the `BatchGenerator` path never does. The
+two ways a request is routed sequentially are `_is_batchable` being false — which happens when
+`args.seed is not None` (`server.py:685-686`) — or a KV-quant flag forcing it
+(`force_sequential_for_kv_quant`, `serve.py:95-143`). **This harness always sends `seed: 0`**
+(`measure.SEED`), so every measured OptiQ request takes the sequential path and MTP applies.
+`--max-concurrent 1` alone does *not* do this: it sets `--decode-concurrency 1`
+(`cli.py:2937-2949`), and a batch of one still goes through `BatchGenerator`. A harness that
+stopped sending a seed would silently measure plain autoregressive under an MTP header pin.
+
 | Add | Why |
 |---|---|
 | `--prompt-cache-bytes <N>` | Otherwise a RAM- and weights-derived value is injected (§7.3), differing across machines and not recorded in the start command. |
@@ -1092,6 +1158,8 @@ run (§2.3).
 4. **MLX's accepted `mode` strings.** OptiQ validates nothing; `nn.quantize`/`mx.quantize`
    decide. Not traced into the MLX core.
 5. **The full `optiq/runtime/mtp/` tree** (~50 modules, vendored vLLM-Metal paged-KV runtime).
-   Read only where it bears on format detection and the `reasoning_content` question.
+   Read where it bears on format detection, the `reasoning_content` question and §9.2's attach
+   path (`attach`, `inject_mtp_support`, `_num_mtp_layers`, `expected_mtp_file`); the generation
+   internals beneath those are not read, and no MTP cell has been run.
 6. **Whether any `generation_config.json` exists for the artifacts this harness serves.** Not
    checked — but §7.2 means it should be, before the next published run.

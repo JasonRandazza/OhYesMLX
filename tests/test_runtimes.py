@@ -863,6 +863,11 @@ def test_no_pin_at_all_leaves_every_start_command_byte_identical_to_today():
         assert runtime.start_command(
             ARTIFACT, HF_ID, mtp_depth=None, stream_experts=None
         ) == TODAY[name]
+        # `off` is the same command on all five for the same reason the absent pin is: it is
+        # either the runtime's own kill switch (vMLX), a default the command already holds
+        # (OptiQ's `--mtp` is off unless passed), or a state the runtime is in because no flag
+        # could take it out of one.
+        assert runtime.start_command(ARTIFACT, HF_ID, mtp_depth="off") == TODAY[name]
 
 
 def test_vmlx_drops_the_kill_switch_for_a_depth_and_pins_the_fixed_policy_with_it(tmp_path):
@@ -891,13 +896,37 @@ def test_vmlx_drops_the_kill_switch_for_a_depth_and_pins_the_fixed_policy_with_i
         assert runtime.mtp_depth_refusal(depth, bundle) is None, "vMLX drives every depth"
 
 
-def test_only_vmlx_has_a_depth_to_pin_and_the_other_four_refuse_every_value():
+def test_optiq_adds_the_mtp_pair_for_a_depth_and_moves_nothing_else(tmp_path):
+    """`--mtp` is `is_flag=True, default=False` and `--mtp-depth` defaults to `2`
+    (optiq/cli.py:2554-2563), so `off` and the absent pin pass neither flag -- a command without
+    the pair is OptiQ's own off rather than a stand-in for one -- and a depth is exactly the
+    pair. No policy flag travels with it because there is no policy to pin: the cycle takes
+    `cycle_K = depth` once and holds it for the whole request (optiq/runtime/engine.py:920)."""
+    runtime = RUNTIMES["optiq"]
+    bundle = optiq_bundle(tmp_path)
+
+    assert "--mtp" not in TODAY["optiq"], "the recorded command is the MTP-free one"
+    assert runtime.start_command(ARTIFACT, HF_ID, mtp_depth="off") == TODAY["optiq"]
+
+    for depth in ("1", "2", "3"):
+        command = runtime.start_command(ARTIFACT, HF_ID, mtp_depth=depth)
+        start = command.index("--mtp")
+        assert command[start : start + 3] == ("--mtp", "--mtp-depth", depth), command
+        assert command.count("--mtp") == 1, "the pair appears once"
+        # A depth changes this command and nothing else about it.
+        assert command[:start] + command[start + 3 :] == TODAY["optiq"]
+        assert runtime.mtp_depth_refusal(depth, bundle) is None, "OptiQ drives every depth"
+
+
+def test_only_the_two_mtp_runtimes_have_a_depth_and_the_other_three_refuse_every_value():
     """Each refusal names its own evidence, because what would have to change is the runtime and
-    not this run: mlx-lm's server has no MTP at all, OptiQ is that same server, oMLX's MTP is a
-    per-model settings field that is adaptive even when set, and Osaurus's depth is host state.
-    Four of the five refuse every depth, so their ``off`` is a statement of fact -- Osaurus is
-    the exception and is read from its host instead."""
-    for name in ("mlxlm", "optiq", "omlx", "osaurus"):
+    not this run: mlx-lm's server has no MTP at all -- its model code drops the head's weights
+    at load -- oMLX's MTP is a per-model settings field that is adaptive even when set, and
+    Osaurus's depth is host state. Three of the five refuse every depth, so their ``off`` is a
+    statement of fact -- Osaurus is the exception and is read from its host instead -- and the
+    two that drive a depth (vMLX, OptiQ) decide it from the artifact rather than from the value,
+    which is why their refusal is tested with a bundle and not here."""
+    for name in ("mlxlm", "omlx", "osaurus"):
         runtime = RUNTIMES[name]
         assert runtime.mtp_depth_refusal(None, ARTIFACT) is None, name
         for depth in ("1", "2", "3"):
@@ -1124,6 +1153,82 @@ def test_an_artifact_that_cannot_be_enumerated_refuses_a_depth_rather_than_assum
     assert "config.json" in runtimes.vmlx_mtp_refusal(missing)
 
 
+# --- the artifact half of the depth pin, on OptiQ -----------------------------------------
+
+
+def optiq_bundle(tmp_path, *, layers=1, head="optiq/mtp.safetensors", named=None,
+                 config_extra=None, name="optiq-bundle"):
+    """A directory shaped like an OptiQ quant: a config that declares an MTP layer, and the head
+    sidecar where OptiQ's own resolver looks for one."""
+    root = tmp_path / name
+    root.mkdir()
+    config = {"model_type": "qwen3_5"}
+    if layers is not None:
+        config["text_config"] = {"mtp_num_hidden_layers": layers}
+    if named is not None:
+        config["mlx_lm_extra_tensors"] = {"mtp_file": named}
+    config.update(config_extra or {})
+    (root / "config.json").write_text(json.dumps(config))
+    if head is not None:
+        sidecar = root / head
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_bytes(b"")
+    return str(root)
+
+
+def test_an_artifact_with_the_sidecar_and_the_layer_accepts_a_depth(tmp_path):
+    """The one case a depth cell is honest on OptiQ: the head is where its resolver looks and
+    the config declares the layer it would build the head against (mtp/artifacts.py:104-115,
+    mtp_patch.py:69-76). Both of the OptiQ quants on this host look exactly like this, with
+    `optiq/mtp.safetensors` named in `mlx_lm_extra_tensors.mtp_file`."""
+    bundle = optiq_bundle(tmp_path)
+
+    assert runtimes.optiq_mtp_refusal(bundle) is None
+    assert RUNTIMES["optiq"].mtp_depth_refusal("3", bundle) is None
+
+
+def test_an_artifact_with_no_head_where_optiq_looks_refuses_a_depth(tmp_path):
+    """`--mtp` is accepted on an artifact with no head, and the failure is loud but late: the
+    engine is built on the first request, warns that it attached without one, and answers HTTP
+    404 (serve.py:459-464, engine.py:297-304, mlx_lm/server.py:1424-1427). Read here instead, the
+    cell costs no model load and says which paths were looked in."""
+    bundle = optiq_bundle(tmp_path, head=None)
+
+    reason = runtimes.optiq_mtp_refusal(bundle)
+
+    assert "optiq/mtp.safetensors" in reason, "the paths looked in are named"
+    assert "HTTP 404" in reason
+    assert RUNTIMES["optiq"].mtp_depth_refusal("1", bundle) == reason
+
+
+def test_the_config_s_own_answer_wins_and_the_four_spellings_are_the_fallback(tmp_path):
+    """`expected_mtp_file` returns the path the config names, and only tries the four spellings
+    when it names none (mtp/artifacts.py:104-115). So a config naming a file that is not there is
+    a refusal even with a sidecar at the root -- the runtime would not read it either, it would
+    fall through to the embedded route -- and the legacy root spelling is a legal artifact."""
+    named = optiq_bundle(tmp_path, head=None, named="optiq/mtp.safetensors", name="named-missing")
+    assert "optiq/mtp.safetensors" in runtimes.optiq_mtp_refusal(named)
+
+    legacy = optiq_bundle(tmp_path, head="mtp.safetensors", name="legacy-root")
+    assert runtimes.optiq_mtp_refusal(legacy) is None
+
+
+def test_an_artifact_whose_config_declares_no_mtp_layer_refuses_a_depth(tmp_path):
+    """Both halves are required. OptiQ's injector returns before it looks for a head when the
+    config's layer count is zero (mtp_patch.py:382-385), so a sidecar on disk under a config
+    that asks for no MTP layer is a cell whose decode would never draft."""
+    bundle = optiq_bundle(tmp_path, layers=None)
+
+    reason = runtimes.optiq_mtp_refusal(bundle)
+
+    assert "mtp_num_hidden_layers" in reason
+    assert "no config.json" not in reason
+    assert RUNTIMES["optiq"].mtp_depth_refusal("2", bundle) == reason
+
+    missing = str(tmp_path / "nothing-here")
+    assert "config.json" in runtimes.optiq_mtp_refusal(missing)
+
+
 # --- the log half of the streaming pin ---------------------------------------------------
 
 
@@ -1199,6 +1304,50 @@ def test_vmlx_requires_the_line_that_says_the_layers_were_patched(tmp_path):
     assert "model has no MoE layers, skipping" in reason, "the log line is quoted"
 
 
+def test_optiq_requires_the_engine_s_own_ready_line_at_the_depth_that_was_pinned(tmp_path):
+    """`--mtp --mtp-depth N` is echoed at startup, but the engine that line names is built on the
+    first request (serve.py:443-471), so the echo is not evidence and the check reads the line
+    printed once the engine exists -- `[optiq.serve] MTP engine ready (depth=N).` (serve.py:465).
+    The depth is interpolated into that line, so a cell at 3 whose engine says 2 is a FAIL."""
+    runtime = RUNTIMES["optiq"]
+
+    assert runtime.mtp_depth_missing(None, None) is None
+    assert runtime.mtp_depth_missing("off", None) is None
+
+    startup_echo = write_log(
+        tmp_path,
+        "[optiq.serve] MTP speculation enabled (depth=3, model=/models/qwen3.5-4b)\n"
+        "[optiq.serve] server is starting at http://127.0.0.1:8080\n",
+        name="echo-only.log",
+    )
+    reason = runtime.mtp_depth_missing("3", startup_echo)
+    assert "MTP engine ready (depth=3)." in reason, "the line that was required is named"
+    assert startup_echo in reason, "the log path is named"
+
+    ready = write_log(
+        tmp_path,
+        "[optiq.serve] MTP speculation enabled (depth=3, model=/models/qwen3.5-4b)\n"
+        "[optiq.serve] attaching MTP engine to loaded model (/models/qwen3.5-4b)...\n"
+        "[optiq.serve] MTP engine ready (depth=3).\n",
+    )
+    assert runtime.mtp_depth_missing("3", ready) is None
+
+    reason = runtime.mtp_depth_missing("2", ready)
+    assert "MTP engine ready (depth=2)." in reason, "the depth is part of the evidence"
+
+    # The engine's own account of attaching without a draft head is quoted when it is there.
+    fell_back = write_log(
+        tmp_path,
+        "[optiq.serve] MTP speculation enabled (depth=3, model=/models/x)\n"
+        "WARNING:optiq.runtime.engine:MTP head not attached (MTP injection failed for /models/x); "
+        "continuing without MTP\n",
+        name="no-head.log",
+    )
+    reason = runtime.mtp_depth_missing("3", fell_back)
+    assert "MTP head not attached" in reason, "the fallback line is quoted"
+    assert "continuing without MTP" in reason
+
+
 def test_a_handle_with_no_log_path_is_a_failure_to_verify_rather_than_a_pass():
     """The evidence is a file, and a start that left no file cannot be checked -- which is a
     FAIL with that reason, not a silent pass. Nothing in production reaches it: every handle a
@@ -1207,6 +1356,11 @@ def test_a_handle_with_no_log_path_is_a_failure_to_verify_rather_than_a_pass():
         reason = RUNTIMES[name].stream_experts_missing("on", None)
         assert "log path" in reason
         assert "FAIL" in reason
+
+    # The depth pin's log half reads the same window and fails the same way.
+    reason = RUNTIMES["optiq"].mtp_depth_missing("3", None)
+    assert "log path" in reason
+    assert "FAIL" in reason
 
 
 def test_the_log_window_the_evidence_reads_is_the_head_not_the_tail(tmp_path):

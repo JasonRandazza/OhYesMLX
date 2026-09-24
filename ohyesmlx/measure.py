@@ -473,8 +473,11 @@ def run_cells(
     depth is only MTP if the artifact carries the heads, so its refusal is handed the cell's
     directory (:meth:`runtimes.Runtime.mtp_depth_refusal`), and ``on`` is only streaming if the
     server's own log says so, which is asked after the start and before the first request
-    (:meth:`runtimes.Runtime.stream_experts_missing`). An ``on`` cell whose log does not show it
-    is ``FAIL`` with that log quoted, never a number published under a pin it does not hold.
+    (:meth:`runtimes.Runtime.stream_experts_missing`). The depth pin has a log half too, later
+    by one workload because the one runtime that answers it builds its engine on the first
+    request (:meth:`runtimes.Runtime.mtp_depth_missing`). A cell whose log does not show either
+    state is ``FAIL`` with that log quoted, never a number published under a pin it does not
+    hold.
 
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
@@ -510,10 +513,10 @@ def run_cells(
         raise ValueError(
             f"mtp_depth must be one of {MTP_DEPTHS} or None, not {mtp_depth!r}: None is the "
             "pin not taken and not a value, and it is not 'off' either -- the runs measured "
-            "before the pin existed ran vMLX at its own default, which on a bundle carrying MTP "
-            "heads is not off. The depths are strings because the set is one word and three "
-            "numbers, and they are not a count of tokens: they are the draft heads' depth, "
-            "pinned with the fixed policy"
+            "before the pin existed ran each runtime's own MTP default, which on a bundle "
+            "carrying heads is not off for vMLX. The depths are strings because the set is one "
+            "word and three numbers, and they are not a count of tokens: they are the draft "
+            "heads' depth, pinned with the fixed policy"
         )
     if stream_experts not in (None, *STREAM_EXPERTS):
         raise ValueError(
@@ -713,6 +716,12 @@ def _visit(
     therefore runs between the start and the first request, and a cell it fails is ``FAIL`` with
     the log quoted and is not visited again: the answer is a property of the model and the flag,
     so a second start would buy the same log and one more model load.
+
+    ``mtp_depth`` has a log half too, on the one runtime that answers it (:meth:`Runtime.
+    mtp_depth_missing`), and it is asked one workload later than the streaming one for a reason
+    the runtime states: OptiQ builds its MTP engine on the first request, so the line that says
+    a draft head is running cannot exist before one has been made. It is the same verdict --
+    ``FAIL`` with the log quoted, not visited again -- and the same reading of the same window.
     """
     runtime = runtimes.RUNTIMES.get(cell.runtime)
     if runtime is None:
@@ -792,10 +801,24 @@ def _visit(
                 result.status, result.reason = "FAIL", missing
             return "skip"
 
-        for result, workload in zip(results, workloads):
+        for position, (result, workload) in enumerate(zip(results, workloads)):
             memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
                                      concurrency=concurrency, counter=counter)
             result.memory = _highest_peak(result.memory, memory)
+
+            # The second half of the depth pin. It is asked here and not beside the streaming
+            # check above because OptiQ -- the only runtime that answers it -- builds its MTP
+            # engine on the first request (optiq/serve.py:443-471), so its own MTP-ready line
+            # exists only once one has been made; every other runtime answers without a log at
+            # all. One workload in is the earliest that is true, and the verdict is FAIL with
+            # the log quoted whether or not the rest of the visit would have measured
+            # something: what failed is the claim the header makes about the cell.
+            if position == 0:
+                missing_depth = runtime.mtp_depth_missing(mtp_depth, handle.log_path)
+                if missing_depth is not None:
+                    for row in results:
+                        row.status, row.reason = "FAIL", missing_depth
+                    return "skip"
 
         if cold_visit:
             carrier = _first_warmup_result(results)

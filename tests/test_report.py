@@ -3804,6 +3804,28 @@ def test_an_mtp_depth_sweep_reads_the_baseline_column_first_and_then_the_depths(
         assert run_label in sweep, "every directory behind a column is named"
 
 
+def test_an_optiq_depth_sweep_joins_the_second_runtime_the_pin_now_drives():
+    """The swept field is the header's, so the join is indifferent to which runtime a column ran
+    on: OptiQ's `off` and depth-3 runs are two columns of a depth sweep exactly as vMLX's are,
+    and the same two runs are refused a grid, because a grid may not average over a depth."""
+    runs = [
+        grid_run(SWEEP_RUNS[0], "optiq", "mlx-optiq 0.5.13", ("oq4",),
+                 workload_ids=("prefill",), rate_of=lambda *_: 100.0,
+                 header=run_header(("prefill",), mtp_depth="off")),
+        grid_run(SWEEP_RUNS[1], "optiq", "mlx-optiq 0.5.13", ("oq4",),
+                 workload_ids=("prefill",), rate_of=lambda *_: 300.0,
+                 header=run_header(("prefill",), mtp_depth="3")),
+    ]
+
+    sweep = report.render_sweep(runs, varying="mtp_depth")
+    table = sweep_tables(sweep)["prefill"]["oq4__optiq"]
+
+    assert list(table) == ["off", "3"]
+    assert table == {"off": "100.0", "3": "300.0"}
+
+    assert_refused(runs, SWEEP_RUNS[0], SWEEP_RUNS[1], "mtp_depth")
+
+
 def test_an_expert_streaming_sweep_reads_resident_first_and_then_streamed():
     runs = [
         streaming_run(SWEEP_RUNS[1], "on", rate=300.0),

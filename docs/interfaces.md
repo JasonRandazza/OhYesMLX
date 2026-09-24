@@ -107,6 +107,9 @@ class Runtime:
     def stream_experts_refusal(self, stream_experts: str | None) -> str | None: ...
     def stream_experts_missing(self, stream_experts: str | None,
                                log_path: str | None) -> str | None: ...
+    def mtp_depth_missing(self, mtp_depth: str | None,
+                          log_path: str | None) -> str | None: ...      # OptiQ only, 03-06
+
 
 @dataclass
 class Handle:
@@ -1026,7 +1029,9 @@ today**, checked against recorded literals for all five runtimes.
 Each of the two carries a **second question the three above do not have**, and both are the
 same defect: the runtime accepts the flag and does something else. So a state one of these pins
 claims is not taken from the command line alone — a depth is decided from the artifact on disk
-before the start, and `on` is decided from the server's own log after it.
+before the start, and `on` is decided from the server's own log after it. A depth also has a log
+half, on the one runtime whose engine is built later than its start: see "`mtp_depth`'s log
+half, on OptiQ" below.
 
 ### `mtp_depth` — the native-MTP draft depth
 
@@ -1037,7 +1042,7 @@ ohyesmlx sweep <off-run-dir> <3-run-dir> --varying mtp_depth --rank decode_tps
 
 | value | means |
 |---|---|
-| `off` | MTP not running: the runtime's own kill switch |
+| `off` | MTP not running: the runtime's own kill switch, or the state its own default is already in |
 | `1` / `2` / `3` | that many draft tokens per verify cycle, under the **fixed** policy |
 
 **The policy is part of the value, not a second pin.** vMLX's default is `adaptive`, which
@@ -1046,39 +1051,70 @@ depth's measured cost, keeping the measured winner" (`cli.py:4324-4331`): depth 
 *inside one request*, and a cell measured under it is not a cell at depth N. Every depth is
 therefore passed as `--native-mtp-depth N --native-mtp-depth-policy fixed`. The values are
 strings — one word beside three numbers — and the ceiling is vMLX's own (1..3 by default,
-`cli.py:1668-1678`). The definitions are `runtimes.MTP_DEPTHS`, written once.
+`cli.py:1668-1678`). The definitions are `runtimes.MTP_DEPTHS`, written once. OptiQ needs no
+equivalent pin: its cycle takes `cycle_K = depth` once and holds it for the whole call, the
+HuggingFace-style dynamic-depth adapter having measured 4-17% slower and been removed
+(`optiq/runtime/engine.py:897-905`, `:920`).
 
-**A depth is only MTP if the artifact says so, and vMLX does not fail when it does not.**
-`--native-mtp-depth` is accepted on a bundle with no MTP heads, the load succeeds, every request
-is answered, and the decode is plain autoregressive — with the startup banner suppressed
-altogether for a `not_configured` bundle (`cli.py:2441`) and the INFO line that would explain an
-inactive draft head conditional on the bundle having declared one (`native_mtp.py:1307-1316`).
-vMLX's own source records that exact failure as measured (`native_mtp.py:1296-1303`): "A bundle
-that DECLARES MTP but is not runtime-supported used to deactivate in total silence, so the model
-ran plain autoregressive with nothing in the log to say why. MEASURED: Nemotron 3.5 Lightning
-(JANG_2L/4M/6M, 34 mtp.layers.0.* tensors, num_nextn_predict_layers=1) and Inkling both hit
-this."
+**A depth is only MTP if the artifact says so, on both runtimes that drive one — and the two
+fail differently.** vMLX does not fail at all: `--native-mtp-depth` is accepted on a bundle with
+no MTP heads, the load succeeds, every request is answered, and the decode is plain
+autoregressive — with the startup banner suppressed altogether for a `not_configured` bundle
+(`cli.py:2441`) and the INFO line that would explain an inactive draft head conditional on the
+bundle having declared one (`native_mtp.py:1307-1316`). vMLX's own source records that exact
+failure as measured (`native_mtp.py:1296-1303`): "A bundle that DECLARES MTP but is not
+runtime-supported used to deactivate in total silence, so the model ran plain autoregressive
+with nothing in the log to say why. MEASURED: Nemotron 3.5 Lightning (JANG_2L/4M/6M, 34
+mtp.layers.0.* tensors, num_nextn_predict_layers=1) and Inkling both hit this." OptiQ fails
+loudly but late: with `--mtp` and no attachable head it builds an engine without a draft head,
+warns once, and then answers each request as HTTP 404 (`optiq/serve.py:459-464`,
+`engine.py:297-304`, `mlx_lm/server.py:1424-1427`) — a per-request failure that costs a full
+model load first.
 
 So `Runtime.mtp_depth_refusal` is handed the **cell's artifact directory** (the one place this
 pin's refusal departs from the three above) and decides from the files, through
-`runtimes.vmlx_mtp_refusal`: the family must be one vMLX wires (`native_mtp.py:64-79`), the
-bundle must not declare MTP dropped (`:883-925`), the config must declare at least one MTP layer
-(`:538-546`), and the safetensors index must carry `mtp.*` tensors (`:606-611`). **Both halves of
-the declaration are required**, because each has its own failure in vMLX's source: a config that
-expects MTP over an index with no tensors reads `metadata_inconsistent` (`:983-986`), and tensors
-under a config that disables MTP read the same (`:987-988`). The accepted case is on this host —
-`models--JANGQ-AI--Qwen3.5-4B-JANG_4S` declares one layer in
+`runtimes.vmlx_mtp_refusal` and `runtimes.optiq_mtp_refusal`. For vMLX: the family must be one
+vMLX wires (`native_mtp.py:64-79`), the bundle must not declare MTP dropped (`:883-925`), the
+config must declare at least one MTP layer (`:538-546`), and the safetensors index must carry
+`mtp.*` tensors (`:606-611`). **Both halves of the declaration are required**, because each has
+its own failure in vMLX's source: a config that expects MTP over an index with no tensors reads
+`metadata_inconsistent` (`:983-986`), and tensors under a config that disables MTP read the same
+(`:987-988`). For OptiQ: the config must declare at least one MTP layer
+(`optiq/runtime/mtp/mtp_patch.py:69-76`, whose zero sends the injector home at `:382-385`), and
+the head file must be where its resolver looks (`mtp/artifacts.py:104-115` — the path the config
+names under `mlx_lm_extra_tensors.mtp_file` first, then the four published spellings). The
+accepted cases are on this host — `models--JANGQ-AI--Qwen3.5-4B-JANG_4S` declares one layer in
 `text_config.mtp_num_hidden_layers`, indexes 31 `mtp.layers.0.*` tensors, stamps family
 `qwen3_5`, and its recorded start log carries `Qwen3.5/3.6 MTP model adapter applied`
-(`results/logs/vmlx-20260924T032906-11424.log:38`).
+(`results/logs/vmlx-20260924T032906-11424.log:38`); both OptiQ quants name
+`optiq/mtp.safetensors` in `mlx_lm_extra_tensors.mtp_file` and declare
+`mtp_num_hidden_layers: 1`.
 
 | runtime | `off` | `1` / `2` / `3` |
 |---|---|---|
 | vMLX 1.6.59 | accepted, and it is the command of today: `--disable-native-mtp` sets `VMLINUX_NATIVE_MTP=0` and clears any depth the environment left behind (`cli.py:1662-1667`) | **driven**, then decided from the artifact: `--native-mtp-depth N --native-mtp-depth-policy fixed` on a bundle whose MTP heads vMLX will wire, and `N/A` with the check that failed on one whose heads it will not |
-| mlx-lm 0.31.3 | accepted, no flag — the only state the server has: its 23 options include none for MTP and the string `mtp` does not occur in `server.py` | **refused**: no MTP exists in the server for a depth to apply to |
-| OptiQ 0.5.13 | accepted, no flag — same server underneath | **refused**: it is that same `mlx_lm.server` 0.31.3 (`cli.py:2332`, `:2571`, `:3030`) |
+| OptiQ 0.5.13 | accepted, no flag change: `--mtp` is `is_flag=True, default=False` (`optiq/cli.py:2554-2558`), so a command without the pair is a command that never drafts | **driven**, then decided twice: `--mtp --mtp-depth N` on an artifact whose head `optiq_mtp_refusal` accepts, and `FAIL` quoting the log if the engine's own ready line at the pinned depth does not appear (below) |
+| mlx-lm 0.31.3 | accepted, no flag — the only state the server has: its 23 options include none for MTP, the string `mtp` does not occur in `server.py`, and its model code drops the head's weights at load (`models/qwen3_5.py:313`) | **refused**: no MTP exists in the server for a depth to apply to |
 | oMLX 0.6.4 | accepted, no flag, and structural: the per-run `--base-path` scratch holds no `model_settings.json`, so `mtp_enabled` is `False` (`model_settings.py:303`) | **refused**: `mtp_num_draft_tokens` is a per-model settings field with no flag, and it is adaptive even when set (`model_settings.py:304-308`) |
 | Osaurus 0.25.12 | accepted only when the host's `mtp.mode` is `force_off` — read through the tracked key the drift gate already records | **refused**: the depth is the host setting `mtp.explicitDepth`, which "must be 1, 2, or 3" (docs/runtimes/osaurus.md:344), with no start-command surface |
+
+### `mtp_depth`'s log half, on OptiQ
+
+The streaming pin is not the only one whose state is settled by the server's own log. OptiQ
+echoes `--mtp --mtp-depth N` at startup, but the engine that echo names is created on the
+**first request** (`optiq/serve.py:443-471`, reached from the patched `stream_generate`), so the
+line that says a draft head is really driving the decode —
+`[optiq.serve] MTP engine ready (depth=N).`, `serve.py:465` — cannot exist before one has been
+made. `Runtime.mtp_depth_missing` is therefore asked **after the first workload of the visit has
+answered**, and it is the same verdict the streaming check gives: `FAIL` with the log quoted,
+kept on the row's own start facts, and not retried on a later visit.
+
+The required line carries the pinned depth — `serve.py:465` interpolates it — so a cell that
+asked for 3 and got an engine built at 2 is a `FAIL` rather than a number published under a
+depth the decode did not hold. The fallback lines are the engine's own warning that it attached
+without a head (`engine.py:297-304`); the `HTTP 404` that follows is answered to the client and
+never logged, so the warning is what the log holds. The evidence window is the log head
+(`LOG_HEAD_BYTES`), the same one the streaming banner is read from.
 
 ### `stream_experts` — experts from SSD, or resident
 

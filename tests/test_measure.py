@@ -118,7 +118,8 @@ class FakeRuntime:
                  start_error=None, fail_from_attempt=None, fail_attempts=(),
                  cache_state_refusals=None, kv_quant_refusals=None,
                  mtp_depth_refusals=None, stream_experts_refusals=None,
-                 stream_experts_missing=None, log_path=None, api_key=None):
+                 stream_experts_missing=None, mtp_depth_missing=None, log_path=None,
+                 api_key=None):
         self.name = name
         self.port = port
         self.version = version
@@ -147,6 +148,9 @@ class FakeRuntime:
         # log settles it (the real OptiQ and vMLX read a file), or a reason for one whose log
         # does not.
         self.stream_experts_missing_reason = stream_experts_missing
+        # The depth pin's log half, which only OptiQ answers: the same shape, and ``None`` for
+        # the runtime whose artifact refusal is the whole of its answer.
+        self.mtp_depth_missing_reason = mtp_depth_missing
         self.log_path = log_path
         self.api_key = api_key
 
@@ -170,6 +174,14 @@ class FakeRuntime:
             return None
         self.recorder.log("stream_experts_missing", self.name, log_path)
         return self.stream_experts_missing_reason
+
+    def mtp_depth_missing(self, mtp_depth, log_path):
+        # Only a depth has a log half, on the same reading `off` and the absent pin get from the
+        # streaming check: neither claims a state a log could contradict.
+        if mtp_depth not in ("1", "2", "3"):
+            return None
+        self.recorder.log("mtp_depth_missing", self.name, log_path)
+        return self.mtp_depth_missing_reason
 
     def start(self, artifact_dir, model_id, *, cache_state=None, kv_quant=None,
               mtp_depth=None, stream_experts=None):
@@ -3001,6 +3013,59 @@ def test_an_on_cell_whose_log_does_not_show_streaming_fails_with_the_log_quoted(
     # while the verdict is FAIL: what failed is the claim, not the load.
     assert results[0].cold_load_s is not None
     assert results[0].runtime_version == "0.31.3"
+
+
+def test_a_depth_cell_whose_log_never_shows_the_engine_is_fail_with_the_log_quoted(harness):
+    """The depth pin's log half, and the one timing difference from the streaming check beside
+    it: OptiQ builds its MTP engine on the first request (optiq/serve.py:443-471), so its own
+    MTP-ready line cannot exist before one has been made. The check is therefore asked after the
+    first workload has answered -- which means requests were made -- and the verdict is FAIL
+    with the log quoted, on the same reading as an `on` cell whose log does not show streaming.
+    """
+    runtime = harness.add_runtime(
+        "optiq",
+        port=8080,
+        log_path="/tmp/optiq-mtp.log",
+        mtp_depth_missing=(
+            "mtp_depth='2' was not delivered: optiq's own log never printed '[optiq.serve] MTP "
+            "engine ready (depth=2).', and it says 'WARNING:optiq.runtime.engine:MTP head not "
+            "attached (MTP injection failed for /models/x); continuing without MTP' instead. The "
+            "flag was accepted and the engine attached without a draft head, so this cell is "
+            "FAIL rather than a number published under a pin it does not hold "
+            "(log: /tmp/optiq-mtp.log)."
+        ),
+    )
+
+    results = harness.run(
+        [harness.cell("oq4__optiq", "optiq")], workloads=THREE, measured=2, mtp_depth="2"
+    )
+
+    assert [result.status for result in results] == ["FAIL"] * len(THREE)
+    assert "MTP engine ready (depth=2)." in results[0].reason
+    assert "MTP head not attached" in results[0].reason, "the log line is quoted"
+    assert measure.load_run(harness.results_file())[1][0].status == "FAIL"
+    # Asked once, with the start's own log path, and after a request rather than before one:
+    # that is the earliest the line it reads can exist.
+    assert harness.recorder.of("mtp_depth_missing") == [("optiq", "/tmp/optiq-mtp.log")]
+    assert harness.recorder.kinds().count("chat") > 0, "the check runs after a request, not before"
+    assert runtime.attempts == 1, "a deterministic answer is not retried on the next visit"
+
+
+def test_the_depth_evidence_is_asked_for_a_depth_only_and_only_once(harness):
+    """Only a depth claims a draft head, so `off` and the absent pin ask the runtime for no log,
+    as the streaming pin's own absent states do. A depth is asked once per visit even with three
+    workloads: the answer is a property of the engine the start built, not of the shape that
+    happened to run first."""
+    harness.add_runtime("optiq", port=8080, log_path="/tmp/optiq-mtp.log")
+    cell = harness.cell("oq4__optiq", "optiq")
+
+    harness.run([cell], workloads=THREE, measured=1, mtp_depth="off")
+    harness.run([cell], workloads=THREE, measured=1, results_dir=harness.tmp_path / "unpinned")
+    assert harness.recorder.of("mtp_depth_missing") == []
+
+    harness.run([cell], workloads=THREE, measured=1, mtp_depth="3",
+                results_dir=harness.tmp_path / "depth")
+    assert harness.recorder.of("mtp_depth_missing") == [("optiq", "/tmp/optiq-mtp.log")]
 
 
 def test_the_streaming_evidence_is_read_from_the_handles_own_log(harness):

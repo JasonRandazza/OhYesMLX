@@ -44,9 +44,11 @@ see :meth:`Runtime.kv_quant_refusal`.
 Two more pins of the same shape follow, one decode-side and one load-side: ``mtp_depth``
 (:data:`MTP_DEPTHS`) and ``stream_experts`` (:data:`STREAM_EXPERTS`). Each carries a second
 question the two above do not have, because each flag is accepted on a model that silently falls
-back: a depth is only MTP if the artifact carries the heads (:func:`vmlx_mtp_refusal`, before
-anything starts), and ``on`` is only streaming if the server's own log says so
-(:meth:`Runtime.stream_experts_missing`, after it).
+back: a depth is only MTP if the artifact carries the heads the runtime will load
+(:func:`vmlx_mtp_refusal` and :func:`optiq_mtp_refusal`, both before anything starts), and ``on``
+is only streaming if the server's own log says so (:meth:`Runtime.stream_experts_missing`, after
+it). The depth pin has a log half too, on the one runtime whose engine is built later than its
+start: :meth:`Optiq.mtp_depth_missing`.
 """
 
 from __future__ import annotations
@@ -150,31 +152,68 @@ KV_QUANT_AFFINE8 = "affine8"
 KV_QUANT_AFFINE4 = "affine4"
 KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
 
-# The MTP-depth pin's values, and the whole of them. vMLX is the only runtime here with a
-# multi-token-prediction depth to pin -- its native in-model MTP heads draft N tokens per verify
-# cycle -- and the values are the depths it accepts plus its own explicit off:
+# The MTP-depth pin's values, and the whole of them. Two of the five runtimes here have a
+# multi-token-prediction depth to pin -- vMLX's native in-model MTP heads and OptiQ's bundled
+# head both draft N tokens per verify cycle -- and the values are the depths they accept beside
+# an explicit off:
 #
-#   `off`  MTP not running: vMLX's own kill switch, `--disable-native-mtp` (cli.py:1662-1667)
-#   `1`    one draft token per verify cycle: `--native-mtp-depth 1 --native-mtp-depth-policy fixed`
+#   `off`  MTP not running: vMLX's own kill switch, `--disable-native-mtp` (cli.py:1662-1667);
+#          OptiQ's own default, `--mtp` being `is_flag=True, default=False`
+#          (optiq/cli.py:2554-2558), so its off is the absence of two flags
+#   `1`    one draft token per verify cycle: `--native-mtp-depth 1 --native-mtp-depth-policy
+#          fixed`, or `--mtp --mtp-depth 1`
 #   `2`, `3`  the same at those depths
 #
 # The values are strings, `off` beside `1`/`2`/`3`, because the set is a word and three numbers
 # and the header value is compared exactly -- the same shape `cache_state` and `kv_quant` have.
 # They are not a bit width and not a count of tokens: `--native-mtp-depth` is documented as
 # "Starting depth for native in-model MTP heads on preserved-MTP bundles" (cli.py:4304-4314) and
-# is capped at `native_mtp_max_depth()`, 3 by default (native_mtp.py:28-44).
+# is capped at `native_mtp_max_depth()`, 3 by default (native_mtp.py:28-44), while OptiQ's own
+# help caps it in words -- "acceptance ~70% at depth 2, drops at depth 3+" (optiq/cli.py:2559-2563)
+# -- over a `depth <= 0` guard that returns before anything is patched (optiq/serve.py:437-438).
 #
-# **The policy is part of the value and not a second pin.** vMLX's default policy is `adaptive`,
-# which "may also lower the depth on measured acceptance and tries depth 1 once against the
-# configured depth's measured cost, keeping the measured winner" (cli.py:4324-4331) -- so depth
-# can change *within* one request and a cell measured under it is not a cell at depth N.
-# `--native-mtp-depth-policy fixed` is therefore passed with every depth, and the adaptive path
-# is not reachable through this pin.
+# **The policy is part of the value and not a second pin, and only vMLX has one.** vMLX's default
+# policy is `adaptive`, which "may also lower the depth on measured acceptance and tries depth 1
+# once against the configured depth's measured cost, keeping the measured winner" (cli.py:4324-4331)
+# -- so depth can change *within* one request and a cell measured under it is not a cell at depth
+# N. `--native-mtp-depth-policy fixed` is therefore passed with every depth, and the adaptive path
+# is not reachable through this pin. OptiQ needs no equivalent: its cycle takes `cycle_K = depth`
+# once and holds it for the whole call, the HuggingFace-style dynamic-depth adapter having been
+# measured at 4-17% *slower* and removed (optiq/runtime/engine.py:897-905, :920).
 #
-# `None` is not a value: it is the pin not taken -- those runs measured vMLX's own default, which
-# for a bundle carrying MTP heads is *not* `off` -- and it is never read as `off`.
+# **Why the other three refuse depth values**, written here once because the reason is a property
+# of each runtime and not of this pin. oMLX's MTP is the per-model settings boolean `mtp_enabled`
+# -- `mtp_enabled: bool = False` (model_settings.py:303), "Enable native multi-token prediction"
+# (:170-171) -- which has no depth of its own; the depth it does carry,
+# `mtp_num_draft_tokens: Optional[int] = None` (:304-308), is an adaptive controller's ceiling
+# rather than a fixed depth, and no option in `omlx/cli.py` names either. Osaurus's depth is host
+# config, `mtp.mode` and `mtp.explicitDepth` ("must be 1, 2, or 3", docs/runtimes/osaurus.md:344)
+# in `~/.osaurus/config/server-runtime.json`, with no start-command surface in either direction
+# and a force-on that is refused without a `vmlx_mtp_tuning.json` sidecar (docs/runtimes/osaurus.md:900).
+# mlx-lm 0.31.3 drops the head at load -- `weights = {k: v for k, v in weights.items() if "mtp."
+# not in k}` (`mlx_lm/models/qwen3_5.py:313` in ~/.local/share/ohyesmlx/mlx-lm-0.31.3) -- so there
+# is nothing left for a depth to apply to. OptiQ is that same server, and it is the runtime that
+# puts a head back: its own loader reads the `optiq/mtp.safetensors` sidecar
+# (optiq/runtime/mtp/artifacts.py:104-115).
+#
+# `None` is not a value: it is the pin not taken -- those runs measured each runtime's own MTP
+# default, which for vMLX on a bundle carrying heads is *not* `off` and for OptiQ is `off` -- and
+# it is never read as `off`.
 MTP_DEPTH_OFF = "off"
 MTP_DEPTHS = ("off", "1", "2", "3")
+
+# Where OptiQ looks for an MTP head when the config does not name one, in its own order. Its
+# resolver takes the path the config gives under `mlx_lm_extra_tensors.mtp_file` first and only
+# then tries these four spellings, because the sidecar has lived in all of them
+# (optiq/runtime/mtp/artifacts.py:104-115, and the subfolder-first/root-fallback pair at
+# optiq/sidecar_layout.py:39-50). Copied rather than imported for the reason
+# :data:`VMLX_MTP_FAMILIES` is: the table lives inside a package this harness does not depend on.
+OPTIQ_MTP_HEAD_RELS = (
+    "optiq/mtp.safetensors",
+    "mtp.safetensors",
+    "mtp/weights.safetensors",
+    "model-mtp.safetensors",
+)
 
 # vMLX's own MTP family gate, copied deliberately and cited: `_RUNTIME_SUPPORTED_FAMILIES`
 # (native_mtp.py:64-79) is the set of families whose draft/verify path vMLX actually wires, and
@@ -475,26 +514,35 @@ def _read_log_head(path: Path) -> str:
         return ""
 
 
-def _stream_evidence(
+def _banner_evidence(
     name: str,
     log_path: str | None,
     *,
+    claim: str,
     required: tuple[str, ...],
     fallback: tuple[str, ...],
+    banner_why: str,
+    fallback_why: str,
 ) -> str | None:
-    """Why a runtime's log does not show expert streaming, or ``None`` when it does.
+    """Why a runtime's own log does not show *claim*, or ``None`` when it does.
 
-    ``required`` is every line the runtime prints when streaming is really on, and ``fallback``
-    is the lines it prints instead when it is not -- the same set that makes a flag in a command
+    ``required`` is every line the runtime prints when *claim* really holds, and ``fallback`` is
+    the lines it prints instead when it does not -- the same set that makes a flag in a command
     no evidence at all. A log that carries no fallback line either says so rather than quoting
     nothing: the absence is the finding, and the log path is what a reader follows.
+
+    Both halves of the two pins that follow this pattern read their evidence here, because it is
+    one reading of one window (:data:`LOG_HEAD_BYTES`) and two copies of it would be two places
+    for the same check to drift: :meth:`Runtime.stream_experts_missing` for the streaming pin and
+    :meth:`Optiq.mtp_depth_missing` for the depth pin. What a caller supplies beyond the markers
+    is the prose around them -- *banner_why*, why a banner is evidence of the claim at all, and
+    *fallback_why*, what the runtime did instead of it.
     """
     if log_path is None:
         return (
-            f"stream_experts='on' cannot be verified on {name}: this run was started without a "
-            "log path, and the runtime's own banner is the evidence that streaming is on rather "
-            "than falling back to a resident load. This cell is FAIL rather than a number "
-            "published under a pin nothing checked."
+            f"{claim} cannot be verified on {name}: this run was started without a log path, "
+            f"and {banner_why}. This cell is FAIL rather than a number published under a pin "
+            "nothing checked."
         )
     text = _read_log_head(Path(log_path))
     missing = [marker for marker in required if marker not in text]
@@ -512,16 +560,42 @@ def _stream_evidence(
         # The absence is the finding and the cause is not known, so it is not guessed at: the
         # line this check reads may simply be beyond the head window (see LOG_HEAD_BYTES).
         return (
-            f"stream_experts='on' was not delivered: {name}'s own log never printed "
-            f"{missing[0]!r}, and it says nothing about why. The flag was accepted, so this "
-            "cell is FAIL rather than a number published under a pin nothing confirmed "
-            f"(log: {log_path})."
+            f"{claim} was not delivered: {name}'s own log never printed {missing[0]!r}, and it "
+            "says nothing about why. The flag was accepted, so this cell is FAIL rather than a "
+            f"number published under a pin nothing confirmed (log: {log_path})."
         )
     return (
-        f"stream_experts='on' was not delivered: {name}'s own log never printed "
-        f"{missing[0]!r}, and it says {quoted!r} instead. The flag was accepted and the load "
-        "fell back to the resident path, so this cell is FAIL rather than a number published "
-        f"under a pin it does not hold (log: {log_path})."
+        f"{claim} was not delivered: {name}'s own log never printed {missing[0]!r}, and it says "
+        f"{quoted!r} instead. The flag was accepted and {fallback_why}, so this cell is FAIL "
+        "rather than a number published under a pin it does not hold "
+        f"(log: {log_path})."
+    )
+
+
+def _stream_evidence(
+    name: str,
+    log_path: str | None,
+    *,
+    required: tuple[str, ...],
+    fallback: tuple[str, ...],
+) -> str | None:
+    """Why a runtime's log does not show expert streaming, or ``None`` when it does.
+
+    The streaming pin's reading of :func:`_banner_evidence`: *claim* is the pin's own `on`, and
+    the prose is why a streaming banner is evidence -- the two runtimes that take the flag both
+    load resident without failing anything when they cannot stream.
+    """
+    return _banner_evidence(
+        name,
+        log_path,
+        claim="stream_experts='on'",
+        required=required,
+        fallback=fallback,
+        banner_why=(
+            "the runtime's own banner is the evidence that streaming is on rather than falling "
+            "back to a resident load"
+        ),
+        fallback_why="the load fell back to the resident path",
     )
 
 
@@ -698,6 +772,93 @@ def vmlx_mtp_refusal(artifact_dir: str) -> str | None:
             "(native_mtp.py:944, :1012-1018) and its own banner is suppressed for a "
             "not_configured bundle (cli.py:2441). A depth cell here would decode plain "
             "autoregressive and publish as MTP; it is N/A at a depth instead."
+        )
+    return None
+
+
+def optiq_mtp_refusal(artifact_dir: str) -> str | None:
+    """Why OptiQ cannot be measured at an MTP depth on this artifact, or ``None`` when it can.
+
+    Two checks, both read off the files before anything is started and both OptiQ's own: the
+    config must declare an MTP layer (``_num_mtp_layers``, ``mtp_patch.py:69-76``, whose answer
+    of zero sends the injector home before it looks for a head at ``:382-385``), and the head
+    file must be where its resolver looks (``expected_mtp_file``, ``mtp/artifacts.py:104-115``:
+    the path the config names under ``mlx_lm_extra_tensors.mtp_file`` first, then the four
+    spellings of :data:`OPTIQ_MTP_HEAD_RELS`).
+
+    Why up front rather than only from the log, when this runtime does not fall back quietly:
+    it fails **loudly but late**. With ``--mtp`` and no head it attaches one anyway, logs a
+    single warning (``MTP head not attached (...)``, ``engine.py:297-304``) and then raises at
+    the first request, which is answered to the client as HTTP 404 with that text in the body
+    and nothing in the log (``serve.py:459-464``, ``mlx_lm/server.py:1424-1427``). So a cell
+    refused here is N/A with this reason and costs no model load, and the second half -- that a
+    head really attached -- is asked of the log after the start, by
+    :meth:`Optiq.mtp_depth_missing`.
+
+    The accepted case is on this host: both of ``mlx-community/Qwen3.5-4B-OptiQ-4bit`` and
+    ``mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit`` name ``optiq/mtp.safetensors`` in
+    ``mlx_lm_extra_tensors.mtp_file`` and declare ``mtp_num_hidden_layers: 1``, and the 35B
+    sidecar is 1,644,816,560 B on disk.
+
+    # ponytail: an artifact carrying ``mtp.*`` tensors in its *main* weights is refused here,
+    # and OptiQ can read those too (``_embedded_mtp_weight_map``, ``mtp_patch.py:277-299``). That
+    # route is not opened on purpose: every OptiQ quant on this host ships the sidecar, and
+    # accepting the embedded one would mean this harness judging a head's completeness from an
+    # index. The ceiling is a false refusal, which costs a cell rather than a number.
+    """
+    bundle = Path(artifact_dir)
+    config = _read_json_object(bundle / "config.json")
+    if config is None:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: there is no readable config.json, so "
+            "the MTP layer and the head OptiQ would build from it cannot be established from the "
+            "artifact. This cell is N/A at a depth rather than measured at one no decode may "
+            "have used."
+        )
+
+    # The layer count, from every source `_num_mtp_layers` reads (mtp_patch.py:69-76): the
+    # config's own, then the two under text_config.
+    text_config = config.get("text_config")
+    text_config = text_config if isinstance(text_config, dict) else {}
+    declared = None
+    for raw in (
+        text_config.get("mtp_num_hidden_layers"),
+        text_config.get("num_nextn_predict_layers"),
+        config.get("num_nextn_predict_layers"),
+    ):
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            declared = value
+            break
+    if declared is None:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: neither config.json nor its "
+            "text_config declares an MTP layer -- mtp_num_hidden_layers or "
+            "num_nextn_predict_layers (mtp_patch.py:69-76) -- so OptiQ's injector returns before "
+            "it looks for a head (:382-385), the engine attaches without one (:297-304) and "
+            "every request is answered HTTP 404 (serve.py:459-464). A depth cell here would "
+            "publish a depth no decode used; it is N/A at a depth instead."
+        )
+
+    # The head file, resolved the way `expected_mtp_file` resolves it: the config's own answer
+    # wins, and the four spellings are tried only when it gives none.
+    extra = config.get("mlx_lm_extra_tensors")
+    named = extra.get("mtp_file") if isinstance(extra, dict) else None
+    if isinstance(named, str) and named.strip():
+        candidates = (bundle / named,)
+    else:
+        candidates = tuple(bundle / rel for rel in OPTIQ_MTP_HEAD_RELS)
+    if not any(candidate.exists() for candidate in candidates):
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: no MTP head is where OptiQ resolves "
+            "one -- looked for "
+            + ", ".join(str(candidate) for candidate in candidates)
+            + " (mtp/artifacts.py:104-115) -- so --mtp attaches an engine with no draft head and "
+            "answers every request HTTP 404 (serve.py:459-464, mlx_lm/server.py:1424-1427). This "
+            "cell is N/A at a depth rather than measured at one the decode never used."
         )
     return None
 
@@ -1078,21 +1239,24 @@ class Runtime:
         """Why this runtime cannot be measured at *mtp_depth*, or ``None`` when it can.
 
         The default refuses every depth, the opposite of :meth:`kv_quant_refusal`'s default and
-        for the opposite reason: vMLX is the only runtime here with a depth to pin
-        (:data:`MTP_DEPTHS`), so an override is what accepts one. ``off`` and the absent pin
-        reach every runtime -- ``off`` is MTP not running, which is what a runtime with no MTP
-        delivers.
+        for the opposite reason: two of the five runtimes here carry a depth to pin
+        (:data:`MTP_DEPTHS` -- vMLX's in-model heads and OptiQ's bundled one), so an override is
+        what accepts one. ``off`` and the absent pin reach every runtime -- ``off`` is MTP not
+        running, which is what a runtime with no MTP delivers.
 
-        *artifact_dir* is required rather than optional: vMLX's answer is decided from the
-        artifact (:func:`vmlx_mtp_refusal`), so a caller that could omit it could omit the check.
-        The four runtimes that refuse every depth ignore it.
+        *artifact_dir* is required rather than optional: both answers are decided from the
+        artifact (:func:`vmlx_mtp_refusal`, :func:`optiq_mtp_refusal`), so a caller that could
+        omit it could omit the check. The three runtimes that refuse every depth ignore it -- and
+        each of the five overrides this method, so the reason below is the shape's floor rather
+        than the answer any cell on this host gets: the per-runtime evidence is in those
+        overrides and in :data:`MTP_DEPTHS`.
         """
         if mtp_depth in (None, MTP_DEPTH_OFF):
             return None
         return (
             f"mtp_depth={mtp_depth!r} asks for a native-MTP draft depth, and {self.name} has no "
-            "MTP depth to pin: vMLX is the only runtime here whose own start command carries "
-            "one (--native-mtp-depth, cli.py:4304-4314). So this cell is N/A at a depth rather "
+            "MTP depth to pin: it carries neither a start-command flag that sets one nor a "
+            "settings field one could be written into. So this cell is N/A at a depth rather "
             "than measured at one it does not hold."
         )
 
@@ -1117,8 +1281,19 @@ class Runtime:
         """Why this runtime's own log does not show expert streaming, or ``None`` when it does.
 
         The second half of the ``on`` pin, asked after the start and before the first request:
-        see :data:`STREAM_EXPERTS` and :func:`_stream_evidence`. The default needs no evidence --
+        see :data:`STREAM_EXPERTS` and :func:`_banner_evidence`. The default needs no evidence --
         a runtime that refuses ``on`` never reaches an ``on`` cell.
+        """
+        return None
+
+    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
+        """Why this runtime's own log does not show a draft head running, or ``None`` when it is.
+
+        The second half of the depth pin, asked the same way the streaming one is -- with the
+        start's log and nothing else -- and the default needs no evidence for the same reason:
+        the three runtimes that refuse every depth never reach a depth cell. OptiQ is the one
+        override, and it is the one runtime whose depth flag is accepted on an engine it builds
+        later than the start: see :meth:`Optiq.mtp_depth_missing`.
         """
         return None
 
@@ -1409,10 +1584,12 @@ class MlxLm(Runtime):
         return (
             f"mtp_depth={mtp_depth!r} asks for a native-MTP draft depth, and mlx_lm.server "
             "0.31.3 has no MTP at all: its 23 options include none for MTP, no MTP cache or "
-            "draft head exists in it, and the string 'mtp' does not occur in server.py. The "
-            "depth, its adaptive policy and the preserved-MTP bundle handling are vMLX's patch "
-            "layer over this same package. So this cell is N/A at a depth rather than measured "
-            "at one the decode never used."
+            "draft head exists in it, and the string 'mtp' does not occur in server.py. A depth "
+            "on this package is a patch layer over it -- vMLX's, and OptiQ's built on its own "
+            "sidecar loader -- while this server's own model code drops the head's weights at "
+            "load (models/qwen3_5.py:313 filters 'mtp.' out of the weight tree), so nothing "
+            "here drafts from one. This cell is N/A at a depth rather than measured at one the "
+            "decode never used."
         )
 
     def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
@@ -1826,6 +2003,13 @@ class Optiq(Runtime):
         stream = ("--no-stream-experts",)
         if stream_experts == STREAM_EXPERTS_ON:
             stream = ("--stream-experts",)
+        # The depth pin. `--mtp` is `is_flag=True, default=False` and `--mtp-depth` defaults to
+        # 2 (cli.py:2554-2563), so `off` and the absent pin pass neither flag -- OptiQ's own off
+        # *is* the absence of the pair -- and a depth passes both. Nothing pins a policy beside
+        # it because there is none to pin: the cycle's K is the depth for the whole request
+        # (engine.py:920). Whether a head is really driving the decode is not this method's
+        # question: see `optiq_mtp_refusal` and `mtp_depth_missing`.
+        mtp = ("--mtp", "--mtp-depth", mtp_depth) if mtp_depth in MTP_DEPTHS[1:] else ()
         # NOT moved by this pin: enabling KV quantization also installs OptiQ's fused
         # streaming-KV path unless `--no-fused-kv` is passed (optiq/cli.py:2729-2739) -- one
         # layer converted at a time, plus a FlashAttention-2 SDPA the runtime's own header
@@ -1855,6 +2039,7 @@ class Optiq(Runtime):
             "0",
             "--context-scale",
             "1.0",
+            *mtp,
             *stream,
             "--temp",
             "0",
@@ -1874,17 +2059,50 @@ class Optiq(Runtime):
         return ("optiq", "--version")
 
     def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
-        """Refuse a depth -- OptiQ is stock mlx-lm underneath, and mlx-lm has no MTP. The reason
-        below is the whole of it, and ``off`` adds nothing: nothing was going to draft."""
+        """The second runtime a depth can be driven into, decided from the artifact.
+
+        ``off`` and the absent pin pass no flag at all, and that is this runtime's own off
+        rather than a stand-in for one: ``--mtp`` is an opt-in flag defaulting to False
+        (``cli.py:2554-2558``), so a command without the pair is a command that never drafts.
+        A depth is driven by ``--mtp --mtp-depth N`` (:meth:`start_command`) and then decided
+        from the files, through :func:`optiq_mtp_refusal` -- the same artifact-shaped answer
+        vMLX's depths get, and the same reason: a flag in the command is not a head on disk.
+        """
         if mtp_depth in (None, MTP_DEPTH_OFF):
             return None
-        return (
-            f"mtp_depth={mtp_depth!r} asks for a native-MTP draft depth, and OptiQ has none to "
-            "pin: it is a fork over the same mlx_lm.server 0.31.3 this harness runs as mlxlm "
-            "(unknown options are forwarded to that server's own argparse, optiq/cli.py:2332, "
-            ":2571, :3030), and that server has no MTP path. No draft head exists for a depth "
-            "to apply to, so this cell is N/A at a depth rather than measured at one the decode "
-            "never used."
+        return optiq_mtp_refusal(artifact_dir)
+
+    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
+        """A depth is only MTP if the engine says it built one, and OptiQ says so late.
+
+        ``--mtp --mtp-depth N`` is accepted and echoed at startup (``cli.py:3057-3060``), but the
+        engine that line names is created on the **first request** -- ``_get_engine`` runs from
+        the patched ``stream_generate`` (``serve.py:443-471``) -- so the line that settles it,
+        ``[optiq.serve] MTP engine ready (depth=N).`` (``serve.py:465``), cannot exist before one
+        has been made. That is the one place this check departs from
+        :meth:`Runtime.stream_experts_missing`'s timing, and it is why ``measure._visit`` asks it
+        after the first workload rather than before the first request.
+
+        The required line carries the pinned depth, because ``serve.py:465`` interpolates it:
+        a cell that asked for 3 and got an engine built at 2 is a FAIL here rather than a number
+        published under a depth the decode did not hold. The fallback lines are the engine's own
+        account of attaching without a head (``engine.py:297-304``); the error that follows is
+        answered to the client as HTTP 404 and never logged (``serve.py:459-464``,
+        ``mlx_lm/server.py:1424-1427``), so the warning is what the log holds.
+        """
+        if mtp_depth not in MTP_DEPTHS[1:]:
+            return None
+        return _banner_evidence(
+            self.name,
+            log_path,
+            claim=f"mtp_depth={mtp_depth!r}",
+            required=(f"[optiq.serve] MTP engine ready (depth={mtp_depth}).",),
+            fallback=("MTP head not attached", "MTP injection failed"),
+            banner_why=(
+                "the runtime's own banner is the evidence that a draft head is driving the "
+                "decode rather than an engine that attached without one"
+            ),
+            fallback_why="the engine attached without a draft head",
         )
 
     def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
