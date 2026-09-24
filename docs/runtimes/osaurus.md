@@ -304,7 +304,7 @@ key is validated (E3, `G`).
 | `memorySafety.slider` | `2` | — |
 | `mtp.acceptedTokensOnlyEnterBaseCache` | `true` | — |
 | `mtp.keepDraftCacheSeparate` | `true` | — |
-| `mtp.mode` | `auto` | enum includes `force_on`, `force_off`, `speculative`, `blocked` |
+| `mtp.mode` | `auto` | values seen in `G`: `force_on` (`G:110216294`), `force_off` (`:110216303`), `off` (`G:100593569`), `speculative` (`:573`), `blocked` (`:585`). Exact enum membership is not provable from adjacent literals, and the mode is a decode-path gate, not a knob — **§7.8** |
 | `multimodal.enableAudio` | `true` | — |
 | `multimodal.enableVideo` | `true` | — |
 | `multimodal.requireMediaSaltForCache` | `true` | "Media salt is required when any prompt or KV cache reuse tier is enabled." |
@@ -342,7 +342,8 @@ positive"), `maxTokens`.
 `tools`: `mcpConfigFile`, `toolParserOverride`, `reasoningParserOverride`,
 `customChatTemplate`.
 `mtp`: `draftTokenLimit`, `explicitDepth` ("must be 1, 2, or 3"), `dflash2DrafterPath`,
-`dflash2BlockSize`.
+`dflash2BlockSize` — the depth surface, and the reason a relaxed depth is not "MTP with a bigger
+number" (§7.8).
 `memorySafety`: `customPhysicalMemoryFraction` ("greater than 0 and at most 1"),
 `customAllocatorCacheBytes`, `customDefaultMaxKVSize`, `customMaxConcurrentSequences`.
 
@@ -816,6 +817,123 @@ The harness's side of this already exists: `cache.storedKVCodec` and `cache.live
 values differ from the committed baseline (research §6.3) — so a host that had been switched to
 `turboquant` is refused rather than measured.
 
+### 7.8 Native MTP — one per-model mode, two tuning gates, and a vmlx-swift engine
+
+**Added 2026-09-24. String-table evidence only (E3), unverified live.** §3.2 lists the keys and §8.4
+the refusals; this section is the capability reference: what controls MTP, how deep it goes, what
+happens on a bundle without heads, and whose MTP this is. The project's working notes treated vMLX
+as the only runtime here with native multi-token prediction. **That is false.** Osaurus ships one, and
+so do oMLX (`docs/runtimes/omlx.md` §8.8) and vMLX (`docs/runtimes/vmlx.md` §7.4.2) — what differs
+between them is the control surface and the gates, not the existence.
+
+**Control surface: `server-runtime.json` only.** The MTP settings keys are a contiguous run in the
+binary — `mode` (`G:100593410`), `draftTokenLimit` (`:415`), `keepDraftCacheSeparate` (`:440`),
+`acceptedTokensOnlyEnterBaseCache` (`:472`), `explicitDepth` (`:505`), `dflash2DrafterPath` (`:520`),
+`dflash2BlockSize` (`:552`) — and `mtp.explicitDepth` appears as a literal at `G:110209856`. There is
+**no CLI flag** (§2.4, §3.7) and **no per-request field** was found. On this host the file carries
+`mtp.mode: auto`, `keepDraftCacheSeparate: true`, `acceptedTokensOnlyEnterBaseCache: true` (E2);
+`explicitDepth` and `draftTokenLimit` are absent (§3.3 — absent means compiled default, not off).
+
+**Mode values.** The literals visible in the shipped binary are `force_on` (`G:110216294`),
+`force_off` (`G:110216303`), `off` (`G:100593569`), `speculative` (`:573`) and `blocked` (`:585`),
+and the live file value is `auto`. The UI description states the contract (`G:108376272`):
+
+> Native MTP starts Off. Off disables the model's native MTP head. Auto requires verified bundle
+> tuning. Force On requires verified tuning unless you select an eligible manual depth in Chat. A
+> refused request reports the reason. A selected DFlash 2 drafter drafts regardless of Mode.
+
+**The exact enum membership is not provable from adjacent literals** — the `force_on`/`force_off`
+pair sits in the config-value cluster and `off`/`speculative`/`blocked` in the neighbouring MTP
+resolution cluster (`launchMode`, `recommendation`, `reason`, `G:100593593-100593619`), and a string
+table cannot show which struct owns which literal. Record that as the evidence class, not as doubt:
+the keys, the mode names and the gate messages are all positively present.
+
+**Depth.** `mtp.explicitDepth` must be 1, 2, or 3 — *"MTP explicit depth must be 1, 2, or 3."*
+(`G:110209888`, also `G:110213968`); `mtp.draftTokenLimit` must be positive (`G:110210128`). Manual
+depth requires complete tensor evidence (`G:110209632`, `G:110214016`), and the activation records
+its provenance — `activation=manual_explicit_depth` with *"User-selected maximum depth …:
+tensor-evidence activation without measured tuning; request sampling remains in effect."*
+(`G:110224240`, `G:110224288`). A family cold-start default exists too: *"Qwen3.8 Flash-Next uses
+measured family cold-start depth 3; live acceptance may adapt downward."* (`G:110225344`). Depth can
+therefore change **inside one request**, and the per-request receipt is the perf line
+`[perf] decodePath=nativeMTP depth=… activeDepth=… downshifts=… fallbackReason=…` (`G:111596128`) —
+the same shape as vMLX's adapting controller (`docs/runtimes/vmlx.md` §7.4).
+
+**The tuning gate — what `auto` does on a bundle with heads.** Auto launches only against
+**verified** bundle tuning: snapshot fields `hasUsableNativeMTPTuning` (`G:100598064`),
+`requiresNativeMTPTuningBeforeAutoLaunch` (`G:100598272`), `nativeMTPCanAutoLaunch` (`G:100590128`),
+and *"Auto requires verified bundle tuning"* (`G:108376272`). The tuning document is
+`vmlx_mtp_tuning.json` (`G:107823648`, `:110225584`) carrying `tuning.validated`,
+`tuning.output_equivalent`, `tuning.best_depth`, `tuning.verifier_mode`,
+`tuning.speedup_vs_baseline`, `tuning.best_tok_s`, `tuning.manual_blocked` and a quantization
+fingerprint that must match the active bundle (`G:110225632-110226288`, `G:110224736-110225168`).
+Refusals, verbatim:
+
+| Refusal | Offset |
+|---|---|
+| *"MTP cannot be forced on until the bundle has complete tensor evidence and usable vmlx_mtp_tuning.json metadata for a supported native-MTP runtime."* | `G:110209472` |
+| *"MTP is explicitly blocked by this bundle's tuning metadata: …"* | `G:110209760` |
+| *"native MTP was requested but this bundle does not have usable …"* | `G:110221744` |
+| *"native MTP was requested but this bundle explicitly blocks it: …"* / *"…does not have complete MTP tensor evidence: …"* | `G:110221680`, `G:110221808` |
+| *"MTP disabled by server settings."* (mode `off`) | `G:110213760` |
+| *"Bundle model type is not on the native-MTP allowlist."* | `G:110224592` |
+
+When inspection cannot produce that evidence the load falls back with a log line — *"MTP inspection
+failed; using autoregressive load."* (`G:107852544`) — and even when it succeeds the **first request
+runs AR as a cold warmup** before MTP is enabled (`G:111597840`). So on this runtime a bundle with
+heads but no usable tuning is AR under `auto`. **That differs from vMLX's Python engine, where the
+tuning file is an optional depth override rather than a launch precondition**
+(`docs/runtimes/vmlx.md` §7.4.2). Two cells that both look "MTP-capable" can therefore run different
+decode paths purely by which sidecar shipped.
+
+**Which requests get it.** From the runtime's own gate message (`G:110229392`): native MTP is enabled
+only for **text-only requests with no active penalties or suppress/reasoning-budget processors**, and
+requires either an unbounded KV window or a prompt-plus-output ceiling that fits wholly inside the
+configured window. It also requires `max_tokens > 1` (`G:110228080`) and a non-empty prompt
+(`G:110228224`). Sampled requests take an exact-pq accept path rather than the greedy one. A cell
+that sets a repetition penalty, a thinking budget, or a tight `max_tokens` is not measuring MTP at
+all, and nothing in the response will say so — the perf line is the only tell.
+
+**DFlash2 does not conflict with the mode.** A selected DFlash 2 drafter **replaces** the native MTP
+head and drafts regardless of mode (`G:108376272`: *"A selected DFlash 2 drafter drafts regardless of
+Mode"*; `G:108377029`: *"…it REPLACES the native MTP head"*). That is the opposite of oMLX, where
+`mtp_enabled` and `dflash_enabled` are mutually exclusive in one settings object
+(`docs/runtimes/omlx.md` §8.8). The two other MTP keys are `true` on this host and the binary states
+their content as requirements, not preferences — *"Native MTP draft cache must stay separate from the
+verifier/base cache."* (`G:110209200`) and *"Native MTP may commit only accepted verifier tokens to
+the base cache."* (`G:110209408`) — so a cell that flips `keepDraftCacheSeparate` or
+`acceptedTokensOnlyEnterBaseCache` is testing a configuration the runtime is written not to have.
+
+**Whose engine this is — and whether it is the same MTP path as vMLX's.** Osaurus ships **vMLX
+Swift**: `Resources/Acknowledgements.json` lists `{"name": "vMLX Swift", "identity": "vmlx-swift",
+"version": "0b85cad0", "repository": "https://github.com/osaurus-ai/vmlx-swift"}` and the GUI binary
+links it statically — `VMLX*` Swift types (`VMLXServerMTPSettings` `G:103371520`,
+`VMLXMTPServerMode` `:552`, `VMLXMTPLaunchMode` `:584`, `VMLXResolvedMTPLaunch` `:616`),
+`MLXLMCommon/MTPRuntime.swift`, `OsaurusCore/MTPSection.swift`. It is **not** the Python `vmlx_engine`
+the vMLX app runs.
+
+Same path or not, stated precisely:
+
+- **Same bundle-side conventions.** Osaurus reads the same metadata inputs as the Python engine:
+  `vmlx_mtp_tuning.json`, `jang_config.runtime.bundle_has_mtp=true`,
+  `jang_config.runtime.mtp_layers=`, `text_config.num_nextn_predict_layers`,
+  `text_config.mtp_num_hidden_layers` (`G:110226320-110226448`; compare
+  `vmlx_engine/native_mtp.py:883-925`, `:537-580`).
+- **Different code, and stricter gates.** The decode path is MLXLMCommon's
+  `NativeMTPAutoregressiveBackboneModel` protocol (`G:99947732`) implemented in Swift, and this
+  runtime adds preconditions the Python engine does not have: the tuning precondition above, and the
+  **native-MTP family allowlist** (`G:110224592`). The allowlist's *membership* is not recoverable
+  from the string table — the model-family name cluster at `G:100910816-100911040` is the general
+  family map, not proven to be the MTP list — so it is recorded here as a gate, not as a list.
+- **Consequence for the harness.** A `--mtp-depth`-style pin is not transferable between Osaurus and
+  vMLX by name alone: Osaurus's depth surface is `mtp.explicitDepth ∈ {1,2,3}` plus an adaptive
+  controller, where vMLX's is a flag plus a ceiling of 8.
+
+**Not established (string table cannot show it):** whether `auto` on a bundle **with** usable tuning
+actually launches on this host, what the allowlist contains, and whether the DFlash 2 path can serve
+green without its own drafter artifact present. Each needs a live probe — which is the coordinator's
+to run, not this document's.
+
 ---
 
 ## 8. Quantization formats
@@ -897,8 +1015,8 @@ this one is satisfied; a future required version above the installed app would r
 | `nvfp4`/`mxfp8` fast path for any other mode | `[qqmm]` message, §8.1 |
 | Global scale on Metal | `[quantize]`/`[dequantize]` messages |
 | Unsupported model type at the family level | `Unsupported local model type: hunyuan_v1_dense. Osaurus needs vmlx Hunyuan Dense support before this model can run locally.` |
-| A bundle whose MTP metadata is incomplete | `MTP cannot be forced on until the bundle has complete tensor evidence and usable vmlx_mtp_tuning.json metadata` |
-| A bundle with no MTP tensors, when MTP is forced manually | `MTP manual depth requires complete MTP tensor evidence in the bundle` |
+| A bundle whose MTP metadata is incomplete | `MTP cannot be forced on until the bundle has complete tensor evidence and usable vmlx_mtp_tuning.json metadata` — `G:110209472`, **§7.8** |
+| A bundle with no MTP tensors, when MTP is forced manually | `MTP manual depth requires complete MTP tensor evidence in the bundle` — `G:110209632`, **§7.8** |
 | `paged` KV for incompatible architectures | `paged_incompatible_model_count`, `isPagedIncompatible`, `requiresPagedBoundaryCompanion` |
 | Nanbeige with an unsupported runtime formula | `Nanbeige jang_runtime cache_slot_formula is unsupported` |
 
@@ -1015,6 +1133,11 @@ a cache, not a runtime.
 And one thing that is not a pin but a name: **the id a cell requests is the repo name,
 lowercased** (§4.4). A hub-cache path ends in a commit hash as far as this runtime is
 concerned, and it will never resolve.
+
+And one thing that decides the decode path rather than a number: **`mtp.mode` (§7.8)**. On this host
+it is `auto`, which is inert without a usable `vmlx_mtp_tuning.json`, and even when MTP launches the
+runtime's own gate silently excludes requests carrying penalties, a reasoning budget, or
+`max_tokens: 1`. A cell that does not read the runtime's own log cannot tell which path it measured.
 
 And the operational rule from §0.1: **never run `osaurus <subcommand> --help`.** For most
 subcommands that is a state-mutating command, not a documentation lookup.

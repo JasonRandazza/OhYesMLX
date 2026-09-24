@@ -1454,6 +1454,89 @@ MTP reads the same (`:987-988`). The accepted case is a bundle on this host:
 
 The `on`-side of the same question for the *streaming* pin is the log line quoted in §7.8.
 
+#### 7.4.2 The control surface, the depth ladder, and where the heads have to live
+
+**Added 2026-09-24.** §7.4 says how depth *adapts* and §7.4.1 says what the harness pins. This is the
+capability reference: how the feature is switched on, how deep it can go, what makes the runtime
+believe a bundle has heads — and one artifact class this runtime cannot see.
+
+**Control surface — flags and environment, never the request.** The flags are in §2.2.4:
+`--native-mtp-depth` (default `3`), `--native-mtp-depth-policy adaptive|fixed`,
+`--native-mtp-sampling-policy`, `--disable-native-mtp`. Everything else is environment (§3.3):
+`VMLX_NATIVE_MTP` (process enable/disable), `VMLX_NATIVE_MTP_MAX_DEPTH` (ceiling), plus the
+`AR_SAFETY` / `ADAPTIVE_DEPTH` / cost-margin variables in Appendix A. **No per-request field exists**
+— the chat request model (`api/models.py:231-336`) carries none, so a client cannot influence MTP.
+
+**Depth range.** Product default **3**, hard ceiling **8**: `_NATIVE_MTP_DEFAULT_MAX_DEPTH = 3` and
+`_NATIVE_MTP_DEPTH_HARD_CEILING = 8` (`native_mtp.py:28-29`), with `native_mtp_max_depth()` clamping
+the env ceiling to `[1, 8]` (`:32-44`). The effective depth is resolved in this order
+(`native_mtp_effective_depth`, `:800-868`): explicit `VMLX_NATIVE_MTP_DEPTH` → a *measured*
+`vmlx_mtp_tuning.json` depth → `jang_config.mtp.recommended_num_drafts` (a v3 stamp) → family default
+— **3**, and **1** for `hy_v3` (the `:793-796` docstring records the Hy3 sweep: d1 +10% over
+baseline while d2/d3 collapse acceptance). The file is read unless
+`VMLX_NATIVE_MTP_USE_TUNING` disables it (`:830`), and its *depth* attestation is strict only above
+depth 1 (`:340-358`: depth 1 stands unless the block is `blocked` or `output_equivalent: false`;
+deeper needs `validated: true`).
+
+**Where the tuning file is a precondition rather than a hint.** Two gates make it load-bearing, and
+both are separate from the depth ladder:
+
+1. `jang_config.runtime.native_mtp_blocked = "<measured reason>"` blocks the runtime path entirely
+   unless `VMLX_NATIVE_MTP_FORCE=1` (`:747-754`) — a bundle that measured MTP as a net slowdown
+   declares it in its own metadata rather than the engine hardcoding profile names.
+2. **Hy3 only**: `vmlx_mtp_tuning.json`'s `native_mtp.output_equivalent` must be exactly `true`. A
+   missing or failed attestation reads `runtime_validation_blocked` (`:756-776`), because the
+   two-token affine verifier is not bit-identical to one-token AR and has to prove token identity on
+   the real quantized weights.
+
+One family also defaults to AR even when everything else passes: `glm5_next` serves autoregressive
+unless MTP is explicitly requested (`_runtime_default_enabled_for_family`, `:708-712`; status reason
+`:1099-1105`) — the bundle inspector reports it as `runtime_default_mode: "off"` (`:1152-1154`).
+Osaurus refuses MTP without usable tuning for *every* family
+(`docs/runtimes/osaurus.md` §7.8): same direction, wider scope.
+
+**Head detection needs a declaration *and* tensors.** `inspect_native_mtp_bundle`
+(`native_mtp.py:871-1171`) requires all of:
+
+1. **A declaration** — `num_nextn_predict_layers` or `mtp_num_hidden_layers` in `config.json`
+   (`:537-548`), or a `jang_config` counter (`runtime.mtp_layers`, `mtp.num_layers`,
+   `mtp.num_hidden_layers`, `:563-580`);
+2. **Not dropped** — `jang_config.drop_mtp`, `mtp.enabled/kept = false`,
+   `mtp.mtp_mode ∈ {none, absent, disabled, off}`, or `runtime.bundle_has_mtp = false` (`:883-925`);
+   a bundle name matching `(?:^|[-_.])mtp(?:$|[-_.])` counts as a declaration too (`:222-233`);
+3. **Tensor evidence** — `mtp.*` keys matching `(^|\.)mtp(\.|$)`, read from `_bundle_weight_keys`
+   (`:606-611`, `:126-212`), which reads `model.safetensors.index.json` when present and then the
+   **top-level** `*.safetensors` headers for shards the index does not list
+   (`Path(bundle_path).glob("*.safetensors")`, `:158-162`, `:197-201`).
+
+Missing any of the three becomes an issue and the status ladder (`:1070-1134`) reports
+`metadata_inconsistent` / `dropped` / `runtime_disabled` / `runtime_validation_blocked` /
+`weights_present_runtime_unwired` / `native_runtime_ready`. Even a clean bundle needs the runtime on:
+`VMLX_NATIVE_MTP` enabled and the family in `_RUNTIME_SUPPORTED_FAMILIES` (`:64-79`: `qwen3_5`,
+`qwen3_5_moe`, `qwen4_exp`, `hy_v3`, `glm5_next`, `dots3_note`; EAGLE-3 drafters are a separate
+branch, `minimax_m3` / `minimax_m3_vl` at `:80-83`).
+
+**A sidecar head this runtime cannot read — `optiq/mtp.safetensors`.** The glob in
+`_bundle_weight_keys` is top-level only, and the shipped `vmlx_engine` never reads
+`mlx_lm_extra_tensors` (grep: zero hits) — the same key OptiQ exports use to point at their head.
+**Live example on this host**, snapshot
+`~/.cache/huggingface/hub/models--mlx-community--Qwen3.5-4B-OptiQ-4bit/snapshots/6cb5bdfd…`:
+
+| What the artifact says | Value |
+|---|---|
+| `config.json` MTP declaration | `mtp_num_hidden_layers: 1` (and `text_config.mtp_num_hidden_layers: 1`) |
+| `config.json` head pointer | `mlx_lm_extra_tensors.mtp_file = "optiq/mtp.safetensors"` |
+| The head on disk | `optiq/mtp.safetensors` — 29 tensors (`mtp_tensor_count` in `config.json`) |
+| `model.safetensors.index.json` | **1,221 keys, zero `mtp.*`** |
+
+So the declaration is there and the tensors are there, but not where this runtime looks: it reports
+`config expects MTP next-token prediction layers, but the bundle index has no mtp.* tensors`
+(`native_mtp.py:983-986`) and serves AR. **A depth pin on such an artifact is refused by the harness's
+artifact gate (§7.4.1) for the right reason** — the runtime cannot wire a draft head it cannot see.
+The contrast is oMLX, which can merge that same sidecar into the index through an explicit admin
+import (`docs/runtimes/omlx.md` §8.8). The finding is not "OptiQ is broken"; it is that **MTP's
+presence is a property of where the tensors sit, and the two runtimes read different places.**
+
 ### 7.5 Caches — what survives a restart, and 22 GB already on disk
 
 | Cache | Default | On-disk path | Keyed by model? | Survives restart? |

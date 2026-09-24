@@ -315,6 +315,11 @@ settings-file-only, which is exactly the point of listing it.
 `server.host` and `auth.api_key` are also settable through environment variables in the
 legacy `config.py` path — but that path is dead (§2.4).
 
+**A third file exists and §3.1–3.4 do not cover it:** `~/.omlx/model_settings.json`, the *per-model*
+settings store (`model_settings.py:434`). Its keys have no CLI equivalent at all — `mtp_enabled` and
+`mtp_num_draft_tokens` (§8.8) are the ones this document needed. `settings.json` and
+`model_settings.json` are different files with overlapping names; do not confuse them.
+
 ---
 
 ## 4. The API surface
@@ -908,6 +913,109 @@ engines loaded later pick up the new mode, but an already-loaded engine keeps th
 (`server.py:362–367`). `mcp.expose_tools` (`true`) and the `integrations.*` block add
 network-facing tools if configured. None are active on this machine.
 
+### 8.8 Native MTP — a per-model setting in a second settings file
+
+**Added 2026-09-24.** The project's working notes treated vMLX as the only runtime in this set with
+native multi-token prediction. **That is false.** oMLX 0.6.4 ships a native MTP monkey-patch — mlx-lm
+PR 990 (Qwen3.5/3.6) and Blaizzy/mlx-lm PR 15 (DeepSeek-V4) adapted into in-place patches
+(`patches/mlx_lm_mtp/__init__.py:2-27`) — and it is switched per model, in a file §3 does not cover.
+
+**Control surface — a settings key and an admin route, and nothing else.**
+
+| Surface | Value | Evidence |
+|---|---|---|
+| CLI flag | **none.** A case-insensitive grep of `cli.py` for `mtp` returns nothing | absence evidence; the CLI source is fully readable, so this is the strong kind |
+| Per-request field | **none.** No `mtp` occurrence in `api/openai_models.py` | absence evidence |
+| Per-model setting | `mtp_enabled: bool = False` (`model_settings.py:303`; docstring `:170-175`) | shipped source |
+| Depth setting | `mtp_num_draft_tokens: Optional[int] = None` (`model_settings.py:308`) | **the depth knob exists** — see below |
+| Settings file | `~/.omlx/model_settings.json` (`model_settings.py:434`, loaded `:450-497`) | E2 on this host: three models |
+| Admin API | `PUT /api/models/{model_id}/settings` (`admin/routes.py:2218`), `mtp_enabled` at `:2700`, `mtp_num_draft_tokens` validated 1..8 at `:2372-2382` | a settings surface reachable over HTTP while the file reads clean |
+
+On this host `~/.omlx/model_settings.json` carries three entries and **all three are
+`mtp_enabled: false`** — including `Qwen3.6-35B-A3B-oQ4-mtp`. **An `-mtp` suffix in a model id proves
+nothing about the cell**; the setting decides, and here it is off.
+
+**Depth.** `mtp_num_draft_tokens` is the *maximum* draft depth: `1..8`
+(`MAX_LIGHTNING_MTP_DRAFT_TOKENS = 8`, `model_settings.py:34`; clamped again in
+`patches/mlx_lm_mtp/__init__.py:75`). `None` leaves the adaptive controller in place — it picks
+1..max per sequence from rolling acceptance/latency estimates (`utils/model_loading.py:717-723`).
+When the setting is absent, load applies family ceilings (`:724-747`): **3** general, **1**
+`nemotron_h`, **8** `gemma4`/`gemma4_unified`, the checkpoint's shipped depth for `inkling`;
+Qwen4-Exp defaults to 3 (`:659`). A "no depth knob" reading of this runtime is therefore wrong: the
+knob exists, and what it sets is a *ceiling* — the controller may sit below it for the whole request,
+which is why a per-request depth figure from a cell with the default value is an average over a
+policy, not a constant.
+
+**Which bundles can use it.** `_is_mtp_compatible` (`utils/model_loading.py:1084-1106`) requires both
+a config that declares MTP heads (`_has_mtp_heads`, `:945-962`) and one of: `qwen3_5*`, `qwen3_6*`,
+`deepseek_v4*`, `nemotron_h*`, `glm_moe_dsa`, `gemma4`/`gemma4_unified`,
+`inkling`/`inkling_mm_model`, `step3p7`. The `model_settings.py:170-175` docstring lists only
+qwen3_5*/qwen3_6*/deepseek_v4* — the shipped compatibility list is wider than its own prose. The
+admin UI exposes the same verdict as `mtp_compatible`, computed from `_is_mtp_compatible`
+(`admin/routes.py:726`, `:2025`, `:2736`).
+
+**What happens without heads, and what "heads" means here.**
+
+- `mtp_enabled=True` on a config that declares no heads, or an incompatible `model_type`: the patch
+  is not applied and one warning says so — `mtp_enabled=True for %s but model is incompatible …
+  MTP path will be inactive` (`utils/model_loading.py:845-856`). The model serves AR.
+- Heads declared but `mtp_enabled=False`: the patch is **still** applied, for *sanitize correctness*
+  — stock `qwen3_5.sanitize` double-shifts norm weights when it sees `mtp.*`, which corrupts an
+  already-converted MLX bundle. The head module is not attached, and the debug line says
+  `head not attached` (`:690-704`, `:759-764`).
+- Head attachment itself is gated on `n_mtp > 0 and is_mtp_active()` — the config declaration times
+  the per-model flag (`patches/mlx_lm_mtp/qwen35_model.py:476-487`). A **weight-level** check exists
+  but is not on the text path: `_checkpoint_has_mtp_weights` (`:1060-1081`) reads
+  `model.safetensors.index.json` for an `mtp.` prefix (fallback: the first shard's metadata header;
+  unresolvable ⇒ `False`), and gates only the **VLM attach** (`:803`, the issue-#1426 fix for exports
+  that declare heads and ship none) and the **Qwen4-Exp** path (`:635`). Whether a text-path bundle
+  with declared-but-absent heads fails the load or attaches an unused head is **not established
+  here**; the VLM path's fix is the evidence that the failure mode exists.
+
+**MTPLX sidecars and the OptiQ artifacts.** A bundle may keep its MTP head beside the weights and
+point at it from `config.json` (`mlx_lm_extra_tensors.mtp_file`). oMLX does **not** follow that
+pointer at load time and has no `optiq/`-MTP reader (the only `optiq/` sidecar loader is vision-only,
+`engine/vlm.py:545-563`, `:1680`). What exists is an **explicit import**:
+`POST /api/models/{model_id}/import-mtplx` (`admin/routes.py:2183-2206` → `oq.py:1613-1705`), which
+resolves the sidecar in MTPLX's order — the config pointer first, then `mtp.safetensors`,
+`mtp/weights.safetensors`, `model-mtp.safetensors` (`oq.py:1563-1583`) — normalizes it to a
+**root-level `model-mtp.safetensors` shard** and merges the index, so mlx-lm's own globs and
+index-based detection see the head with no load-time special-casing (`oq.py:1613-1622`). It is
+fail-closed twice: `mtplx_runtime.json` must exist (`:1593-1595`) and the contract must be one the
+Lightning MTP runtime implements (`:1605-1610`).
+
+This is the sharpest known difference between the two Python runtimes in this project.
+`~/.cache/huggingface/hub/models--mlx-community--Qwen3.5-4B-OptiQ-4bit/snapshots/6cb5bdfd…` keeps
+29 MTP tensors in `optiq/mtp.safetensors` with **zero** `mtp.*` keys in its
+`model.safetensors.index.json`, and its `config.json` declares `mtp_num_hidden_layers: 1` plus
+`mlx_lm_extra_tensors.mtp_file = "optiq/mtp.safetensors"`. oMLX's importer would find that sidecar
+through the config pointer — but **the same snapshot ships no `mtplx_runtime.json`, so the import
+fails closed** on this host. vMLX cannot read the sidecar at all
+(`docs/runtimes/vmlx.md` §7.4.2). A cell that wants MTP on these artifacts needs the head merged
+into the root index first, whichever runtime it targets.
+
+**Which requests use it.** Singleton decode by default (`_is_mtp_eligible`,
+`patches/mlx_lm_mtp/batch_generator.py:553-573`). The multi-row path is opt-in through the
+undocumented `OMLX_MTP_ROWWISE_BATCH` env var (`:429-446` — measured *slower* than standard batched
+decode at batch 2/4, so it stays off) and **no longer requires aligned cache positions** (`:594-604`,
+issue #2150). The `model_settings.py:170-175` and package-docstring
+(`patches/mlx_lm_mtp/__init__.py:23-26`) prose still says "aligned batches"; the batch generator
+records that the requirement was removed. **Code wins over prose.** The practical statement is: one
+request in flight ⇒ MTP may engage; two or more ⇒ standard batched decode unless the env opt-in is
+set.
+
+**Mutual exclusion.** `mtp_enabled` and `dflash_enabled` cannot both be true — `__post_init__` raises
+at construction so the conflict surfaces in the UI rather than at load
+(`model_settings.py:341-351`). `vlm_mtp_enabled` is a separate, external-drafter path with its own
+exclusions (`:352-382`).
+
+**MTP is re-decided at load, not at request time.** The process-wide flag is set just before
+`mlx_lm.load()` runs (`utils/model_loading.py:705-716`) and each model instance persists its own
+`_omlx_mtp_decode_enabled` marker (`patches/mlx_lm_mtp/__init__.py:46-57`), so a later model load
+cannot change an already-loaded model, and the setting must be set before the model is loaded for a
+cell to see it. `engine_pool.py:587-593` folds it into the engine signature so toggling it reloads
+the engine.
+
 ---
 
 ## 9. Address and ports
@@ -1002,7 +1110,9 @@ that produced it. It is cited, not re-derived.
    evidence of 15,286.6 tok/s against 76.3 tok/s for the same model, mechanism in §6.2.
 7. **Silent performance determinants.** Burst decode seeded from settings into env vars;
    memory guard tiers and thresholds; SSD/hot prefix caches; `decode_fairness`; `prefill_priority`;
-   idle-timeout model eviction; `model_fallback`. §8.
+   idle-timeout model eviction; `model_fallback`; **per-model native MTP (`mtp_enabled`,
+   `mtp_num_draft_tokens`), which lives in a second settings file and changes the decode path
+   itself** (§8.8). §8.
 8. **Quantization.** Loads everything mlx-lm loads, plus explicit dispatch for
    `compressed-tensors`, `paroquant`, `fp8`/`mxfp8`, `mxfp4`. Refuses a text-only load of the
    Qwen3.8 ModelOpt VLM checkpoint and errors informatively when ParoQuant is not installed.
