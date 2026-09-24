@@ -439,7 +439,7 @@ kernel is small, and it is this:
 | Variable | Default | What it changes |
 |---|---|---|
 | `VMLX_DISABLE_JANG_AFFINE_JIT_DEFAULT` | `0` | `1` suppresses the automatic JIT-on for JANG affine bundles (§7.1). The supported way to A/B JIT without editing flags |
-| `VMLX_DISABLE_TQ_KV` | unset | Set to `1` by the CLI itself whenever `--kv-cache-quantization` is passed explicitly, to skip loader-level TurboQuant (§7.2) |
+| `VMLX_DISABLE_TQ_KV` | unset in the ambient environment; **the CLI sets it to `1` itself** | Skips loader-level TurboQuant. Set on every path except the `VMLX_FORCE_TQ_AUTO=1` diagnostic, and again whenever `--kv-cache-quantization` is passed explicitly (`cli.py:60-91`, `cli.py:1510-1512`) — see §7.2 (research `2026-09-24-kv-quant-surface.md` §7.1) |
 | `VMLX_FORCE_TQ_AUTO` | unset | `1` synthesises a 3-bit/4-bit TurboQuant config for bundles that have no `turboquant` block |
 | `VMLX_NATIVE_MTP_AR_SAFETY` | `1` (on) | `0` disables the AR-safety valve, so a fixed MTP depth **never leaves its depth even when slower than plain decoding** (§7.4) |
 | `VMLX_NATIVE_MTP_RUNTIME_COST_MARGIN` | `1.0` / `1.25` | Cost-gate margin. **Read in three places with two different defaults** — 1.0 for the windowed valve, 1.25 for the legacy runtime-cost gate |
@@ -1175,6 +1175,20 @@ exactly the "not appearing in the start command" hazard.
 
 ### 7.2 Loader-level TurboQuant is bundle-driven, and the flag *disables* it
 
+> **Corrected 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §7.1, §8).** The reading below
+> was taken from the loader alone, and the loader is not where the decision starts. In 1.6.59 the
+> CLI **pre-sets `VMLX_DISABLE_TQ_KV=1` on every path except the `VMLX_FORCE_TQ_AUTO=1`
+> diagnostic** (`cli.py:60-91`; `cli.py:1510-1512` sets it again whenever `--kv-cache-quantization`
+> is passed explicitly), and `_patch_turboquant_make_cache` returns immediately when that variable
+> is truthy (`utils/jang_loader.py:1969-1975`). **The loader's auto path is therefore unreachable by
+> default.** Loader-level TurboQuant requires all three of: the flag omitted, `VMLX_FORCE_TQ_AUTO=1`
+> set, and no `VMLX_DISABLE_TQ_KV` / `VMLX_FULL_PRECISION_LIVE_KV` in the ambient environment. The
+> "Consequence" paragraph at the end of this section — that the KV cache's precision can be decided
+> by a key inside the model artifact — is **superseded**: that is not what this build does by
+> default. The text below is kept rather than rewritten, because the loader-side mechanics it
+> documents (the `VMLX_FORCE_TQ_AUTO` synthesis, the early returns, the log lines) are still
+> accurate; only the conclusion drawn from them is not.
+
 The `--kv-cache-quantization` help states that omitting the flag uses "production auto mode …
 with no generic TurboQuant replacement or added stored codec", and that passing it explicitly
 "disables loader-level TurboQuant". Both halves are true and the mechanism is subtle.
@@ -1221,18 +1235,59 @@ if not _tq_cfg:
         return
 ```
 
-**The precise condition: loader-level TurboQuant KV is auto-enabled only when the bundle's own
-`jang_config.json` carries a `turboquant` block whose `enabled` is not `False`.** With no block,
-TQ stays off. There are further early returns for MLA layouts (`jang_loader.py:1977`),
-MiniMax-M3 (`:2046-2053`), and mixed-SWA without opt-in or native rotating slots
-(`:2015-2020`, `:2137-2150`). `VMLX_DISABLE_TQ_KV` is also honoured by `utils/tokenizer.py:280`,
-`disk_cache.py:312` and `block_disk_store.py:489`.
+**The precise condition (superseded 2026-09-24 — it is the loader's condition, and the CLI's
+`VMLX_DISABLE_TQ_KV=1` is evaluated before it; see the box at the top of §7.2): loader-level
+TurboQuant KV is auto-enabled only when the bundle's own `jang_config.json` carries a `turboquant`
+block whose `enabled` is not `False`.** With no block, TQ stays off. There are further early
+returns for MLA layouts (`jang_loader.py:1977`), MiniMax-M3 (`:2046-2053`), and mixed-SWA without
+opt-in or native rotating slots (`:2015-2020`, `:2137-2150`). `VMLX_DISABLE_TQ_KV` is also honoured
+by `utils/tokenizer.py:280`, `disk_cache.py:312` and `block_disk_store.py:489`.
 
-**Consequence: the KV cache's precision can be decided by a key inside the model artifact, not
-by the start command.** Two JANG bundles with identical bit widths can have different KV cache
-behaviour because one ships a `turboquant` block. A harness recording only the flags records
-neither. The tell at runtime is the loader's own INFO line, `TurboQuant: not enabled` or
-`TurboQuant auto-enabled`.
+**Consequence (superseded 2026-09-24 — see the box at the top of §7.2): the KV cache's precision
+can be decided by a key inside the model artifact, not by the start command.** Two JANG bundles
+with identical bit widths can have different KV cache behaviour because one ships a `turboquant`
+block. A harness recording only the flags records neither. The tell at runtime is the loader's own
+INFO line, `TurboQuant: not enabled` or `TurboQuant auto-enabled`. *What survives of this
+paragraph:* the log line is still the only tell, and it is still worth reading — but on 1.6.59 the
+line it prints for a default command is `TurboQuant: not enabled`, because `VMLX_DISABLE_TQ_KV=1`
+is already set.
+
+#### 7.2.1 The stored codec — `q4`/`q8` is storage-only, and inert without the prefix cache
+
+**Added 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §7.1, §7.2, §11).** The flag's own
+codec is MLX affine `QuantizedKVCache`, built with raw `mx.quantize` (`scheduler.py:2606-2631`,
+and `_wrap_make_cache_quantized` at `scheduler.py:2443-…` / `mllm_scheduler.py:1783-…`). Affine,
+not FP8. And it is **not a live cache** — the module states the boundary itself:
+
+> "Quantization is applied at the storage/retrieval boundary of the prefix cache, **NOT at
+> model.make_cache() level**. … During generation: full-precision KVCache (no quality loss). In
+> prefix cache: quantized QuantizedKVCache (memory savings)."
+> — `scheduler.py:2444-2458`
+
+**It only fires when the prefix cache is on.** Both schedulers gate on it and log the no-op when
+it is off (`scheduler.py:1393-1404`; the same shape at `mllm_scheduler.py:1165-1177`):
+
+```python
+scheduler.py:1393       elif self.config.kv_cache_quantization != "none":
+scheduler.py:1394           if self.config.enable_prefix_cache:
+scheduler.py:1395               bits = 4 if self.config.kv_cache_quantization == "q4" else 8
+scheduler.py:1396               self._wrap_make_cache_quantized(bits, self.config.kv_cache_group_size)
+                                logger.info("KV cache quantization enabled: …")
+                            else:
+                                logger.warning(f"KV cache quantization '{…}' requested but prefix "
+                                               "cache is disabled — quantization has no effect "
+                                               "without prefix cache")
+```
+
+`--disable-prefix-cache` makes `enable_prefix_cache = args.enable_prefix_cache and not
+args.disable_prefix_cache` false (`cli.py:2639`), and that value is handed to the scheduler config
+at `cli.py:2667`. The harness passes `--continuous-batching` (`runtimes.py:1191`), so the branch is
+taken — **but `runtimes.Vmlx.start_command` also passes `--disable-prefix-cache` unless the run was
+pinned `cache_state="on"` (`ohyesmlx/runtimes.py:1161-1163`).** Under a default harness start
+command, `--kv-cache-quantization q4|q8` on vMLX is therefore **inert**: the runtime logs its own
+warning and serves the model's native cache. A future `--kv-quant` cell on this runtime must either
+also enable the prefix cache — which would make the run vary two things — or record the value as
+`N/A`.
 
 ### 7.3 Memory-pressure behaviour — and the threshold that is *not* the optiq one
 

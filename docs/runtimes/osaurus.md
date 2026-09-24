@@ -1,8 +1,17 @@
-# Osaurus 0.25.3 — capability and configuration reference
+# Osaurus 0.25.12 — capability and configuration reference
 
 Scope: Osaurus `0.25.3` (build `0.25.3`), bundle `com.dinoki.osaurus`, as installed on this
 host on 2026-09-15. Everything below is static inspection. No server was started, no model
 was loaded, and no request was sent to produce this document.
+
+> **Version corrected 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §6.1, §8).** The
+> installed version is **0.25.12** (`Info.plist` `CFBundleShortVersionString`), not the `0.25.3`
+> this document was written against — every "0.25.3" below is a record of what was observed on
+> 2026-09-15, not a claim about the current install. The `cache.liveKVCodec` /
+> `cache.storedKVCodec` reading is **unchanged** and the 0.25.12 string table agrees with it. The
+> new material in this revision is the request-side `kvBits`/`kvMode` cluster (§4.2) and the
+> batched-decode fallback (§7.7); both are string-table evidence from the 0.25.12 binary, which
+> proves a key or a message exists and cannot prove control flow. Neither has been verified live.
 
 **Read §0.1 before you touch this runtime from a script.** `--help` is not intercepted by
 most Osaurus subcommands, and running `osaurus serve --help` starts a server.
@@ -180,7 +189,7 @@ subcommand groups. This is the complete documented surface.
 | `stop` | — | Stops the server. |
 | `status` | — | Prints `running (port N)` or `stopped`. |
 | `mcp` | `[--access-key KEY]` `[--tools PATTERNS]` | MCP stdio server proxying to local HTTP. `--tools` is comma-separated, `*` suffix matches by prefix. |
-| `version` | also `--version`, `-v` | `Osaurus 0.25.3 (0.25.3)` |
+| `version` | also `--version`, `-v` | `Osaurus 0.25.3 (0.25.3)` when observed 2026-09-15; the installed version is now **0.25.12** (research §8) |
 | `doctor` | `[--port N] [--json] [--redact] [--verify-signatures]` | Diagnoses CLI/app skew, duplicate bundles, server startup, model storage. Signature checks are opt-in because they are slow. `--port` domain is `1...65535`. |
 | `list` | — | Lists available model IDs. |
 | `show <model_id>` | — | Prints model metadata. |
@@ -451,6 +460,7 @@ OpenAI fields are omitted; these are the additions.
 | Field | Note |
 |---|---|
 | `modelOptions` | Per-request model option bag — the request-side twin of §3.6 |
+| `kvBits`, `kvGroupSize`, `quantizedKVStart`, `kvMode` | **Added 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §6.1).** A KV-quantization cluster in the same Codable key run as `temperature`, `topP`, `topK`, `minP`, `randomSeed`, `repetitionPenalty`, `maxTokens` and `maxKVSize` (`G:100578363`, `:100578370`, `:100578384`, `:100578401`) — i.e. the per-request generation-options DTO, the twin of `modelOptions` above. `kvMode` carries the codec (`: .affine`, `: .turboQuant(...)`) and `kvBits` is the legacy affine width. **String-table evidence: whether this bag is honoured on the OpenAI chat path is not established** — see §7.7 and §9 |
 | `enable_thinking` | Toggles reasoning for this request |
 | `reasoning_effort` | Reasoning budget selector |
 | `session_id` | Server-side session affinity |
@@ -763,6 +773,48 @@ plist, and it decides whether reasoning tokens are generated at all. On this hos
 ### 7.6 Automatic update checks
 
 `SUEnableAutomaticChecks = true` (§1.4). The app can replace itself between cells.
+
+### 7.7 KV quantization is host-side, and its affine route is inert under batched decode
+
+**Added 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §6.1, §6.2, §8). String-table
+evidence only — unverified live.** No command-line flag exists in either direction (§2.1, §2.4):
+`serve` takes `--port`, `--expose`, `--yes`, `--supervise` and `--interval` and nothing else. The
+live-codec surface is the host setting `cache.liveKVCodec` (§3.2) plus the two width keys
+`cache.turboQuantKeyBits` / `cache.turboQuantValueBits`, validated `2..8` and absent from this
+host's file (§3.3); the codec requires them explicitly — *"TurboQuant KV requires explicit key and
+value bit widths."* (`G:110210688`). Two codec families exist in the binary: mlx-swift-lm's affine
+`QuantizedKVCache` (`G:103350992`; `MLXLMCommon.QuantizedKVCache` `G:111255728`) and TurboQuant
+(`TurboQuantKVCache` `G:103397984`, `CompilableTurboQuantKVCache` `G:103323920`).
+
+**The one behaviour stated outright, and it matters.** Three messages in `G` describe the
+batched-decode case:
+
+```
+G:111612192  Slot %{public}s: legacy kvBits is not supported under batched decode.
+             Request will run with float KV. Use kvMode: .turboQuant(...) for
+             memory-efficient batched decode.
+G:111612368  Slot %{public}s: affine KV quantization (kvMode: .affine) is not supported
+             under batched decode. Request will run with float KV. Use .turboQuant for
+             memory-efficient batched decode.
+G:111612128  Slot %{public}s: applied coordinator defaultKVMode
+```
+
+So the affine/`kvBits` route **falls back to float KV under batched decode**, with a log line and
+nothing else — and this host runs `concurrency.continuousBatching: true` (§3.2). TurboQuant is the
+only memory-efficient route while batching is on, which is the same shape as vMLX's "no effect
+without the prefix cache" (`docs/runtimes/vmlx.md` §7.2.1). A cell that requested a `kvBits` value
+here would record a pin it did not hold.
+
+Two limits on this evidence, both stated rather than papered over. A string table cannot show
+whether the chat handler reads the request-side cluster (§4.2) — that needs a live probe. And
+`defaultKVMode` exists as a **coordinator-level default** (`G:111612128`), so a request that
+specifies nothing can inherit a mode from another layer of configuration; that is a fourth place
+the state can come from, and the research doc does not enumerate it.
+
+The harness's side of this already exists: `cache.storedKVCodec` and `cache.liveKVCodec` are in
+`osaurus_settings.TRACKED_KEYS`, and `Osaurus.check_host_state` refuses to start when the live
+values differ from the committed baseline (research §6.3) — so a host that had been switched to
+`turboquant` is refused rather than measured.
 
 ---
 

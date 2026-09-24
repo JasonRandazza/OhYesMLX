@@ -1,4 +1,13 @@
-# OptiQ (`mlx-optiq` 0.5.6) — capability and configuration reference
+# OptiQ (`mlx-optiq` 0.5.13) — capability and configuration reference
+
+> **Version and line numbers corrected 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §8).**
+> This document was written against `mlx-optiq` **0.5.6**. The installed version is **0.5.13**
+> (`optiq --version` → `mlx-optiq, version 0.5.13`; the bundle carries
+> `mlx_optiq-0.5.13.dist-info/`). The `serve` flag block has moved by roughly 170 lines and grown.
+> The KV flag citations in §2.2 and the fused-KV citations in §7.7 have been re-read against
+> 0.5.13; the `dist-info` paths in §1.1 and §1.4 have been updated with it. **Every other line
+> number in §2.2 is still a 0.5.6 number and is stale** — re-read it from the installed source
+> before relying on it.
 
 Static inspection. Nothing in this document was produced by starting the server, loading a
 model, or sending a request. Where a claim depends on live behaviour rather than code, it is
@@ -8,7 +17,7 @@ Sources, all read directly:
 
 | Component | Version | Path |
 |---|---|---|
-| `mlx-optiq` | **0.5.6** | `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq` |
+| `mlx-optiq` | **0.5.13** (0.5.6 when written; research §8) | `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq` |
 | `mlx-lm` (the actual HTTP server) | **0.31.3** | `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/mlx_lm` |
 
 Everything below is cited as `file:line` relative to
@@ -50,7 +59,7 @@ from optiq.cli import cli
 sys.exit(cli())
 ```
 
-Registered by `mlx_optiq-0.5.6.dist-info/entry_points.txt`:
+Registered by `mlx_optiq-0.5.13.dist-info/entry_points.txt`:
 
 ```
 [console_scripts]
@@ -110,7 +119,7 @@ cmd = [
     "mtplx.server.openai",
 ```
 
-**In this install that command cannot work.** `mlx_optiq-0.5.6.dist-info/top_level.txt` contains
+**In this install that command cannot work.** `mlx_optiq-0.5.13.dist-info/top_level.txt` contains
 only `optiq`, and:
 
 ```
@@ -144,15 +153,17 @@ the version alone.
 
 ### 2.2 `optiq serve` — OptiQ's own flags
 
-Declared at `optiq/cli.py:2330-2461`; `context_settings={"ignore_unknown_options": True,
-"allow_extra_args": True}` (`cli.py:2332`), which is what makes the forwarding in §2.3 possible.
+Declared at `optiq/cli.py:2498-2656` (0.5.13, research `2026-09-24-kv-quant-surface.md` §8; it was
+`cli.py:2330-2461` in 0.5.6, and the block has grown since);
+`context_settings={"ignore_unknown_options": True, "allow_extra_args": True}` (`cli.py:2500`),
+which is what makes the forwarding in §2.3 possible.
 
 | Flag | Default | Controls | Source |
 |---|---|---|---|
-| `--kv-bits INTEGER` | `None` (fp16) | Uniform KV cache quantization, 4 or 8 | `cli.py:2334` |
-| `--kv-group-size INTEGER` | `64` | KV quant group size | `cli.py:2336` |
-| `--quantized-kv-start INTEGER` | `0` | Token offset where KV quant begins | `cli.py:2337` |
-| `--kv-config FILE` | `None` | Per-layer mixed-precision KV; **overrides `--kv-bits`** | `cli.py:2339` |
+| `--kv-bits INTEGER` | `None` (fp16) | Uniform KV cache quantization. Help says "4 or 8", but the option is declared `type=int` with **no `choices`**, so nothing enforces that set at the CLI and whatever is passed reaches `mx.quantize` | `cli.py:2502-2503` |
+| `--kv-group-size INTEGER` | `64` | KV quant group size | `cli.py:2504` |
+| `--quantized-kv-start INTEGER` | `0` | Token offset where KV quant begins | `cli.py:2505-2506` |
+| `--kv-config FILE` | `None` | Per-layer mixed-precision KV; **overrides `--kv-bits`** | `cli.py:2507-2509` |
 | `--adapter TEXT` (repeatable) | `()` | LoRA adapter(s), HF id or local dir; switches to mounted-LoRA mode | `cli.py:2342` |
 | `--anthropic/--no-anthropic` | **on** | OpenAI **Anthropic** `/v1/messages` endpoint | `cli.py:2354` |
 | `--responses/--no-responses` | **on** | OpenAI `/v1/responses` endpoint | `cli.py:2360` |
@@ -162,7 +173,7 @@ Declared at `optiq/cli.py:2330-2461`; `context_settings={"ignore_unknown_options
 | `--mtp` | off | MTP speculative decoding via `OptiqEngine` | `cli.py:2386` |
 | `--mtp-depth INTEGER` | `2` | Draft tokens per verify cycle | `cli.py:2391` |
 | `--drafter TEXT` | `None` | Separate drafter model (γ=1 greedy); **mutually exclusive with `--mtp`** | `cli.py:2396` |
-| `--no-fused-kv` | off | Opts out of the tight-RAM KV-quant path | `cli.py:2404` |
+| `--no-fused-kv` | off | Opts out of the tight-RAM KV-quant path — see §7.7 | `cli.py:2593` |
 | `--stream-experts/--no-stream-experts` | `None` = **auto** | SSD expert streaming — see §7.1 | `cli.py:2418` |
 | `--stream-experts-cache INTEGER` | `0` | LRU expert cache per projection | `cli.py:2427` |
 | `--models-dir DIRECTORY` | `None` | Advertise local quants in `/v1/models`; **implies `--allow-model-switch`** | `cli.py:2432` |
@@ -172,6 +183,12 @@ Declared at `optiq/cli.py:2330-2461`; `context_settings={"ignore_unknown_options
 
 Two defaults are worth stating twice because they are on by default and change the wire
 surface: `--anthropic` and `--responses` both ship **enabled**.
+
+**Line-number warning, added 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §8).** Only the
+five KV rows above have been re-read against 0.5.13. The rest of this table's `Source` column is a
+0.5.6 reading, and the block has moved and grown since — a line number from this table that is not
+one of the KV five should be treated as a pointer to the flag, not to the line, until it is
+re-read from the installed source.
 
 ### 2.3 Everything else is mlx-lm's
 
@@ -536,7 +553,7 @@ curl -sN http://127.0.0.1:8080/v1/chat/completions \
 Expected from the source: many `delta.reasoning` chunks, then `delta.content` chunks, **zero**
 `reasoning_content`, one `usage` frame, then `[DONE]`. The same request with `":no-think"`
 appended should move the text into `content`. If either expectation fails, the source has been
-patched since 0.5.6 and this document is stale.
+patched since 0.5.13 and this document is stale.
 
 ---
 
@@ -826,11 +843,35 @@ path is bypassed, which is correct and should stay.
 
 ### 7.7 Fused KV path is automatic when KV quantization is on
 
-`optiq/cli.py:2532-2546`: with `--kv-bits` or `--kv-config` set and no `--no-fused-kv`, two
-patches install automatically (streaming per-layer conversion + fused quantized SDPA). The
-comment states the effect is a ~2x memory reduction at 32k on a 24 GB Mac
-(`cli.py:2413-2415`). Not active for this harness (no KV quantization), but it means any future
-KV-quant cell has a memory profile that differs from stock mlx-lm and must be recorded.
+**Citations in this section re-read against 0.5.13, 2026-09-24 (research
+`2026-09-24-kv-quant-surface.md` §4.4).** `optiq/cli.py:2730-2739`: with `--kv-bits` or
+`--kv-config` set and no `--no-fused-kv`, two patches install automatically (streaming per-layer
+conversion + fused quantized SDPA). The `--no-fused-kv` help states the effect as a ~2x memory
+reduction at 32k on a 24 GB Mac (`cli.py:2602-2604`: "24 GB Mac, granite-4.1-8b-4bit at 32k peak
+goes from 16.35 GB (stock u4, would OOM) to 7.60 GB"). Not active for this harness (no KV
+quantization), but it means any future KV-quant cell has a memory profile that differs from stock
+mlx-lm and must be recorded.
+
+The two patches are worth naming separately, because they are two changes and not one: the
+streaming conversion converts **one layer at a time** instead of letting mlx-lm enqueue every
+layer's `to_quantized` as one lazy batch, since the stock path holds "fp16_all_layers +
+quantized_all_layers co-resident" and OOMs on tight RAM
+(`optiq/runtime/streaming_kv_quant.py:1-25`); the fused SDPA replaces the attention with a
+FlashAttention-2 tiling that never materializes the scores matrix, and its header carries the
+figures above (`optiq/runtime/fused_quant_sdpa.py:1-30`). **So an OptiQ KV-quant cell is not
+stock-mlx-lm-with-a-quantized-cache** — it is a different attention kernel and a different
+conversion strategy. `--no-fused-kv` is the opt-out and produces stock behaviour, which is the
+right control arm if the codec is the variable.
+
+**Second automatic side effect, added 2026-09-24 (research `2026-09-24-kv-quant-surface.md`
+§4.4).** KV quant can silently cost cross-request batching. `install_quantized_kv` tries
+`install_batch_kv_quant(default=(kv_bits, kv_group_size))` first — a mergeable quantizing cache
+class for `BatchGenerator` — and falls back to `force_sequential_for_kv_quant("--kv-bits")` when
+the hook point is missing (`optiq/serve.py:95-117`, `262-…`). That function's own docstring is
+explicit that mlx-lm's batch path never quantizes the KV cache and that the sequential path is
+forced instead, "strictly better than honoring the flag in name only". At the harness's
+`--max-concurrent 1` this costs nothing, but a future concurrency sweep on this runtime could
+measure a batching loss that the flag caused.
 
 ### 7.8 The sampling RNG fix
 

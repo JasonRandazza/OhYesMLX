@@ -2,6 +2,8 @@
 
 > **Caveat added 2026-09-23 (hardening review A3, Decision 121).** The figures in this paper come from `scripts/probe_kv_quant.py`, a probe script, not the OhYesMLX harness. Decode is `(completion_tokens - 1) / span`, not the harness's `completion_tokens / (last_content_s - ttft_s)`; an undefined window is reported as `0.0` rather than as unavailable; each context/config point is one request with no warmup plateau; coherence is annotated but does not withhold numbers; raw observations were reduced to derived summaries; runtime versions were not recorded. They are therefore **not comparable with harness-produced figures** (grids, sweeps, leaderboards), and within-paper comparisons hold only to the extent that the same formula applied to every arm. Re-running this study through the harness is hardening Phase 4. See `.paul/review/2026-09-23/scripts.md`.
 
+> **Caveat added 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §2.1, §7.1, §10.5).** Two labelling problems, both load-bearing for how the tables below may be read. **First, the vMLX rows are not a KV codec comparison.** `vmlx_fp8` and `vmlx_int4` passed `--kv-cache-quantization q8`/`q4` on top of a start command that disables the prefix cache, and in vMLX the codec is applied only at the prefix-cache **storage** boundary — with the prefix cache off the runtime logs *"KV cache quantization '…' requested but prefix cache is disabled — quantization has no effect without prefix cache"* and serves the model's native cache (`VMLX/scheduler.py:1393-1404`; the same gate at `mllm_scheduler.py:1165-1177`). The flag's only remaining effect was to disable loader-level TurboQuant, so all three vMLX precisions served the same native cache and the flat decode rates are the expected signature of that rather than a finding about quantization. **Second, every "FP8" arm in this paper is MLX affine 8-bit, not float8**: `mx.quantize(..., mode='affine')` is a signed integer with a per-group float scale and bias, with no exponent and not FP8's error profile (§2.1). No runtime in this set has an E4M3/E5M2 KV codec. The numbers and conclusions below are **marked, not rewritten** — they remain the record of what those commands produced. Every inline **Marked 2026-09-24** note below points back to this caveat and carries no claim beyond it.
+
 **Date:** 2026-09-20  
 **Status:** COMPLETE & PUBLISHED  
 **Phase:** Milestone v3 Phase 2 (Context Scaling & Conversational Dynamics)  
@@ -28,11 +30,11 @@ At long context lengths (16,384 and 32,768 tokens), the Key-Value (KV) cache bec
    While hypothesis H2 predicted that reading less KV data over the memory bus would accelerate decode throughput at 32k, empirical measurements reveal an architectural trade-off:
    - In `optiq`, decode throughput at 32k drops from **20.01 tok/s** in FP16 down to **8.05 tok/s** in FP8 and **8.00 tok/s** in INT4 (ITL increases from 49.97 ms to 124.95 ms).
    - **Root Cause:** On an 8B model with 4.60 GB weights, memory bandwidth is not saturated enough to offset the arithmetic cost of per-token dynamic dequantization across 32 layers of 8 GQA heads. The kernel ALU overhead of unpacking 4-bit and 8-bit scales and zero-points in Metal out-weighs the memory bus transfer savings at batch size 1.
-   - In `vmlx`, decode throughput remains steady across all formats: **17.67 tok/s** (FP16), **17.61 tok/s** (FP8), and **17.59 tok/s** (INT4).
+   - In `vmlx`, decode throughput remains steady across all formats: **17.67 tok/s** (FP16), **17.61 tok/s** (FP8), and **17.59 tok/s** (INT4). **Marked 2026-09-24:** this is not a codec comparison. `--kv-cache-quantization q8`/`q4` is applied only at the prefix-cache storage boundary and is a logged no-op without the prefix cache (`VMLX/scheduler.py:1393-1404`), which the probe's start command disables — so all three vMLX arms served the same native cache. See the caveat at the top.
 
 3. **Prefill Quantization Tax (H3 Confirmed):**  
    - In `optiq`, streaming per-layer KV conversion introduces a prefill overhead: 32k TTFT increases from 120.40 s (272.4 tok/s) in FP16 to 172.54 s (190.1 tok/s) in INT4 (+43.3% prefill time).
-   - In `vmlx`, prefill latency is indifferent to quantization: 173.49 s (FP16) vs 174.65 s (INT4), a negligible +0.6% difference.
+   - In `vmlx`, prefill latency is indifferent to quantization: 173.49 s (FP16) vs 174.65 s (INT4), a negligible +0.6% difference. **Marked 2026-09-24:** the INT4 arm's codec was inert (`VMLX/scheduler.py:1393-1404`), so this is an fp16-vs-fp16 comparison, not a prefill tax measurement. See the caveat at the top.
 
 4. **100% Output Coherence Floor (H4 Confirmed):**  
    All 14 evaluated configurations (7 cells $\times$ 2 context lengths) passed the coherence gate (`coherence.is_coherent()`, 100% PASS). The model answered complex summary questions accurately and coherently across both 16k and 32k contexts under both 4-bit and 8-bit KV quantization, confirming that KV quantization maintains numerical stability and semantic fidelity at long context.
@@ -63,6 +65,8 @@ At long context lengths (16,384 and 32,768 tokens), the Key-Value (KV) cache bec
 | `mlxlm_fp16` | mlx-lm | **FP16** | 16k | 16,416 | 70.60 s | 232.5 tok/s | 24.42 tok/s | 40.95 ms | 6,835 MB | PASS |
 | `mlxlm_fp16` | mlx-lm | **FP16** | 32k | 32,802 | 104.08 s | 315.2 tok/s | 17.95 tok/s | 55.70 ms | 11,264 MB | PASS |
 
+> **Marked 2026-09-24 (caveat at the top).** The four `vmlx_*` rows are not a KV codec comparison: the probe's start command disables the prefix cache, and `--kv-cache-quantization q8`/`q4` is a logged no-op in that state (`VMLX/scheduler.py:1393-1404`), so all three vMLX precisions served the same native cache. Every "**FP8**" label in this table — OptiQ's included — is MLX affine 8-bit, not float8 (§2.1). Rows are left as recorded.
+
 ---
 
 ### Table 2: Memory Savings and Trade-Off Summary at 32k Context
@@ -79,6 +83,8 @@ At long context lengths (16,384 and 32,768 tokens), the Key-Value (KV) cache bec
 
 *\*In vMLX, continuous batching and the default block-disk store offload paged KV caches to SSD, keeping RAM flat across all precision modes.*
 
+> **Marked 2026-09-24 (caveat at the top).** The three vMLX rows and their footnote are not a KV codec comparison — the codec was inert in all three (`VMLX/scheduler.py:1393-1404`), so the -8 MB / -7 MB deltas are run-to-run noise against a constant, not a codec's memory saving. The "FP8" column is affine 8-bit throughout (§2.1).
+
 ---
 
 ## 3. Analysis & Hypothesis Evaluation
@@ -92,10 +98,10 @@ At long context lengths (16,384 and 32,768 tokens), the Key-Value (KV) cache bec
 ### H2: Decode Throughput Acceleration at Long Context — REJECTED / INVERTED
 - **Finding:** Instead of accelerating decode throughput, dynamic KV dequantization in OptiQ cut decode rate from 20.01 tok/s to 8.00 tok/s.
 - **Architectural Diagnosis:** On 8B models at batch size 1, memory bus saturation is not the limiting bottleneck during decode. The cost of running per-token dequantization arithmetic (unpacking int4 nibbles and multiplying scale vectors) in software/Metal creates an ALU bottleneck that slows down token generation by 2.5×.
-- In vMLX, where generic KV quantization operates with pre-tiled block storage, decode rate was perfectly neutral (17.67 tok/s in FP16 vs 17.59 tok/s in INT4).
+- In vMLX, where generic KV quantization operates with pre-tiled block storage, decode rate was perfectly neutral (17.67 tok/s in FP16 vs 17.59 tok/s in INT4). **Marked 2026-09-24:** the "pre-tiled block storage" reading is superseded — vMLX applies this codec only at the prefix-cache storage boundary, the probe's start command disables the prefix cache, and the runtime logs the no-op rather than applying it (`VMLX/scheduler.py:1393-1404`). Neutrality here is the signature of an inert flag, not of a cheap codec. See the caveat at the top.
 
 ### H3: Prefill Latency Quantization Tax — CONFIRMED
-- Converting FP16 tensors to quantized representations during prompt prefill adds compute latency. In OptiQ, 32k TTFT grew from 120.40 s to 172.54 s (+43.3%). In vMLX, prefill latency was unaffected (+0.6%).
+- Converting FP16 tensors to quantized representations during prompt prefill adds compute latency. In OptiQ, 32k TTFT grew from 120.40 s to 172.54 s (+43.3%). In vMLX, prefill latency was unaffected (+0.6%). **Marked 2026-09-24:** the vMLX half of this conclusion is void — its INT4 arm's codec was inert (`VMLX/scheduler.py:1393-1404`), so there was nothing to add latency. The OptiQ half stands.
 
 ### H4: Complete Output Coherence Floor — CONFIRMED
 - All 14 runs produced coherent, syntactically correct, and logically sound responses (100% PASS). Quantizing KV states to 8-bit or 4-bit caused zero hallucinations, zero repetition loops, and zero syntax degradation on long-context technical prompts.
@@ -109,4 +115,4 @@ At long context lengths (16,384 and 32,768 tokens), the Key-Value (KV) cache bec
 2. **Accept the Decode Latency Trade-off in OptiQ:**  
    OptiQ's INT4 KV cache trades decode speed (20 tok/s $\rightarrow$ 8 tok/s) for 4.7 GB of memory savings. If throughput is the priority on 64 GB+ Macs, keep KV cache in unquantized FP16.
 3. **vMLX Block Disk Alternative:**  
-   vMLX avoids RAM expansion by streaming paged KV blocks to SSD (`--enable-disk-cache`), maintaining a constant ~5.09 GB RAM footprint regardless of KV precision while sustaining 17.6 tok/s decode throughput.
+   vMLX avoids RAM expansion by streaming paged KV blocks to SSD (`--enable-disk-cache`), maintaining a constant ~5.09 GB RAM footprint regardless of KV precision while sustaining 17.6 tok/s decode throughput. **Marked 2026-09-24:** "regardless of KV precision" is true here for the reason the caveat at the top gives — the precision never changed, because the codec was inert without the prefix cache (`VMLX/scheduler.py:1393-1404`). The constant footprint is real; the attribution to disk streaming alone is not established.
