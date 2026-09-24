@@ -352,7 +352,9 @@ def test_cli_short_version_flag_prints_version_and_exits_zero(capsys):
     assert "ohyesmlx 0.3.0" in capsys.readouterr().out
 
 
-def test_cli_help_flag_prints_usage_and_exits_zero(capsys):
+def test_cli_help_flag_prints_usage_and_exits_zero(capsys, monkeypatch):
+    # Python 3.14 argparse colours help when FORCE_COLOR is set; the assertion is on the text.
+    monkeypatch.setenv("NO_COLOR", "1")
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["--help"])
     assert exc_info.value.code == 0
@@ -363,7 +365,9 @@ def test_cli_help_flag_prints_usage_and_exits_zero(capsys):
     assert "sweep" in out
 
 
-def test_cli_subcommand_help_exits_zero(capsys):
+def test_cli_subcommand_help_exits_zero(capsys, monkeypatch):
+    # Python 3.14 argparse colours help when FORCE_COLOR is set; the assertion is on the text.
+    monkeypatch.setenv("NO_COLOR", "1")
     for subcmd in ("run", "grid", "sweep"):
         with pytest.raises(SystemExit) as exc_info:
             cli.main([subcmd, "--help"])
