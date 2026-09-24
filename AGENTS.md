@@ -79,8 +79,9 @@ Raw observations are never discarded. Summaries must stay recomputable from them
 ## Delegation contract
 
 Implementation is delegated to Command Code workers via `cc-agent`, on whatever route the fleet
-policy makes the default (`orca-fleet routes`; `gpt-6-luna` since 2026-09-23, not yet trialled,
-so check its diffs against `git` with extra care). Claude Opus 5 orchestrates and is the final reviewer.
+profile names (`orca-fleet routes`; the `fleet-provider-routing` skill has the map — since
+2026-09-24 `implement`/`refactor` run DeepSeek v4.1 flash, `test`/`explain` MiMo flash, `review`
+MiMo pro; Luna is explicit-only). Claude Opus orchestrates and is the final reviewer.
 
 A worker dispatch always carries: the plan's acceptance criteria, the exact files it may
 touch, and "touch nothing else."
@@ -109,7 +110,7 @@ ran a command against an explicit capitalised warning and left a server holding 
 Work orders go out through `.paul/orders/dispatch.sh <role> <order-file>`, which prepends
 `.paul/orders/PREAMBLE.md` verbatim. The preamble carries the project's standing rules and
 is byte-identical on every dispatch, so the worker bills it as a cache read rather than fresh
-input — 10x cheaper on GPT-6 Luna ($0.01/M vs $0.10/M), 50x on DeepSeek — on the part of the
+input — 50x cheaper on DeepSeek — on the part of the
 prompt that never changes. Order-specific text goes after it, never before: anything prepended
 breaks the shared prefix and every order that follows pays full price.
 
