@@ -107,6 +107,18 @@ and then report `listening on http://127.0.0.1:1337`. The literal `--launched-by
 `mcp` help text says so explicitly — *"Runs an MCP stdio server that proxies tool discovery
 and calls to the local Osaurus HTTP server"* (E1).
 
+**Any MCP host relaunches the app (observed 2026-09-23).** Because `osaurus mcp` is a client
+of the GUI app, an MCP host that registers it (`"command": "osaurus", "args": ["mcp"]`) starts
+`/Applications/osaurus.app/Contents/MacOS/osaurus --launched-by-cli` every time it opens a
+session, with launchd as the parent and nothing in the process tree naming the host. On
+2026-09-23 `~/.commandcode/mcp.json` carried that entry, so every `cc-agent` worker dispatch
+spawned the app (a stray started 22:40:15, fifteen seconds after a worker session wrote
+`~/.commandcode`). The harness refuses every runtime start while such an app is alive
+(`runtimes._resident_osaurus_pids`), so a relaunch mid-column costs every remaining cell in
+that column. Jason removed the entry and the app's Login Item the same night. Before a grid:
+no MCP host with an `osaurus` entry may start a session, and `sfltool dumpbtm` should not
+list Osaurus as enabled.
+
 **Consequence for measurement:** anything the CLI reports about the model, the cache, or
 timings is the GUI process's answer, not the CLI's own observation.
 
