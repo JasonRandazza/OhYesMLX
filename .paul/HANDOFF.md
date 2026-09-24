@@ -1,83 +1,170 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-24 morning (v3.1 Hardening: Phases 1–3 complete, validation grids run)"
+description: "OhYesMLX — session handoff, 2026-09-24 evening (v3.1 Hardening: Phase 4 code complete, sweeps not yet run)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-24 morning (v3.1 Hardening, Phases 1–3 complete)
+# Handoff — 2026-09-24 evening (Phase 4 code complete; sweeps tonight)
 
-> Read this, then `.paul/STATE.md` (Current Position, Deferred Issues), then `AGENTS.md`.
-> STATE wins on conflict. The previous handoff is `.paul/archive/HANDOFF-2026-09-23-evening.md`.
+> Read this, then `.paul/STATE.md` (Current Position, Decisions 122–123), then `AGENTS.md`.
+> STATE wins on conflict. The previous handoff is
+> `.paul/archive/2026-09-24-handoff-morning-phase3-closed.md`.
 
-## What happened overnight
+## Where things stand
 
-All commits are **local only, not pushed.** Review with `git log origin/main..main`.
+Phase 4 of v3.1 Hardening is **code complete and not yet exercised live**. Jason approved all
+four proposed items and the mixed-channel TTFT refusal this morning; each landed as its own
+commit, reviewed by the coordinator with a green suite. **Tests: 618 pass** (543 at the start of
+the day). The measurement half of Phase 4 — the overnight sweeps — is what remains, and Jason
+plans to run it tonight.
+
+`git log origin/main..main` shows what is unpushed. Jason pushed the first batch mid-session; the
+Phase 4 commits after `cb0bcb1` were local at the time of writing — check before assuming.
 
 | commit | what |
 |---|---|
-| `4279663` | Phase 3a: caveats at the top of the five v3 script papers (Decision 121, review A3); `probe_grid*.py` no longer calls an incoherent HTTP-200 cell `LOADS` (A4/F7); AGENTS.md TTFT definition names the reasoning-channel exception (Decision 119). |
-| `7601e62` | Grid runners accept `OUT=`; `scripts/run_harden_validation.sh` re-runs the three published grids unchanged. |
-| `17b3791` | **Phase 2:** A5 `reasoning_timed_note` + grid/sweep marker; A7 no cross-runtime ordering or recommendation on `peak_mb`/`cold_load_s`; D1 `e2e_p50/p90/p99_s`; D3 join refuses `unknown…` versions. Luna worker hit its 200-turn cap; the coordinator removed a duplicated D3 check and a duplicated A7 branch, gated E2E percentiles on their own sample count, and red-checked all four items. |
-| `4afd162` | Validation writeup; Osaurus relaunch cause in `docs/runtimes/osaurus.md` §1.2; AGENTS.md hazard points to it. |
-| `deb6189` | **Phase 3b:** documentation drift (review F): README, `docs/interfaces.md`, `docs/runtimes/{optiq,vmlx}.md`. Worker ran on the DeepSeek route. |
-| `9210931` | Two CLI help tests failed under `FORCE_COLOR` (Python 3.14 argparse colours help); they now pin `NO_COLOR`. |
+| `e57775d` | Decision 122: runtime-axis TTFT and prefill orderings refuse rows timed on mixed channels (content vs reasoning). `report.CHANNEL_DEPENDENT_RANKS`; new row key `timing_channel`; the group lists values without positions and the recommendation is "none". |
+| `360ca81` | AGENTS.md delegation text follows the fleet profile map (`implement`/`refactor` → DeepSeek v4.1 flash, `test`/`explain` → MiMo flash, `review` → MiMo pro; Luna explicit-only). |
+| `3a47e12` | `docs/research/2026-09-24-kv-quant-surface.md`: the KV-quant control surface of every runtime, from source. |
+| `eec6480` | `--kv-quant off\|affine8\|affine4` header pin. |
+| `c33edc4` | The 2026-09-20 KV paper's vMLX rows are marked an inert codec; runtime notes corrected (`docs/runtimes/{optiq,vmlx,osaurus}.md`). |
+| `3310e33` | `--mtp-depth off\|1\|2\|3` and `--stream-experts off\|on` header pins. |
+| `d868f56` | `run --workloads multiturn`: ten fixed turns of one pinned conversation. |
+| `a376728` | STATE/ROADMAP: Phase 4 code complete; Decisions 122–123. |
 
-Tests: **543 pass**, with and without `FORCE_COLOR`.
+## What each Phase 4 setting does
 
-## Validation grids: the headline
+All three pins follow the `--cache-state` pattern: a `run` flag recorded in the header, a
+member of `report.PIN_FIELDS` / `ABSENT_PINS` / `SWEEP_PINS` / `SWEEP_VALUES` (so
+`sweep --varying <pin>` joins runs that differ only in it), a `Runtime.<pin>_refusal()` asked
+before start that turns a cell into **N/A with the reason**, and an absent pin (`None`) that
+leaves every start command byte-identical to before. The rationale for each refusal is written
+once, in `ohyesmlx/runtimes.py`, at the refusal.
 
-Full writeup: `docs/research/2026-09-24-hardening-validation-grids.md`. Data:
-`results/harden-2026-09-23/grid-{35b,dense,moe}/` (gitignored). The three grids ran 23:18 → 05:37,
-every column exited 0, and one harness sha covers all 15 columns.
+### `--kv-quant off|affine8|affine4` (study 03-05)
 
-- **MoE replicates**, within about 1.5% in every cell, with the same single FAIL (`optiq × osaurus`).
-- **Dense replicates**: format orderings are identical in every runtime, and most cells are within 4%.
-- **35B format orderings replicate, but levels do not.** mlx-lm, oMLX and vMLX are 8–27% faster than
-  the published grid at *identical* versions, and the current code reproduces the published
-  figures exactly from the old data, so the shift is in the measurements. OptiQ and Osaurus changed
-  version, so those columns cannot be joined with the published ones. The cause is unknown.
-  A third 35B replicate is the cheap way to settle it (about 2.3 h on a quiet machine).
-- **New:** with A5 labelling on, OptiQ is the only runtime timed on *content* on the Qwen grids.
-  The other four are timed on reasoning for 9 of 9 requests, and the old data shows the same
-  split. Decode rate stays readable across the row, but a TTFT ordering across the row mixes two
-  definitions. **Decision needed:** should the runtime axis refuse TTFT orderings across mixed
-  channels, as A7 does for `peak_mb`?
-- The 35B mlx-lm column overlapped about 12 minutes of snapshot deletion and process reaping. It
-  was kept: it came out faster, with no drift marker. The writeup names it.
+- Renamed from the proposed `fp8`/`int4` on evidence: **no runtime here has a float8 KV codec**.
+  Every codec in the set is MLX affine integer quantization (`docs/research/2026-09-24-kv-quant-surface.md` §2).
+- **Only OptiQ quantizes the live cache** (`--kv-bits 8|4 --kv-group-size 64`).
+- **vMLX's q4/q8 applies only to the prefix-cache copy**, and the harness has run with
+  `--disable-prefix-cache` since 2026-09-15 (vMLX `scheduler.py:1393-1404`, `:2444-2458`). vMLX
+  accepts only an explicit `off` (passing `--kv-cache-quantization none`) and refuses codec values.
+  Consequence: **the vMLX rows of the 2026-09-20 KV paper measured nothing** — the paper now says so;
+  its numbers are kept, not rewritten.
+- mlx-lm and oMLX accept `off` only. Osaurus accepts `off` only when `cache.liveKVCodec ==
+  engine_selected`.
+- So a KV-quant sweep is effectively an **OptiQ sweep**; the other runtimes contribute `off` rows or N/A.
 
-## Host changes Jason made (2026-09-23 night)
+### `--mtp-depth off|1|2|3` (study 03-06)
 
-- Osaurus was removed from `~/.commandcode/mcp.json` and from Login Items. Both relaunched the app with
-  `--launched-by-cli`, and the harness refuses every runtime start while that app is alive.
-- Google Drive was quit for the run (it held ~100% CPU). **Relaunch it.**
-- Time Machine local snapshots were deleted, leaving about 100 GiB free. AGENTS.md now dates the disk figure.
+- vMLX only. At depth N the start command drops `--disable-native-mtp` and passes
+  `--native-mtp-depth N --native-mtp-depth-policy fixed`.
+- `vmlx_mtp_refusal(artifact_dir)` is a static check of the bundle: config.json present, family
+  wired in vMLX, MTP not declared dropped, MTP layers declared, and `mtp.*` tensors present in
+  `model.safetensors.index.json`. A bundle without heads would decode plain autoregressive and
+  publish as MTP; it is N/A instead.
+- **Checked this evening against every snapshot in the HF cache: only
+  `JANGQ-AI/Qwen3.5-4B-JANG_4S` passes.** The 35B MTP bundle the paper used,
+  `Jundot/Qwen3.6-35B-A3B-oQ4-mtp`, is no longer on disk (its cache directory is a 4 KB stub), and
+  the paper found it incoherent under vMLX with MTP both on and off anyway. Run the MTP sweep on
+  the 4B JANG_4S; do not download the 35B bundle for it.
+- Acceptance rate is a runtime self-report; it is recorded, not treated as a measurement.
 
-## Phase 4 proposal (needs Jason's yes: each item is a new header pin)
+### `--stream-experts off|on` (study 03-03)
 
-Phase 4 re-runs the v3 script studies through the harness. Four of the five need a run setting
-that the harness does not have. AGENTS.md requires approval for each new header pin. The
-proposal follows the `--cache-state` pattern exactly:
+- OptiQ: `--stream-experts` for `on`; `--no-stream-experts` for `off` **and** when absent (the
+  existing internal pin stays — AGENTS.md hazard: OptiQ auto-enables streaming at 70% of RAM).
+- vMLX: `--flash-moe` for `on`.
+- Both runtimes can silently fall back to loading everything. So after start,
+  `stream_experts_missing()` reads the head of the server log (`LOG_HEAD_BYTES` = 1 MiB) and the
+  cell is **FAIL, with the log quoted,** unless the banner is there: OptiQ needs both
+  `SSD expert streaming: on` and `pre-loaded`; vMLX needs `Flash MoE enabled:`. The runtime is still
+  stopped in `finally`. `Handle.log_path` was added for this.
 
-- a `run` flag, recorded in the header;
-- a member of `SWEEP_PINS`, so `sweep --varying <pin>` joins runs that differ only in it;
-- **N/A with the reason** on any runtime that cannot be driven into the state. It is never
-  measured in a different state.
+### `run --workloads pinned|multiturn` (study 03-04) — not a pin
 
-| study (paper) | proposed pin | values | runtimes that can honour it | notes |
+- Default `pinned` is today's three shapes, byte-identical. `multiturn` swaps in ten workloads,
+  `turn-01`…`turn-10`, all `max_tokens=128`. It is mutually exclusive with `--prompt-tokens`.
+- `cli.DIALOGUE` holds the ten probe questions plus **nine fixed literal assistant replies**. The
+  2026-09-20 probe fed each runtime its own replies back, so every runtime saw a different history —
+  two things varied at once. Fixed replies make turn N the same prompt on every runtime.
+- The header's existing workload list is the provenance; no new pin was needed.
+
+### Not re-run: 03-07 speculative draft
+
+It needs two resident models by design, which breaks the one-model rule. It stays a caveated
+script study.
+
+## Tonight: the sweeps
+
+**No Phase 4 runner scripts exist yet.** The first job is writing them — delegate it
+(`CC_AGENT_MAX_TURNS=300 .paul/orders/dispatch.sh implement <order>`), and land it **before**
+the grid starts: AGENTS.md forbids editing `ohyesmlx/*.py` or running tests while a grid runs.
+Model them on `scripts/run_sweep_cache.sh`, which already has the port sweep, the stale-Osaurus
+sweep by full executable path, the Osaurus baseline snapshot/restore with `cmp`, the abort trap,
+one log per run, and `OUT=` override. `scripts/gridspec-35b.sh` resolves the 35B snapshot paths.
+
+Suggested runs, in the order of value (cheapest first is also fine for a first live check):
+
+| study | runtimes × artifact | varying | extra | expected N/A |
 |---|---|---|---|---|
-| 03-05 KV-cache quant | `--kv-quant` | `off`, `fp8`, `int4` | per `docs/runtimes/*.md`; paper used OptiQ, vMLX, mlx-lm | Combine with the existing `--prompt-tokens 16384/32768`. Highest value: the paper's decode formula is the most off. |
-| 03-06 native MTP | `--mtp-depth` | `off`, `1`, `2`, `3` | vMLX (`--enable-native-mtp`) | One runtime, so it is a sweep and not a grid. Acceptance rate is a runtime self-report and would be recorded, not treated as a measurement. |
-| 03-03 expert streaming | `--stream-experts` | `off`, `on` | OptiQ, vMLX FlashMoE | OptiQ is already pinned `off` internally; this would make that pin explicit and sweepable. |
-| 03-04 multi-turn | `--turns` | `1`…`10` | all five | The only one that changes the *workload*, not a runtime flag. It could instead be N fixed workloads in `cli.py`, with no pin. **Recommend the workload route** (no new pin). |
-| 03-07 speculative draft | — | — | — | **Do not re-run.** Two resident models by design breaks the one-model rule, so it can never be a harness cell. It stays a caveated script study. |
+| 03-05 KV quant | all five × `oq4` 35B (`$Q4`) | `kv_quant` off/affine8/affine4 | `--prompt-tokens 16384` and `32768` | affine8/affine4 on everything but OptiQ |
+| 03-06 MTP | vMLX × `Qwen3.5-4B-JANG_4S` | `mtp_depth` off/1/2/3 | — | none (it passes the refusal) |
+| 03-03 streaming | OptiQ, vMLX × `stock4bit` 35B (`$S4`) | `stream_experts` off/on | — | mlx-lm, oMLX, Osaurus |
+| 03-04 multi-turn | all five × one 35B artifact | runtime axis, `--workloads multiturn` | — | none expected |
 
-Suggested order: KV-quant → MTP → streaming → multi-turn. Each is one worker order plus one
-overnight sweep. Nothing needs a download: every artifact the papers used is on disk.
+Then `ohyesmlx sweep --varying <pin>` over each study's results directory.
+
+Things to watch in the first results, because none of this has run live:
+
+- a streaming `on` cell that FAILs for a missing banner — read the quoted log before believing
+  either the harness or the runtime; the banner strings were taken from source and recorded logs;
+- an OptiQ `affine4` cell failing the coherence gate — that is a result, not a harness bug;
+- the TTFT refusal (Decision 122) firing on the multi-turn runtime-axis report, which is expected
+  on the Qwen artifacts (OptiQ times on content, the other four on reasoning).
+
+Also queued for a quiet night: **the third 35B replicate**, which settles whether this morning's
+8–27% level shift in mlx-lm/oMLX/vMLX is real (about 2.3 h):
+`OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh`.
+
+The machine must be quiet: no pytest, git, downloads, or Command Code workers while any of this runs.
+
+## Deferred
+
+- The single-run `render_markdown` leaderboard is guarded by neither A7 (no cross-runtime
+  `peak_mb`/`cold_load_s` ordering) nor the Decision 122 channel refusal. Only the grid/sweep
+  paths are. Worth a small order once the sweeps land.
+- The Luna route trial is still owed (Luna is explicit-only now; one data point: it ran out of
+  turns on Phase 2 and left two duplicated definitions).
+- Phase 4 order files are in `.paul/orders/p4-*.md`; their `.log` files are untracked worker
+  transcripts and can be deleted.
+
+## Working notes carried forward
+
+- **Offload to Command Code.** Claude tokens are scarce: Opus writes orders, reviews diffs and
+  runs the suite; workers write code. Always set `CC_AGENT_MAX_TURNS` — 300 for code orders, 400
+  for an order that spans two pins or several modules, never the default 40. One worker hit 200
+  mid-edit today with no report; a 400-turn continuation order finished and trimmed it.
+- A worker's BLOCKED is a finding: today's multi-turn worker correctly stopped on a snapshot test
+  (`tests/test_report.py`, run-flag list) outside its allowlist.
+- **Graphify:** the repo had no git hooks, and the Claude-side hook fires only on `.md` edits. On
+  2026-09-24 `graphify hook install` added post-commit/post-checkout hooks; every commit now
+  rebuilds `graphify-out/` in the background (log: `~/.cache/graphify-rebuild.log`). Uncommitted
+  `.py` edits still need `graphify update .` by hand. Graphify's merge driver created a
+  `.gitattributes`; Jason deleted it — if it reappears, it is harmless and untracked.
+- Test command: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`.
+
+## Host state
+
+- Google Drive was quit for the 2026-09-23 grids — relaunch it if it is still off (quit it again
+  before tonight's run; it held ~100% CPU).
+- About 100 GiB free after the Time Machine snapshot purge; check `df` before any fetch.
+- Osaurus is out of `~/.commandcode/mcp.json` and Login Items (both relaunched the app).
 
 ## Next moves
 
-1. Review and push the six local commits.
-2. Decide the Phase 4 pins (table above) and the mixed-channel TTFT question.
-3. Queue a third 35B replicate for the next quiet night: `OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh`.
-4. The Luna route trial is still owed. Tonight's Phase 2 worker (Luna) ran out of turns, and its
-   partial diff contained two duplicated definitions. That is one data point for the trial.
+1. Push any unpushed commits (`git log origin/main..main`).
+2. Dispatch the Phase 4 runner scripts; review; commit; then start the sweeps on a quiet machine.
+3. Morning after: `sweep --varying` reports per study, a research writeup per study under
+   `docs/research/`, and STATE updated (Phase 4 closes when the studies are written up).
+4. Third 35B replicate on the next free quiet night.
