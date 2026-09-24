@@ -1,0 +1,37 @@
+NOTE: Thu 09:39 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+Done. Report per finding, with the code I checked.
+
+**Verification.** Baseline before edits: `541 passed, 2 failed`. After edits: identical (`pytest -q`, `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`). The 2 failures are pre-existing and environmental — `tests/test_cli.py` help-text tests assert plain `usage:` against argparse's ANSI-coloured output in this shell; with `NO_COLOR=1 TERM=dumb` they pass (2 passed). No code changed, so there was nothing to red-check and I left no new test behind (docs-only; the order restricts me to these four files). Nothing in `tests/`, `scripts/` or `ohyesmlx/` reads these files as data — only docstring references. `git diff --stat` shows exactly README.md, docs/interfaces.md, docs/runtimes/optiq.md, docs/runtimes/vmlx.md. Not committed.
+
+| # | Verdict | Code checked |
+|---|---|---|
+| F1 | **fixed** | `measure.CellResult` (`workload_id` exists; field order; `measured_pin=None`), `measure._record`, `measure.write_jsonl` + the `run` dict in `run_cells`, `measure.load_run`. Added `workload_id`, reordered the listing to the dataclass's real order, added the record-keys paragraph (three derived, three omitted keys), rewrote the header sentence (`max_tokens` is a workload field; `concurrency`/`prompt_tokens`/`cache_state`/`harness` exist). Cross-checked against a real file (`results/sweep-conc8/20260916T112648Z-format/results.jsonl`). |
+| F2 | **fixed** | `cli._check_axis` (runtime axis holds one `(label, artifact_dir)`; format axis holds the runtime constant), `runtimes.RUNTIMES`. Table now lists the five ids and says the format-axis runtime is whatever the caller selects. |
+| F3 | **not-a-defect** | The review is stale: `measure.MIN_CONTENT_DELTAS` is the first guard in `decode_tps`, `prefill_tps` and `itl_s`, each returning `None` below two deltas, and `_missing_metric` says why. The doc now matches the code. No edit. |
+| F4 | **fixed** | `transport.chat` body carries only `model/messages/temperature/max_tokens/stream/stream_options/seed`; `measure.TEMPERATURE=0.0`/`SEED=0` via `measure._request`; `runtimes.Optiq.start_command` pins `--temp 0 --top-p 1 --top-k 0 --min-p 0`. README now claims only that; optiq.md §7.2 rewritten to the closed state, and I confirmed in the installed source that `merge_into_argv.flag_for` forwards only those four of the five `_SAMPLER_KEYS`. §9's "add these first" row corrected. |
+| F5 | **fixed** | JANG row is now `vmlx` + `osaurus`, "JANG_Q" gone. Evidence: every `results/**/results.jsonl` — `jang4s`/`jang2l` PASS only on osaurus+vmlx, `jangtq4` only on vmlx; nothing on `omlx`/`optiq`/`mlxlm`. MLX Studio appears once, as a non-registered external app. |
+| F6 | **fixed** | `transport.Observation` + `transport.timing_channel` + `report._reasoning_timed_note`. `last_content_s` comment no longer says "content delta"; a paragraph now names all three fields as output-stream timing/count; the mirror paragraph no longer calls itself the only exception (the two-exception paragraph above it already did). |
+| F7 | **fixed** | `runtimes.Handle` (`serving_pid`, `stop_command`, `scratch`, `api_key`, `memory_pid`), `measure._visit` / `measure._first_warmup_latency`. Name list includes `vmlx`; a paragraph distinguishes lifecycle fields from the `first_request_s` the loop writes. |
+| F8 | **fixed** | "all MLX runtimes" removed from both sites; the table and prose are scoped to the five registered runtimes, and each row's runtime list is grounded in the recorded cells (`stock4bit`, `oq4`, `oq4e`, `optiq` each have PASS rows on all five). |
+| F9 | **fixed** | `measure.visit_plan`, `measure._visits` (zero-quota visits dropped), `run_cells` persistence, `report` `short_note`. Doc now states the two visits are conditional and that `measured=1` drops the second; "persist after every visit". |
+| F11 | **fixed** | Replaced every in-repo `runtimes.py:NNN` citation in both files (5 in optiq.md, 5 in vmlx.md — not just the two the finding named) with symbols (`runtimes.Optiq.version_command`, `Runtime.start`, `Runtime.await_ready`, …). vmlx.md §9 retitled **historical** with a banner naming `runtimes.Vmlx`/`RUNTIMES["vmlx"]` (port 8000) as the authority, and its stale "8000 is free in the registry" line corrected. |
+| F12 | **fixed** | The ownership paragraph now points at AGENTS.md rather than restating, and says "after every **visit**". Also corrected the neighbouring claim that `warmup_plateau` is *the only* leniently-read field — `batch_spans`, `lost_visit_reason` and `cold_load_after_lost_visit` are too. |
+| F10 | **ignored** as instructed; independently confirmed the README has no such table. |
+
+**Things I fixed beyond the findings, for your call:** README's TTFT definition read "first *content* token", stale against Decision 119 and `transport.timing_channel` — now states the output-stream definition and the `timed on reasoning channel` label. Also noted, **not** fixed: `docs/runtimes/optiq.md` declares its scope as mlx-optiq **0.5.6**, but the installed binary reports **0.5.13**; re-verifying that document against the newer build is a re-read, not a citation swap.
+
+**Not verified:** the compatibility rows are grounded only in the cells recorded under `results/` — I make no claim about artifacts never run here. I started no server, loaded no model, and ran no measurement.
+
+== cc-agent: git status ==
+ M README.md
+ M docs/interfaces.md
+ M docs/runtimes/optiq.md
+ M docs/runtimes/vmlx.md
+?? .paul/orders/harden/p2-contract.log
+?? .paul/orders/harden/p3-docs-drift.log
+ README.md              |  48 ++++++++++++++---------
+ docs/interfaces.md     | 103 +++++++++++++++++++++++++++++++++++--------------
+ docs/runtimes/optiq.md |  47 +++++++++++-----------
+ docs/runtimes/vmlx.md  |  39 +++++++++++--------
+ 4 files changed, 153 insertions(+), 84 deletions(-)

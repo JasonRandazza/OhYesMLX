@@ -11,15 +11,15 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** v0.3.0 release prep — code-size reduction before tagging (Decision 117 removed `pareto`)
+**Current focus:** v3.1 Hardening — Phases 1–3 done; Phase 4 (re-run v3 script studies) awaits Jason's design call
 
 ## Current Position
 
 Milestone: v3.1 — Hardening (0.3.1) — IN PROGRESS. v0.3.0 released 2026-09-23.
-Phase: 1 (Correctness & residency fixes) — IN PROGRESS
+Phase: 4 (Re-run v3 script studies through the harness) — NOT STARTED, needs header-pin approval
 Plan: from the deep review, `.paul/review/2026-09-23/SUMMARY.md` (IDs A1–F below refer to it)
-Status: Phase 1 COMPLETE 2026-09-23 (waves 1 and 2 committed; 530 tests). Next: Phase 2 (A5 label, A7 refusal, D1, D3).
-Last activity: 2026-09-23 — deep review complete; hardening Phase 1 dispatch.
+Status: Phases 1–3 COMPLETE 2026-09-24 (543 tests). Validation grids (35B, dense, MoE) re-run on the hardened harness: `docs/research/2026-09-24-hardening-validation-grids.md`.
+Last activity: 2026-09-24 — overnight validation grids; docs drift closed; Osaurus relaunch cause found.
 
 Progress:
 - Milestone: [██████████] 100%
@@ -138,6 +138,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | ~~Grid TTFT-ranked entries carry decode drift (same latent mislabel, `render_grid`)~~ **FIXED 2026-09-17** | Phase 6 | — | `_grid_table` passes `drift_marker=rank in DECODE_DERIVED_RANKS`. Default decode-ranked grid byte-identical; non-decode grids marker-free. |
 | ~~`CONCURRENCY_DRIFT_SENTENCE` now describes markers absent from non-decode tables~~ **FIXED 2026-09-17** | Phase 6 | — | Scoped to `rank in DECODE_DERIVED_RANKS` in `render_sweep`. |
 | TTFT-ranked concurrent table carries no queueing caveat | Phase 6 | S | The design says concurrent TTFT is a queueing measurement; the render doesn't. Minor. |
+| 35B levels moved +8–27% vs the published grid on unchanged runtime versions (orderings held) | Hardening validation 2026-09-24 | M | A third quiet-machine 35B replicate (≈2.3 h) decides which night was the outlier |
+| Runtime-axis TTFT mixes channels: OptiQ is content-timed, the other four reasoning-timed on Qwen | Hardening validation 2026-09-24 | S | Jason's call: refuse a TTFT ordering across mixed channels (like A7) or keep the label only |
+| `docs/runtimes/optiq.md` is scoped to 0.5.6; installed is 0.5.13 | Phase 3 docs worker | S | Re-read against the new build before the next OptiQ claim |
 | Thinking-Off MMLU Arm (Candidate 3) | Post-v2 | M | **Preserved for overnight execution.** Ablation study: isolate reasoning contribution on MMLU and resolve MoE HTTP 502 truncation trap. |
 
 ### Blockers/Concerns
@@ -155,9 +158,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-23 (Claude Opus coordinator)
-Stopped at: Phase 4 pushed; `pareto` removed (Decision 117); 504 tests pass.
-Next action: hardening Phase 1 (review A1, A2, B1–B4, C1–C4, A6, D2, E1–E3), then Phase 2 (A5 label, A7 refusal, D1, D3), Phase 3 (v3 paper caveats, docs drift F), Phase 4 (re-run v3 script studies through the harness).
+Last session: 2026-09-23/24 overnight (Claude Opus coordinator)
+Stopped at: Phases 2 and 3 committed (`17b3791`, `4279663`, `deb6189`); validation grids in `results/harden-2026-09-23/`; nothing pushed.
+Next action: Jason decides Phase 4 pins (proposal in HANDOFF) and the mixed-channel TTFT question; a third 35B replicate settles the level shift.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---

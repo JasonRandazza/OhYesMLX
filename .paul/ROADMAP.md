@@ -282,7 +282,7 @@ concurrency finding that fell out along the way.
 Source: deep review 2026-09-23, `.paul/review/2026-09-23/SUMMARY.md`. IDs refer to it.
 
 - [x] Phase 1 (COMPLETE 2026-09-23): Correctness & residency. A1 (no figures on FAIL rows), A2 (single-delta timestamps; delta domain in measure), B1–B4 (stale Osaurus sweep by executable path; lsof failure; swallowed cleanup; post-SIGKILL wait), C1–C4 (persist partial visits; start/try gap; unreadable baseline fails closed; sampler/scratch/tmp), A6 (OptiQ sampler flags pinned), D2 (harness revision in header), E1–E3 (tests that can fail).
-- [ ] Phase 2: Contract decisions. A5 label (Decision 119), A7 refusal (Decision 120), D1 end-to-end latency percentiles, D3 unknown versions refused by the join.
-- [ ] Phase 3: Research & docs integrity. Caveats on the script-based v3 papers (Decision 121); probe_grid LOADS requires coherence (A4); docs/interfaces.md and README drift (F).
-- [ ] Phase 4: Re-run the v3 script-based studies through the harness.
+- [x] Phase 2 (COMPLETE 2026-09-23, `17b3791`): Contract decisions. A5 label (Decision 119), A7 refusal (Decision 120), D1 end-to-end latency percentiles, D3 unknown versions refused by the join.
+- [x] Phase 3 (COMPLETE 2026-09-24, `4279663`, `deb6189`): Research & docs integrity. Caveats on the script-based v3 papers (Decision 121); probe_grid LOADS requires coherence (A4); docs/interfaces.md and README drift (F).
+- [ ] Phase 4: Re-run the v3 script-based studies through the harness. Needs new header pins (Jason's yes); proposal in `.paul/HANDOFF.md`. Validation re-run of the three harness grids done 2026-09-24 (`docs/research/2026-09-24-hardening-validation-grids.md`).
 
