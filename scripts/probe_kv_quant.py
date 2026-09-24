@@ -84,9 +84,12 @@ class OptiqFP8(runtimes.Optiq):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--kv-bits", "8"])
         return tuple(cmd)
 
@@ -98,9 +101,12 @@ class OptiqINT4(runtimes.Optiq):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--kv-bits", "4"])
         return tuple(cmd)
 
@@ -112,9 +118,12 @@ class VmlxFP16(runtimes.Vmlx):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--kv-cache-quantization", "none"])
         return tuple(cmd)
 
@@ -126,9 +135,12 @@ class VmlxFP8(runtimes.Vmlx):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--kv-cache-quantization", "q8"])
         return tuple(cmd)
 
@@ -140,9 +152,12 @@ class VmlxINT4(runtimes.Vmlx):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--kv-cache-quantization", "q4"])
         return tuple(cmd)
 

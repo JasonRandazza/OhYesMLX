@@ -235,13 +235,14 @@ _RANK_PLACES = dict(CARD_FIELDS)
 
 # The run-header pins the grid's first join guard compares across columns. A header carries
 # these and the workloads it measured, and nothing else -- a pin belongs here on the day one
-# exists, and four did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c),
-# `cache_state` (plan 06-02) and `kv_quant` (study 03-05). The first two were pinned in the
-# header and left out of this tuple, so an N=8 run and a 32k-prompt run would each have joined a
-# grid of their opposite without a word; the last two are here from the day they were written.
-# Every one of the four is a property of how the run drove its cells, which is exactly why the
-# grid may not join runs that disagree about it -- and the last two are one cache's two
-# questions, so two runs of one cell under different codecs are a codec sweep's columns and
+# exists, and six did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c),
+# `cache_state` (plan 06-02), `kv_quant` (study 03-05), `mtp_depth` and `stream_experts`
+# (studies 03-06 and 03-03). The first two were pinned in the header and left out of this
+# tuple, so an N=8 run and a 32k-prompt run would each have joined a grid of their opposite
+# without a word; the last four are here from the day they were written. Every one of the six
+# is a property of how the run drove its cells, which is exactly why the grid may not join runs
+# that disagree about it -- and the last four are two mechanisms' two questions each, so two
+# runs of one cell under different codecs, depths or streaming states are a sweep's columns and
 # never one grid.
 PIN_FIELDS = (
     "temperature",
@@ -253,6 +254,8 @@ PIN_FIELDS = (
     "prompt_tokens",
     "cache_state",
     "kv_quant",
+    "mtp_depth",
+    "stream_experts",
 )
 
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
@@ -1389,21 +1392,24 @@ def _footnotes() -> list[str]:
 
 
 # What a pin is worth on a header that predates it. `concurrency`, `prompt_tokens`,
-# `cache_state` and `kv_quant` are the four that arrived after runs existed: every header written
-# before them drove its requests one at a time and sized no prompt at all and ran each runtime's
-# own cache default and its own KV codec, so `1`, `None`, `None` and `None` are what those runs
-# did rather than defaults standing in for something unknown -- which is what separates them from
-# an absent `temperature`, whose absence is a header this guard cannot compare. The two `None`s
-# are the pair that matters most here: an absent pin is not `"off"`, because the runs it stands
-# for were not uniform -- the Osaurus grid columns ran with its prefix cache ON -- so reading the
-# absence as a state would fold two different cache states into one column and call them a sweep,
-# and the same is true one cache down of a codec nobody pinned. Every one of the four is the
-# absence being the fact: `ABSENT_PINS` is where that is written once.
+# `cache_state`, `kv_quant`, `mtp_depth` and `stream_experts` are the six that arrived after runs
+# existed: every header written before them drove its requests one at a time and sized no prompt
+# at all and ran each runtime's own cache default and its own KV codec and its own MTP default
+# and its own expert default, so `1` and five `None`s are what those runs did rather than
+# defaults standing in for something unknown -- which is what separates them from an absent
+# `temperature`, whose absence is a header this guard cannot compare. The `None`s are the ones
+# that matter most here: an absent pin is not `"off"`, because the runs it stands for were not
+# uniform -- the Osaurus grid columns ran with its prefix cache ON, OptiQ's default expert mode
+# is `auto`, and vMLX runs MTP on any bundle that carries the heads -- so reading an absence as
+# a state would fold two different states into one column and call them a sweep. Every one of
+# the six is the absence being the fact: `ABSENT_PINS` is where that is written once.
 ABSENT_PINS = {
     "concurrency": 1,
     "prompt_tokens": None,
     "cache_state": None,
     "kv_quant": None,
+    "mtp_depth": None,
+    "stream_experts": None,
 }
 
 # The four entry states as the two joined tables spell them out: the grid and the sweep print
@@ -2012,11 +2018,18 @@ def _recommendation(rows: list[dict], rank: str) -> str | None:
 # --- the Phase 6 sweep ----------------------------------------------------------------------
 
 # The header pins a sweep may vary, and the whole of the list. A cell is `(format, runtime)`,
-# and all four of these are properties of how a run *drove* its cells rather than of a cell:
+# and all six of these are properties of how a run *drove* its cells rather than of a cell:
 # that is why they are header pins, why `--study` can name none of them, and why a sweep is N
 # runs differing in exactly one of them. Anything else a header carries is held by guard 1 like
 # any other pin, so a "sweep" of `temperature` would be a grid with a pin quietly uncompared.
-SWEEP_PINS = ("concurrency", "prompt_tokens", "cache_state", "kv_quant")
+SWEEP_PINS = (
+    "concurrency",
+    "prompt_tokens",
+    "cache_state",
+    "kv_quant",
+    "mtp_depth",
+    "stream_experts",
+)
 
 # What each swept pin holds, in words a reader of the rendered sweep can act on.
 SWEPT_PIN = {
@@ -2028,6 +2041,11 @@ SWEPT_PIN = {
     "kv_quant": "which codec the runtime's KV cache was held in, as the start command pinned "
     "it -- `off` for the runtime's own full-precision cache, `affine8`/`affine4` for MLX's "
     "affine codec at that width",
+    "mtp_depth": "the native-MTP draft depth the runtime's heads were pinned at, as the start "
+    "command pinned it -- `off` for MTP not running, `1`/`2`/`3` for that many draft tokens per "
+    "verify cycle under the fixed policy",
+    "stream_experts": "whether MoE expert weights were streamed from SSD on demand or held "
+    "resident, as the start command pinned it and the runtime's own log confirmed it",
 }
 
 # What each sweep holds constant while the pin moves, and -- for the one pin that moves
@@ -2063,6 +2081,22 @@ SWEEP_HELD = {
         "verifying a host setting -- which are named beside the values, in "
         "`runtimes.KV_QUANTS` and each runtime's refusal."
     ),
+    "mtp_depth": (
+        "Every other pin is identical across these runs, and so is every workload down to its "
+        "prompt and its cap, so the columns differ only in the draft depth the runtime's MTP "
+        "heads were pinned at. No prompt is relaxed, and every depth column is only rendered on "
+        "an artifact whose MTP heads the runtime will wire -- a bundle without them is `N/A` "
+        "with the reason, never a depth measured as plain autoregressive "
+        "(`runtimes.vmlx_mtp_refusal`)."
+    ),
+    "stream_experts": (
+        "Every other pin is identical across these runs, and so is every workload down to its "
+        "prompt and its cap, so the columns differ only in whether expert weights were streamed "
+        "from SSD or held resident. No prompt is relaxed. The `on` column is the one place a "
+        "header pin is confirmed by the server rather than by its own command line, so an `on` "
+        "cell whose log does not show streaming is `FAIL` with that log quoted "
+        "(`runtimes.STREAM_EXPERTS`)."
+    ),
 }
 
 # A swept pin's values in the order they are read, for the pins whose order is not their
@@ -2071,10 +2105,14 @@ SWEEP_HELD = {
 # order is pinned here rather than left to the words' spelling, which happens to sort the same
 # way today and would stop the moment a third value arrived. A codec sweep reads the same way
 # one cache down: `off` is the baseline -- the runtime's own full-precision cache -- and the
-# codec columns follow in `runtimes.KV_QUANTS`' order, which a test holds this tuple to.
+# codec columns follow in `runtimes.KV_QUANTS`' order, which a test holds this tuple to. The
+# two after it are the same reading again: `off` first, then the depths in `runtimes.MTP_DEPTHS`
+# order and `on` after `off` in `runtimes.STREAM_EXPERTS`'.
 SWEEP_VALUES = {
     "cache_state": ("off", "on"),
     "kv_quant": ("off", "affine8", "affine4"),
+    "mtp_depth": ("off", "1", "2", "3"),
+    "stream_experts": ("off", "on"),
 }
 
 
@@ -2100,7 +2138,8 @@ def render_sweep(
     disagree about.
 
     A **cell** is `(format, runtime)`, and *varying* is neither of those: `concurrency`,
-    `prompt_tokens`, `cache_state` and `kv_quant` are properties of how a run drove its cells, so
+    `prompt_tokens`, `cache_state`, `kv_quant`, `mtp_depth` and `stream_experts` are properties
+    of how a run drove its cells, so
     they live in the header. A sweep is N run directories differing in exactly that pin, joined
     afterwards. Guard 1 is the grid's, with the swept pin skipped, and beside it sit the two
     refusals a sweep needs and a grid has no use for: a pin holding one value across every run
@@ -2119,12 +2158,15 @@ def render_sweep(
     down: its columns are meant to answer the same prompt under one codec and then another, so
     what they cannot carry is each runtime's own side effects of reaching the codec it was
     pinned to, which are named beside the values in `runtimes.KV_QUANTS` and each runtime's
-    refusal.
+    refusal. `mtp_depth` and `stream_experts` relax nothing and add nothing beside the values:
+    the `on` column's evidence is a floor on the cell, not a caveat on the table
+    (`runtimes.STREAM_EXPERTS`).
 
     The columns ascend, because that is the reading: a prompt that got longer or batches that
     got wider says nothing while the table is in command-line order. A pin with an order of its
     own reads in that order — `cache_state`'s `off` before its `on`, and `kv_quant`'s `off`
-    before its codecs, the baseline column first because it is what the others are read against.
+    before its codecs, `mtp_depth`'s `off` before its depths and `stream_experts`' `off` before
+    its `on`, the baseline column first because it is what the others are read against.
     Entries are the ``rank`` metric,
     formatted by the same functions the grid formats its own with, so `—`, `FAIL` and
     `no value` mean here exactly what they mean there.

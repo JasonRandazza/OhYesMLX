@@ -1016,12 +1016,48 @@ weight index.
 The harness currently passes (`Optiq.start_command`):
 `--model`, `--host`, `--port`, `--no-anthropic`, `--no-responses`, `--no-auth`,
 `--max-context off` (8192 before 2026-09-16), `--max-concurrent 1`, `--idle-timeout 0`,
-`--context-scale 1.0`, `--no-stream-experts`, `--temp 0 --top-p 1 --top-k 0 --min-p 0`, and
+`--context-scale 1.0`, `--no-stream-experts` or `--stream-experts` (header pin 03-03, below),
+`--temp 0 --top-p 1 --top-k 0 --min-p 0`, and
 `--prompt-cache-size 0` or `10` when the run pins a cache state.
 
 **Done since this document was written:** the four sampler flags, which this table used to list
 as its first priority, are now in the command — every key `merge_into_argv` forwards is already
 in argv, so nothing is injected (§7.2).
+
+### 9.1 `--stream-experts` is now a header pin, and the log is its evidence (03-03)
+
+`--stream-experts` is no longer a flag this harness happens to pass: it is the header pin
+`--stream-experts {off,on}`, and `--no-stream-experts` stays in the command for `off` and for an
+absent pin — which is what keeps every recorded command byte-identical. `auto` is deliberately
+**not** a value of the pin: it is the flag's own default (`None` → `"auto"`, `cli.py:2607-2615`,
+`:3095-3096`), and taking that decision away from the runtime is what the pin is for. `off` is a
+complete opt-out rather than a partial one — `mode == "off"` returns before anything is
+installed (`serve.py:1629-1630`) — while `auto` streams a MoE the moment its weights exceed 0.70
+of total RAM (`moe_stream.py:621-634`).
+
+**The flag is not evidence that anything streamed, so the cell is checked against the log.**
+Every fallback here is silent by design: `_wants()` false takes the resident path with no line
+at all (`serve.py:1641-1643`, the fall-through the codebase documents against itself at
+`moe_stream.py:344-352`), and a streaming attempt that raises prints one line and loads
+resident (`serve.py:1688-1692`). The harness therefore reads the head of this start's own log
+after readiness and before the first request, and **FAILs an `on` cell with that log quoted**
+unless **both** of these are in it:
+
+```
+[optiq.serve] SSD expert streaming: on
+[optiq.serve] SSD expert streaming: pre-loaded <path>
+```
+
+Both are required, and the first alone is why: the mode banner is printed at startup, before the
+model is inspected (`cli.py:3095-3101`), so on a model `is_streamable_moe` answers `False` for
+it appears and nothing streams. The pre-load line is printed only when the model was really
+built through `load_streaming` (`serve.py:1654-1662`) — and note its own failure twin,
+`streaming pre-load failed (…); the server will try at first request`, which is a fallback and
+not a success.
+
+**Not moved by this pin:** `--stream-experts-cache` stays at its `0` default, so a streamed cell
+is the uncached streaming path; and `--kv-bits` still installs the fused streaming-KV path
+(§7.7), which is a different mechanism with a similar name.
 
 | Add | Why |
 |---|---|

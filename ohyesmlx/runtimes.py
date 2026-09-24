@@ -40,6 +40,13 @@ where the names and why they are codec names are defined). ``kv_quant=None`` is 
 taken and leaves every command byte-identical to the ones recorded before it existed; a value a
 runtime cannot deliver is refused up front rather than approximated into a neighbouring codec --
 see :meth:`Runtime.kv_quant_refusal`.
+
+Two more pins of the same shape follow, one decode-side and one load-side: ``mtp_depth``
+(:data:`MTP_DEPTHS`) and ``stream_experts`` (:data:`STREAM_EXPERTS`). Each carries a second
+question the two above do not have, because each flag is accepted on a model that silently falls
+back: a depth is only MTP if the artifact carries the heads (:func:`vmlx_mtp_refusal`, before
+anything starts), and ``on`` is only streaming if the server's own log says so
+(:meth:`Runtime.stream_experts_missing`, after it).
 """
 
 from __future__ import annotations
@@ -59,6 +66,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .osaurus_settings import (
+    DEFAULT_CONFIG_DIR as OSAURUS_CONFIG_DIR,
+    MISSING as OSAURUS_MISSING,
+    UNREADABLE as OSAURUS_UNREADABLE,
     capture_osaurus_settings,
     describe_drift,
     diff_against_baseline,
@@ -82,6 +92,20 @@ KILL_GRACE_S = 5.0
 # ponytail: a dump longer than this hides the fatal line again; the upgrade path is a
 # forward scan that stops at the first failure line instead of reading a window.
 LOG_TAIL_BYTES = 1024 * 1024
+
+# How much of a runtime's log a *startup banner* check reads, from the START of the file. The
+# two windows are not interchangeable and neither is a second copy of the other: a failure line
+# scrolls out of a head, and a banner scrolls out of a tail. Measured over the 781 logs in
+# results/logs, every line this check reads sits in the first 8,088 bytes -- OptiQ's mode banner
+# at 787 and its pre-load line at 978 (results/logs/optiq-20260920T023332-73621.log), vMLX's
+# `Flash MoE enabled:` at 8,088 (results/logs/vmlx-20260920T023513-73621.log) -- and the startup
+# banner furthest into any log here is `Native MTP:` at 33,786
+# (results/logs/vmlx-20260915T134352-32665.log). A tail window would miss all of them: the log
+# that reaches 3,532,257 bytes keeps its head 2.4 MiB below where one would start
+# (results/logs/vmlx-20260918T042800-77766.log, `Native MTP:` at 11,154). A banner beyond this
+# window is missed, and the direction that fails is a FAILed cell rather than a published number
+# under a pin the runtime does not hold.
+LOG_HEAD_BYTES = 1024 * 1024
 
 LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
@@ -125,6 +149,94 @@ KV_QUANT_OFF = "off"
 KV_QUANT_AFFINE8 = "affine8"
 KV_QUANT_AFFINE4 = "affine4"
 KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
+
+# The MTP-depth pin's values, and the whole of them. vMLX is the only runtime here with a
+# multi-token-prediction depth to pin -- its native in-model MTP heads draft N tokens per verify
+# cycle -- and the values are the depths it accepts plus its own explicit off:
+#
+#   `off`  MTP not running: vMLX's own kill switch, `--disable-native-mtp` (cli.py:1662-1667)
+#   `1`    one draft token per verify cycle: `--native-mtp-depth 1 --native-mtp-depth-policy fixed`
+#   `2`, `3`  the same at those depths
+#
+# The values are strings, `off` beside `1`/`2`/`3`, because the set is a word and three numbers
+# and the header value is compared exactly -- the same shape `cache_state` and `kv_quant` have.
+# They are not a bit width and not a count of tokens: `--native-mtp-depth` is documented as
+# "Starting depth for native in-model MTP heads on preserved-MTP bundles" (cli.py:4304-4314) and
+# is capped at `native_mtp_max_depth()`, 3 by default (native_mtp.py:28-44).
+#
+# **The policy is part of the value and not a second pin.** vMLX's default policy is `adaptive`,
+# which "may also lower the depth on measured acceptance and tries depth 1 once against the
+# configured depth's measured cost, keeping the measured winner" (cli.py:4324-4331) -- so depth
+# can change *within* one request and a cell measured under it is not a cell at depth N.
+# `--native-mtp-depth-policy fixed` is therefore passed with every depth, and the adaptive path
+# is not reachable through this pin.
+#
+# `None` is not a value: it is the pin not taken -- those runs measured vMLX's own default, which
+# for a bundle carrying MTP heads is *not* `off` -- and it is never read as `off`.
+MTP_DEPTH_OFF = "off"
+MTP_DEPTHS = ("off", "1", "2", "3")
+
+# vMLX's own MTP family gate, copied deliberately and cited: `_RUNTIME_SUPPORTED_FAMILIES`
+# (native_mtp.py:64-79) is the set of families whose draft/verify path vMLX actually wires, and
+# `_FAMILY_ALIAS` (native_mtp.py:49-55) is how it normalises their spellings. An artifact can
+# carry MTP heads in a family outside this set -- vMLX's own status for one is
+# `weights_present_runtime_unwired` (native_mtp.py:1110-1117), and its source records the
+# bundles that hit it as measured: "Nemotron 3.5 Lightning (JANG_2L/4M/6M, 34 mtp.layers.0.*
+# tensors, num_nextn_predict_layers=1) and Inkling ... ran plain autoregressive with nothing in
+# the log to say why" (native_mtp.py:1296-1303) -- and a depth cell there would publish a depth
+# the decode never used. This is a copy rather than an import: the table lives
+# inside the app bundle, importing it pulls the whole engine in (see :meth:`Vmlx.version_command`)
+# and reading its source at run time would be worse. The ceiling is that a vMLX release adding a
+# family makes this refuse a cell that could have been measured, which is the conservative
+# direction; the upgrade path is to re-read the table from the bundle on each release.
+VMLX_MTP_FAMILIES = (
+    "qwen3_5",
+    "qwen3_5_moe",
+    "qwen4_exp",
+    "hy_v3",
+    "glm5_next",
+    "dots3_note",
+)
+VMLX_MTP_FAMILY_ALIASES = {
+    "qwen3_5_text": "qwen3_5",
+    "qwen3_6": "qwen3_5",
+    "qwen3_6_text": "qwen3_5",
+    "qwen3_5_moe_text": "qwen3_5_moe",
+    "qwen4_exp_text": "qwen4_exp",
+}
+
+# The expert-streaming pin's values, and the whole of them. `on` means the runtime is streaming
+# MoE expert weights from SSD on demand instead of holding the fused expert tensors resident --
+# OptiQ's `--stream-experts` (optiq/cli.py:3095-3104) and vMLX's `--flash-moe`
+# (vmlx_engine/cli.py:3963-3970). `off` means it is not, and for both of these it is a flag that
+# has to be passed rather than a default left alone: OptiQ's own default is `auto`, which streams
+# a MoE the moment its weights exceed 0.70 of total RAM (`--stream-experts/--no-stream-experts`
+# defaults to `None` -> `auto`, optiq/cli.py:2607-2615 and :3095-3096; identical weights then
+# decode ~5x slower, with nothing in the artifact explaining it), and vMLX's `--flash-moe`
+# is `default=False` (cli.py:3966, and `FlashMoEConfig.enabled: bool = False` at
+# flash_moe_config.py:29) -- which is why the harness has pinned `--no-stream-experts` since
+# before this pin existed.
+#
+# **Both runtimes fall back to a resident load silently**, so neither flag is evidence that
+# streaming happened and each runtime's own log is: OptiQ's `[optiq.serve] SSD expert streaming:
+# on` plus `pre-loaded <path>` (cli.py:3101, serve.py:1654-1662) and vMLX's `Flash MoE enabled:
+# <n> layers patched` (server.py:8996-9002). A cell whose log does not show it is FAIL, quoted
+# from that log -- see :meth:`Runtime.stream_experts_missing`.
+#
+# `None` is not a value here either: it is the pin not taken, and the runs measured before it
+# existed left each runtime's own default in place -- OptiQ's `auto` for the two cells measured
+# without the harness's `--no-stream-experts`, and vMLX's off. Those are not one state.
+STREAM_EXPERTS_OFF = "off"
+STREAM_EXPERTS_ON = "on"
+STREAM_EXPERTS = (STREAM_EXPERTS_OFF, STREAM_EXPERTS_ON)
+
+# Osaurus's `concurrency.smeltMode` is the one place its expert behaviour is decided, and it is
+# host state: the enum is `engineSelected | disabled | flashMoE | ssdStreaming`
+# (docs/runtimes/osaurus.md:298, and the same four words are in the app binary's key table). It
+# is NOT one of `osaurus_settings.TRACKED_KEYS`, so the drift gate does not attest it and the
+# refusal below reads it directly. Only `disabled` is a state in which nothing about experts is
+# being changed underneath the cell.
+OSAURUS_SMELT_DISABLED = "disabled"
 
 # Loopback-only key for a run-owned oMLX. Not a shared secret, and not user state.
 OMLX_API_KEY = "ohyesmlx-local"
@@ -351,10 +463,243 @@ def _read_log(path: Path) -> str:
         return ""
 
 
+def _read_log_head(path: Path) -> str:
+    """The head of a runtime's log, or ``""`` when there is nothing to read yet.
+
+    The startup banner's window, not the failure line's: see :data:`LOG_HEAD_BYTES`.
+    """
+    try:
+        with open(path, "rb") as log:
+            return log.read(LOG_HEAD_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _stream_evidence(
+    name: str,
+    log_path: str | None,
+    *,
+    required: tuple[str, ...],
+    fallback: tuple[str, ...],
+) -> str | None:
+    """Why a runtime's log does not show expert streaming, or ``None`` when it does.
+
+    ``required`` is every line the runtime prints when streaming is really on, and ``fallback``
+    is the lines it prints instead when it is not -- the same set that makes a flag in a command
+    no evidence at all. A log that carries no fallback line either says so rather than quoting
+    nothing: the absence is the finding, and the log path is what a reader follows.
+    """
+    if log_path is None:
+        return (
+            f"stream_experts='on' cannot be verified on {name}: this run was started without a "
+            "log path, and the runtime's own banner is the evidence that streaming is on rather "
+            "than falling back to a resident load. This cell is FAIL rather than a number "
+            "published under a pin nothing checked."
+        )
+    text = _read_log_head(Path(log_path))
+    missing = [marker for marker in required if marker not in text]
+    if not missing:
+        return None
+    quoted = next(
+        (
+            line.strip()
+            for line in text.splitlines()
+            if any(marker in line for marker in fallback)
+        ),
+        None,
+    )
+    if quoted is None:
+        # The absence is the finding and the cause is not known, so it is not guessed at: the
+        # line this check reads may simply be beyond the head window (see LOG_HEAD_BYTES).
+        return (
+            f"stream_experts='on' was not delivered: {name}'s own log never printed "
+            f"{missing[0]!r}, and it says nothing about why. The flag was accepted, so this "
+            "cell is FAIL rather than a number published under a pin nothing confirmed "
+            f"(log: {log_path})."
+        )
+    return (
+        f"stream_experts='on' was not delivered: {name}'s own log never printed "
+        f"{missing[0]!r}, and it says {quoted!r} instead. The flag was accepted and the load "
+        "fell back to the resident path, so this cell is FAIL rather than a number published "
+        f"under a pin it does not hold (log: {log_path})."
+    )
+
+
+def _read_json_object(path: Path) -> dict | None:
+    """One JSON object off disk, or ``None`` when it is absent, unreadable or not an object."""
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _log_path(name: str) -> Path:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%S")
     return LOGS_DIR / f"{name}-{stamp}-{os.getpid()}.log"
+
+
+def osaurus_smelt_mode() -> object:
+    """The host's ``concurrency.smeltMode``, which decides Osaurus's expert behaviour.
+
+    Not one of ``osaurus_settings.TRACKED_KEYS``, so the drift gate does not attest it and it is
+    read here instead: the same file, and the same two sentinels, so an unreadable host is
+    visibly unreadable rather than indistinguishable from a default one. The enum is
+    ``engineSelected | disabled | flashMoE | ssdStreaming`` (:data:`OSAURUS_SMELT_DISABLED`) --
+    one of them changes how many experts are resident, and none of them is visible in a start
+    command.
+    """
+    payload = _read_json_object(OSAURUS_CONFIG_DIR / "server-runtime.json")
+    if payload is None:
+        return OSAURUS_UNREADABLE
+    cursor: object = payload
+    for part in ("concurrency", "smeltMode"):
+        if not isinstance(cursor, dict) or part not in cursor:
+            return OSAURUS_MISSING
+        cursor = cursor[part]
+    return cursor
+
+
+def vmlx_mtp_refusal(artifact_dir: str) -> str | None:
+    """Why vMLX cannot be measured at an MTP depth on this artifact, or ``None`` when it can.
+
+    Four checks, each cited where it is applied and each with its own reason below: the family
+    must be one vMLX wires (``native_mtp.py:64-79``), the bundle must not declare MTP dropped
+    (``:883-925``), the config must declare an MTP layer (``:538-546``), and the index must carry
+    ``mtp.*`` tensors (``:606-611``). Together they are vMLX's own ``artifact_available`` and
+    ``runtime_supported`` (``:1012-1021``) read off the files, and the reason they are read here
+    rather than from the log is vMLX's own measured note (``native_mtp.py:1296-1303``): a bundle
+    that declares MTP but is not runtime-supported "used to deactivate in total silence, so the
+    model ran plain autoregressive with nothing in the log to say why", and the banner is still
+    skipped altogether for a ``not_configured`` bundle (``cli.py:2441``).
+
+    The accepted case is a bundle on this host: ``models--JANGQ-AI--Qwen3.5-4B-JANG_4S`` declares
+    one MTP layer, indexes 31 ``mtp.layers.0.*`` tensors under family ``qwen3_5``, and its
+    recorded start log carries ``Qwen3.5/3.6 MTP model adapter applied``
+    (results/logs/vmlx-20260924T032906-11424.log:38).
+
+    # ponytail: an artifact with no ``model.safetensors.index.json`` cannot be enumerated, so a
+    # depth cell on one is refused. vMLX reads the safetensors headers directly for those
+    # (``native_mtp.py:189-212``, ``safe_open``), a dependency this harness does not carry; the
+    # upgrade path is a header reader over that format's own 8-byte length prefix.
+    """
+    bundle = Path(artifact_dir)
+    config = _read_json_object(bundle / "config.json")
+    if config is None:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: there is no readable config.json, so "
+            "the MTP layers the depth would apply to cannot be established from the artifact. "
+            "vMLX accepts --native-mtp-depth on a bundle with no MTP heads and decodes plain "
+            "autoregressive without saying so, so this cell is N/A at a depth rather than "
+            "measured as MTP."
+        )
+    jang = _read_json_object(bundle / "jang_config.json") or {}
+    if not jang:
+        # The sidecar may be embedded in config.json instead of standing beside it
+        # (native_mtp.py:95-106).
+        embedded = config.get("jang_config", config.get("jang"))
+        jang = embedded if isinstance(embedded, dict) else {}
+
+    # The family, resolved the way `_bundle_family` resolves it (native_mtp.py:236-248): the
+    # stamped capability first, then the config's own model_type, then the one under text_config.
+    capabilities = jang.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, dict) else {}
+    text_config = config.get("text_config")
+    text_config = text_config if isinstance(text_config, dict) else {}
+    family = None
+    for raw in (capabilities.get("family"), config.get("model_type"), text_config.get("model_type")):
+        name = str(raw).strip().lower() if isinstance(raw, str) and raw.strip() else None
+        if name:
+            family = VMLX_MTP_FAMILY_ALIASES.get(name, name)
+            if family != "unknown":
+                break
+    if family not in VMLX_MTP_FAMILIES:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: its family is {family or 'unstated'}, "
+            f"and vMLX wires an MTP draft/verify path for {VMLX_MTP_FAMILIES} only "
+            "(native_mtp.py:64-79). A bundle outside that set reads "
+            "'weights_present_runtime_unwired' (native_mtp.py:1110-1117) even when its MTP "
+            "heads are on disk, so a depth cell here would publish a depth the decode never "
+            "used. This cell is N/A at a depth rather than measured as MTP."
+        )
+
+    # Whether the bundle drops MTP, by every route `native_mtp_status` reads it
+    # (native_mtp.py:883-925): the explicit boolean, the sidecar's own flags and stamped mode,
+    # and the runtime block's `bundle_has_mtp`.
+    mtp_sidecar = jang.get("mtp") if isinstance(jang.get("mtp"), dict) else {}
+    runtime_sidecar = jang.get("runtime") if isinstance(jang.get("runtime"), dict) else {}
+    stamped_mode = str(mtp_sidecar.get("mtp_mode") or "").strip().lower()
+    dropped = (
+        jang.get("drop_mtp") is True
+        or mtp_sidecar.get("enabled") is False
+        or mtp_sidecar.get("kept") is False
+        or stamped_mode in {"none", "absent", "disabled", "off"}
+        or runtime_sidecar.get("bundle_has_mtp") is False
+    )
+    if dropped:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: the bundle declares MTP dropped -- "
+            "jang_config.drop_mtp, mtp.enabled/kept, the stamped mtp.mtp_mode or "
+            "runtime.bundle_has_mtp says so (native_mtp.py:883-925) -- so no draft head is "
+            "loaded and a depth cell here would publish a depth the decode never used. This "
+            "cell is N/A at a depth rather than measured as MTP."
+        )
+
+    # Whether the config asks for MTP layers at all, from every source
+    # `_config_mtp_layer_count` reads (native_mtp.py:537-571): the config and its text_config,
+    # then the sidecar's own counts.
+    declared = None
+    for raw in (
+        config.get("num_nextn_predict_layers"),
+        config.get("mtp_num_hidden_layers"),
+        text_config.get("num_nextn_predict_layers"),
+        text_config.get("mtp_num_hidden_layers"),
+        runtime_sidecar.get("mtp_layers"),
+        mtp_sidecar.get("num_layers"),
+        mtp_sidecar.get("num_hidden_layers"),
+    ):
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            declared = value
+            break
+    if declared is None:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: neither config.json nor "
+            "jang_config.json declares an MTP layer -- num_nextn_predict_layers, "
+            "mtp_num_hidden_layers, runtime.mtp_layers or mtp.num_layers (native_mtp.py:537-571) "
+            "-- so vMLX's own status for this bundle is 'metadata_inconsistent' or "
+            "'configured_without_runtime' (native_mtp.py:1071-1072, :1130) and its decode runs "
+            "without a draft head. This cell is N/A at a depth rather than measured as MTP."
+        )
+
+    # Whether the weights carry MTP tensors, by the key pattern `_mtp_keys_from_weight_keys`
+    # matches (native_mtp.py:606-611). The index is the only enumeration available without a
+    # dependency; see the ceiling note above.
+    index = _read_json_object(bundle / "model.safetensors.index.json")
+    weight_map = index.get("weight_map") if isinstance(index, dict) else None
+    if not isinstance(weight_map, dict):
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: the artifact has no readable "
+            "model.safetensors.index.json, so its tensors cannot be enumerated and the MTP "
+            "heads a depth would drive cannot be shown to exist. This cell is N/A at a depth "
+            "rather than measured as MTP."
+        )
+    mtp_keys = [
+        str(key) for key in weight_map if re.search(r"(^|\.)mtp(\.|$)", str(key))
+    ]
+    if not mtp_keys:
+        return (
+            f"mtp_depth cannot be pinned on {artifact_dir}: its safetensors index holds no "
+            "mtp.* tensors, so vMLX loads no draft head however the depth flag is spelled "
+            "(native_mtp.py:944, :1012-1018) and its own banner is suppressed for a "
+            "not_configured bundle (cli.py:2441). A depth cell here would decode plain "
+            "autoregressive and publish as MTP; it is N/A at a depth instead."
+        )
+    return None
 
 
 def log_load_error(text: str) -> str | None:
@@ -657,6 +1002,12 @@ class Handle:
     # answers an unauthenticated /v1/chat/completions with 401, and the readiness probe
     # authenticating while the measurement did not is how that went unnoticed.
     api_key: str | None = None
+    # Where this start's stdout and stderr went. It is the server's own account of itself --
+    # the readiness rule already reads it for a load failure -- and it is the only place a
+    # pin the runtime can silently decline is visible: OptiQ and vMLX both accept an
+    # expert-streaming flag on a model they cannot stream and fall back without failing
+    # anything. ``None`` on a handle built without a spawn.
+    log_path: str | None = None
 
     @property
     def memory_pid(self) -> int:
@@ -690,6 +1041,8 @@ class Runtime:
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
         raise NotImplementedError
 
@@ -718,6 +1071,54 @@ class Runtime:
         there, codec names rather than widths. The default is ``None`` for the shape
         :class:`Optiq` has, whose own start flags drive all three values; the four runtimes
         that cannot are the four that override this.
+        """
+        return None
+
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """Why this runtime cannot be measured at *mtp_depth*, or ``None`` when it can.
+
+        The default refuses every depth, the opposite of :meth:`kv_quant_refusal`'s default and
+        for the opposite reason: vMLX is the only runtime here with a depth to pin
+        (:data:`MTP_DEPTHS`), so an override is what accepts one. ``off`` and the absent pin
+        reach every runtime -- ``off`` is MTP not running, which is what a runtime with no MTP
+        delivers.
+
+        *artifact_dir* is required rather than optional: vMLX's answer is decided from the
+        artifact (:func:`vmlx_mtp_refusal`), so a caller that could omit it could omit the check.
+        The four runtimes that refuse every depth ignore it.
+        """
+        if mtp_depth in (None, MTP_DEPTH_OFF):
+            return None
+        return (
+            f"mtp_depth={mtp_depth!r} asks for a native-MTP draft depth, and {self.name} has no "
+            "MTP depth to pin: vMLX is the only runtime here whose own start command carries "
+            "one (--native-mtp-depth, cli.py:4304-4314). So this cell is N/A at a depth rather "
+            "than measured at one it does not hold."
+        )
+
+    def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
+        """Why this runtime cannot be measured in *stream_experts*, or ``None`` when it can.
+
+        The default refuses ``on``: a runtime with no expert-streaming surface has no flag that
+        turns one on, and the two that do -- OptiQ and vMLX -- are the two that override this.
+        ``off`` and the absent pin reach every runtime.
+        """
+        if stream_experts in (None, STREAM_EXPERTS_OFF):
+            return None
+        return (
+            f"stream_experts={stream_experts!r} asks for SSD expert streaming, and {self.name} "
+            "has no start-command surface that turns it on. So this cell is N/A in this state "
+            "rather than measured in another one."
+        )
+
+    def stream_experts_missing(
+        self, stream_experts: str | None, log_path: str | None
+    ) -> str | None:
+        """Why this runtime's own log does not show expert streaming, or ``None`` when it does.
+
+        The second half of the ``on`` pin, asked after the start and before the first request:
+        see :data:`STREAM_EXPERTS` and :func:`_stream_evidence`. The default needs no evidence --
+        a runtime that refuses ``on`` never reaches an ``on`` cell.
         """
         return None
 
@@ -753,11 +1154,18 @@ class Runtime:
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[tuple[str, ...], str | None]:
         """The argv to spawn, plus any scratch tree a stop will have to remove."""
         return (
             self.start_command(
-                artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+                artifact_dir,
+                model_id,
+                cache_state=cache_state,
+                kv_quant=kv_quant,
+                mtp_depth=mtp_depth,
+                stream_experts=stream_experts,
             ),
             None,
         )
@@ -822,6 +1230,8 @@ class Runtime:
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> Handle:
         """Spawn the runtime, hold until it can answer, and return its handle.
 
@@ -829,9 +1239,11 @@ class Runtime:
         pin not taken and produces the command this method produced before the pin existed.
         The refusal is not made here: :meth:`cache_state_refusal` is the measurement loop's to
         ask, before it starts anything, so a state this runtime cannot be driven into is
-        recorded as ``N/A`` with its reason rather than raised as a start failure. *kv_quant*
-        is the same kind of pin and is threaded the same way -- ``None`` is no codec flag at
-        all -- and :meth:`kv_quant_refusal` is likewise the loop's to ask.
+        recorded as ``N/A`` with its reason rather than raised as a start failure. *kv_quant*,
+        *mtp_depth* and *stream_experts* are the same kind of pin and are threaded the same way
+        -- ``None`` is no flag at all -- and their refusals are likewise the loop's to ask.
+        *stream_experts*' second half is asked by the loop as well, after this returns: see
+        :meth:`stream_experts_missing`.
         """
         if not _port_is_free(self.port):
             raise RuntimeStartError(
@@ -846,7 +1258,12 @@ class Runtime:
             )
         self.check_host_state()
         command, scratch = self.build_command(
-            artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+            artifact_dir,
+            model_id,
+            cache_state=cache_state,
+            kv_quant=kv_quant,
+            mtp_depth=mtp_depth,
+            stream_experts=stream_experts,
         )
         log_path = _log_path(self.name)
         started = _now()
@@ -885,6 +1302,7 @@ class Runtime:
             stop_command=self.stop_command(),
             scratch=scratch,
             api_key=self.api_key(),
+            log_path=str(log_path),
         )
 
 
@@ -925,10 +1343,13 @@ class MlxLm(Runtime):
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        # `off` and the absent pin are one command here and it is the one this runtime always
-        # built: there is no flag to add for either, which is the whole of kv_quant_refusal
-        # below. No codec value reaches this method -- the loop asks first and skips the cell.
+        # `off` and the absent pin are one command here for all three of the codec, depth and
+        # streaming pins -- there is no flag to add for any of them, which is the whole of the
+        # refusals below. No codec value, no depth and no `on` reaches this method: the loop
+        # asks first and skips the cell.
         return (
             "python",
             "-m",
@@ -980,6 +1401,34 @@ class MlxLm(Runtime):
         absolute = str(Path(os.path.abspath(artifact_dir)))
         return _ordered((absolute, model_id), name_forms(artifact_dir))
 
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """Accept ``off`` -- the only state this server has. A negative claim, so the reason
+        below is made from the source and not from the absence of a flag."""
+        if mtp_depth in (None, MTP_DEPTH_OFF):
+            return None
+        return (
+            f"mtp_depth={mtp_depth!r} asks for a native-MTP draft depth, and mlx_lm.server "
+            "0.31.3 has no MTP at all: its 23 options include none for MTP, no MTP cache or "
+            "draft head exists in it, and the string 'mtp' does not occur in server.py. The "
+            "depth, its adaptive policy and the preserved-MTP bundle handling are vMLX's patch "
+            "layer over this same package. So this cell is N/A at a depth rather than measured "
+            "at one the decode never used."
+        )
+
+    def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
+        """Accept ``off`` -- there is no expert-streaming path here to be off. Same negative
+        claim, same standard: the reason below is read from the source."""
+        if stream_experts in (None, STREAM_EXPERTS_OFF):
+            return None
+        return (
+            f"stream_experts={stream_experts!r} asks for SSD expert streaming, and "
+            "mlx_lm.server 0.31.3 has no such path: 'expert' does not occur in server.py, its "
+            "expert weights are ordinary resident tensors, and nothing in it loads them from "
+            "disk per token. The streaming loader is OptiQ's, patched onto this server from the "
+            "outside (optiq/serve.py:1623-1633). So this cell is N/A in this state rather than "
+            "measured in one this runtime cannot hold."
+        )
+
 
 class Osaurus(Runtime):
     """The one runtime with no tuning flags to pin, and host settings instead."""
@@ -991,12 +1440,13 @@ class Osaurus(Runtime):
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
         # No model and no tuning on the command line: what a cell measures is decided by
-        # ~/.osaurus/config, which check_host_state refuses to run away from. The cache pin
-        # and the KV-codec pin are two more of those settings, so neither adds a flag here in
-        # any state -- and the states they cannot be asked for are refused by
-        # cache_state_refusal and kv_quant_refusal below, never faked.
+        # ~/.osaurus/config, which check_host_state refuses to run away from. All four pins are
+        # more of those settings, so none adds a flag here in any state -- and the states they
+        # cannot be asked for are refused by the refusals below, never faked.
         return ("osaurus", "serve", "--port", str(self.port), "--yes")
 
     def cache_state_refusal(self, cache_state: str | None) -> str | None:
@@ -1077,6 +1527,69 @@ class Osaurus(Runtime):
     def version_command(self) -> tuple[str, ...]:
         return ("osaurus", "doctor", "--json", "--redact")
 
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """Refuse a depth; accept ``off`` only where the host forces MTP off.
+
+        Osaurus is the one runtime here with an MTP mode to be in, so its ``off`` is not a
+        statement of fact the way mlx-lm's is, and both reasons are below. ``mtp.mode`` is a
+        tracked key, so it is read through the same capture the drift gate attests with; the
+        depth itself is the host setting ``mtp.explicitDepth``, which the harness does not edit.
+        """
+        if mtp_depth is None:
+            return None
+        if mtp_depth != MTP_DEPTH_OFF:
+            return (
+                f"mtp_depth={mtp_depth!r} cannot be driven on Osaurus: it exposes no "
+                "start-command flag for MTP in either direction, and the depth is the host "
+                "setting mtp.explicitDepth, which 'must be 1, 2, or 3' "
+                "(docs/runtimes/osaurus.md:344) in ~/.osaurus/config/server-runtime.json. The "
+                "harness does not edit the host's settings, so this cell is N/A at a depth "
+                "rather than measured at one it does not hold."
+            )
+        live = capture_osaurus_settings().get("server-runtime.json:mtp.mode")
+        if live == "force_off":
+            return None
+        return (
+            "mtp_depth='off' needs Osaurus's MTP forced off, and the host has mtp.mode "
+            f"{live!r} in ~/.osaurus/config/server-runtime.json. Osaurus exposes no "
+            "start-command flag for MTP, and its mtp.mode 'auto' runs a draft head on any "
+            "bundle that carries one (docs/runtimes/osaurus.md:307, :900-901) -- so a restart "
+            "would not make this cell MTP-free and the harness does not edit the host's "
+            "settings. This cell is N/A in this state rather than measured in another one."
+        )
+
+    def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
+        """Refuse ``on``; accept ``off`` only where the host is not changing how many experts
+        are resident.
+
+        The one setting is ``concurrency.smeltMode`` (:data:`OSAURUS_SMELT_DISABLED`), which is
+        not one of ``osaurus_settings.TRACKED_KEYS`` and is therefore read here rather than
+        through the drift gate. Both reasons are below.
+        """
+        if stream_experts is None:
+            return None
+        if stream_experts == STREAM_EXPERTS_ON:
+            return (
+                "stream_experts='on' cannot be driven on Osaurus: its expert streaming is the "
+                "host setting concurrency.smeltMode, whose enum is engineSelected | disabled | "
+                "flashMoE | ssdStreaming (docs/runtimes/osaurus.md:298), and no start-command "
+                "flag reaches it in either direction. The harness does not edit the host's "
+                "settings, so this cell is N/A in this state rather than measured in another "
+                "one. A restart is not a way to turn it on: a fresh process has no expert "
+                "weights cached, so restarting would label a resident cell as a streaming one."
+            )
+        live = osaurus_smelt_mode()
+        if live == OSAURUS_SMELT_DISABLED:
+            return None
+        return (
+            "stream_experts='off' needs Osaurus's concurrency.smeltMode at 'disabled', and the "
+            f"host has {live!r} in ~/.osaurus/config/server-runtime.json. 'flashMoE' and "
+            "'ssdStreaming' are this pin's `on`, and 'engineSelected' leaves the choice to the "
+            "engine, which for a large MoE may be streaming -- so a cell measured now could be "
+            "streaming experts under a header pin that says it is not. This cell is N/A in this "
+            "state rather than measured in another one."
+        )
+
     def parse_version(self, output: str) -> str:
         try:
             payload = json.loads(output)
@@ -1136,6 +1649,8 @@ class Omlx(Runtime):
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
         # `off` here is structural and adds nothing: the per-run base path this runtime is
         # handed holds no model_settings.json, so turboquant_kv_enabled sits at its False
@@ -1202,6 +1717,45 @@ class Omlx(Runtime):
     def version_command(self) -> tuple[str, ...]:
         return ("omlx", "--version")
 
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """Refuse a depth; accept ``off`` with no flag change.
+
+        ``off`` is structural rather than a pin, like the codec above: the per-run base path
+        holds no ``model_settings.json``, so ``mtp_enabled`` sits at its default. The reason
+        below is the whole of the depth side.
+        """
+        if mtp_depth in (None, MTP_DEPTH_OFF):
+            return None
+        return (
+            f"mtp_depth={mtp_depth!r} cannot be driven on oMLX: MTP is the per-model settings "
+            "field mtp_num_draft_tokens (model_settings.py:308) with no flag in omlx/cli.py at "
+            "all, and the field is not even a fixed depth -- an adaptive controller picks 1..max "
+            "per sequence from rolling acceptance and latency estimates "
+            "(model_settings.py:304-307). Reaching it would mean writing the scratch's "
+            "model_settings.json or calling the admin route, which is a second variable beside "
+            "this pin. So this cell is N/A at a depth rather than measured at one the decode "
+            "may never have used. `off` needs no flag: the per-run base path holds no "
+            "model_settings.json, which leaves mtp_enabled False."
+        )
+
+    def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
+        """Refuse ``on`` -- oMLX has no expert-streaming surface, and the reason below names
+        the mechanism that is easy to mistake for one."""
+        if stream_experts in (None, STREAM_EXPERTS_OFF):
+            return None
+        return (
+            f"stream_experts={stream_experts!r} asks for SSD expert streaming, and oMLX has no "
+            "such surface: no option in omlx/cli.py names experts, no module in the package "
+            "mentions expert streaming, and expert weights are resident tensors to its engine. "
+            "The mechanism it does have that resembles this one is burst decode -- "
+            "server.burst_decode_mode -> OMLX_DECODE_BURST_* (settings.py:148-162, exported by "
+            "cli.py:179-182, read at engine construction engine_core.py:176-188) -- and that "
+            "sets how many decode steps are coalesced before a delta is emitted, not where the "
+            "expert weights live (docs/runtimes/omlx.md:798-841). It is a different mechanism, "
+            "so this cell is N/A in this state rather than measured under a pin it does not "
+            "hold."
+        )
+
     def api_key(self) -> str | None:
         return OMLX_API_KEY
 
@@ -1218,12 +1772,19 @@ class Omlx(Runtime):
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[tuple[str, ...], str | None]:
         scratch = create_omlx_scratch(artifact_dir, model_id)
         command = tuple(
             str(scratch.catalog) if part == OMLX_CATALOG_TOKEN else part
             for part in self.start_command(
-                artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+                artifact_dir,
+                model_id,
+                cache_state=cache_state,
+                kv_quant=kv_quant,
+                mtp_depth=mtp_depth,
+                stream_experts=stream_experts,
             )
         )
         return command + (
@@ -1244,6 +1805,8 @@ class Optiq(Runtime):
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
         # The KV-codec pin, in the flags OptiQ consumes itself -- these are its own options and
         # are not forwarded to the mlx_lm.server underneath it. `off` is the absence of both
@@ -1257,6 +1820,12 @@ class Optiq(Runtime):
             kv = ("--kv-bits", "8", "--kv-group-size", "64")
         elif kv_quant == KV_QUANT_AFFINE4:
             kv = ("--kv-bits", "4", "--kv-group-size", "64")
+        # Both states are explicit rather than an absence, because OptiQ's own default is
+        # `auto` -- never leave it there (`STREAM_EXPERTS`). `on` is the flag that asks for
+        # streaming, and the flag is not the evidence: see `stream_experts_missing`.
+        stream = ("--no-stream-experts",)
+        if stream_experts == STREAM_EXPERTS_ON:
+            stream = ("--stream-experts",)
         # NOT moved by this pin: enabling KV quantization also installs OptiQ's fused
         # streaming-KV path unless `--no-fused-kv` is passed (optiq/cli.py:2729-2739) -- one
         # layer converted at a time, plus a FlashAttention-2 SDPA the runtime's own header
@@ -1286,10 +1855,7 @@ class Optiq(Runtime):
             "0",
             "--context-scale",
             "1.0",
-            # OptiQ turns --stream-experts on by itself when model_disk_bytes exceeds
-            # 0.70 * total_RAM; identical weights then decode ~5x slower with nothing in
-            # the artifact explaining it. Pin it off; never leave it auto.
-            "--no-stream-experts",
+            *stream,
             "--temp",
             "0",
             "--top-p",
@@ -1306,6 +1872,56 @@ class Optiq(Runtime):
 
     def version_command(self) -> tuple[str, ...]:
         return ("optiq", "--version")
+
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """Refuse a depth -- OptiQ is stock mlx-lm underneath, and mlx-lm has no MTP. The reason
+        below is the whole of it, and ``off`` adds nothing: nothing was going to draft."""
+        if mtp_depth in (None, MTP_DEPTH_OFF):
+            return None
+        return (
+            f"mtp_depth={mtp_depth!r} asks for a native-MTP draft depth, and OptiQ has none to "
+            "pin: it is a fork over the same mlx_lm.server 0.31.3 this harness runs as mlxlm "
+            "(unknown options are forwarded to that server's own argparse, optiq/cli.py:2332, "
+            ":2571, :3030), and that server has no MTP path. No draft head exists for a depth "
+            "to apply to, so this cell is N/A at a depth rather than measured at one the decode "
+            "never used."
+        )
+
+    def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
+        """Accept both values: OptiQ is the runtime this pin was written for.
+
+        ``off`` is its own flag, needed because the flag's default is ``auto``
+        (:data:`STREAM_EXPERTS`); ``on``'s truth is settled from the log rather than from the
+        flag, in :meth:`stream_experts_missing`.
+        """
+        return None
+
+    def stream_experts_missing(
+        self, stream_experts: str | None, log_path: str | None
+    ) -> str | None:
+        """``on`` is only streaming if the log says so, twice -- the mode banner alone is
+        printed before the model is even inspected (``optiq/cli.py:3095-3101``).
+
+        OptiQ accepts ``--stream-experts`` on a model it cannot stream and takes the resident
+        path without failing anything (``optiq/serve.py:1641-1643``, ``:1688-1692``), which is
+        why the flag is not evidence. What the two required lines mean, and every fallback line
+        quoted when they are absent, is the tuple below; :func:`_stream_evidence` reads them.
+        """
+        if stream_experts != STREAM_EXPERTS_ON:
+            return None
+        return _stream_evidence(
+            self.name,
+            log_path,
+            required=(
+                "[optiq.serve] SSD expert streaming: on",
+                "[optiq.serve] SSD expert streaming: pre-loaded",
+            ),
+            fallback=(
+                "expert streaming failed",
+                "streaming pre-load failed",
+                "SSD expert streaming: auto",
+            ),
+        )
 
     def parse_version(self, output: str) -> str:
         """`optiq --version` answers `mlx-optiq, version 0.5.6`, not a bare `0.5.6`.
@@ -1386,6 +2002,8 @@ class Vmlx(Runtime):
         *,
         cache_state: str | None = None,
         kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
         # The KV-codec pin's one explicit off in this set, and the only value of the three this
         # runtime can be driven into: `--kv-cache-quantization none` is a real accepted value
@@ -1416,6 +2034,22 @@ class Vmlx(Runtime):
         jit = ("--no-jit",)
         if os.environ.get("OHYESMLX_VMLX_ENABLE_JIT") == "1":
             jit = ("--enable-jit",)
+        # The absent pin and `off` pass the kill switch, which is what keeps their command
+        # byte-identical to the recorded ones; the depths and their fixed policy are
+        # `MTP_DEPTHS`'. Whether a depth is honest on this artifact is not this method's
+        # question: see `vmlx_mtp_refusal`.
+        mtp = ("--disable-native-mtp",)
+        if mtp_depth in MTP_DEPTHS[1:]:
+            mtp = (
+                "--native-mtp-depth",
+                mtp_depth,
+                "--native-mtp-depth-policy",
+                "fixed",
+            )
+        # Off by default and opt-in (`STREAM_EXPERTS`), so the absent pin and `off` pass nothing
+        # while `on` is the flag -- and the flag is not the evidence: see
+        # `stream_experts_missing`.
+        flash = ("--flash-moe",) if stream_experts == STREAM_EXPERTS_ON else ()
         return (
             "vmlx",
             "serve",
@@ -1438,17 +2072,14 @@ class Vmlx(Runtime):
             "--continuous-batching",
             "--max-num-seqs",
             "1",
-            # MTP is decided by the artifact when left alone — it turns itself on for a bundle
-            # carrying MTP heads — and it re-tunes its own depth mid-request. That would make
-            # two cells of this runtime differ by something that is not the variable being
-            # measured, which is the same hazard `jit` above defaults away from.
             *jit,
-            "--disable-native-mtp",
+            *mtp,
             *prefix,
             # A cache hit is invisible to Observation, which carries no cached_tokens, so it
             # would publish as prefill throughput. The block disk cache also survives restarts
             # and is trimmed synchronously inside cold load, on a 22 GB cache that is not ours.
             "--disable-block-disk-cache",
+            *flash,
             *kv,
         )
 
@@ -1491,6 +2122,57 @@ class Vmlx(Runtime):
         # the whole engine and measured 9.2s, which start() times as part of cold load, and
         # cold load is a published metric that must not carry harness overhead.
         return ("sed", "-n", VMLX_VERSION_SED, VMLX_ENGINE_INIT)
+
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """The one runtime a depth can be driven into, and the one whose refusal is about the
+        *artifact* rather than a missing flag: a depth is decided by :func:`vmlx_mtp_refusal`,
+        which names the check that failed. ``off`` and the absent pin pass the kill switch and
+        need no artifact check.
+        """
+        if mtp_depth in (None, MTP_DEPTH_OFF):
+            return None
+        return vmlx_mtp_refusal(artifact_dir)
+
+    def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
+        """Accept both values: ``--flash-moe`` is a real flag and its default is off
+        (:data:`STREAM_EXPERTS`).
+
+        The two side effects are the runtime's own and stay out of the pin's way: the flag is
+        mutually exclusive with ``--smelt`` and ``--distributed`` (cli.py:2565-2573), neither of
+        which this command passes, and the engine skips ``mx.compile`` while it is active
+        (server.py:6565-6568) -- the command passes ``--no-jit`` unconditionally, so both states
+        are un-JITed and this flag is the only thing that moves. What it cannot be trusted to be
+        is *on*: see :meth:`stream_experts_missing`.
+        """
+        return None
+
+    def stream_experts_missing(
+        self, stream_experts: str | None, log_path: str | None
+    ) -> str | None:
+        """``on`` is only streaming if the log shows the layers were patched.
+
+        vMLX accepts ``--flash-moe`` on a model it cannot stream and carries on -- every such
+        outcome logs one line and loads resident, and those lines are the ``fallback`` tuple
+        below. The line printed only when layers were patched is among the runtime's own
+        (``server.py:8996-9002``), and it is in the log before the runtime can answer: the
+        patching is applied at the readiness barrier, ahead of the yield that opens the port
+        (``server.py:6176-6177``, :6199).
+        """
+        if stream_experts != STREAM_EXPERTS_ON:
+            return None
+        return _stream_evidence(
+            self.name,
+            log_path,
+            required=("Flash MoE enabled:",),
+            fallback=(
+                "Flash MoE: model has no MoE layers, skipping",
+                "Flash MoE: no MoE layers found to patch",
+                "--flash-moe is not supported on JANGTQ",
+                "Flash MoE: could not find raw model in engine",
+                "Flash MoE: refusing to patch",
+                "Flash MoE setup failed",
+            ),
+        )
 
     def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
         # vMLX strips a path to its last two components, or to org/repo for an HF cache path.

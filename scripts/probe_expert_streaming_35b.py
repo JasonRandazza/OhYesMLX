@@ -134,9 +134,12 @@ class OptiqResident(runtimes.Optiq):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         if "--no-stream-experts" not in cmd:
             cmd.append("--no-stream-experts")
         return tuple(cmd)
@@ -150,9 +153,12 @@ class OptiqStreaming(runtimes.Optiq):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         if "--no-stream-experts" in cmd:
             cmd.remove("--no-stream-experts")
         cmd.append("--stream-experts")
@@ -167,9 +173,12 @@ class OptiqStreamingCached(runtimes.Optiq):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         if "--no-stream-experts" in cmd:
             cmd.remove("--no-stream-experts")
         cmd.extend(["--stream-experts", "--stream-experts-cache", "64"])
@@ -191,9 +200,12 @@ class VmlxFlashMoE(runtimes.Vmlx):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--flash-moe", "--flash-moe-slot-bank", "64"])
         return tuple(cmd)
 
@@ -206,9 +218,12 @@ class VmlxSmelt(runtimes.Vmlx):
 
     def start_command(
         self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
-        kv_quant: str | None = None,
+        kv_quant: str | None = None, mtp_depth: str | None = None,
+        stream_experts: str | None = None,
     ) -> tuple[str, ...]:
-        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
+        cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state,
+                                         mtp_depth=mtp_depth,
+                                         stream_experts=stream_experts))
         cmd.extend(["--smelt", "--smelt-experts", "50"])
         return tuple(cmd)
 

@@ -98,7 +98,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import __version__, coherence, runtimes, sample, token_counter, transport
-from .runtimes import CACHE_STATES, KV_QUANTS, RuntimeStopError
+from .runtimes import CACHE_STATES, KV_QUANTS, MTP_DEPTHS, STREAM_EXPERTS, RuntimeStopError
 
 # Imported at runtime, not under TYPE_CHECKING: load_run rebuilds a record with the class
 # that wrote it, from transport.py itself rather than from a re-bound module handle.
@@ -421,6 +421,8 @@ def run_cells(
     concurrency: int = 1,
     cache_state: str | None = None,
     kv_quant: str | None = None,
+    mtp_depth: str | None = None,
+    stream_experts: str | None = None,
     cooldown_s: float = 30.0,
     prompt_tokens: dict | None = None,
     results_dir: str,
@@ -466,6 +468,14 @@ def run_cells(
     ``fp8`` is not one of them are defined), and a codec a runtime cannot deliver is ``N/A``
     with that reason rather than approximated into a neighbouring one.
 
+    ``mtp_depth`` and ``stream_experts`` are the same kind of field again
+    (:data:`runtimes.MTP_DEPTHS`, :data:`runtimes.STREAM_EXPERTS`), with one addition each: a
+    depth is only MTP if the artifact carries the heads, so its refusal is handed the cell's
+    directory (:meth:`runtimes.Runtime.mtp_depth_refusal`), and ``on`` is only streaming if the
+    server's own log says so, which is asked after the start and before the first request
+    (:meth:`runtimes.Runtime.stream_experts_missing`). An ``on`` cell whose log does not show it
+    is ``FAIL`` with that log quoted, never a number published under a pin it does not hold.
+
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
     are written to ``<results_dir>/results.jsonl`` after every visit, so a run that dies still
@@ -495,6 +505,22 @@ def run_cells(
             "measured before the pin existed ran each runtime's own codec, and those were not "
             "uniform. The values name a codec rather than a bit width, so a value no runtime "
             "here delivers is refused rather than rounded to a neighbouring one"
+        )
+    if mtp_depth not in (None, *MTP_DEPTHS):
+        raise ValueError(
+            f"mtp_depth must be one of {MTP_DEPTHS} or None, not {mtp_depth!r}: None is the "
+            "pin not taken and not a value, and it is not 'off' either -- the runs measured "
+            "before the pin existed ran vMLX at its own default, which on a bundle carrying MTP "
+            "heads is not off. The depths are strings because the set is one word and three "
+            "numbers, and they are not a count of tokens: they are the draft heads' depth, "
+            "pinned with the fixed policy"
+        )
+    if stream_experts not in (None, *STREAM_EXPERTS):
+        raise ValueError(
+            f"stream_experts must be one of {STREAM_EXPERTS} or None, not {stream_experts!r}: "
+            "None is the pin not taken and not a synonym for 'off' -- the runs measured before "
+            "the pin existed left each runtime's own default in place, and OptiQ's default is "
+            "'auto', which streams a large MoE without being asked"
         )
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
@@ -532,6 +558,11 @@ def run_cells(
         # pin not taken, never `"off"`. The value names and why `fp8` is not among them live at
         # `runtimes.KV_QUANTS`.
         "kv_quant": kv_quant,
+        # The MTP draft depth and the expert-streaming state the cells were driven into, and the
+        # same reading of an absence: `None` is the pin not taken, never a value. Both sets are
+        # `runtimes.MTP_DEPTHS`' and `runtimes.STREAM_EXPERTS`'.
+        "mtp_depth": mtp_depth,
+        "stream_experts": stream_experts,
         "cooldown_s": cooldown_s,
     }
 
@@ -555,7 +586,8 @@ def run_cells(
         try:
             outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
                              concurrency=concurrency, cache_state=cache_state,
-                             kv_quant=kv_quant, counters=counters)
+                             kv_quant=kv_quant, mtp_depth=mtp_depth,
+                             stream_experts=stream_experts, counters=counters)
         except BaseException:
             write_jsonl(results, results_path, run=run)
             raise
@@ -656,6 +688,8 @@ def _visit(
     concurrency: int,
     cache_state: str | None,
     kv_quant: str | None,
+    mtp_depth: str | None,
+    stream_experts: str | None,
     counters: dict,
 ) -> str:
     """One visit to one cell, returning ``"measured"``, ``"retry"`` or ``"skip"``.
@@ -667,12 +701,18 @@ def _visit(
     that will not load is usually deterministic, but a port still held by a stale server is
     not — and the samples already taken, if any, stand.
 
-    The requested cache state and the requested KV codec are asked of the runtime before
-    anything is started, and a state or a codec the runtime cannot be driven into is ``"skip"``
-    with the reason on every row: a cell whose host disagrees with either is not a cell that is
-    briefly unavailable, and measuring it anyway would publish a number under a header pin it
-    does not hold. The checks are the runtime's to answer because only it knows its mechanism —
-    a start flag, or for Osaurus a settings file the harness does not edit.
+    The requested cache state, KV codec, MTP depth and expert-streaming state are asked of the
+    runtime before anything is started, and a value it cannot be driven into is ``"skip"`` with
+    the reason on every row -- measuring it anyway would publish a number under a header pin it
+    does not hold. The checks are the runtime's to answer because only it knows its mechanism: a
+    start flag, an artifact it will wire, or for Osaurus a settings file the harness does not
+    edit.
+
+    ``stream_experts`` has a second half no refusal can carry -- ``on`` is only true if the
+    server said so in its own log, and the log does not exist until after the start. That check
+    therefore runs between the start and the first request, and a cell it fails is ``FAIL`` with
+    the log quoted and is not visited again: the answer is a property of the model and the flag,
+    so a second start would buy the same log and one more model load.
     """
     runtime = runtimes.RUNTIMES.get(cell.runtime)
     if runtime is None:
@@ -700,6 +740,18 @@ def _visit(
             _na(result, refusal)
         return "skip"
 
+    refusal = runtime.mtp_depth_refusal(mtp_depth, cell.artifact_dir)
+    if refusal is not None:
+        for result in results:
+            _na(result, refusal)
+        return "skip"
+
+    refusal = runtime.stream_experts_refusal(stream_experts)
+    if refusal is not None:
+        for result in results:
+            _na(result, refusal)
+        return "skip"
+
     handle = None
     try:
         try:
@@ -710,6 +762,8 @@ def _visit(
                 cell.artifact_dir,
                 cache_state=cache_state,
                 kv_quant=kv_quant,
+                mtp_depth=mtp_depth,
+                stream_experts=stream_experts,
             )
         except RuntimeStopError:
             raise
@@ -728,6 +782,15 @@ def _visit(
             if result.cold_load_s is None:
                 result.cold_load_s = handle.cold_load_s
                 result.runtime_version = handle.version
+
+        # The second half of the `on` pin, and the earliest it can be asked: the log exists now
+        # and no request has been made yet. The start's own facts stay on the row while the
+        # verdict is FAIL with the log quoted.
+        missing = runtime.stream_experts_missing(stream_experts, handle.log_path)
+        if missing is not None:
+            for result in results:
+                result.status, result.reason = "FAIL", missing
+            return "skip"
 
         for result, workload in zip(results, workloads):
             memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
@@ -1210,18 +1273,20 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
     Line 1 is the run header — temperature, seed, warmup, measured, concurrency, prompt_tokens,
-    cache_state, kv_quant, cooldown_s and every workload that was measured, each with the messages
-    it sent and its own max_tokens (a single run-level cap would be a half-truth once three
-    workloads carry three of them). ``warmup`` is the rule that was in force, as a dict, or the
-    integer budget a caller pinned instead; which one it is is what tells a reader how to read
-    ``warmup_count``. ``measured`` counts batches and ``concurrency`` says how many requests are
-    in one, so the two together are how many requests a row holds — and ``concurrency`` is what
-    a sweep varies and a join guard compares, because it is a property of how the run drove the
-    cells, not of a cell. ``prompt_tokens`` rides beside it for the same reason: one prompt
-    length, recorded with the count it achieved. ``cache_state`` does too: it is the state the
-    cells were started in, and its absence is the pin not taken rather than a state.
-    ``kv_quant`` is the same field one cache down — the codec the cells' KV caches were held in,
-    with the same reading of its absence — and the value names are ``runtimes.KV_QUANTS``'.
+    cache_state, kv_quant, mtp_depth, stream_experts, cooldown_s and every workload that was
+    measured, each with the messages it sent and its own max_tokens (a single run-level cap
+    would be a half-truth once three workloads carry three of them). ``warmup`` is the rule that
+    was in force, as a dict, or the integer budget a caller pinned instead; which one it is is
+    what tells a reader how to read ``warmup_count``. ``measured`` counts batches and
+    ``concurrency`` says how many requests are in one, so the two together are how many requests
+    a row holds — and ``concurrency`` is what a sweep varies and a join guard compares, because
+    it is a property of how the run drove the cells, not of a cell. ``prompt_tokens`` rides
+    beside it for the same reason: one prompt length, recorded with the count it achieved.
+    ``cache_state`` does too: it is the state the cells were started in, and its absence is the
+    pin not taken rather than a state. ``kv_quant`` is the same field one cache down — the codec
+    the cells' KV caches were held in, with the same reading of its absence — and the value names
+    are ``runtimes.KV_QUANTS``'. ``mtp_depth`` and ``stream_experts`` are the two after it, with
+    the same reading of an absence again (``runtimes.MTP_DEPTHS``, ``runtimes.STREAM_EXPERTS``).
 
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything

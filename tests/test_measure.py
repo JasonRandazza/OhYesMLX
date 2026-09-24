@@ -86,7 +86,8 @@ class Recorder:
 
 
 class FakeHandle:
-    def __init__(self, runtime, model_id, port, version, cold_load_s, recorder, api_key=None):
+    def __init__(self, runtime, model_id, port, version, cold_load_s, recorder, api_key=None,
+                 log_path=None):
         self.pid = 40000 + port
         self.memory_pid = self.pid
         self.port = port
@@ -100,6 +101,9 @@ class FakeHandle:
         self.runtime = runtime
         self.recorder = recorder
         self.api_key = api_key
+        # Where the server's own output went. The real handle always has one; a fake with none
+        # is the case the ``on`` evidence check has to report rather than pass.
+        self.log_path = log_path
         self.stops = 0
 
     def stop(self):
@@ -112,7 +116,9 @@ class FakeRuntime:
 
     def __init__(self, name, recorder, *, port=8081, version="0.31.3", cold_load_s=7.5,
                  start_error=None, fail_from_attempt=None, fail_attempts=(),
-                 cache_state_refusals=None, kv_quant_refusals=None, api_key=None):
+                 cache_state_refusals=None, kv_quant_refusals=None,
+                 mtp_depth_refusals=None, stream_experts_refusals=None,
+                 stream_experts_missing=None, log_path=None, api_key=None):
         self.name = name
         self.port = port
         self.version = version
@@ -131,6 +137,17 @@ class FakeRuntime:
         # reading: the absent pin reaches every runtime, and the real ones that refuse a codec
         # are four of the five.
         self.kv_quant_refusals = dict(kv_quant_refusals or {})
+        # ``{value: reason}`` for the MTP depths this runtime cannot be driven into -- which is
+        # every depth on four of the five real runtimes, and on vMLX every depth whose artifact
+        # does not show MTP the runtime will wire.
+        self.mtp_depth_refusals = dict(mtp_depth_refusals or {})
+        # ``{value: reason}`` for the expert-streaming states this runtime cannot hold.
+        self.stream_experts_refusals = dict(stream_experts_refusals or {})
+        # What this runtime's own log would say about an `on` cell: ``None`` for a runtime whose
+        # log settles it (the real OptiQ and vMLX read a file), or a reason for one whose log
+        # does not.
+        self.stream_experts_missing_reason = stream_experts_missing
+        self.log_path = log_path
         self.api_key = api_key
 
     def cache_state_refusal(self, cache_state):
@@ -139,9 +156,26 @@ class FakeRuntime:
     def kv_quant_refusal(self, kv_quant):
         return self.kv_quant_refusals.get(kv_quant)
 
-    def start(self, artifact_dir, model_id, *, cache_state=None, kv_quant=None):
+    def mtp_depth_refusal(self, mtp_depth, artifact_dir):
+        # The artifact is the second half of this refusal's question, so it is recorded: a test
+        # asserting the loop handed the cell's own directory is asserting the check can run.
+        self.recorder.log("mtp_depth_refusal", self.name, mtp_depth, artifact_dir)
+        return self.mtp_depth_refusals.get(mtp_depth)
+
+    def stream_experts_refusal(self, stream_experts):
+        return self.stream_experts_refusals.get(stream_experts)
+
+    def stream_experts_missing(self, stream_experts, log_path):
+        if stream_experts != "on":
+            return None
+        self.recorder.log("stream_experts_missing", self.name, log_path)
+        return self.stream_experts_missing_reason
+
+    def start(self, artifact_dir, model_id, *, cache_state=None, kv_quant=None,
+              mtp_depth=None, stream_experts=None):
         self.attempts += 1
-        self.recorder.log("start", self.name, artifact_dir, model_id, cache_state, kv_quant)
+        self.recorder.log("start", self.name, artifact_dir, model_id, cache_state, kv_quant,
+                          mtp_depth, stream_experts)
         if self.start_error is not None and self._fails(self.attempts):
             raise self.start_error
         handle = FakeHandle(
@@ -152,6 +186,7 @@ class FakeRuntime:
             self.cold_load_s,
             self.recorder,
             api_key=self.api_key,
+            log_path=self.log_path,
         )
         self.handles.append(handle)
         return handle
@@ -353,9 +388,8 @@ def harness(monkeypatch, tmp_path):
 def starts(harness):
     return [
         runtime
-        for runtime, _artifact_dir, _model_id, _cache_state, _kv_quant in harness.recorder.of(
-            "start"
-        )
+        for runtime, _artifact_dir, _model_id, _cache_state, _kv_quant, _depth, _stream
+        in harness.recorder.of("start")
     ]
 
 
@@ -363,7 +397,8 @@ def started_cache_states(harness):
     """The cache state every start was asked for, in order."""
     return [
         cache_state
-        for _runtime, _artifact, _model, cache_state, _kv_quant in harness.recorder.of("start")
+        for _runtime, _artifact, _model, cache_state, _kv_quant, _depth, _stream
+        in harness.recorder.of("start")
     ]
 
 
@@ -371,7 +406,26 @@ def started_kv_quants(harness):
     """The KV codec every start was asked for, in order, `None` for the pin not taken."""
     return [
         kv_quant
-        for _runtime, _artifact, _model, _cache_state, kv_quant in harness.recorder.of("start")
+        for _runtime, _artifact, _model, _cache_state, kv_quant, _depth, _stream
+        in harness.recorder.of("start")
+    ]
+
+
+def started_mtp_depths(harness):
+    """The MTP depth every start was asked for, in order, `None` for the pin not taken."""
+    return [
+        depth
+        for _runtime, _artifact, _model, _cache_state, _kv_quant, depth, _stream
+        in harness.recorder.of("start")
+    ]
+
+
+def started_stream_experts(harness):
+    """The expert-streaming state every start was asked for, in order."""
+    return [
+        stream
+        for _runtime, _artifact, _model, _cache_state, _kv_quant, _depth, stream
+        in harness.recorder.of("start")
     ]
 
 
@@ -1255,9 +1309,11 @@ def test_a_stop_error_while_finishing_a_visit_is_persisted_and_ends_the_run(harn
     succeeding = harness.add_runtime("mlxlm", port=8081)
     original_start = failing.start
 
-    def start_with_stop_failure(artifact_dir, model_id, *, cache_state=None, kv_quant=None):
+    def start_with_stop_failure(artifact_dir, model_id, *, cache_state=None, kv_quant=None,
+                                mtp_depth=None, stream_experts=None):
         handle = original_start(
-            artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+            artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant,
+            mtp_depth=mtp_depth, stream_experts=stream_experts,
         )
         handle.stop = lambda: (_ for _ in ()).throw(RuntimeStopError("stop unverified"))
         return handle
@@ -1519,9 +1575,11 @@ def test_exception_after_runtime_start_still_stops_handle(harness):
         def __getattr__(self, name):
             return getattr(self._handle, name)
 
-    def start(artifact_dir, model_id, *, cache_state=None, kv_quant=None):
+    def start(artifact_dir, model_id, *, cache_state=None, kv_quant=None, mtp_depth=None,
+              stream_experts=None):
         handle = BrokenVersionHandle(
-            original_start(artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant)
+            original_start(artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant,
+                           mtp_depth=mtp_depth, stream_experts=stream_experts)
         )
         handles.append(handle)
         return handle
@@ -2795,6 +2853,210 @@ def test_a_refused_cache_state_is_reported_before_a_codec_is_considered(harness)
     assert "cache.prefix.enabled" in results[0].reason
     assert harness.recorder.of("start") == []
     assert started_kv_quants(harness) == []
+
+
+# ---------------------------------------------------------------------------------------
+# The MTP-depth and expert-streaming pins (studies 03-06 and 03-03)
+# ---------------------------------------------------------------------------------------
+#
+# The same shape as the two cache pins, with one addition each: a depth is only MTP if the
+# artifact carries MTP heads the runtime will wire, and `on` is only streaming if the server's
+# own log says so. The first is asked before the start and is handed the cell's artifact
+# directory; the second is asked after it, because the log it reads does not exist before.
+
+
+def test_the_run_header_pins_the_mtp_depth_and_the_streaming_state(harness):
+    """Two more header pins, and two more absences that are not values: `None` is the pin not
+    taken, never `off`. It is not `off` for a reason a reader can act on -- vMLX's own default
+    on a bundle with MTP heads is not off, and OptiQ's own expert default is `auto`."""
+    harness.add_runtime("vmlx", port=8000)
+    cell = harness.cell("jang__vmlx", "vmlx")
+
+    harness.run([cell], measured=1, mtp_depth="3", stream_experts="on")
+    header = harness.header()
+    assert header["mtp_depth"] == "3"
+    assert header["stream_experts"] == "on"
+    assert measure.load_run(harness.results_file())[0]["mtp_depth"] == "3"
+    assert measure.load_run(harness.results_file())[0]["stream_experts"] == "on"
+
+    harness.run([cell], measured=1, mtp_depth="off", stream_experts="off",
+                results_dir=harness.tmp_path / "plain")
+    assert harness.header(harness.tmp_path / "plain")["mtp_depth"] == "off"
+    assert harness.header(harness.tmp_path / "plain")["stream_experts"] == "off"
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "unpinned")
+    unpinned = harness.header(harness.tmp_path / "unpinned")
+    assert unpinned["mtp_depth"] is None, "an absent pin is the absence, not the 'off' value"
+    assert unpinned["stream_experts"] is None
+    assert unpinned["mtp_depth"] != "off"
+    assert unpinned["stream_experts"] != "off"
+
+
+def test_every_start_is_asked_for_the_runs_depth_and_streaming_state(harness):
+    """Both pins reach the runtime in every value and as no value at all: `None` is no flag,
+    which is what keeps a run that never named them byte-identical to one from before they
+    existed."""
+    harness.add_runtime("vmlx", port=8000)
+    cell = harness.cell("jang__vmlx", "vmlx")
+
+    harness.run([cell], measured=1, mtp_depth="2", stream_experts="on")
+    assert started_mtp_depths(harness) == ["2"]
+    assert started_stream_experts(harness) == ["on"]
+
+    harness.run([cell], measured=1, mtp_depth="off", stream_experts="off",
+                results_dir=harness.tmp_path / "plain")
+    assert started_mtp_depths(harness) == ["2", "off"]
+    assert started_stream_experts(harness) == ["on", "off"]
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "unpinned")
+    assert started_mtp_depths(harness) == ["2", "off", None]
+    assert started_stream_experts(harness) == ["on", "off", None]
+
+
+def test_a_depth_the_runtime_cannot_be_driven_into_is_na_with_its_reason(harness):
+    """The same path an unknown runtime and a refused codec take, and nothing is started: a
+    depth the runtime cannot hold is not a cell that is briefly unavailable."""
+    harness.add_runtime(
+        "mlxlm",
+        mtp_depth_refusals={
+            "3": "mlx_lm.server 0.31.3 has no MTP at all, so no depth applies to anything"
+        },
+    )
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    results = harness.run([cell], mtp_depth="3")
+
+    assert [result.status for result in results] == ["N/A"]
+    assert "no MTP" in results[0].reason
+    assert results[0].observations == []
+    assert harness.recorder.of("start") == [], "a refused depth starts no runtime"
+    assert measure.load_run(harness.results_file())[1][0].reason == results[0].reason
+
+    # The value the runtime can hold is measured as usual: the refusal is about the depth
+    # asked for, not about the cell.
+    harness.run([cell], measured=1, mtp_depth="off", results_dir=harness.tmp_path / "plain")
+    assert started_mtp_depths(harness) == ["off"]
+
+
+def test_a_depth_refusal_is_asked_with_the_cells_own_artifact_directory(harness):
+    """vMLX's answer is decided from the artifact on disk, so the refusal is handed the cell's
+    own directory rather than being able to ask without it -- a caller that could omit it could
+    omit the check."""
+    runtime = harness.add_runtime("vmlx", port=8000)
+    cell = harness.cell("jang__vmlx", "vmlx")
+
+    harness.run([cell], measured=1, mtp_depth="1")
+
+    asked = harness.recorder.of("mtp_depth_refusal")
+    assert asked == [("vmlx", "1", cell.artifact_dir)]
+    assert runtime.attempts >= 1, "an accepted depth still measures the cell"
+
+
+def test_a_streaming_state_the_runtime_cannot_hold_is_na_with_its_reason(harness):
+    harness.add_runtime(
+        "osaurus",
+        stream_experts_refusals={
+            "on": "its expert streaming is the host setting concurrency.smeltMode"
+        },
+    )
+    cell = harness.cell("oq__osaurus", "osaurus")
+
+    results = harness.run([cell], stream_experts="on")
+
+    assert [result.status for result in results] == ["N/A"]
+    assert "smeltMode" in results[0].reason
+    assert harness.recorder.of("start") == [], "a refused streaming state starts no runtime"
+
+    harness.run([cell], measured=1, stream_experts="off",
+                results_dir=harness.tmp_path / "plain")
+    assert started_stream_experts(harness) == ["off"]
+
+
+def test_an_on_cell_whose_log_does_not_show_streaming_fails_with_the_log_quoted(harness):
+    """The second half of the `on` pin, and the half a start flag cannot carry: both runtimes
+    that accept the flag fall back to a resident load without failing anything, so an `on` cell
+    is only `on` if the server said so. The check runs between the start and the first request,
+    the cell is FAIL rather than N/A -- it ran, and it was not what the header says -- and it is
+    not visited again, because a second start would buy the same log and one more model load."""
+    runtime = harness.add_runtime(
+        "vmlx",
+        port=8000,
+        stream_experts_missing=(
+            "stream_experts='on' was not delivered: vmlx's own log never printed "
+            "'Flash MoE enabled:', and it says 'INFO:vmlx_engine.server:Flash MoE: model has no "
+            "MoE layers, skipping' instead (log: /tmp/vmlx.log)."
+        ),
+    )
+
+    results = harness.run([harness.cell("jang__vmlx", "vmlx")], measured=4, stream_experts="on")
+
+    assert [result.status for result in results] == ["FAIL"]
+    assert "Flash MoE enabled:" in results[0].reason
+    assert "no MoE layers, skipping" in results[0].reason, "the log line is quoted"
+    assert results[0].observations == [], "no request was made against a cell that is not on"
+    assert harness.transport.calls == []
+    assert runtime.attempts == 1, "a deterministic answer is not retried on the next visit"
+    assert measure.load_run(harness.results_file())[1][0].status == "FAIL"
+    # The start happened, and its own facts stay on the row -- the cold load and the version --
+    # while the verdict is FAIL: what failed is the claim, not the load.
+    assert results[0].cold_load_s is not None
+    assert results[0].runtime_version == "0.31.3"
+
+
+def test_the_streaming_evidence_is_read_from_the_handles_own_log(harness):
+    """The path the check reads is the handle's, not a guess: the runtime is asked for the log
+    of the start that just happened, and a handle with no log path is a failure to verify
+    rather than a pass."""
+    harness.add_runtime("optiq", port=8080, log_path="/tmp/optiq-run.log")
+
+    harness.run([harness.cell("oq__optiq", "optiq")], measured=1, stream_experts="on")
+
+    assert harness.recorder.of("stream_experts_missing") == [("optiq", "/tmp/optiq-run.log")]
+
+
+def test_the_absent_and_off_streaming_pins_ask_for_no_evidence_at_all(harness):
+    """Only `on` has a second half. `off` and the absent pin ask the runtime for no log: there
+    is nothing they claim that a log could contradict."""
+    harness.add_runtime("optiq", port=8080, log_path="/tmp/optiq-run.log")
+    cell = harness.cell("oq__optiq", "optiq")
+
+    harness.run([cell], measured=1, stream_experts="off")
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "unpinned")
+
+    assert harness.recorder.of("stream_experts_missing") == []
+
+
+def test_a_value_that_is_not_one_of_either_pins_values_is_refused_before_anything_starts(
+    harness,
+):
+    """`4` is above the ceiling vMLX accepts (`--native-mtp-depth` must be 1..3,
+    cli.py:1668-1678), and `auto` is OptiQ's own expert default rather than a value of this pin
+    -- the pin exists to take that decision away, so it is refused rather than passed through."""
+    harness.add_runtime("vmlx", port=8000)
+
+    for value in ("4", "0", "auto", 3):
+        with pytest.raises(ValueError, match="mtp_depth"):
+            harness.run([harness.cell("jang__vmlx", "vmlx")], mtp_depth=value)
+    for value in ("auto", "true", True):
+        with pytest.raises(ValueError, match="stream_experts"):
+            harness.run([harness.cell("jang__vmlx", "vmlx")], stream_experts=value)
+
+    assert harness.transport.calls == []
+    assert harness.recorder.of("start") == []
+
+
+def test_the_two_new_pins_are_asked_separately_from_each_other_and_from_the_two_caches(harness):
+    """Four header fields, four questions: a run may take any one of them without the others,
+    and the absent ones stay absent rather than becoming the first runtime's default."""
+    harness.add_runtime("vmlx", port=8000)
+    cell = harness.cell("jang__vmlx", "vmlx")
+
+    harness.run([cell], measured=1, mtp_depth="1")
+
+    assert started_mtp_depths(harness) == ["1"]
+    assert started_stream_experts(harness) == [None]
+    assert started_cache_states(harness) == [None]
+    assert started_kv_quants(harness) == [None]
 
 
 def test_a_run_at_four_issues_four_requests_per_batch_and_records_one_span(harness):

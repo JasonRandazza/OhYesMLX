@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from ohyesmlx import __version__, report, token_counter
-from ohyesmlx.runtimes import CACHE_STATES, KV_QUANTS
+from ohyesmlx.runtimes import CACHE_STATES, KV_QUANTS, MTP_DEPTHS, STREAM_EXPERTS
 
 STUDIES = report.AXES
 
@@ -426,6 +426,30 @@ def _parser() -> argparse.ArgumentParser:
         "only in this pin.",
     )
     run.add_argument(
+        "--mtp-depth",
+        choices=MTP_DEPTHS,
+        default=None,
+        help="pin the native-MTP draft depth for this run: `off` for MTP not running, "
+        "`1`/`2`/`3` for that many draft tokens per verify cycle under the runtime's fixed "
+        "policy (vMLX's default policy moves the depth inside a single request, so it is never "
+        "left to adapt). vMLX is the only runtime here with a depth to pin; the others are N/A "
+        "with the reason. A depth is also refused on an artifact whose MTP heads vMLX will not "
+        "wire, because its decode then falls back silently. Leaving the flag out pins nothing: "
+        "the header records `None`. A sweep is several runs differing only in this pin.",
+    )
+    run.add_argument(
+        "--stream-experts",
+        choices=STREAM_EXPERTS,
+        default=None,
+        help="pin whether MoE expert weights are streamed from SSD (`on`) or held resident "
+        "(`off`), through each runtime's own start flag. Both runtimes that accept `on` fall "
+        "back to a resident load silently, so an `on` cell is only accepted when the runtime's "
+        "own log shows streaming -- otherwise it is FAIL with that log quoted. Leaving the flag "
+        "out pins nothing and is not `off`: the header records `None`, and OptiQ's own default "
+        "is `auto`, which streams a large MoE unasked. A sweep is several runs differing only in "
+        "this pin.",
+    )
+    run.add_argument(
         "--results-dir",
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
@@ -463,7 +487,8 @@ def _parser() -> argparse.ArgumentParser:
         "sweep",
         help="join run directories into one sweep of a single header pin",
         description="Join finished run directories that differ in exactly one header pin -- "
-        "concurrency, prompt length, cache state or KV-cache codec -- into one table per "
+        "concurrency, prompt length, cache state, KV-cache codec, MTP depth or expert streaming "
+        "-- into one table per "
         "workload: cells down, the pin's values across. Measures nothing and starts no runtime "
         "-- it reads results.jsonl files that already exist.",
     )
@@ -560,6 +585,8 @@ def _run(args) -> int:
         concurrency=args.concurrency,
         cache_state=args.cache_state,
         kv_quant=args.kv_quant,
+        mtp_depth=args.mtp_depth,
+        stream_experts=args.stream_experts,
         results_dir=str(run_dir),
         prompt_tokens=prompt_tokens,
     )

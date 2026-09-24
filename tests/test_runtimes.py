@@ -631,6 +631,20 @@ def host_live_kv_codec(monkeypatch, value):
     )
 
 
+def host_mtp_mode(monkeypatch, value):
+    """The live ``mtp.mode`` the runtime reads -- a tracked key, read through the same capture."""
+    monkeypatch.setattr(
+        runtimes,
+        "capture_osaurus_settings",
+        lambda: {"server-runtime.json:mtp.mode": value},
+    )
+
+
+def host_smelt_mode(monkeypatch, value):
+    """The live ``concurrency.smeltMode``. Not a tracked key, so it has its own reader."""
+    monkeypatch.setattr(runtimes, "osaurus_smelt_mode", lambda: value)
+
+
 def test_osaurus_refuses_the_cache_state_the_host_is_not_in(monkeypatch):
     """The harness does not edit ~/.osaurus/config, so a requested state is honoured only when
     the host is already in it -- and the refusal says which setting disagreed, because that is
@@ -801,6 +815,412 @@ def test_osaurus_accepts_the_off_pin_only_while_the_host_is_at_its_default_codec
     for sentinel in (osaurus_settings.UNREADABLE, osaurus_settings.MISSING):
         host_live_kv_codec(monkeypatch, sentinel)
         assert "cache.liveKVCodec" in osaurus.kv_quant_refusal("off")
+
+
+# --------------------------------------------------------------------------------------
+# The MTP-depth pin (study 03-06) and the expert-streaming pin (study 03-03)
+# --------------------------------------------------------------------------------------
+#
+# One decode-side and one load-side, built the same way as the two cache pins and each with a
+# second question: a depth is only MTP if the artifact on disk carries MTP heads the runtime
+# will wire (`vmlx_mtp_refusal`), and `on` is only streaming if the server's own log says so
+# (`Runtime.stream_experts_missing`). Both runtimes that accept the streaming flag fall back
+# to a resident load silently, so neither flag is evidence of the state it names.
+
+
+def test_the_mtp_depth_values_are_the_depths_and_vmlx_s_own_off():
+    """`off` beside `1`/`2`/`3`, as strings: the set is one word and three numbers and the
+    header value is compared exactly. They are a draft depth and not a count of tokens, and the
+    ceiling is vMLX's own -- `--native-mtp-depth` must be 1..3 by default
+    (cli.py:1668-1678, native_mtp.py:28-44)."""
+    assert runtimes.MTP_DEPTHS == ("off", "1", "2", "3")
+    assert runtimes.MTP_DEPTH_OFF == "off"
+    assert "4" not in runtimes.MTP_DEPTHS
+    assert "auto" not in runtimes.MTP_DEPTHS
+
+
+def test_the_streaming_values_are_off_and_on_and_nothing_else():
+    """`auto` is not one of them on purpose: it is OptiQ's own default (`--stream-experts`
+    defaults to `None` -> `auto`, optiq/cli.py:2607-2615, :3095-3096) and the thing this pin
+    exists to take away from the runtime."""
+    assert runtimes.STREAM_EXPERTS == ("off", "on")
+    assert "auto" not in runtimes.STREAM_EXPERTS
+
+
+def test_no_pin_at_all_leaves_every_start_command_byte_identical_to_today():
+    """Both new pins are absent here, and an absent pin is not a value: vMLX keeps
+    `--disable-native-mtp` and gains nothing, OptiQ keeps `--no-stream-experts`, and the other
+    three commands are the tuples recorded before either pin existed. Reading an absent
+    streaming pin as `off` would have been invisible on OptiQ -- its `off` is the same flag --
+    but reading an absent depth as `off` on vMLX would have claimed a state nobody asked for,
+    and reading either as a value on the other four would have claimed a state they cannot
+    hold."""
+    assert set(TODAY) == set(RUNTIMES)
+    for name, runtime in RUNTIMES.items():
+        assert runtime.start_command(ARTIFACT, HF_ID) == TODAY[name]
+        assert runtime.start_command(ARTIFACT, HF_ID, mtp_depth=None) == TODAY[name]
+        assert runtime.start_command(ARTIFACT, HF_ID, stream_experts=None) == TODAY[name]
+        assert runtime.start_command(
+            ARTIFACT, HF_ID, mtp_depth=None, stream_experts=None
+        ) == TODAY[name]
+
+
+def test_vmlx_drops_the_kill_switch_for_a_depth_and_pins_the_fixed_policy_with_it(tmp_path):
+    """`--disable-native-mtp` is vMLX's own off and stays for `off` and the absent pin; a depth
+    replaces it. The policy is not a second pin: vMLX's default is `adaptive`, which "may also
+    lower the depth on measured acceptance and tries depth 1 once against the configured depth's
+    measured cost" (cli.py:4324-4331) -- depth moving inside one request is not a cell at depth
+    N, so `fixed` travels with every depth."""
+    runtime = RUNTIMES["vmlx"]
+    bundle = mtp_bundle(tmp_path)
+
+    off = runtime.start_command(ARTIFACT, HF_ID, mtp_depth="off")
+    assert off == TODAY["vmlx"]
+    assert "--disable-native-mtp" in off
+
+    for depth in ("1", "2", "3"):
+        command = runtime.start_command(ARTIFACT, HF_ID, mtp_depth=depth)
+        assert "--disable-native-mtp" not in command
+        start = command.index("--native-mtp-depth")
+        assert command[start : start + 4] == (
+            "--native-mtp-depth",
+            depth,
+            "--native-mtp-depth-policy",
+            "fixed",
+        ), command
+        assert runtime.mtp_depth_refusal(depth, bundle) is None, "vMLX drives every depth"
+
+
+def test_only_vmlx_has_a_depth_to_pin_and_the_other_four_refuse_every_value():
+    """Each refusal names its own evidence, because what would have to change is the runtime and
+    not this run: mlx-lm's server has no MTP at all, OptiQ is that same server, oMLX's MTP is a
+    per-model settings field that is adaptive even when set, and Osaurus's depth is host state.
+    Four of the five refuse every depth, so their ``off`` is a statement of fact -- Osaurus is
+    the exception and is read from its host instead."""
+    for name in ("mlxlm", "optiq", "omlx", "osaurus"):
+        runtime = RUNTIMES[name]
+        assert runtime.mtp_depth_refusal(None, ARTIFACT) is None, name
+        for depth in ("1", "2", "3"):
+            reason = runtime.mtp_depth_refusal(depth, ARTIFACT)
+            assert depth in reason, f"{name} names the value it refused"
+            assert "N/A" in reason, f"{name} says the cell is not measured"
+
+    for name in ("mlxlm", "optiq", "omlx"):
+        assert RUNTIMES[name].mtp_depth_refusal("off", ARTIFACT) is None, name
+
+    assert "0.31.3" in RUNTIMES["mlxlm"].mtp_depth_refusal("3", ARTIFACT)
+    assert "model_settings.py" in RUNTIMES["omlx"].mtp_depth_refusal("3", ARTIFACT)
+    assert "adaptive" in RUNTIMES["omlx"].mtp_depth_refusal("3", ARTIFACT)
+    assert "mtp.explicitDepth" in RUNTIMES["osaurus"].mtp_depth_refusal("3", ARTIFACT)
+
+
+def test_osaurus_accepts_the_off_depth_only_while_the_host_forces_mtp_off(monkeypatch):
+    """`mtp.mode` is a tracked key, so the drift gate already attests it -- but it is not `off`
+    at `auto`, under which Osaurus runs a draft head on any bundle that carries one
+    (docs/runtimes/osaurus.md:307, :900-901). A cell labelled MTP-free has to be MTP-free."""
+    osaurus = RUNTIMES["osaurus"]
+
+    host_mtp_mode(monkeypatch, "force_off")
+    assert osaurus.mtp_depth_refusal("off", ARTIFACT) is None
+
+    host_mtp_mode(monkeypatch, "auto")
+    refusal = osaurus.mtp_depth_refusal("off", ARTIFACT)
+    assert "mtp.mode" in refusal and "auto" in refusal
+    assert "restart" in refusal, "a restart is not a way to make a cell MTP-free"
+
+    for sentinel in (osaurus_settings.UNREADABLE, osaurus_settings.MISSING):
+        host_mtp_mode(monkeypatch, sentinel)
+        assert "mtp.mode" in osaurus.mtp_depth_refusal("off", ARTIFACT)
+
+
+def test_optiq_drives_both_streaming_states_and_neither_claims_to_be_a_default():
+    """`off` is OptiQ's own `--no-stream-experts` -- a complete opt-out, not a partial one
+    (`mode == "off"` returns before anything is installed, optiq/serve.py:1629-1630) -- and it
+    is passed explicitly because the flag's default is `auto`. `on` is `--stream-experts`, and
+    exactly one of the two is ever in the command."""
+    runtime = RUNTIMES["optiq"]
+
+    off = runtime.start_command(ARTIFACT, HF_ID, stream_experts="off")
+    on = runtime.start_command(ARTIFACT, HF_ID, stream_experts="on")
+
+    assert off == TODAY["optiq"]
+    expected_on = tuple(
+        "--stream-experts" if part == "--no-stream-experts" else part for part in TODAY["optiq"]
+    )
+    assert on == expected_on
+    assert "--no-stream-experts" in off and "--stream-experts" not in off
+    assert "--stream-experts" in on and "--no-stream-experts" not in on
+    assert runtime.stream_experts_refusal("off") is None
+    assert runtime.stream_experts_refusal("on") is None
+
+
+def test_vmlx_drives_both_streaming_states_through_its_own_opt_in_flag():
+    """`--flash-moe` is `default=False` (vmlx_engine/cli.py:3966) and `FlashMoEConfig.enabled:
+    bool = False` -- "Default False (opt-in)" (flash_moe_config.py:29) -- so `off` adds nothing
+    and `on` is the flag."""
+    runtime = RUNTIMES["vmlx"]
+
+    assert runtime.start_command(ARTIFACT, HF_ID, stream_experts="off") == TODAY["vmlx"]
+    on = runtime.start_command(ARTIFACT, HF_ID, stream_experts="on")
+    assert on == TODAY["vmlx"] + ("--flash-moe",)
+    assert "--smelt" not in on, "--flash-moe and --smelt are mutually exclusive (cli.py:2565)"
+    assert runtime.stream_experts_refusal("off") is None
+    assert runtime.stream_experts_refusal("on") is None
+
+
+def test_the_runtimes_with_no_streaming_surface_refuse_on_and_accept_off():
+    """mlx-lm has no expert-loading path at all, oMLX's nearest mechanism is burst decode --
+    which sets how many decode steps are coalesced before a delta is emitted, not where expert
+    weights live (docs/runtimes/omlx.md:798-841) -- and Osaurus's is host state with no start
+    flag in either direction."""
+    for name in ("mlxlm", "optiq", "omlx", "vmlx"):
+        assert RUNTIMES[name].stream_experts_refusal(None) is None, name
+        assert RUNTIMES[name].stream_experts_refusal("off") is None, name
+
+    for name in ("mlxlm", "omlx"):
+        reason = RUNTIMES[name].stream_experts_refusal("on")
+        assert "on" in reason and "N/A" in reason
+
+    assert "expert" in RUNTIMES["mlxlm"].stream_experts_refusal("on")
+    assert "burst decode" in RUNTIMES["omlx"].stream_experts_refusal("on")
+    assert "smeltMode" in RUNTIMES["osaurus"].stream_experts_refusal("on")
+
+
+def test_osaurus_accepts_the_off_streaming_state_only_where_the_host_is_not_streaming(
+    monkeypatch,
+):
+    """`concurrency.smeltMode` is the one place Osaurus's expert behaviour is decided, its enum
+    is `engineSelected | disabled | flashMoE | ssdStreaming` (docs/runtimes/osaurus.md:298), and
+    it is host state -- not one of `TRACKED_KEYS`, so it is read directly. `disabled` is the
+    only value under which nothing about experts is being changed underneath the cell."""
+    osaurus = RUNTIMES["osaurus"]
+
+    host_smelt_mode(monkeypatch, "disabled")
+    assert osaurus.stream_experts_refusal("off") is None
+
+    for live in ("engineSelected", "flashMoE", "ssdStreaming"):
+        host_smelt_mode(monkeypatch, live)
+        refusal = osaurus.stream_experts_refusal("off")
+        assert "concurrency.smeltMode" in refusal
+        assert live in refusal, "the refusal names the value that disagreed"
+
+    for sentinel in (osaurus_settings.UNREADABLE, osaurus_settings.MISSING):
+        host_smelt_mode(monkeypatch, sentinel)
+        assert "concurrency.smeltMode" in osaurus.stream_experts_refusal("off")
+
+
+# --- the artifact half of the depth pin -------------------------------------------------
+
+
+def mtp_bundle(tmp_path, *, family="qwen3_5", layers=1, keys=("mtp.layers.0.mlp.down_proj.weight",),
+               config_extra=None, jang=None, name="bundle"):
+    """A directory shaped like the files vMLX reads: config.json and a safetensors index."""
+    root = tmp_path / name
+    root.mkdir()
+    config = {"model_type": family, "num_nextn_predict_layers": layers}
+    config.update(config_extra or {})
+    (root / "config.json").write_text(json.dumps(config))
+    if keys is not None:
+        (root / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {key: "model.safetensors" for key in keys}})
+        )
+    if jang is not None:
+        (root / "jang_config.json").write_text(json.dumps(jang))
+    return str(root)
+
+
+def test_a_bundle_with_mtp_heads_the_runtime_wires_accepts_a_depth(tmp_path):
+    """The one case a depth cell is honest: MTP tensors on disk, a config that declares the
+    layers, a family vMLX wires a draft/verify path for (native_mtp.py:64-79), and nothing
+    saying the bundle dropped them."""
+    bundle = mtp_bundle(tmp_path)
+
+    assert runtimes.vmlx_mtp_refusal(bundle) is None
+    assert RUNTIMES["vmlx"].mtp_depth_refusal("3", bundle) is None
+
+
+def test_a_bundle_with_no_mtp_tensors_refuses_a_depth(tmp_path):
+    """vMLX accepts `--native-mtp-depth` on a bundle with no MTP heads and decodes plain
+    autoregressive without saying so -- its banner is suppressed entirely for a
+    `not_configured` bundle (cli.py:2441) -- so the depth cell is refused up front, from the
+    artifact, with the check that failed named."""
+    bundle = mtp_bundle(tmp_path, keys=("model.layers.0.mlp.down_proj.weight",))
+
+    reason = runtimes.vmlx_mtp_refusal(bundle)
+
+    assert "no mtp.* tensors" in reason
+    assert "autoregressive" in reason
+    assert RUNTIMES["vmlx"].mtp_depth_refusal("1", bundle) == reason
+
+
+def test_a_bundle_whose_config_declares_no_mtp_layer_refuses_a_depth(tmp_path):
+    """Both halves of the declaration are required. An index full of MTP tensors under a config
+    that asks for no MTP layer is `metadata_inconsistent` to vMLX (`native_mtp.py:987-988`) and
+    its decode carries no draft head -- so tensors alone must not pass this check. The reverse
+    -- a config that asks for MTP over an index with none -- is the other `issues` line at
+    `:983-986`, covered by the tensors test beside this one."""
+    bundle = mtp_bundle(tmp_path, layers=None)
+
+    reason = runtimes.vmlx_mtp_refusal(bundle)
+
+    assert "declares no MTP layer" in reason or "metadata_inconsistent" in reason
+
+
+def test_a_bundle_that_drops_its_mtp_refuses_a_depth(tmp_path):
+    """`jang_config.drop_mtp`, the sidecar's own `enabled`/`kept`, the stamped `mtp_mode` and
+    `runtime.bundle_has_mtp` are the four routes `native_mtp_status` reads as dropped
+    (native_mtp.py:883-925)."""
+    for index, jang in enumerate(
+        (
+            {"drop_mtp": True},
+            {"mtp": {"enabled": False}},
+            {"mtp": {"kept": False}},
+            {"mtp": {"mtp_mode": "absent"}},
+            {"runtime": {"bundle_has_mtp": False}},
+        )
+    ):
+        bundle = mtp_bundle(tmp_path, jang=jang, name=f"bundle-dropped-{index}")
+        reason = runtimes.vmlx_mtp_refusal(bundle)
+        assert "dropped" in reason, jang
+
+
+def test_a_bundle_in_a_family_vmlx_does_not_wire_refuses_a_depth(tmp_path):
+    """An artifact can carry MTP heads in a family outside vMLX's support map, and its own
+    status for one is `weights_present_runtime_unwired` (native_mtp.py:1110-1117) -- the
+    decode would run without a draft head however the flag is spelled."""
+    bundle = mtp_bundle(tmp_path, family="gemma4")
+
+    reason = runtimes.vmlx_mtp_refusal(bundle)
+
+    assert "gemma4" in reason
+    assert "weights_present_runtime_unwired" in reason
+
+
+def test_the_family_aliases_vmlx_normalises_are_read_the_same_way_here(tmp_path):
+    """`qwen3_6` is `qwen3_5` to vMLX (native_mtp.py:49-55), and a family stated only under
+    `text_config` counts -- a bundle refused for its spelling would be a false refusal."""
+    for family in ("qwen3_6", "qwen3_5_text", "qwen3_5_moe"):
+        bundle = mtp_bundle(tmp_path, family=family, name=f"bundle-{family}")
+        assert runtimes.vmlx_mtp_refusal(bundle) is None, family
+
+    nested = mtp_bundle(tmp_path, family="text_only", name="bundle-nested")
+    config = json.loads((Path(nested) / "config.json").read_text())
+    # `_bundle_family` reads the config's own model_type first, so the fallback to text_config
+    # is only reached on a config that does not state one at all.
+    config.pop("model_type")
+    config["text_config"] = {"model_type": "qwen3_5_text"}
+    (Path(nested) / "config.json").write_text(json.dumps(config))
+    assert runtimes.vmlx_mtp_refusal(nested) is None
+
+
+def test_an_artifact_that_cannot_be_enumerated_refuses_a_depth_rather_than_assuming(tmp_path):
+    """No index means the tensors cannot be enumerated without a dependency this harness does
+    not carry, and a depth the artifact cannot be shown to support is not one to publish."""
+    bundle = mtp_bundle(tmp_path, keys=None)
+
+    assert "model.safetensors.index.json" in runtimes.vmlx_mtp_refusal(bundle)
+
+    missing = str(tmp_path / "nothing-here")
+    assert "config.json" in runtimes.vmlx_mtp_refusal(missing)
+
+
+# --- the log half of the streaming pin ---------------------------------------------------
+
+
+def write_log(tmp_path, text, name="runtime.log"):
+    path = tmp_path / name
+    path.write_text(text)
+    return str(path)
+
+
+def test_optiq_requires_both_of_its_own_lines_before_an_on_cell_is_believed(tmp_path):
+    """The mode banner alone is printed before the model is even inspected, so on a model it
+    cannot stream it appears and nothing streams (optiq/cli.py:3095-3101, serve.py:1641-1643);
+    the pre-load line is the one that says the model was built through `load_streaming`
+    (serve.py:1654-1662). Both are required."""
+    runtime = RUNTIMES["optiq"]
+    banner = "[optiq.serve] SSD expert streaming: on\n"
+    # Verbatim from results/logs/optiq-20260920T023332-73621.log, a probe run that really
+    # streamed: the mode line, then the pre-load line naming the model.
+    preloaded = (
+        "[optiq.serve] SSD expert streaming: pre-loaded /Users/jrazz/.cache/huggingface/hub/"
+        "models--mlx-community--Qwen3.6-35B-A3B-4bit/snapshots/38740b847e4cb78f352aba30aa"
+        "41c76e08e6eb46\n"
+    )
+
+    assert runtime.stream_experts_missing(None, None) is None
+    assert runtime.stream_experts_missing("off", None) is None
+
+    both = write_log(tmp_path, banner + preloaded)
+    assert runtime.stream_experts_missing("on", both) is None
+
+    only_banner = write_log(tmp_path, banner, name="banner-only.log")
+    reason = runtime.stream_experts_missing("on", only_banner)
+    assert "pre-loaded" in reason
+    assert only_banner in reason, "the log path is named"
+
+    failed = write_log(
+        tmp_path,
+        banner + "  [optiq.serve] expert streaming failed (no index); falling back to resident "
+        "load\n",
+        name="failed.log",
+    )
+    reason = runtime.stream_experts_missing("on", failed)
+    assert "expert streaming failed" in reason, "the fallback line is quoted"
+    assert "falling back to resident load" in reason
+
+
+def test_vmlx_requires_the_line_that_says_the_layers_were_patched(tmp_path):
+    """Every other outcome logs something else: no MoE layers (server.py:8981-8982), a JANGTQ
+    bundle refused by name (server.py:8964-8973), nothing patched (server.py:9003-9005), or a
+    setup that raised (server.py:9006-9008)."""
+    runtime = RUNTIMES["vmlx"]
+
+    # Verbatim from results/logs/vmlx-20260920T023513-73621.log, a probe run that really did
+    # stream 40 MoE layers: the success line, with the two lines above it that are *not* the
+    # evidence (`Flash MoE: patched ...`, `Flash MoE: freed ...`).
+    good = write_log(
+        tmp_path,
+        "INFO:vmlx_engine.models.flash_moe_integration:Flash MoE: patched 40 MoE layers\n"
+        "INFO:vmlx_engine.models.flash_moe_integration:Flash MoE: freed ~18.12 GB expert "
+        "weights\n"
+        "INFO:vmlx_engine.server:Flash MoE enabled: 40 layers patched, 18.12 GB freed, "
+        "slot bank=64, io_workers=4\n",
+    )
+    assert runtime.stream_experts_missing("on", good) is None
+
+    no_layers = write_log(
+        tmp_path,
+        "INFO:vmlx_engine.server:Flash MoE: model has no MoE layers, skipping\n",
+        name="no-layers.log",
+    )
+    reason = runtime.stream_experts_missing("on", no_layers)
+    assert "Flash MoE enabled:" in reason, "the line that was required is named"
+    assert "model has no MoE layers, skipping" in reason, "the log line is quoted"
+
+
+def test_a_handle_with_no_log_path_is_a_failure_to_verify_rather_than_a_pass():
+    """The evidence is a file, and a start that left no file cannot be checked -- which is a
+    FAIL with that reason, not a silent pass. Nothing in production reaches it: every handle a
+    real spawn returns carries the path its output went to."""
+    for name in ("optiq", "vmlx"):
+        reason = RUNTIMES[name].stream_experts_missing("on", None)
+        assert "log path" in reason
+        assert "FAIL" in reason
+
+
+def test_the_log_window_the_evidence_reads_is_the_head_not_the_tail(tmp_path):
+    """A banner scrolls out of a tail and a failure line scrolls out of a head, so the two
+    windows are not interchangeable: across the 781 recorded logs the lines this check reads sit
+    in the first 8,088 bytes, while the largest log is 3,552,989 bytes. A log longer than the
+    window keeps its head."""
+    runtime = RUNTIMES["vmlx"]
+    banner = "INFO:vmlx_engine.server:Flash MoE enabled: 4 layers patched, 1.00 GB freed\n"
+    padding = "INFO:vmlx_engine.server:request handled\n" * 200_000
+    long_log = write_log(tmp_path, banner + padding, name="long.log")
+
+    assert len(padding) > runtimes.LOG_HEAD_BYTES
+    assert runtime.stream_experts_missing("on", long_log) is None
 
 
 # --------------------------------------------------------------------------------------

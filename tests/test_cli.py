@@ -256,6 +256,58 @@ def test_a_run_pinning_the_kv_quant_passes_it_to_the_loop_and_defaults_to_nothin
     assert all(call["cache_state"] is None for call in measure.calls)
 
 
+def test_a_run_pinning_the_mtp_depth_passes_it_to_the_loop_and_defaults_to_nothing(
+    measure, tmp_path
+):
+    """The depth pin is the CLI's to parse and the loop's to record: the four values reach
+    `run_cells` as strings, an absent flag reaches it as `None` -- the pin not taken, not `off`
+    -- and anything else is refused by the parser before a run directory exists. `4` is above
+    the ceiling vMLX's own flag accepts, and `auto` is the adaptive policy this pin exists to
+    take away from the runtime."""
+    assert run(tmp_path, "--mtp-depth", "off") == 0
+    assert measure.calls[0]["mtp_depth"] == "off"
+
+    for index, depth in enumerate(("1", "2", "3"), start=1):
+        assert run(tmp_path, "--mtp-depth", depth) == 0
+        assert measure.calls[index]["mtp_depth"] == depth
+
+    assert run(tmp_path) == 0
+    assert measure.calls[4]["mtp_depth"] is None
+
+    for value in ("0", "4", "auto", "adaptive"):
+        with pytest.raises(SystemExit):
+            run(tmp_path, "--mtp-depth", value)
+
+    assert len(measure.calls) == 5
+    # Four pins, four independent fields: taking one leaves the other three absent.
+    assert all(call["stream_experts"] is None for call in measure.calls)
+    assert all(call["cache_state"] is None for call in measure.calls)
+    assert all(call["kv_quant"] is None for call in measure.calls)
+
+
+def test_a_run_pinning_the_streaming_state_passes_it_to_the_loop_and_defaults_to_nothing(
+    measure, tmp_path
+):
+    """`off`/`on` reach `run_cells`, an absent flag reaches it as `None` -- which is not `off`,
+    because OptiQ's own default is `auto` -- and `auto` itself is refused by the parser: it is
+    the decision this pin exists to take away from the runtime."""
+    assert run(tmp_path, "--stream-experts", "off") == 0
+    assert measure.calls[0]["stream_experts"] == "off"
+
+    assert run(tmp_path, "--stream-experts", "on") == 0
+    assert measure.calls[1]["stream_experts"] == "on"
+
+    assert run(tmp_path) == 0
+    assert measure.calls[2]["stream_experts"] is None
+
+    for value in ("auto", "true", "disabled"):
+        with pytest.raises(SystemExit):
+            run(tmp_path, "--stream-experts", value)
+
+    assert len(measure.calls) == 3
+    assert all(call["mtp_depth"] is None for call in measure.calls)
+
+
 def test_a_run_pinning_a_prompt_length_measures_one_prefill_workload_at_64_tokens(
     measure, tmp_path, capsys
 ):

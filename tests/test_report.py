@@ -1589,7 +1589,7 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
 
     assert flags == {
         "-h", "--help", "--study", "--cells", "--results-dir", "--rank", "--concurrency",
-        "--prompt-tokens", "--cache-state", "--kv-quant",
+        "--prompt-tokens", "--cache-state", "--kv-quant", "--mtp-depth", "--stream-experts",
     }
     # --concurrency is a PIN, not a selector: it says how the named cells are driven, never
     # which cells run. That distinction is the whole reason concurrency is not a third
@@ -2409,7 +2409,7 @@ def test_the_join_states_the_pins_and_every_run_directory_it_joined():
     assert (
         "Pins all columns share: temperature `0.0`, seed `0`, warmup `3`, measured `5`, "
         "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`, cache_state `—`, "
-        "kv_quant `—`." in grid
+        "kv_quant `—`, mtp_depth `—`, stream_experts `—`." in grid
     )
     assert "Workloads all columns ran, with identical messages: `chat` (max_tokens 128)" in grid
 
@@ -3446,7 +3446,14 @@ def test_a_sweep_may_vary_only_one_of_the_header_pins():
     rather than left uncompared."""
     runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
 
-    assert report.SWEEP_PINS == ("concurrency", "prompt_tokens", "cache_state", "kv_quant")
+    assert report.SWEEP_PINS == (
+        "concurrency",
+        "prompt_tokens",
+        "cache_state",
+        "kv_quant",
+        "mtp_depth",
+        "stream_experts",
+    )
     assert set(report.SWEEP_PINS) <= set(report.PIN_FIELDS)
     for varying in ("temperature", "seed", "warmup", "measured", "cooldown_s", "decode_tps", None):
         with pytest.raises(ValueError) as raised:
@@ -3732,6 +3739,161 @@ def test_a_kv_quant_sweep_refuses_the_same_cell_measured_twice_at_one_codec():
     ]
 
     assert_sweep_refused(runs, "kv_quant", "does not vary", SWEEP_RUNS[0], SWEEP_RUNS[1])
+
+
+def depth_run(run_label, depth, *, rate=100.0, labels=("jang",), header=None, **kwargs):
+    """One run of an MTP-depth sweep: the same prompt answered with one draft depth pinned."""
+    return grid_run(
+        run_label,
+        "vmlx",
+        "1.6.59",
+        labels,
+        workload_ids=("prefill",),
+        rate_of=lambda *_: rate,
+        header=run_header(("prefill",), mtp_depth=depth) if header is None else header,
+        **kwargs,
+    )
+
+
+def streaming_run(run_label, state, *, rate=100.0, labels=("oq4",), runtime="optiq",
+                  version="mlx-optiq 0.5.13", header=None, **kwargs):
+    """One run of an expert-streaming sweep: the same prompt answered resident and streamed."""
+    return grid_run(
+        run_label,
+        runtime,
+        version,
+        labels,
+        workload_ids=("prefill",),
+        rate_of=lambda *_: rate,
+        header=run_header(("prefill",), stream_experts=state) if header is None else header,
+        **kwargs,
+    )
+
+
+def test_the_two_new_sweep_orders_are_their_pins_own_values_in_their_declared_order():
+    """`SWEEP_VALUES` orders both rather than leaving the columns to how four words happen to
+    sort: `off` is the baseline each is read against -- MTP not running, and experts held
+    resident -- and the depths follow `runtimes.MTP_DEPTHS`' order, which is ascending by
+    depth and not lexicographic (`1`, `2`, `3` would sort the same way today only because there
+    are not ten of them)."""
+    assert report.SWEEP_VALUES["mtp_depth"] == runtimes.MTP_DEPTHS
+    assert report.SWEEP_VALUES["stream_experts"] == runtimes.STREAM_EXPERTS
+    for pin in ("mtp_depth", "stream_experts"):
+        assert len(report.SWEEP_VALUES[pin]) == len(set(report.SWEEP_VALUES[pin]))
+
+
+def test_an_mtp_depth_sweep_reads_the_baseline_column_first_and_then_the_depths():
+    """The columns are the pin's values, in the pin's order, and each carries its own run's
+    number: three depths are not one row printed thrice. The runs arrive scrambled, because a
+    sweep that read them in directory order would order three names by accident."""
+    runs = [
+        depth_run(SWEEP_RUNS[1], "3", rate=300.0),
+        depth_run(SWEEP_RUNS[0], "off", rate=100.0),
+        depth_run(SWEEP_RUNS[2], "1", rate=200.0),
+    ]
+
+    sweep = report.render_sweep(runs, varying="mtp_depth")
+    table = sweep_tables(sweep)["prefill"]["jang__vmlx"]
+
+    assert list(table) == ["off", "1", "3"]
+    assert table == {"off": "100.0", "1": "200.0", "3": "300.0"}
+    assert "`mtp_depth`" in sweep.splitlines()[0]
+    assert "draft depth" in sweep, "the swept pin is described, not just named"
+    for run_label in SWEEP_RUNS:
+        assert run_label in sweep, "every directory behind a column is named"
+
+
+def test_an_expert_streaming_sweep_reads_resident_first_and_then_streamed():
+    runs = [
+        streaming_run(SWEEP_RUNS[1], "on", rate=300.0),
+        streaming_run(SWEEP_RUNS[0], "off", rate=100.0),
+    ]
+
+    sweep = report.render_sweep(runs, varying="stream_experts")
+    table = sweep_tables(sweep)["prefill"]["oq4__optiq"]
+
+    assert list(table) == ["off", "on"]
+    assert table == {"off": "100.0", "on": "300.0"}
+    assert "`stream_experts`" in sweep.splitlines()[0]
+    assert "SSD" in sweep, "the swept pin is described, not just named"
+
+
+def test_neither_new_sweep_relaxes_the_prompt_the_way_the_length_pin_does():
+    """Same prompt, one depth or one streaming state: the difference between two columns is the
+    pin's and not a prompt's, so a pair of runs that sent different text is refused."""
+    runs = [
+        depth_run(SWEEP_RUNS[0], "off"),
+        depth_run(
+            SWEEP_RUNS[1], "2", header=other_prompt_header(("prefill",), mtp_depth="2")
+        ),
+    ]
+
+    assert_sweep_refused(
+        runs,
+        "mtp_depth",
+        "workload `prefill`",
+        "pinned a different messages",
+        SWEEP_RUNS[0],
+        SWEEP_RUNS[1],
+        "not one grid",
+    )
+
+    streaming = [
+        streaming_run(SWEEP_RUNS[0], "off"),
+        streaming_run(
+            SWEEP_RUNS[1], "on", header=other_prompt_header(("prefill",), stream_experts="on")
+        ),
+    ]
+
+    assert_sweep_refused(
+        streaming,
+        "stream_experts",
+        "workload `prefill`",
+        "pinned a different messages",
+        SWEEP_RUNS[0],
+        SWEEP_RUNS[1],
+        "not one grid",
+    )
+
+
+def test_a_grid_refuses_two_runs_that_pinned_different_depths_or_streaming_states():
+    """Guard 1, one pin at a time: an absent pin against a pinned one is a disagreement too,
+    and neither of these pins is a state a grid may quietly average over."""
+    for pin, first, second in (
+        ("mtp_depth", None, "2"),
+        ("mtp_depth", "off", "2"),
+        ("stream_experts", None, "on"),
+        ("stream_experts", "off", "on"),
+    ):
+        runs = [
+            grid_run(SWEEP_RUNS[0], "optiq", "mlx-optiq 0.5.13", ("oq4",),
+                     header=run_header(("chat",), **{pin: first})),
+            grid_run(SWEEP_RUNS[1], "optiq", "mlx-optiq 0.5.13", ("oq4",),
+                     header=run_header(("chat",), **{pin: second})),
+        ]
+
+        message = assert_refused(runs, SWEEP_RUNS[0], SWEEP_RUNS[1], pin)
+
+        assert f"{pin}={first!r}" in message, "the absence is printed as the absence"
+        assert f"{pin}={second!r}" in message
+
+
+def test_a_sweep_refuses_two_runs_that_measured_the_same_cell_twice_at_one_value():
+    runs = [
+        depth_run(SWEEP_RUNS[0], "off", rate=100.0),
+        depth_run(SWEEP_RUNS[1], "off", rate=50.0),
+    ]
+
+    assert_sweep_refused(runs, "mtp_depth", "does not vary", SWEEP_RUNS[0], SWEEP_RUNS[1])
+
+    streaming = [
+        streaming_run(SWEEP_RUNS[0], "off", rate=100.0),
+        streaming_run(SWEEP_RUNS[1], "off", rate=50.0),
+    ]
+
+    assert_sweep_refused(
+        streaming, "stream_experts", "does not vary", SWEEP_RUNS[0], SWEEP_RUNS[1]
+    )
 
 
 def test_a_combination_no_run_measured_is_an_em_dash_and_a_failure_is_a_fail():

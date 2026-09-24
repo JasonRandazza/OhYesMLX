@@ -1407,6 +1407,53 @@ adaptation to get a stable number must set `VMLX_NATIVE_MTP_DEPTH_PROBE` /
 "fixed never leaves its depth, even when slower than plain decoding" (the CLI's own words at
 `cli.py:4319-4331`), i.e. the resulting speed may be a speed the runtime would have rejected.
 
+#### 7.4.1 What the harness pins now (`--mtp-depth`, header pin 03-06)
+
+The harness drives MTP through one header pin, and it does **not** reach for the AR-safety
+knobs: `--native-mtp-depth N --native-mtp-depth-policy fixed` is the whole of it, and the cell
+records which of the two it ran.
+
+| pin value | flags | why that is the whole of the pin |
+|---|---|---|
+| absent | `--disable-native-mtp` | The command of today. Left alone, MTP turns itself on for a bundle carrying MTP heads, so an absent pin that passed nothing would be an MTP cell nobody declared |
+| `off` | `--disable-native-mtp` | The same command: the flag is this runtime's own explicit off (`cli.py:1662-1667`), setting `VMLINUX_NATIVE_MTP=0` and clearing any depth an inherited environment left behind |
+| `1`, `2`, `3` | `--native-mtp-depth N --native-mtp-depth-policy fixed` | `fixed` is not a second pin. The default policy is `adaptive` ("may also lower the depth on measured acceptance and tries depth 1 once against the configured depth's measured cost, keeping the measured winner", `cli.py:4324-4331`), so an adaptive cell is not a cell at depth N; `fixed` steps down only through the AR-safety valve, which is itself the runtime's own behaviour and stays untouched |
+
+**`AR_SAFETY` is deliberately left at its default.** Setting `VMLX_NATIVE_MTP_AR_SAFETY=0` would
+give a depth that is truly fixed, at the price of a speed the runtime would itself have
+rejected — a measurement of a configuration it does not serve. `fixed` already removes the
+depth *adaptation* this pin is about; the valve's own demotion is a property of the runtime as
+shipped, and a cell that disabled it would be measuring a different product.
+
+**The flag is accepted on a bundle that cannot use it, so the artifact decides first.** The
+harness refuses a depth up front (`runtimes.vmlx_mtp_refusal`) unless the artifact on disk shows
+MTP the runtime will wire: a family in `native_mtp.py:64-79`, no `drop_mtp` / `mtp_mode` /
+`runtime.bundle_has_mtp` saying the bundle dropped its heads (`:883-925`), a config that
+declares at least one MTP layer (`:537-546`), and `mtp.*` tensors in the safetensors index
+(`:606-611`). Without that check a depth cell on such a bundle is indistinguishable from a
+working one: for a bundle that declares no MTP at all the startup banner is skipped
+(`cli.py:2441`) and the INFO line that would explain an inactive draft head is conditional on
+the bundle having declared something (`native_mtp.py:1307-1316`).
+
+**That silence is measured, and the source says so** (`native_mtp.py:1296-1303`):
+
+> A bundle that DECLARES MTP but is not runtime-supported used to deactivate in total silence,
+> so the model ran plain autoregressive with nothing in the log to say why. MEASURED: Nemotron
+> 3.5 Lightning (JANG_2L/4M/6M, 34 mtp.layers.0.* tensors, num_nextn_predict_layers=1) and
+> Inkling both hit this — the only surfaces telling the truth were /health.mtp and the CLI
+> startup banner.
+
+**Both halves of the declaration are required by this check, and each has its own failure in
+that source:** a config that expects MTP over an index with no `mtp.*` tensors reads
+`metadata_inconsistent` (`:983-986`), and an index that carries them under a config disabling
+MTP reads the same (`:987-988`). The accepted case is a bundle on this host:
+`models--JANGQ-AI--Qwen3.5-4B-JANG_4S` declares one MTP layer in
+`text_config.mtp_num_hidden_layers`, indexes 31 `mtp.layers.0.*` tensors under family
+`qwen3_5`, and its start log carries `Qwen3.5/3.6 MTP model adapter applied`
+(`results/logs/vmlx-20260924T032906-11424.log:38`) — a depth pin is honest there.
+
+The `on`-side of the same question for the *streaming* pin is the log line quoted in §7.8.
+
 ### 7.5 Caches — what survives a restart, and 22 GB already on disk
 
 | Cache | Default | On-disk path | Keyed by model? | Survives restart? |
@@ -1514,6 +1561,42 @@ stronger statement than "no flag for it":
 - No sampler injection from `generation_config.json` beyond the documented
   `--default-top-k` / `--default-min-p` / `--default-repetition-penalty` fallback chain (§2.2.5),
   which is a flag with a documented bundle fallback rather than a hidden override.
+
+### 7.8 `--flash-moe` is accepted on models it cannot stream (`stream_experts`, header pin 03-03)
+
+`--flash-moe` "Enable[s] Flash MoE: stream expert weights from SSD on-demand"
+(`cli.py:3963-3970`), `default=False`, and `FlashMoEConfig.enabled: bool = False` — "Default
+False (opt-in)" (`flash_moe_config.py:29`). Passing it is therefore the whole of what a cell can
+say through its start command, and it is **not evidence that anything streamed.** Every failure
+below is logged and then the load simply proceeds resident:
+
+| Outcome | Line | Source |
+|---|---|---|
+| The model has no MoE layers | `Flash MoE: model has no MoE layers, skipping` | `server.py:8981-8982` |
+| The bundle is JANGTQ | `vmlx#81: --flash-moe is not supported on JANGTQ (weight_format=mxtq) …` | `server.py:8964-8973` |
+| The patch matched nothing | `Flash MoE: no MoE layers found to patch` | `server.py:9003-9005` |
+| The setup raised | `Flash MoE setup failed: %s` | `server.py:9006-9008` |
+| smelt or distributed is also on | `Flash MoE: refusing to patch — …` | `server.py:8929-8938` |
+
+The line that says it **is** on is printed only when layers were patched
+(`server.py:8996-9002`):
+
+```
+Flash MoE enabled: <n> layers patched, <g> GB freed, slot bank=<n>, io_workers=<n>
+```
+
+It is written before the runtime can answer: `--flash-moe` is applied at the readiness barrier,
+ahead of the yield that lets uvicorn start serving (`server.py:6176-6177`, `:6199`), so it is
+already in the log when `GET /v1/models` answers. That is what makes an `on` cell checkable at
+all — the harness reads the head of this start's own log and **FAILs the cell with that log
+quoted** when the line is not there, rather than publishing a number under `stream_experts='on'`
+for a cell that ran resident.
+
+**Not pinned by this flag, and worth knowing:** Flash MoE is mutually exclusive with `--smelt`
+and `--distributed` (`cli.py:2565-2573`), and while it is active the engine skips `mx.compile`
+(`server.py:6565-6568`) — so an `on` cell is not byte-comparable with an `off` one in the JIT
+dimension either. The harness passes `--no-jit` unconditionally, so both states are un-JITed and
+the flag is the only thing that moves.
 
 ---
 
@@ -1658,7 +1741,8 @@ the question.
 | `--max-num-seqs` | `1` | Single-stream measurement; requires continuous batching |
 | `--enable-jit` **or** `--no-jit` | pin one, always | Otherwise a JANG affine bundle silently gets JIT while a non-JANG one does not (§7.1) |
 | `--no-speculative-model` | n/a | Not a flag — simply omit `--speculative-model` |
-| `--disable-native-mtp` | per cell | MTP adapts at runtime (§7.4); either disable it or record that it was enabled |
+| `--disable-native-mtp` **or** `--native-mtp-depth N --native-mtp-depth-policy fixed` | pin one, always | MTP adapts at runtime (§7.4); either disable it or pin a depth under the fixed policy. **Done since this document was written:** the header pin `--mtp-depth` drives exactly that pair, and a depth is refused on an artifact whose MTP heads the runtime will not wire (§7.4.1) |
+| `--flash-moe` | pin on or off, and read the log | Off by default, and accepted on models it cannot stream — every fallback is one log line and a resident load (§7.8). **Done since this document was written:** the header pin `--stream-experts` drives the flag and checks the `Flash MoE enabled:` line |
 | `--native-mtp-sampling-policy` | `greedy-only` or leave + record | **`greedy-only` overrides the request's temperature** — it forces temperature 0, top_p 1, top_k 0, min_p 0, repetition_penalty 1. A cell that pins temperature 0 in the request body and passes nothing here is relying on MTP not to override; the default `compatible-only` "leaves sampling defaults alone" |
 | `--prefix-cache` state | pin on or off | On by default |
 | `--disable-block-disk-cache` | consider pinning | Removes the 22 GB on-disk cache and the synchronous startup trim (§7.5) from cold-load time |
