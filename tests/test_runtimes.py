@@ -622,6 +622,15 @@ def host_prefix_cache(monkeypatch, value):
     )
 
 
+def host_live_kv_codec(monkeypatch, value):
+    """The live ``cache.liveKVCodec`` the runtime reads, without touching the host's files."""
+    monkeypatch.setattr(
+        runtimes,
+        "capture_osaurus_settings",
+        lambda: {"server-runtime.json:cache.liveKVCodec": value},
+    )
+
+
 def test_osaurus_refuses_the_cache_state_the_host_is_not_in(monkeypatch):
     """The harness does not edit ~/.osaurus/config, so a requested state is honoured only when
     the host is already in it -- and the refusal says which setting disagreed, because that is
@@ -661,6 +670,137 @@ def test_the_absent_cache_pin_is_never_refused_and_the_flag_runtimes_never_refus
     for name in ("mlxlm", "omlx", "optiq", "vmlx"):
         assert RUNTIMES[name].cache_state_refusal("off") is None
         assert RUNTIMES[name].cache_state_refusal("on") is None
+
+
+# --------------------------------------------------------------------------------------
+# The KV-quantization pin (study 03-05)
+# --------------------------------------------------------------------------------------
+#
+# The codec a runtime's KV cache is held in, one cache down from `cache_state` and built the
+# same way. The values name a codec rather than a width, and `fp8` is not one of them: nothing
+# in this set has an FP8 KV codec, and the earlier study's "FP8" arms were `mx.quantize` affine
+# 8-bit. Per-runtime evidence: docs/research/2026-09-24-kv-quant-surface.md §2.3, §9, §11.
+
+
+def test_the_kv_quant_values_name_a_codec_and_fp8_is_not_one_of_them():
+    """`fp8` reads as a float8 codec and there is none here, so the value is retired rather than
+    aliased onto `affine8`; `int4` is not used either, because it is true of the affine path and
+    false of the TurboQuant codebook codecs two of these runtimes carry."""
+    assert runtimes.KV_QUANTS == ("off", "affine8", "affine4")
+    assert "fp8" not in runtimes.KV_QUANTS
+    assert "int4" not in runtimes.KV_QUANTS
+    assert "int8" not in runtimes.KV_QUANTS
+
+
+def test_no_kv_quant_pin_leaves_every_start_command_byte_identical_to_today():
+    """Absent is not `off`: the pin was never taken, so no runtime's command gains a flag and
+    every one of the five is the tuple this module built before the pin existed. An absent pin
+    read as `off` would have added `--kv-cache-quantization none` to vMLX's command and claimed
+    a codec nobody asked about."""
+    assert set(TODAY) == set(RUNTIMES)
+    for name, runtime in RUNTIMES.items():
+        assert runtime.start_command(ARTIFACT, HF_ID) == TODAY[name]
+        assert runtime.start_command(ARTIFACT, HF_ID, kv_quant=None) == TODAY[name]
+
+
+def test_optiq_drives_all_three_values_and_pins_the_group_size_with_each_codec():
+    """`--kv-bits` is OptiQ's own flag (`optiq/cli.py:2502-2503`) and, because OptiQ consumes
+    it, it is not forwarded to the mlx_lm.server underneath. `off` is the *absence* of the flag:
+    there is no `--kv-bits none` and no `--no-kv-quant`, so `off` and an absent pin build one
+    command, and that is the state OptiQ defaults to (`cli.py:2332-2347`). The group size is
+    pinned with each codec rather than inherited, because it is a second variable and 64 is only
+    today's default (`cli.py:2504`)."""
+    off = RUNTIMES["optiq"].start_command(ARTIFACT, HF_ID, kv_quant="off")
+    eight = RUNTIMES["optiq"].start_command(ARTIFACT, HF_ID, kv_quant="affine8")
+    four = RUNTIMES["optiq"].start_command(ARTIFACT, HF_ID, kv_quant="affine4")
+
+    assert off == TODAY["optiq"]
+    assert eight == TODAY["optiq"] + ("--kv-bits", "8", "--kv-group-size", "64")
+    assert four == TODAY["optiq"] + ("--kv-bits", "4", "--kv-group-size", "64")
+    assert "--kv-config" not in eight + four, "the per-layer recipe is not this pin"
+    for value in runtimes.KV_QUANTS:
+        assert RUNTIMES["optiq"].kv_quant_refusal(value) is None
+
+
+def test_vmlx_passes_its_explicit_off_only_when_the_pin_is_off():
+    """vMLX is the one runtime here with a real `off` flag: `--kv-cache-quantization none` is an
+    accepted value and the production default (`vmlx_engine/cli.py:3864-3882`). It is passed for
+    `off` alone -- an absent pin omits it, which is what keeps every recorded command
+    byte-identical -- and a codec value never reaches the command, because the refusal is asked
+    first."""
+    off = RUNTIMES["vmlx"].start_command(ARTIFACT, HF_ID, kv_quant="off")
+
+    assert off == TODAY["vmlx"] + ("--kv-cache-quantization", "none")
+    assert "--kv-cache-quantization" not in TODAY["vmlx"]
+    assert RUNTIMES["vmlx"].kv_quant_refusal("off") is None
+
+
+def test_the_runtimes_with_no_way_to_reach_a_codec_refuse_it_rather_than_approximating():
+    """Each refusal names what was read, because what would have to change is the runtime and
+    not this run: mlx-lm's server has no surface for a codec at all, oMLX's codec is TurboQuant
+    rather than affine, vMLX's codec is storage-only and inert under this harness's own
+    `--disable-prefix-cache`, and Osaurus's affine route is inert under batched decode."""
+    mlxlm = RUNTIMES["mlxlm"].kv_quant_refusal("affine8")
+    assert "make_prompt_cache" in mlxlm and "server.py" in mlxlm
+
+    omlx = RUNTIMES["omlx"].kv_quant_refusal("affine4")
+    assert "TurboQuant" in omlx and "model_settings.json" in omlx
+
+    vmlx = RUNTIMES["vmlx"].kv_quant_refusal("affine8")
+    assert "scheduler.py:2444-2458" in vmlx and "--disable-prefix-cache" in vmlx
+
+    osaurus = RUNTIMES["osaurus"].kv_quant_refusal("affine8")
+    assert "batched decode" in osaurus and "TurboQuant" in osaurus
+
+    for name in ("mlxlm", "omlx", "osaurus", "vmlx"):
+        for value in ("affine8", "affine4"):
+            reason = RUNTIMES[name].kv_quant_refusal(value)
+            assert value in reason, f"{name} names the value it refused"
+            assert "N/A" in reason, f"{name} says the cell is not measured"
+
+
+def test_off_is_accepted_by_every_runtime_that_can_hold_it(monkeypatch):
+    """`off` is the full-precision state, and on four of the five it is the state the runtime
+    already delivers: mlx-lm and oMLX with no flag surface at all, OptiQ by omitting two flags,
+    vMLX by its own explicit `none`. The fifth is read from the host rather than assumed."""
+    host_live_kv_codec(monkeypatch, "engine_selected")
+
+    for name in RUNTIMES:
+        assert RUNTIMES[name].kv_quant_refusal("off") is None, name
+        assert RUNTIMES[name].kv_quant_refusal(None) is None, name
+
+
+def test_the_absent_kv_pin_is_never_refused_even_on_a_host_in_another_codec(monkeypatch):
+    """The absent pin asks for no codec, so nothing can refuse it -- including the host whose
+    live codec is not the default, which refuses the `off` *pin* rather than the absence of
+    one."""
+    host_live_kv_codec(monkeypatch, "turboquant")
+
+    for runtime in RUNTIMES.values():
+        assert runtime.kv_quant_refusal(None) is None
+    for name in ("mlxlm", "omlx", "optiq", "vmlx"):
+        assert RUNTIMES[name].kv_quant_refusal("off") is None, name
+
+
+def test_osaurus_accepts_the_off_pin_only_while_the_host_is_at_its_default_codec(monkeypatch):
+    """No flag exists in either direction, so `off` is host state this harness reads and does
+    not edit -- the same shape as `cache.prefix.enabled`, read the same way, and refused with
+    the setting named when the host disagrees. A restart is not a way to move it: the codec is
+    host state rather than a property of a fresh process."""
+    osaurus = RUNTIMES["osaurus"]
+
+    host_live_kv_codec(monkeypatch, "engine_selected")
+    assert osaurus.kv_quant_refusal("off") is None
+
+    host_live_kv_codec(monkeypatch, "turboquant")
+    refusal = osaurus.kv_quant_refusal("off")
+    assert "cache.liveKVCodec" in refusal
+    assert "turboquant" in refusal
+    assert "restart" in refusal, "a restart is not a way to move a host codec"
+
+    for sentinel in (osaurus_settings.UNREADABLE, osaurus_settings.MISSING):
+        host_live_kv_codec(monkeypatch, sentinel)
+        assert "cache.liveKVCodec" in osaurus.kv_quant_refusal("off")
 
 
 # --------------------------------------------------------------------------------------

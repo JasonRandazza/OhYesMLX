@@ -133,7 +133,8 @@ class OptiqResident(runtimes.Optiq):
         super().__init__(name="optiq", port=8080)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         if "--no-stream-experts" not in cmd:
@@ -148,7 +149,8 @@ class OptiqStreaming(runtimes.Optiq):
         super().__init__(name="optiq", port=8080)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         if "--no-stream-experts" in cmd:
@@ -164,7 +166,8 @@ class OptiqStreamingCached(runtimes.Optiq):
         super().__init__(name="optiq", port=8080)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         if "--no-stream-experts" in cmd:
@@ -187,7 +190,8 @@ class VmlxFlashMoE(runtimes.Vmlx):
         super().__init__(name="vmlx", port=8000)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--flash-moe", "--flash-moe-slot-bank", "64"])
@@ -201,7 +205,8 @@ class VmlxSmelt(runtimes.Vmlx):
         super().__init__(name="vmlx", port=8000)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--smelt", "--smelt-experts", "50"])

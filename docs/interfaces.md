@@ -95,8 +95,11 @@ class Runtime:
     name: str                      # "mlxlm" | "osaurus" | "omlx" | "optiq" | "vmlx"
     port: int
     def start(self, artifact_dir: str, model_id: str, *,
-              cache_state: str | None = None) -> "Handle": ...    # see "Phase 6 plan 06-02"
+              cache_state: str | None = None,
+              kv_quant: str | None = None) -> "Handle": ...    # see "Phase 6 plan 06-02" and
+                                                               # "Phase 4 study 03-05"
     def cache_state_refusal(self, cache_state: str | None) -> str | None: ...
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None: ...    # 03-05, below
 
 @dataclass
 class Handle:
@@ -178,11 +181,12 @@ class CellResult:
 
 def run_cells(cells: list[Cell], workloads: list[Workload], *,
               warmup: int | str = "plateau", measured: int = 9, concurrency: int = 1,
-              cache_state: str | None = None,
+              cache_state: str | None = None, kv_quant: str | None = None,
               cooldown_s: float = 30.0, prompt_tokens: dict | None = None,
               results_dir: str) -> list[CellResult]: ...
 # warmup/measured/concurrency: see "Phase 6 plan 06-01b"; prompt_tokens: 06-01c;
-# cache_state: 06-02. Every one of them is a run header pin and none is a cell property.
+# cache_state: 06-02; kv_quant: 03-05. Every one of them is a run header pin and none is a
+# cell property.
 ```
 
 A **record** carries every `CellResult` field except `measured_pin`, adds three derived ones
@@ -313,12 +317,12 @@ def write_jsonl(results: list[CellResult], path: str, *, run: dict) -> None: ...
 ```
 
 Line 1 of the file is the **run header**: the pins — `temperature`, `seed`, `warmup`,
-`measured`, `concurrency`, `prompt_tokens`, `cache_state`, `cooldown_s` — the `workloads` the
-run measured, each with its own `messages` and `max_tokens` (`max_tokens` is a workload field,
-never a run-level pin), and the `harness` block (`version`, `source_sha256`). Every line after
-it is one (cell, workload) pair. A header written before a pin existed simply lacks that key —
-`load_run` returns a header as the dict it is and callers `.get` what they need, so an absent
-key reads as the absence it was.
+`measured`, `concurrency`, `prompt_tokens`, `cache_state`, `kv_quant`, `cooldown_s` — the
+`workloads` the run measured, each with its own `messages` and `max_tokens` (`max_tokens` is a
+workload field, never a run-level pin), and the `harness` block (`version`, `source_sha256`).
+Every line after it is one (cell, workload) pair. A header written before a pin existed simply
+lacks that key — `load_run` returns a header as the dict it is and callers `.get` what they
+need, so an absent key reads as the absence it was.
 
 A stored observation carries **only the `Observation` fields** — never `decode_tps`,
 `prefill_tps`, or `itl_s`. Those are derived, and `report.summarize` computes them from the
@@ -919,3 +923,76 @@ on INT/TERM/HUP. Restoration is verified with `cmp` against the copies rather th
 guard, because the host's 30 legitimately differs from the committed baseline's 900 and the
 guard would report Jason's own machine as drift forever.
 
+## Phase 4 study 03-05 — the KV-quantization pin
+
+The second cache pin, one cache down from 06-02: which **codec** a runtime's KV cache is held in,
+rather than whether prefix/KV reuse happens at all. Same shape as that pin — one run drives every
+cell in it into one codec, so it is a header pin a sweep varies and never an axis or a cell
+property.
+
+```
+ohyesmlx run ... --kv-quant {off,affine8,affine4}
+ohyesmlx sweep <off-run-dir> <affine8-run-dir> --varying kv_quant --rank ttft_p50_s
+```
+
+**The values name the codec, not the width, and that is the whole point of them.**
+
+| value | means |
+|---|---|
+| `off` | no KV quantization: the runtime's own native, full-precision cache |
+| `affine8` | MLX's affine codec, 8-bit, group size pinned in the command |
+| `affine4` | the same, 4-bit |
+
+**`fp8` is not one of them and must not come back as a spelling of `affine8`.** Nothing in this
+set has an FP8 (E4M3/E5M2) KV codec: "8-bit" here is `mx.quantize`'s default `affine` mode — a
+signed integer code plus a per-group float scale and bias — which has no exponent and does not
+share FP8's error profile. The earlier study's "FP8" arms were this codec, and naming them float8
+was false about what ran. A genuine float8 codec gets its own value and its own column on the day
+one appears, because it would not be comparable with `affine8`. `int4`/`int8` are not used either:
+they are true of this affine path and false of the TurboQuant codebook codecs two of these
+runtimes carry, and a codec a runtime cannot deliver is `N/A` with a reason rather than
+approximated into a neighbour. The group size is a second variable and is pinned in the command
+rather than inherited.
+
+The definitions are `runtimes.KV_QUANTS` (the values, and that rationale, written once) and the
+evidence is `docs/research/2026-09-24-kv-quant-surface.md` — §2.3 for the names, §9 and §11 for
+the per-runtime mapping. It is not restated here.
+
+**The header pin.**
+
+```python
+"kv_quant": "off" | "affine8" | "affine4" | None     # None: the pin was not taken
+```
+
+`PIN_FIELDS` and `ABSENT_PINS` gained it exactly as they gained `cache_state`, and for the same
+reason: `None` is not a fourth value and not a synonym for `"off"`. Every run measured before the
+pin existed ran each runtime's own codec — and those were not uniform, since `off` is the absence
+of two flags on OptiQ, a settings field nobody wrote on oMLX, and a host setting on Osaurus — so
+reading the absence as `off` would fold different codecs into one column. Without the flag every
+start command is **byte-identical to today**, checked against recorded literals for all five
+runtimes rather than re-derived.
+
+**The mechanism, per runtime.** `off` is the runtime's own full-precision cache, and a codec value
+is driven only where a start flag exists for it:
+
+| runtime | `off` | `affine8` / `affine4` |
+|---|---|---|
+| mlx-lm 0.31.3 | accepted, no flag — it is the only state the server can hold | **refused**: no flag in the server's argv, no environment variable, no settings file, no per-request field, and `make_prompt_cache` takes no bit width (`server.py:1751-1886`, `:971`, `models/cache.py:15-42`). The codec is real but wired into the client CLIs only (`generate.py:192-208`, `cache_prompt.py:61-76`) |
+| OptiQ 0.5.13 | accepted, no flag — neither `--kv-bits` nor `--kv-config`, which is the production default (`cli.py:2332-2347`) | **driven**: `--kv-bits 8` / `--kv-bits 4`, each with `--kv-group-size 64` pinned (`cli.py:2502-2504`). Enabling it also installs OptiQ's fused streaming-KV path unless `--no-fused-kv` is passed (`cli.py:2729-2739`) — the runtime as shipped, deliberately not moved by this pin, and the reason an affine cell there is not stock-mlx-lm-with-a-quantized-cache |
+| oMLX 0.6.4 | accepted, no flag, and structural: the per-run `--base-path` scratch holds no `model_settings.json`, so `turboquant_kv_enabled` is `False` (`model_settings.py:235`, `:433-435`) | **refused**: oMLX's codec is TurboQuant, a codebook codec that derives `key_bits = floor` / `value_bits = ceil` (`turboquant_kv.py:70-92`), not affine; and it is a per-model settings field with no start-command surface (`grep turboquant omlx/cli.py` is empty) |
+| Osaurus 0.25.12 | accepted only when the host's `cache.liveKVCodec` is `engine_selected` — the same read-the-key-and-refuse shape as `cache.prefix.enabled` | **refused**: no flag exists in either direction, the affine route (`kvMode: .affine` / legacy `kvBits`) is inert under batched decode and falls back to float KV, and the route that works while batching is TurboQuant, needing both widths explicitly |
+| vMLX 1.6.59 | accepted and **driven**: `--kv-cache-quantization none`, the flag's own explicit off (`cli.py:3864-3882`) | **refused**: the codec quantizes only the prefix cache's stored copy and generation stays full precision (`scheduler.py:2444-2458`), and it is a no-op under this harness's `--disable-prefix-cache` (`scheduler.py:1393-1404`) |
+
+**A codec a runtime cannot be driven into is `N/A` with the reason**, through the same path the
+cache pin uses: the runtime is asked (`Runtime.kv_quant_refusal`) where
+`Runtime.cache_state_refusal` is asked, *before* anything is started, and `_visit` returns
+`"skip"` so no later visit retries it. The reason names the evidence, because what would have to
+change is the runtime or the host and not this run.
+
+**`render_sweep` gains `varying="kv_quant"`.** `SWEEP_VALUES` orders it `off` before `affine8`
+before `affine4`: the baseline column first, then the codecs in `KV_QUANTS`' order. Like the
+cache pin — and unlike the prompt-length pin — it relaxes nothing: its columns are meant to answer
+the same prompt under one codec and then another, so two runs whose prompts differ are refused
+like any other grid. What a column does not carry is each runtime's own side effects of reaching
+the codec — the same class of caveat as OptiQ's fused path above — and those are named beside the
+values, in `runtimes.KV_QUANTS` and in each runtime's refusal, rather than in the table.

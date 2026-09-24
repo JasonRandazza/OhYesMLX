@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from ohyesmlx import cli, measure, report
+from ohyesmlx import cli, measure, report, runtimes
 
 # --- stand-ins for docs/interfaces.md (measure.py, issue #5) -------------------------------
 
@@ -1589,7 +1589,7 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
 
     assert flags == {
         "-h", "--help", "--study", "--cells", "--results-dir", "--rank", "--concurrency",
-        "--prompt-tokens", "--cache-state",
+        "--prompt-tokens", "--cache-state", "--kv-quant",
     }
     # --concurrency is a PIN, not a selector: it says how the named cells are driven, never
     # which cells run. That distinction is the whole reason concurrency is not a third
@@ -2408,7 +2408,8 @@ def test_the_join_states_the_pins_and_every_run_directory_it_joined():
 
     assert (
         "Pins all columns share: temperature `0.0`, seed `0`, warmup `3`, measured `5`, "
-        "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`, cache_state `—`." in grid
+        "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`, cache_state `—`, "
+        "kv_quant `—`." in grid
     )
     assert "Workloads all columns ran, with identical messages: `chat` (max_tokens 128)" in grid
 
@@ -3029,6 +3030,49 @@ def test_guard_1_refuses_an_absent_cache_pin_against_a_pinned_off_one():
         assert "cache_state='off'" in message
 
 
+def test_guard_1_refuses_a_grid_over_two_kv_codecs():
+    """`kv_quant` is a header pin like the cache state beside it, and a grid joins runs that
+    agree on every one of them. Two codecs of one cell are a codec sweep's two columns; joined
+    as a grid they would be one table whose difference the reader would attribute to the format
+    or the runtime instead of to the codec."""
+    for codec_a, codec_b in (("off", "affine8"), ("affine4", None)):
+        runs = [
+            grid_run(
+                RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",),
+                header=run_header(("chat",), kv_quant=codec_a),
+            ),
+            grid_run(
+                RUN_B, "osaurus", "Osaurus 0.25.4", ("jang",), workload_ids=("chat",),
+                header=run_header(("chat",), kv_quant=codec_b),
+            ),
+        ]
+
+        assert_refused(runs, RUN_A, RUN_B, "kv_quant")
+
+
+def test_guard_1_refuses_an_absent_kv_pin_against_a_pinned_off_one():
+    """The defect the codec pin's absence invites, one cache down from the cache pin's: reading
+    `None` as `off` would say a run whose codec was never pinned was measured with a
+    full-precision cache as a result of the pin. Every run on disk before the pin ran each
+    runtime's own codec -- `off` is the absence of two flags on one and a host setting on
+    another -- so the absence is refused against `off` rather than folded into it."""
+    pre_pin = grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",))
+    pinned_off = grid_run(
+        RUN_B,
+        "osaurus",
+        "Osaurus 0.25.4",
+        ("jang",),
+        workload_ids=("chat",),
+        header=run_header(("chat",), kv_quant="off"),
+    )
+
+    for runs in ([pre_pin, pinned_off], [pinned_off, pre_pin]):
+        message = assert_refused(runs, RUN_A, RUN_B, "kv_quant")
+
+        assert "kv_quant=None" in message, "the absence is printed as the absence"
+        assert "kv_quant='off'" in message
+
+
 def test_guard_1_refuses_two_runs_that_pinned_a_different_max_tokens():
     header = run_header(("chat",))
     header["workloads"][0]["max_tokens"] = 256
@@ -3402,7 +3446,7 @@ def test_a_sweep_may_vary_only_one_of_the_header_pins():
     rather than left uncompared."""
     runs = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
 
-    assert report.SWEEP_PINS == ("concurrency", "prompt_tokens", "cache_state")
+    assert report.SWEEP_PINS == ("concurrency", "prompt_tokens", "cache_state", "kv_quant")
     assert set(report.SWEEP_PINS) <= set(report.PIN_FIELDS)
     for varying in ("temperature", "seed", "warmup", "measured", "cooldown_s", "decode_tps", None):
         with pytest.raises(ValueError) as raised:
@@ -3598,6 +3642,96 @@ def test_a_cache_state_sweep_refuses_two_runs_that_answered_different_prompts():
         SWEEP_RUNS[1],
         "not one grid",
     )
+
+
+def kv_quant_run(
+    run_label,
+    codec,
+    *,
+    rate=100.0,
+    labels=("oq4",),
+    workload_ids=("prefill",),
+    header=None,
+    **kwargs,
+):
+    """One run of a KV-codec sweep: the same prompt answered under one codec."""
+    return grid_run(
+        run_label,
+        "optiq",
+        "mlx-optiq 0.5.13",
+        labels,
+        workload_ids=workload_ids,
+        rate_of=lambda *_: rate,
+        header=run_header(workload_ids, kv_quant=codec) if header is None else header,
+        **kwargs,
+    )
+
+
+def test_the_codec_sweep_order_is_the_pin_s_own_values_in_their_declared_order():
+    """`SWEEP_VALUES` orders a codec sweep rather than letting two lists drift: `off` is the
+    baseline column and the two codecs follow in the order `runtimes.KV_QUANTS` declares them,
+    which is where the values are defined. A width-sorted order would put `affine4` before
+    `affine8`, and the pin deliberately does not read that way."""
+    assert report.SWEEP_VALUES["kv_quant"] == runtimes.KV_QUANTS
+    assert len(report.SWEEP_VALUES["kv_quant"]) == len(set(report.SWEEP_VALUES["kv_quant"]))
+
+
+def test_a_kv_quant_sweep_reads_the_baseline_column_first_and_then_the_codecs():
+    """The order is the reading: `off` is the runtime's own full-precision cache, which is what
+    the codec columns are read against. The runs are handed over in a scrambled order, because a
+    codec sweep whose columns came out in directory order would be an accident of how three
+    names happen to sort."""
+    runs = [
+        kv_quant_run(SWEEP_RUNS[1], "affine4", rate=300.0),
+        kv_quant_run(SWEEP_RUNS[0], "off", rate=100.0),
+        kv_quant_run(SWEEP_RUNS[2], "affine8", rate=200.0),
+    ]
+
+    sweep = report.render_sweep(runs, varying="kv_quant")
+    table = sweep_tables(sweep)["prefill"]["oq4__optiq"]
+
+    assert list(table) == ["off", "affine8", "affine4"]
+    # Each column carries its own run's number: three codecs are not one row printed thrice.
+    assert table == {"off": "100.0", "affine8": "200.0", "affine4": "300.0"}
+    assert "`kv_quant`" in sweep.splitlines()[0]
+    for run_label in SWEEP_RUNS:
+        assert run_label in sweep, "every directory behind a column is named"
+    assert "KV cache" in sweep, "the swept pin is described, not just named"
+
+
+def test_a_kv_quant_sweep_refuses_two_runs_that_answered_different_prompts():
+    """This pin relaxes nothing, for the same reason the cache-state pin relaxes nothing: its
+    columns are meant to answer the same prompt under one codec and then another, so a pair of
+    runs whose prompts differ is refused like any other grid -- the difference between their
+    numbers would be a prompt's and would publish as a codec's."""
+    runs = [
+        kv_quant_run(SWEEP_RUNS[0], "off"),
+        kv_quant_run(
+            SWEEP_RUNS[1], "affine8", header=other_prompt_header(("prefill",), kv_quant="affine8")
+        ),
+    ]
+
+    assert_sweep_refused(
+        runs,
+        "kv_quant",
+        "workload `prefill`",
+        "pinned a different messages",
+        SWEEP_RUNS[0],
+        SWEEP_RUNS[1],
+        "not one grid",
+    )
+
+
+def test_a_kv_quant_sweep_refuses_the_same_cell_measured_twice_at_one_codec():
+    """The other refusal a sweep needs and a grid has no use for: two run directories that
+    measured one cell at one value of the swept pin are two answers to one question, and the
+    table has one entry for them."""
+    runs = [
+        kv_quant_run(SWEEP_RUNS[0], "off", rate=100.0),
+        kv_quant_run(SWEEP_RUNS[1], "off", rate=50.0),
+    ]
+
+    assert_sweep_refused(runs, "kv_quant", "does not vary", SWEEP_RUNS[0], SWEEP_RUNS[1])
 
 
 def test_a_combination_no_run_measured_is_an_em_dash_and_a_failure_is_a_fail():

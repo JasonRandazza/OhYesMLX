@@ -33,6 +33,13 @@ starts exactly as it did before the pin existed. ``"off"`` is prefix/KV reuse di
 ``"on"`` is enabled, and the value a runtime cannot deliver is refused up front rather than
 approximated -- see :meth:`Runtime.cache_state_refusal` and, for the one runtime with no flag
 in either direction, :meth:`Osaurus.cache_state_refusal`.
+
+The KV-quantization pin (Phase 4, study 03-05) is the same shape one cache down: the codec a
+runtime's KV cache is held in, pinned by name rather than by width (:data:`KV_QUANTS`, which is
+where the names and why they are codec names are defined). ``kv_quant=None`` is the pin not
+taken and leaves every command byte-identical to the ones recorded before it existed; a value a
+runtime cannot deliver is refused up front rather than approximated into a neighbouring codec --
+see :meth:`Runtime.kv_quant_refusal`.
 """
 
 from __future__ import annotations
@@ -89,6 +96,35 @@ _RUN_STARTED_PIDS: set[int] = set()
 CACHE_STATE_OFF = "off"
 CACHE_STATE_ON = "on"
 CACHE_STATES = (CACHE_STATE_OFF, CACHE_STATE_ON)
+
+# The KV-cache pin's values, and the whole of them. They name the CODEC rather than a bit width,
+# because the codec is the thing that has to be held constant and a width alone does not say
+# which one it is:
+#
+#   `off`      the runtime's own native, full-precision cache
+#   `affine8`  MLX's affine codec at 8 bits, group size pinned in the start command
+#   `affine4`  the same at 4 bits
+#
+# "Affine" is `mx.quantize`'s default mode -- signed integer codes plus a per-group float scale
+# and bias (`mlx/core/__init__.pyi:3396`, and `QuantizedKVCache.update_and_fetch` passes no mode
+# of its own). **`fp8` is not one of these values and is not a spelling of `affine8`**: nothing
+# in this set has an FP8 (E4M3/E5M2) KV codec, so the earlier study's "FP8" arms were affine
+# 8-bit and a name saying float8 is false about what ran. A genuine float8 codec would get its
+# own value and its own column on the day one appears, because it would not be comparable with
+# `affine8`. `int4`/`int8` are not values either: they read correctly for this affine path and
+# falsely for the TurboQuant codebook codecs two of these runtimes also carry, so the codec is
+# what gets named and the width stays free for a codec that is not affine. The group size is a
+# second variable and is pinned in the command rather than inherited -- `optiq` defaults it to
+# 64 (`optiq/cli.py:2504`).
+#
+# Per-runtime evidence, and which value each can actually be driven into, is
+# docs/research/2026-09-24-kv-quant-surface.md (§2.3 for the names, §9 and §11 for the mapping).
+# `None` is not a value: it is the pin not taken -- the runs measured before it existed ran each
+# runtime's own codec, and those were not uniform -- and it is never read as `off`.
+KV_QUANT_OFF = "off"
+KV_QUANT_AFFINE8 = "affine8"
+KV_QUANT_AFFINE4 = "affine4"
+KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
 
 # Loopback-only key for a run-owned oMLX. Not a shared secret, and not user state.
 OMLX_API_KEY = "ohyesmlx-local"
@@ -648,7 +684,12 @@ class Runtime:
         return f"http://127.0.0.1:{self.port}/v1"
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         raise NotImplementedError
 
@@ -666,6 +707,17 @@ class Runtime:
         absent pin (``None``) asks for no state at all. The one override is Osaurus, whose
         cache state is host settings this harness must not edit -- it refuses a state the host
         is not in rather than measuring something else and labelling it.
+        """
+        return None
+
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None:
+        """Why this runtime cannot be measured in *kv_quant*, or ``None`` when it can.
+
+        The same shape as :meth:`cache_state_refusal`, one cache down: the absent pin asks for
+        no codec and reaches every runtime, and the values are :data:`KV_QUANTS` -- defined
+        there, codec names rather than widths. The default is ``None`` for the shape
+        :class:`Optiq` has, whose own start flags drive all three values; the four runtimes
+        that cannot are the four that override this.
         """
         return None
 
@@ -695,10 +747,20 @@ class Runtime:
         """Refuse to start when host state this runtime cannot pin has moved."""
 
     def build_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[tuple[str, ...], str | None]:
         """The argv to spawn, plus any scratch tree a stop will have to remove."""
-        return self.start_command(artifact_dir, model_id, cache_state=cache_state), None
+        return (
+            self.start_command(
+                artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+            ),
+            None,
+        )
 
     def await_ready(
         self,
@@ -754,7 +816,12 @@ class Runtime:
             _sleep(READY_POLL_S)
 
     def start(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> Handle:
         """Spawn the runtime, hold until it can answer, and return its handle.
 
@@ -762,7 +829,9 @@ class Runtime:
         pin not taken and produces the command this method produced before the pin existed.
         The refusal is not made here: :meth:`cache_state_refusal` is the measurement loop's to
         ask, before it starts anything, so a state this runtime cannot be driven into is
-        recorded as ``N/A`` with its reason rather than raised as a start failure.
+        recorded as ``N/A`` with its reason rather than raised as a start failure. *kv_quant*
+        is the same kind of pin and is threaded the same way -- ``None`` is no codec flag at
+        all -- and :meth:`kv_quant_refusal` is likewise the loop's to ask.
         """
         if not _port_is_free(self.port):
             raise RuntimeStartError(
@@ -776,7 +845,9 @@ class Runtime:
                 + ", ".join(str(pid) for pid in resident_osaurus)
             )
         self.check_host_state()
-        command, scratch = self.build_command(artifact_dir, model_id, cache_state=cache_state)
+        command, scratch = self.build_command(
+            artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+        )
         log_path = _log_path(self.name)
         started = _now()
         pid = None
@@ -848,8 +919,16 @@ class MlxLm(Runtime):
     """The control: stock mlx-lm's own server."""
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
+        # `off` and the absent pin are one command here and it is the one this runtime always
+        # built: there is no flag to add for either, which is the whole of kv_quant_refusal
+        # below. No codec value reaches this method -- the loop asks first and skips the cell.
         return (
             "python",
             "-m",
@@ -859,6 +938,37 @@ class MlxLm(Runtime):
             "--port",
             str(self.port),
             *prompt_cache_flags(cache_state),
+        )
+
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None:
+        """Refuse a codec value: this server has no surface that selects one.
+
+        All four places were read rather than just the command line, because a claim that a
+        runtime *cannot* do something needs the source and not a missing flag: mlx_lm.server
+        0.31.3 declares 23 options and none of them is a KV codec (``server.py:1751-1886``), it
+        reads no environment variable anywhere in it, it has no settings file, and it honours no
+        per-request field for one -- and the cache it builds is ``make_prompt_cache``'s
+        (``server.py:971``, ``models/cache.py:15-42``), which takes no bit width at all. The
+        codec and its flags exist in the same package and one layer away, wired into the client
+        CLIs (``generate.py:192-208``, ``cache_prompt.py:61-76``), which is not the server a cell
+        is measured through.
+
+        ``off`` is accepted with no flag change, and there is nothing to pin: it is the only
+        state this server can hold, so the absence of a flag *is* the state rather than a way of
+        asking for it.
+        """
+        if kv_quant in (None, KV_QUANT_OFF):
+            return None
+        return (
+            f"kv_quant={kv_quant!r} asks for a KV-cache codec, and mlx_lm.server 0.31.3 has no "
+            "surface that selects one: no option in its argv (server.py:1751-1886), no "
+            "environment variable anywhere in it, no settings file and no per-request field, "
+            "and the cache it builds is make_prompt_cache's (server.py:971, "
+            "models/cache.py:15-42), which takes no bit width. The codec exists one layer away "
+            "on the client CLIs (generate.py:192-208, cache_prompt.py:61-76), which is not the "
+            "server this cell would be measured through. So the cell is N/A in this codec "
+            "rather than measured in the server's own full-precision cache under a header pin "
+            "it does not hold."
         )
 
     def version_command(self) -> tuple[str, ...]:
@@ -875,12 +985,18 @@ class Osaurus(Runtime):
     """The one runtime with no tuning flags to pin, and host settings instead."""
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         # No model and no tuning on the command line: what a cell measures is decided by
         # ~/.osaurus/config, which check_host_state refuses to run away from. The cache pin
-        # is one of those settings, so it adds no flag here in either state -- and the state
-        # it cannot be asked for is refused by cache_state_refusal below, never faked.
+        # and the KV-codec pin are two more of those settings, so neither adds a flag here in
+        # any state -- and the states they cannot be asked for are refused by
+        # cache_state_refusal and kv_quant_refusal below, never faked.
         return ("osaurus", "serve", "--port", str(self.port), "--yes")
 
     def cache_state_refusal(self, cache_state: str | None) -> str | None:
@@ -916,6 +1032,47 @@ class Osaurus(Runtime):
 
     def stop_command(self) -> tuple[str, ...]:
         return ("osaurus", "stop")
+
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None:
+        """Accept ``off`` only while the host's live KV codec is its engine-selected default.
+
+        No start-command flag exists in either direction, so a codec value cannot be driven and
+        is refused outright. Two routes do exist in the binary and neither delivers what these
+        values name: the affine one is request-side (``kvMode: .affine`` / the legacy
+        ``kvBits``) and is **not supported under batched decode** -- it logs a line and runs
+        float KV instead -- and the route that does work while batching, TurboQuant, is a
+        codebook codec needing both bit widths explicitly, not the affine codec ``affine8`` and
+        ``affine4`` name.
+
+        ``off`` is the state ``cache.liveKVCodec = engine_selected`` delivers, so it is honoured
+        only when the host is already in it, read the way :meth:`cache_state_refusal` reads
+        ``cache.prefix.enabled``: the harness does not edit ``~/.osaurus/config``, and a cell
+        measured in another codec under this pin would be a number published under a header
+        field it does not hold.
+        """
+        if kv_quant is None:
+            return None
+        if kv_quant != KV_QUANT_OFF:
+            return (
+                f"kv_quant={kv_quant!r} cannot be driven on Osaurus: it exposes no "
+                "start-command flag for the KV codec in either direction, its affine route "
+                "(kvMode: .affine, and the legacy kvBits) is not supported under batched "
+                "decode and falls back to float KV on this host, and the codec it can deliver "
+                "while batching is TurboQuant -- a codebook codec that requires both bit "
+                "widths explicitly, not the affine codec this value names. So this cell is N/A "
+                "in this codec rather than measured in another one."
+            )
+        live = capture_osaurus_settings().get("server-runtime.json:cache.liveKVCodec")
+        if live == "engine_selected":
+            return None
+        return (
+            "kv_quant='off' needs Osaurus's live KV codec at its engine-selected default, and "
+            f"the host has cache.liveKVCodec {live!r} in ~/.osaurus/config/server-runtime.json. "
+            "Osaurus exposes no start-command flag for the codec, and the harness does not edit "
+            "the host's settings, so this cell is N/A in this state rather than measured in "
+            "another codec. A restart is not a way to move it: the codec is host state, not a "
+            "property of a fresh process."
+        )
 
     def version_command(self) -> tuple[str, ...]:
         return ("osaurus", "doctor", "--json", "--redact")
@@ -973,8 +1130,17 @@ class Omlx(Runtime):
     """The runtime that has to be given a model directory it cannot see past."""
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
+        # `off` here is structural and adds nothing: the per-run base path this runtime is
+        # handed holds no model_settings.json, so turboquant_kv_enabled sits at its False
+        # default whatever the pin says -- see kv_quant_refusal below, which is also where a
+        # codec value is refused, because there is no flag in this command that could carry it.
         command = (
             "omlx",
             "serve",
@@ -999,6 +1165,40 @@ class Omlx(Runtime):
             command += ("--no-cache",)
         return command
 
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None:
+        """Refuse a codec value: oMLX's codec is TurboQuant, and no flag selects it.
+
+        ``off`` is accepted with no flag change, and it is stronger than a pin: it is a property
+        of the scratch the harness already creates. oMLX reads its per-model settings from
+        ``<base-path>/model_settings.json`` (``model_settings.py:433-435``, constructed with
+        ``global_settings.base_path`` at ``server.py:1928-1929``), and the base path a run hands
+        it is the empty per-run directory :func:`create_omlx_scratch` made -- so
+        ``turboquant_kv_enabled`` is at its ``False`` default (``model_settings.py:235``) and the
+        delivered state is the model's native cache.
+
+        A codec value is refused for two reasons at once. What oMLX quantizes its KV cache with
+        is TurboQuant, not the affine codec these values name: a codebook codec that derives two
+        widths from the one value it is given (``key_bits = floor``, ``value_bits = ceil``,
+        ``turboquant_kv.py:70-92``) and whose validator only accepts its own bit widths
+        (``mlx_vlm/turboquant.py:3498-3508``). And there is no start-command surface for it at
+        all -- it is a per-model settings field, HTTP-settable and otherwise read from the
+        scratch's file -- so driving it here would mean writing that file or calling the admin
+        route, which is a second variable beside this pin rather than the pin itself.
+        """
+        if kv_quant in (None, KV_QUANT_OFF):
+            return None
+        return (
+            f"kv_quant={kv_quant!r} asks for the affine codec, and oMLX's KV codec is not "
+            "affine: it is TurboQuant, a codebook codec that splits one value into "
+            "key_bits=floor/value_bits=ceil (turboquant_kv.py:70-92) and accepts only its own "
+            "bit widths (mlx_vlm/turboquant.py:3498-3508). It is also not drivable from a start "
+            "command: turboquant_kv_enabled is a per-model settings field read from "
+            "<base-path>/model_settings.json (model_settings.py:235, :433-435) and settable over "
+            "HTTP, and no flag in omlx/cli.py mentions it -- so this cell is N/A in this codec "
+            "rather than measured in a neighbouring one. `off` needs no flag: the per-run base "
+            "path holds no model_settings.json, which leaves turboquant_kv_enabled False."
+        )
+
     def version_command(self) -> tuple[str, ...]:
         return ("omlx", "--version")
 
@@ -1012,12 +1212,19 @@ class Omlx(Runtime):
         )
 
     def build_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[tuple[str, ...], str | None]:
         scratch = create_omlx_scratch(artifact_dir, model_id)
         command = tuple(
             str(scratch.catalog) if part == OMLX_CATALOG_TOKEN else part
-            for part in self.start_command(artifact_dir, model_id, cache_state=cache_state)
+            for part in self.start_command(
+                artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+            )
         )
         return command + (
             "--base-path",
@@ -1031,8 +1238,30 @@ class Optiq(Runtime):
     """The fork whose expert-streaming heuristic silently costs 5x on large artifacts."""
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
+        # The KV-codec pin, in the flags OptiQ consumes itself -- these are its own options and
+        # are not forwarded to the mlx_lm.server underneath it. `off` is the absence of both
+        # flags: there is no `--kv-bits none` and no `--no-kv-quant`, so `off` and an absent pin
+        # build the same command, and that state is the production default (`_effective_kv_bits`
+        # returns None for neither flag, optiq/cli.py:2332-2347). The group size is pinned
+        # explicitly rather than inherited, because it is a second variable and 64 is only
+        # today's default (optiq/cli.py:2504).
+        kv = ()
+        if kv_quant == KV_QUANT_AFFINE8:
+            kv = ("--kv-bits", "8", "--kv-group-size", "64")
+        elif kv_quant == KV_QUANT_AFFINE4:
+            kv = ("--kv-bits", "4", "--kv-group-size", "64")
+        # NOT moved by this pin: enabling KV quantization also installs OptiQ's fused
+        # streaming-KV path unless `--no-fused-kv` is passed (optiq/cli.py:2729-2739) -- one
+        # layer converted at a time, plus a FlashAttention-2 SDPA the runtime's own header
+        # documents as the reason a quantized cell does not OOM. That is the runtime as
+        # shipped, and an affine cell is therefore not stock-mlx-lm-with-a-quantized-cache.
         return (
             "optiq",
             "serve",
@@ -1072,6 +1301,7 @@ class Optiq(Runtime):
             # The cache pin, under the same flag stock mlx-lm takes: optiq serve forwards
             # what it does not know to the mlx_lm.server underneath it.
             *prompt_cache_flags(cache_state),
+            *kv,
         )
 
     def version_command(self) -> tuple[str, ...]:
@@ -1133,9 +1363,14 @@ class Vmlx(Runtime):
 
     Deliberately absent from the command line: ``--api-key`` (unset means no authentication
     at all), ``--enable-disk-cache`` and ``--use-paged-cache`` (both off by default, both
-    would make request 1 differ from requests 2+), and ``--kv-cache-quantization`` — omitting
-    it selects production auto mode while passing it *disables* loader-level TurboQuant, so
-    neither choice is neutral and this omission is the recorded one.
+    would make request 1 differ from requests 2+), and ``--kv-cache-quantization`` -- which is
+    passed now for the one value that can be honoured, ``off``, and left off for the absent
+    pin. That flag is not neutral either way: passing it at all disables loader-level
+    TurboQuant (``cli.py:1509-1517``), so the pin's ``off`` is a substitution rather than a
+    default spelled out -- but in 1.6.59 omitting it disables loader-level TurboQuant too
+    (``cli.py:60-91``), so the two differ only in ``kv_cache_quantization_explicit`` and pinning
+    ``none`` is strictly the more explicit of two identical states. A codec value is refused
+    rather than passed: see :meth:`kv_quant_refusal`.
 
     No stop subcommand exists, so the base class's empty ``stop_command`` stands and SIGTERM
     to the spawned pid is the stop -- shutdown can take up to ~10s to flush disk caches, which
@@ -1145,8 +1380,20 @@ class Vmlx(Runtime):
     """
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
+        # The KV-codec pin's one explicit off in this set, and the only value of the three this
+        # runtime can be driven into: `--kv-cache-quantization none` is a real accepted value
+        # (cli.py:3864-3882) and the production default, so passing it takes the last way the
+        # storage codec could move underneath a run. It is passed for `off` alone -- an absent
+        # pin omits it, which is what keeps every recorded command byte-identical -- and a
+        # codec value never reaches here: kv_quant_refusal refuses it first.
+        kv = ("--kv-cache-quantization", "none") if kv_quant == KV_QUANT_OFF else ()
         # The prefix cache is `--enable-prefix-cache`, default True (cli.py:3659) against
         # `--disable-prefix-cache` for the explicit off (cli.py:3667), and `on` pins the
         # enable rather than leaving the default to speak for itself.
@@ -1202,6 +1449,40 @@ class Vmlx(Runtime):
             # would publish as prefill throughput. The block disk cache also survives restarts
             # and is trimmed synchronously inside cold load, on a 22 GB cache that is not ours.
             "--disable-block-disk-cache",
+            *kv,
+        )
+
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None:
+        """Refuse a codec value: vMLX's codec is storage-only, and inert in this command.
+
+        `--kv-cache-quantization q4|q8` quantizes the prefix cache's **stored copy** and nothing
+        else -- "Quantization is applied at the storage/retrieval boundary of the prefix cache,
+        NOT at model.make_cache() level. ... During generation: full-precision KVCache (no
+        quality loss)" (``scheduler.py:2444-2458``) -- so a cell pinned to it would decode at
+        full precision and the pin would name a codec the generation path never used. It also
+        does not fire at all unless the prefix cache is on: the scheduler skips the codec and
+        logs its own no-op warning instead (``scheduler.py:1393-1404``, and the same shape at
+        ``mllm_scheduler.py:1165-1177``), while this harness's start command passes
+        ``--disable-prefix-cache`` unless the run asked for ``cache_state="on"``. Reaching the
+        codec would mean enabling the prefix cache and changing the codec in one run, which is
+        two variables and not a pin.
+
+        ``off`` is a real flag here and :meth:`start_command` passes it; the absent pin passes
+        nothing.
+        """
+        if kv_quant in (None, KV_QUANT_OFF):
+            return None
+        return (
+            f"kv_quant={kv_quant!r} cannot be measured on vMLX: its codec quantizes only the "
+            "prefix cache's stored copy and generation stays full precision -- 'Quantization "
+            "is applied at the storage/retrieval boundary of the prefix cache, NOT at "
+            "model.make_cache() level ... During generation: full-precision KVCache' "
+            "(scheduler.py:2444-2458) -- and it is a no-op under this command, which passes "
+            "--disable-prefix-cache unless the run pinned cache_state='on' (scheduler.py:1393"
+            "-1404 skips the codec and logs the no-op). Reaching it would enable the prefix "
+            "cache and move the codec in the same run, which is two variables rather than one. "
+            "So this cell is N/A in this codec; `off` is passed as "
+            "--kv-cache-quantization none, which is this runtime's real explicit off."
         )
 
     def version_command(self) -> tuple[str, ...]:

@@ -228,6 +228,34 @@ def test_a_run_pinning_the_cache_state_passes_it_to_the_loop_and_defaults_to_not
     assert len(measure.calls) == 3
 
 
+def test_a_run_pinning_the_kv_quant_passes_it_to_the_loop_and_defaults_to_nothing(
+    measure, tmp_path
+):
+    """The codec pin is the CLI's to parse and the loop's to record: the three values reach
+    `run_cells`, an absent flag reaches it as `None` -- the pin not taken, not `off` -- and a
+    value that is not one of the three is refused by the parser before a run directory exists.
+    `fp8` is the one that matters: it reads as a float8 codec and there is none in this set."""
+    assert run(tmp_path, "--kv-quant", "off") == 0
+    assert measure.calls[0]["kv_quant"] == "off"
+
+    assert run(tmp_path, "--kv-quant", "affine8") == 0
+    assert measure.calls[1]["kv_quant"] == "affine8"
+
+    assert run(tmp_path, "--kv-quant", "affine4") == 0
+    assert measure.calls[2]["kv_quant"] == "affine4"
+
+    assert run(tmp_path) == 0
+    assert measure.calls[3]["kv_quant"] is None
+
+    for value in ("fp8", "int4", "affine16"):
+        with pytest.raises(SystemExit):
+            run(tmp_path, "--kv-quant", value)
+
+    assert len(measure.calls) == 4
+    # The two cache pins are separate fields and neither implies the other.
+    assert all(call["cache_state"] is None for call in measure.calls)
+
+
 def test_a_run_pinning_a_prompt_length_measures_one_prefill_workload_at_64_tokens(
     measure, tmp_path, capsys
 ):

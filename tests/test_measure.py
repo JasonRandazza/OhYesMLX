@@ -112,7 +112,7 @@ class FakeRuntime:
 
     def __init__(self, name, recorder, *, port=8081, version="0.31.3", cold_load_s=7.5,
                  start_error=None, fail_from_attempt=None, fail_attempts=(),
-                 cache_state_refusals=None, api_key=None):
+                 cache_state_refusals=None, kv_quant_refusals=None, api_key=None):
         self.name = name
         self.port = port
         self.version = version
@@ -127,14 +127,21 @@ class FakeRuntime:
         # default: every real runtime but Osaurus reaches both with a start flag, and the
         # absent pin reaches both everywhere.
         self.cache_state_refusals = dict(cache_state_refusals or {})
+        # ``{value: reason}`` for the KV codecs this runtime cannot deliver, on the same
+        # reading: the absent pin reaches every runtime, and the real ones that refuse a codec
+        # are four of the five.
+        self.kv_quant_refusals = dict(kv_quant_refusals or {})
         self.api_key = api_key
 
     def cache_state_refusal(self, cache_state):
         return self.cache_state_refusals.get(cache_state)
 
-    def start(self, artifact_dir, model_id, *, cache_state=None):
+    def kv_quant_refusal(self, kv_quant):
+        return self.kv_quant_refusals.get(kv_quant)
+
+    def start(self, artifact_dir, model_id, *, cache_state=None, kv_quant=None):
         self.attempts += 1
-        self.recorder.log("start", self.name, artifact_dir, model_id, cache_state)
+        self.recorder.log("start", self.name, artifact_dir, model_id, cache_state, kv_quant)
         if self.start_error is not None and self._fails(self.attempts):
             raise self.start_error
         handle = FakeHandle(
@@ -346,7 +353,9 @@ def harness(monkeypatch, tmp_path):
 def starts(harness):
     return [
         runtime
-        for runtime, _artifact_dir, _model_id, _cache_state in harness.recorder.of("start")
+        for runtime, _artifact_dir, _model_id, _cache_state, _kv_quant in harness.recorder.of(
+            "start"
+        )
     ]
 
 
@@ -354,7 +363,15 @@ def started_cache_states(harness):
     """The cache state every start was asked for, in order."""
     return [
         cache_state
-        for _runtime, _artifact, _model, cache_state in harness.recorder.of("start")
+        for _runtime, _artifact, _model, cache_state, _kv_quant in harness.recorder.of("start")
+    ]
+
+
+def started_kv_quants(harness):
+    """The KV codec every start was asked for, in order, `None` for the pin not taken."""
+    return [
+        kv_quant
+        for _runtime, _artifact, _model, _cache_state, kv_quant in harness.recorder.of("start")
     ]
 
 
@@ -1238,8 +1255,10 @@ def test_a_stop_error_while_finishing_a_visit_is_persisted_and_ends_the_run(harn
     succeeding = harness.add_runtime("mlxlm", port=8081)
     original_start = failing.start
 
-    def start_with_stop_failure(artifact_dir, model_id, *, cache_state=None):
-        handle = original_start(artifact_dir, model_id, cache_state=cache_state)
+    def start_with_stop_failure(artifact_dir, model_id, *, cache_state=None, kv_quant=None):
+        handle = original_start(
+            artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant
+        )
         handle.stop = lambda: (_ for _ in ()).throw(RuntimeStopError("stop unverified"))
         return handle
 
@@ -1500,8 +1519,10 @@ def test_exception_after_runtime_start_still_stops_handle(harness):
         def __getattr__(self, name):
             return getattr(self._handle, name)
 
-    def start(artifact_dir, model_id, *, cache_state=None):
-        handle = BrokenVersionHandle(original_start(artifact_dir, model_id, cache_state=cache_state))
+    def start(artifact_dir, model_id, *, cache_state=None, kv_quant=None):
+        handle = BrokenVersionHandle(
+            original_start(artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant)
+        )
         handles.append(handle)
         return handle
 
@@ -2608,6 +2629,172 @@ def test_a_run_that_never_took_the_pin_asks_neither_runtime_for_a_state(harness)
     )
 
     assert set(started_cache_states(harness)) == {None}
+
+
+# ----------------------------------------------------------------------- the KV-codec pin
+#
+# One cache down from the pin above, and built the same way: the codec a runtime's KV cache is
+# held in is a header pin a sweep varies, its absence is the pin not taken and never `off`, and
+# a codec a runtime cannot deliver is N/A with the reason rather than approximated. The values
+# are `runtimes.KV_QUANTS` and they name a codec rather than a width.
+
+
+def test_the_run_header_pins_the_kv_quant_and_an_absent_pin_is_not_off(harness):
+    """`None` is the pin not taken and never a synonym for `off`.
+
+    Three runs, three header values: the codec values are what a codec sweep's columns differ
+    in, and a run that names none of them drives each runtime at its own codec -- which is a
+    different fact from a full-precision cache and is what every run on disk before this pin
+    holds.
+    """
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.run([cell], measured=1, kv_quant="affine8")
+    assert harness.header()["kv_quant"] == "affine8"
+    assert measure.load_run(harness.results_file())[0]["kv_quant"] == "affine8"
+
+    harness.run([cell], measured=1, kv_quant="off", results_dir=harness.tmp_path / "plain")
+    assert harness.header(harness.tmp_path / "plain")["kv_quant"] == "off"
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "unpinned")
+    unpinned = harness.header(harness.tmp_path / "unpinned")["kv_quant"]
+    assert unpinned is None, "an absent pin is the absence, not the 'off' value"
+    assert unpinned != "off"
+
+
+def test_every_start_is_asked_for_the_runs_kv_quant(harness):
+    """The pin reaches the runtime in every value and as no value at all: `None` is no flag,
+    which is what keeps a run that never named the pin byte-identical to one from before it."""
+    harness.add_runtime("optiq", port=8080)
+
+    harness.run([harness.cell("oq__optiq", "optiq")], measured=1, kv_quant="affine4")
+    assert started_kv_quants(harness) == ["affine4"]
+
+    harness.run([harness.cell("oq__optiq", "optiq")], measured=1, kv_quant="off",
+                results_dir=harness.tmp_path / "plain")
+    assert started_kv_quants(harness) == ["affine4", "off"]
+
+    harness.run([harness.cell("oq__optiq", "optiq")], measured=1,
+                results_dir=harness.tmp_path / "unpinned")
+    assert started_kv_quants(harness) == ["affine4", "off", None]
+
+
+def test_a_codec_the_runtime_cannot_be_driven_into_is_na_with_its_reason(harness):
+    """Where a runtime has no way to reach a codec, the cell is `N/A` with the reason -- the same
+    path an unknown runtime, an unavailable tokenizer and a refused cache state take -- and
+    nothing is started. A codec this runtime cannot hold is not a cell that is briefly
+    unavailable, and measuring it anyway would publish a number under a header pin it does not
+    hold."""
+    harness.add_runtime(
+        "osaurus",
+        kv_quant_refusals={
+            "affine8": "its affine route is inert under batched decode, and the route that "
+            "works while batching is TurboQuant, not affine8"
+        },
+    )
+    cell = harness.cell("oq__osaurus", "osaurus")
+
+    results = harness.run([cell], kv_quant="affine8")
+
+    assert [result.status for result in results] == ["N/A"]
+    assert "TurboQuant" in results[0].reason
+    assert results[0].observations == []
+    assert results[0].cold_load_s is None
+    assert harness.recorder.of("start") == [], "a refused codec starts no runtime"
+    assert started_kv_quants(harness) == []
+    # The reason is the run's own, so it survives the reload and the leaderboard prints it.
+    assert measure.load_run(harness.results_file())[1][0].reason == results[0].reason
+
+    # The value the runtime can hold is measured as usual: the refusal is about the codec asked
+    # for, not about the cell.
+    harness.run([cell], kv_quant="off", results_dir=harness.tmp_path / "plain")
+    assert started_kv_quants(harness) == ["off", "off"]
+
+
+def test_a_kv_quant_that_is_not_one_of_the_values_is_refused_before_anything_starts(harness):
+    """`fp8` above all: the earlier study's arms under that name were `mx.quantize` affine
+    8-bit, so the value is refused as an unknown one rather than rounded onto `affine8`."""
+    harness.add_runtime("mlxlm")
+
+    for value in ("fp8", "int4", "affine16"):
+        with pytest.raises(ValueError, match="kv_quant"):
+            harness.run([harness.cell("oq__mlxlm", "mlxlm")], kv_quant=value)
+
+    assert harness.transport.calls == []
+    assert harness.recorder.of("start") == []
+
+
+def test_the_real_osaurus_refusals_reach_the_record_through_the_loop(harness, monkeypatch):
+    """The two modules on their real shapes -- the runtime that decides and the loop that
+    records -- so the reason a reader sees is the one the runtime actually wrote. A codec value
+    is refused without reading the host at all, because no setting could deliver it; `off` is
+    read from the host's own `cache.liveKVCodec`, which is never edited."""
+    from ohyesmlx import runtimes as real_runtimes
+
+    harness.runtimes.RUNTIMES["osaurus"] = real_runtimes.RUNTIMES["osaurus"]
+
+    refused = harness.run(
+        [harness.cell("oq__osaurus", "osaurus")], kv_quant="affine8",
+        results_dir=harness.tmp_path / "codec",
+    )
+
+    assert [result.status for result in refused] == ["N/A"]
+    assert "batched decode" in refused[0].reason
+    assert harness.recorder.of("start") == [], "nothing was started for a refused codec"
+
+    monkeypatch.setattr(
+        real_runtimes,
+        "capture_osaurus_settings",
+        lambda: {"server-runtime.json:cache.liveKVCodec": "turboquant"},
+    )
+    plain = harness.run(
+        [harness.cell("oq__osaurus", "osaurus")], kv_quant="off",
+        results_dir=harness.tmp_path / "plain",
+    )
+
+    assert [result.status for result in plain] == ["N/A"]
+    assert "cache.liveKVCodec" in plain[0].reason
+    assert "turboquant" in plain[0].reason
+    assert harness.recorder.of("start") == [], "nothing was started for a refused state"
+
+
+def test_the_two_cache_pins_are_asked_separately(harness):
+    """Pinning a codec leaves the cache state `None` -- the pin not taken rather than a state --
+    and pinning a cache state leaves the codec `None`. Two independent header fields, and a run
+    may take either without the other."""
+    harness.add_runtime("vmlx", port=8000)
+    cell = harness.cell("oq__vmlx", "vmlx")
+
+    harness.run([cell], measured=1, kv_quant="off")
+    assert started_kv_quants(harness) == ["off"]
+    assert set(started_cache_states(harness)) == {None}
+
+    harness.run([cell], measured=1, cache_state="on", results_dir=harness.tmp_path / "warm")
+    assert set(started_cache_states(harness)) == {None, "on"}
+    assert started_kv_quants(harness) == ["off", None]
+
+
+def test_a_refused_cache_state_is_reported_before_a_codec_is_considered(harness):
+    """Both pins are asked before anything starts, and when the host disagrees with the cache
+    state that is the answer that lands: a cell that cannot hold the state this run pinned is
+    not made measurable by pinning a codec alongside it."""
+    harness.add_runtime(
+        "osaurus",
+        cache_state_refusals={
+            "off": "the host's cache.prefix.enabled is true, not false"
+        },
+        kv_quant_refusals={"affine8": "and no codec reaches affine8 anyway"},
+    )
+
+    results = harness.run(
+        [harness.cell("oq__osaurus", "osaurus")], cache_state="off", kv_quant="affine8"
+    )
+
+    assert [result.status for result in results] == ["N/A"]
+    assert "cache.prefix.enabled" in results[0].reason
+    assert harness.recorder.of("start") == []
+    assert started_kv_quants(harness) == []
 
 
 def test_a_run_at_four_issues_four_requests_per_batch_and_records_one_span(harness):

@@ -98,7 +98,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import __version__, coherence, runtimes, sample, token_counter, transport
-from .runtimes import CACHE_STATES, RuntimeStopError
+from .runtimes import CACHE_STATES, KV_QUANTS, RuntimeStopError
 
 # Imported at runtime, not under TYPE_CHECKING: load_run rebuilds a record with the class
 # that wrote it, from transport.py itself rather than from a re-bound module handle.
@@ -420,6 +420,7 @@ def run_cells(
     measured: int = 9,
     concurrency: int = 1,
     cache_state: str | None = None,
+    kv_quant: str | None = None,
     cooldown_s: float = 30.0,
     prompt_tokens: dict | None = None,
     results_dir: str,
@@ -456,6 +457,15 @@ def run_cells(
     (:meth:`runtimes.Runtime.cache_state_refusal`), and a runtime that cannot be driven into
     the requested state is ``N/A`` with that reason rather than measured in the other state.
 
+    ``kv_quant`` is the KV-codec pin and is exactly the same kind of field, one cache down:
+    ``"off"``, ``"affine8"`` or ``"affine4"`` for a run whose cells were measured with their KV
+    cache in that codec, and ``None`` when the pin was not taken -- which again is not a value
+    and not a synonym for ``"off"``, because the runs measured before the pin existed ran each
+    runtime's own codec and those were not uniform. It is asked of the runtime before it is
+    started (:meth:`runtimes.Runtime.kv_quant_refusal`, which is where the value names and why
+    ``fp8`` is not one of them are defined), and a codec a runtime cannot deliver is ``N/A``
+    with that reason rather than approximated into a neighbouring one.
+
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
     are written to ``<results_dir>/results.jsonl`` after every visit, so a run that dies still
@@ -477,6 +487,14 @@ def run_cells(
             "the pin not taken and not a third state, which is why it is also not 'off' -- "
             "the runs measured before the pin existed ran each runtime's own default, and "
             "those defaults were not uniform"
+        )
+    if kv_quant not in (None, *KV_QUANTS):
+        raise ValueError(
+            f"kv_quant must be one of {KV_QUANTS} or None, not {kv_quant!r}: None is the pin "
+            "not taken and not a fourth value, which is why it is also not 'off' -- the runs "
+            "measured before the pin existed ran each runtime's own codec, and those were not "
+            "uniform. The values name a codec rather than a bit width, so a value no runtime "
+            "here delivers is refused rather than rounded to a neighbouring one"
         )
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
@@ -510,6 +528,10 @@ def run_cells(
         # taken. `None` is not `"off"` in the header either -- an absent pin means each
         # runtime ran its own default, which is a different fact from a disabled cache.
         "cache_state": cache_state,
+        # The KV-cache codec the run pinned, and the same reading of an absence: `None` is the
+        # pin not taken, never `"off"`. The value names and why `fp8` is not among them live at
+        # `runtimes.KV_QUANTS`.
+        "kv_quant": kv_quant,
         "cooldown_s": cooldown_s,
     }
 
@@ -532,7 +554,8 @@ def run_cells(
         measured_before = sum(len(result.observations) for result in cell_results)
         try:
             outcome = _visit(cell_results, cell, workloads, warmup=warmup, quota=quota,
-                             concurrency=concurrency, cache_state=cache_state, counters=counters)
+                             concurrency=concurrency, cache_state=cache_state,
+                             kv_quant=kv_quant, counters=counters)
         except BaseException:
             write_jsonl(results, results_path, run=run)
             raise
@@ -632,6 +655,7 @@ def _visit(
     quota: int,
     concurrency: int,
     cache_state: str | None,
+    kv_quant: str | None,
     counters: dict,
 ) -> str:
     """One visit to one cell, returning ``"measured"``, ``"retry"`` or ``"skip"``.
@@ -643,12 +667,12 @@ def _visit(
     that will not load is usually deterministic, but a port still held by a stale server is
     not — and the samples already taken, if any, stand.
 
-    The requested cache state is asked of the runtime before anything is started, and a state
-    the runtime cannot be driven into is ``"skip"`` with the reason on every row: a cell whose
-    cache state the host disagrees with is not a cell that is briefly unavailable, and
-    measuring it anyway would publish a number under a header pin it does not hold. The check
-    is the runtime's to answer because only it knows its mechanism -- a start flag, or for
-    Osaurus a settings file the harness does not edit.
+    The requested cache state and the requested KV codec are asked of the runtime before
+    anything is started, and a state or a codec the runtime cannot be driven into is ``"skip"``
+    with the reason on every row: a cell whose host disagrees with either is not a cell that is
+    briefly unavailable, and measuring it anyway would publish a number under a header pin it
+    does not hold. The checks are the runtime's to answer because only it knows its mechanism —
+    a start flag, or for Osaurus a settings file the harness does not edit.
     """
     runtime = runtimes.RUNTIMES.get(cell.runtime)
     if runtime is None:
@@ -670,13 +694,22 @@ def _visit(
             _na(result, refusal)
         return "skip"
 
+    refusal = runtime.kv_quant_refusal(kv_quant)
+    if refusal is not None:
+        for result in results:
+            _na(result, refusal)
+        return "skip"
+
     handle = None
     try:
         try:
             # The artifact directory doubles as the model-id hint; the runtime resolves it to
             # whatever it calls those weights, and that resolved name is what gets recorded.
             handle = runtime.start(
-                cell.artifact_dir, cell.artifact_dir, cache_state=cache_state
+                cell.artifact_dir,
+                cell.artifact_dir,
+                cache_state=cache_state,
+                kv_quant=kv_quant,
             )
         except RuntimeStopError:
             raise
@@ -1177,16 +1210,18 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
     Line 1 is the run header — temperature, seed, warmup, measured, concurrency, prompt_tokens,
-    cache_state, cooldown_s and every workload that was measured, each with the messages it sent
-    and its own max_tokens (a single run-level cap would be a half-truth once three workloads
-    carry three of them). ``warmup`` is the rule that was in force, as a dict, or the integer
-    budget a caller pinned instead; which one it is is what tells a reader how to read
+    cache_state, kv_quant, cooldown_s and every workload that was measured, each with the messages
+    it sent and its own max_tokens (a single run-level cap would be a half-truth once three
+    workloads carry three of them). ``warmup`` is the rule that was in force, as a dict, or the
+    integer budget a caller pinned instead; which one it is is what tells a reader how to read
     ``warmup_count``. ``measured`` counts batches and ``concurrency`` says how many requests are
     in one, so the two together are how many requests a row holds — and ``concurrency`` is what
     a sweep varies and a join guard compares, because it is a property of how the run drove the
     cells, not of a cell. ``prompt_tokens`` rides beside it for the same reason: one prompt
     length, recorded with the count it achieved. ``cache_state`` does too: it is the state the
     cells were started in, and its absence is the pin not taken rather than a state.
+    ``kv_quant`` is the same field one cache down — the codec the cells' KV caches were held in,
+    with the same reading of its absence — and the value names are ``runtimes.KV_QUANTS``'.
 
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything

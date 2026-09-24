@@ -235,12 +235,14 @@ _RANK_PLACES = dict(CARD_FIELDS)
 
 # The run-header pins the grid's first join guard compares across columns. A header carries
 # these and the workloads it measured, and nothing else -- a pin belongs here on the day one
-# exists, and three did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c) and
-# `cache_state` (plan 06-02). The first two were pinned in the header and left out of this
-# tuple, so an N=8 run and a 32k-prompt run would each have joined a grid of their opposite
-# without a word; the third is here from the day it was written. Every one of the three is a
-# property of how the run drove its cells, which is exactly why the grid may not join runs
-# that disagree about it.
+# exists, and four did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c),
+# `cache_state` (plan 06-02) and `kv_quant` (study 03-05). The first two were pinned in the
+# header and left out of this tuple, so an N=8 run and a 32k-prompt run would each have joined a
+# grid of their opposite without a word; the last two are here from the day they were written.
+# Every one of the four is a property of how the run drove its cells, which is exactly why the
+# grid may not join runs that disagree about it -- and the last two are one cache's two
+# questions, so two runs of one cell under different codecs are a codec sweep's columns and
+# never one grid.
 PIN_FIELDS = (
     "temperature",
     "seed",
@@ -250,6 +252,7 @@ PIN_FIELDS = (
     "concurrency",
     "prompt_tokens",
     "cache_state",
+    "kv_quant",
 )
 
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
@@ -1385,16 +1388,23 @@ def _footnotes() -> list[str]:
 # --- the joined grid ------------------------------------------------------------------------
 
 
-# What a pin is worth on a header that predates it. `concurrency`, `prompt_tokens` and
-# `cache_state` are the three that arrived after runs existed: every header written before them
-# drove its requests one at a time and sized no prompt at all and ran each runtime's own cache
-# default, so `1`, `None` and `None` are what those runs did rather than defaults standing in
-# for something unknown -- which is what separates them from an absent `temperature`, whose
-# absence is a header this guard cannot compare. `cache_state`'s `None` is the one that matters
-# most here: an absent pin is not `"off"`, because the runs it stands for were not uniform --
-# the Osaurus grid columns ran with its prefix cache ON -- so reading the absence as a state
-# would fold two different cache states into one column and call them a sweep.
-ABSENT_PINS = {"concurrency": 1, "prompt_tokens": None, "cache_state": None}
+# What a pin is worth on a header that predates it. `concurrency`, `prompt_tokens`,
+# `cache_state` and `kv_quant` are the four that arrived after runs existed: every header written
+# before them drove its requests one at a time and sized no prompt at all and ran each runtime's
+# own cache default and its own KV codec, so `1`, `None`, `None` and `None` are what those runs
+# did rather than defaults standing in for something unknown -- which is what separates them from
+# an absent `temperature`, whose absence is a header this guard cannot compare. The two `None`s
+# are the pair that matters most here: an absent pin is not `"off"`, because the runs it stands
+# for were not uniform -- the Osaurus grid columns ran with its prefix cache ON -- so reading the
+# absence as a state would fold two different cache states into one column and call them a sweep,
+# and the same is true one cache down of a codec nobody pinned. Every one of the four is the
+# absence being the fact: `ABSENT_PINS` is where that is written once.
+ABSENT_PINS = {
+    "concurrency": 1,
+    "prompt_tokens": None,
+    "cache_state": None,
+    "kv_quant": None,
+}
 
 # The four entry states as the two joined tables spell them out: the grid and the sweep print
 # the same legend, and two copies of it are two places for one reading to drift.
@@ -2002,11 +2012,11 @@ def _recommendation(rows: list[dict], rank: str) -> str | None:
 # --- the Phase 6 sweep ----------------------------------------------------------------------
 
 # The header pins a sweep may vary, and the whole of the list. A cell is `(format, runtime)`,
-# and all three of these are properties of how a run *drove* its cells rather than of a cell:
+# and all four of these are properties of how a run *drove* its cells rather than of a cell:
 # that is why they are header pins, why `--study` can name none of them, and why a sweep is N
 # runs differing in exactly one of them. Anything else a header carries is held by guard 1 like
 # any other pin, so a "sweep" of `temperature` would be a grid with a pin quietly uncompared.
-SWEEP_PINS = ("concurrency", "prompt_tokens", "cache_state")
+SWEEP_PINS = ("concurrency", "prompt_tokens", "cache_state", "kv_quant")
 
 # What each swept pin holds, in words a reader of the rendered sweep can act on.
 SWEPT_PIN = {
@@ -2015,6 +2025,9 @@ SWEPT_PIN = {
     "serving tokenizer achieved",
     "cache_state": "whether the runtime's prefix/KV reuse was off or on, as the start command "
     "pinned it",
+    "kv_quant": "which codec the runtime's KV cache was held in, as the start command pinned "
+    "it -- `off` for the runtime's own full-precision cache, `affine8`/`affine4` for MLX's "
+    "affine codec at that width",
 }
 
 # What each sweep holds constant while the pin moves, and -- for the one pin that moves
@@ -2039,14 +2052,30 @@ SWEEP_HELD = {
         "skips. No prompt is relaxed for this pin: a cache sweep's whole subject is the same "
         "prompt answered twice."
     ),
+    "kv_quant": (
+        "Every other pin is identical across these runs, and so is every workload down to its "
+        "prompt and its cap -- the runs sent byte-identical prompts and differ only in the "
+        "codec their KV caches were held in, which is the single field the guard skips. No "
+        "prompt is relaxed for this pin, for the reason the cache-state sweep relaxes none: "
+        "the subject is the same prompt answered under one codec and then another. What these "
+        "columns cannot carry is each runtime's own side effects of reaching the codec it was "
+        "pinned to -- OptiQ's fused streaming-KV path, vMLX's storage-only codec, Osaurus "
+        "verifying a host setting -- which are named beside the values, in "
+        "`runtimes.KV_QUANTS` and each runtime's refusal."
+    ),
 }
 
-# A swept pin's values in the order they are read, for the one pin whose order is not its
+# A swept pin's values in the order they are read, for the pins whose order is not their
 # numeric one. A cache sweep's reading is the difference between the same prompt answered cold
 # and answered warm, so `off` is the baseline column and `on` is the reading against it; the
 # order is pinned here rather than left to the words' spelling, which happens to sort the same
-# way today and would stop the moment a third value arrived.
-SWEEP_VALUES = {"cache_state": ("off", "on")}
+# way today and would stop the moment a third value arrived. A codec sweep reads the same way
+# one cache down: `off` is the baseline -- the runtime's own full-precision cache -- and the
+# codec columns follow in `runtimes.KV_QUANTS`' order, which a test holds this tuple to.
+SWEEP_VALUES = {
+    "cache_state": ("off", "on"),
+    "kv_quant": ("off", "affine8", "affine4"),
+}
 
 
 # The sentence a sweep of concurrency carries, verbatim. Measured, plan 06-01a: oMLX at N=8
@@ -2071,8 +2100,8 @@ def render_sweep(
     disagree about.
 
     A **cell** is `(format, runtime)`, and *varying* is neither of those: `concurrency`,
-    `prompt_tokens` and `cache_state` are properties of how a run drove its cells, so they live
-    in the header. A sweep is N run directories differing in exactly that pin, joined
+    `prompt_tokens`, `cache_state` and `kv_quant` are properties of how a run drove its cells, so
+    they live in the header. A sweep is N run directories differing in exactly that pin, joined
     afterwards. Guard 1 is the grid's, with the swept pin skipped, and beside it sit the two
     refusals a sweep needs and a grid has no use for: a pin holding one value across every run
     -- a table with one column is not a sweep -- and the same cell measured at one value by two
@@ -2086,12 +2115,17 @@ def render_sweep(
     — which is why the pin's key is its target — and two runs whose *other* shapes disagree are
     still refused. `cache_state` relaxes nothing: its columns are meant to answer the same
     prompt twice, once cold and once warm, so a pair of runs whose prompts differ is refused
-    like any other grid.
+    like any other grid. `kv_quant` relaxes nothing either, and for the same reason one cache
+    down: its columns are meant to answer the same prompt under one codec and then another, so
+    what they cannot carry is each runtime's own side effects of reaching the codec it was
+    pinned to, which are named beside the values in `runtimes.KV_QUANTS` and each runtime's
+    refusal.
 
     The columns ascend, because that is the reading: a prompt that got longer or batches that
     got wider says nothing while the table is in command-line order. A pin with an order of its
-    own reads in that order — `cache_state`'s `off` before its `on`, the cold column first
-    because it is the baseline the warm one is read against. Entries are the ``rank`` metric,
+    own reads in that order — `cache_state`'s `off` before its `on`, and `kv_quant`'s `off`
+    before its codecs, the baseline column first because it is what the others are read against.
+    Entries are the ``rank`` metric,
     formatted by the same functions the grid formats its own with, so `—`, `FAIL` and
     `no value` mean here exactly what they mean there.
 

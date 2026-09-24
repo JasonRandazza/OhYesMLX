@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from ohyesmlx import __version__, report, token_counter
-from ohyesmlx.runtimes import CACHE_STATES
+from ohyesmlx.runtimes import CACHE_STATES, KV_QUANTS
 
 STUDIES = report.AXES
 
@@ -413,6 +413,19 @@ def _parser() -> argparse.ArgumentParser:
         "other one. A sweep is several runs differing only in this pin.",
     )
     run.add_argument(
+        "--kv-quant",
+        choices=KV_QUANTS,
+        default=None,
+        help="pin the KV-cache codec for this run: `off` for the runtime's own full-precision "
+        "cache, `affine8`/`affine4` for MLX's affine codec at that width, each through the "
+        "runtime's own start flags. The values name the codec rather than a bit width -- `fp8` "
+        "is not one of them, because nothing these runtimes carry is a float8 KV codec -- and "
+        "leaving the flag out pins nothing at all: the header records `None` and every runtime "
+        "starts with its own codec. A value a runtime cannot deliver is N/A with the reason "
+        "rather than approximated into a neighbouring codec. A sweep is several runs differing "
+        "only in this pin.",
+    )
+    run.add_argument(
         "--results-dir",
         default="results",
         help="parent of the run directory (default: results, so results/<run-id>/results.jsonl)",
@@ -450,9 +463,9 @@ def _parser() -> argparse.ArgumentParser:
         "sweep",
         help="join run directories into one sweep of a single header pin",
         description="Join finished run directories that differ in exactly one header pin -- "
-        "concurrency, prompt length or cache state -- into one table per workload: cells down, "
-        "the pin's values across. Measures nothing and starts no runtime -- it reads "
-        "results.jsonl files that already exist.",
+        "concurrency, prompt length, cache state or KV-cache codec -- into one table per "
+        "workload: cells down, the pin's values across. Measures nothing and starts no runtime "
+        "-- it reads results.jsonl files that already exist.",
     )
     sweep.add_argument(
         "run_dirs",
@@ -546,6 +559,7 @@ def _run(args) -> int:
         shapes,
         concurrency=args.concurrency,
         cache_state=args.cache_state,
+        kv_quant=args.kv_quant,
         results_dir=str(run_dir),
         prompt_tokens=prompt_tokens,
     )

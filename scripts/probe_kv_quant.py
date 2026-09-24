@@ -83,7 +83,8 @@ class OptiqFP8(runtimes.Optiq):
         super().__init__(name="optiq", port=8080)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--kv-bits", "8"])
@@ -96,7 +97,8 @@ class OptiqINT4(runtimes.Optiq):
         super().__init__(name="optiq", port=8080)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--kv-bits", "4"])
@@ -109,7 +111,8 @@ class VmlxFP16(runtimes.Vmlx):
         super().__init__(name="vmlx", port=8000)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--kv-cache-quantization", "none"])
@@ -122,7 +125,8 @@ class VmlxFP8(runtimes.Vmlx):
         super().__init__(name="vmlx", port=8000)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--kv-cache-quantization", "q8"])
@@ -135,7 +139,8 @@ class VmlxINT4(runtimes.Vmlx):
         super().__init__(name="vmlx", port=8000)
 
     def start_command(
-        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None
+        self, artifact_dir: str, model_id: str, *, cache_state: str | None = None,
+        kv_quant: str | None = None,
     ) -> tuple[str, ...]:
         cmd = list(super().start_command(artifact_dir, model_id, cache_state=cache_state))
         cmd.extend(["--kv-cache-quantization", "q4"])
