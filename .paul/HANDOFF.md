@@ -32,6 +32,10 @@ Phase 4 commits after `cb0bcb1` were local at the time of writing — check befo
 | `d868f56` | `run --workloads multiturn`: ten fixed turns of one pinned conversation. |
 | `a376728` | STATE/ROADMAP: Phase 4 code complete; Decisions 122–123. |
 
+> **Updated 2026-09-24 afternoon (Decision 124):** `--mtp-depth` now also drives OptiQ, and the
+> Phase 4 runner scripts exist: `sh scripts/run_phase4_night.sh` (`DRY=1` prints the commands).
+> Where this note says MTP is vMLX-only, STATE Decision 124 supersedes it.
+
 ## What each Phase 4 setting does
 
 All three pins follow the `--cache-state` pattern: a `run` flag recorded in the header, a
