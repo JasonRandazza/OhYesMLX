@@ -19,7 +19,7 @@ cd /Users/jrazz/Dev/active/OhYesMLX
 PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 
-OUT=results/grid-35b
+OUT=${OUT:-results/grid-35b}
 mkdir -p "$OUT"
 exec > "$OUT/runner.log" 2>&1
 
