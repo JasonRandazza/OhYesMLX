@@ -430,6 +430,20 @@ def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) ->
     *rank* names the single metric each table is ordered by, and every header names it. The
     workload is the other axis of the table: the shapes are ordered independently, because
     one shape's figures are not a ranking of another's. The metric card follows the tables.
+
+    A runtime-axis table ordered by a metric that is not one quantity across runtimes is the
+    one case where the table prints values and no ordering, and the two refusals are the
+    grid's own: ``CROSS_RUNTIME_UNCOMPARABLE``'s whatever the rows are, and
+    ``CHANNEL_DEPENDENT_RANKS``' where the rows were not all timed on one channel. The rows
+    are listed by ``_unpositioned`` with the rank column empty, and the refusal's note --
+    ``_runtime_axis_note``, built from the same two texts the grid prints -- says why. The
+    format axis holds one runtime, which is the condition the first refusal is about, so its
+    table orders unchanged.
+
+    A table ordered on a first-token latency carries ``CONCURRENCY_TTFT_SENTENCE`` when the
+    rows it covers were driven more than one request at a time: at concurrency > 1 the figure
+    is a queueing measurement, and the row's own ``concurrent`` says whether the run it came
+    from drove batches at all.
     """
     if axis not in AXES:
         raise ValueError(f"axis must be one of {AXES!r}, not {axis!r}")
@@ -454,13 +468,18 @@ def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) ->
         "under the tables.",
         "",
     ]
+    if rank in CHANNEL_DEPENDENT_RANKS and any(row.get("concurrent") for row in rows):
+        lines += [f"> {CONCURRENCY_TTFT_SENTENCE}", ""]
     for workload, group in _by_workload(rows):
         lines += [
             f"## Workload `{workload}` — ordered by `{rank}` ({_direction(rank)})",
             "",
-            _table(order_rows(group, rank), rank),
-            "",
         ]
+        if axis == "runtime" and _uncomparable_across_runtimes(group, rank):
+            lines += [_runtime_axis_note(group, rank), ""]
+            lines += [_table(_unpositioned(group, "runtime"), rank), ""]
+        else:
+            lines += [_table(order_rows(group, rank), rank), ""]
     lines += _footnotes()
     lines += ["", render_cards(rows, rank=rank).rstrip("\n"), ""]
     return "\n".join(lines) + "\n"
@@ -815,6 +834,13 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "n_requests": len(observations),
         "measured_batches": batches,
         "measured_pin": measured,
+        # Whether this row's run drove more than one request at a time, read off the one record
+        # that says so: a batch span is taken only around a batch of more than one request, so a
+        # row with spans was driven concurrently and a sequential one has none
+        # (``CellResult.batch_spans``). Not a figure and never ranked -- the queueing sentences
+        # the renders print read it, because a concurrent TTFT is a different quantity from a
+        # sequential one and a leaderboard is handed rows and no header to ask.
+        "concurrent": bool(result.batch_spans),
         "content_deltas": sum(deltas),
         "token_source": _token_source(samples),
         "ttft_p50_s": percentile(ttft, 50),
@@ -1412,7 +1438,7 @@ ABSENT_PINS = {
     "stream_experts": None,
 }
 
-# The four entry states as the two joined tables spell them out: the grid and the sweep print
+# The five entry states as the two joined tables spell them out: the grid and the sweep print
 # the same legend, and two copies of it are two places for one reading to drift.
 ENTRY_LEGEND = (
     "| entry | means |",
@@ -1421,6 +1447,7 @@ ENTRY_LEGEND = (
     "| `no value` | a cell that cleared every floor and has no value for this metric; "
     "its run's leaderboard carries the note saying why |",
     "| `FAIL` | a measured cell that did not clear one |",
+    "| `N/A` | a cell that could not be run here; its own run's row carries the reason |",
     "| `—` | a combination no run measured |",
     "",
 )
@@ -1769,14 +1796,16 @@ def _reasoning_timed_marker(row: dict) -> str | None:
 
 
 def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
-    """One grid entry, in one of the four states a cell can be in.
+    """One grid entry, in one of the five states a cell can be in.
 
-    A combination no run measured is ``—`` and a cell that ran without clearing a floor is
-    ``FAIL``: they are different facts about a cell, and rendering them alike is how a rag
-    comes to read as a failure. ``N/A`` is measure's word for a cell that never ran here, the
-    same state the floors print as "not measured"; anything else that is not PASS ran and did
-    not clear one. A PASS entry carries its number, and a drifting one carries its marker
-    beside it.
+    A combination no run measured is ``—``, a cell the runtime could not be driven into is
+    ``N/A``, and a cell that ran without clearing a floor is ``FAIL``: they are different facts
+    about a cell, and rendering them alike is how a rag comes to read as a failure and how a
+    refused cell comes to read as one nobody planned. ``N/A`` is measure's word for a cell that
+    never ran here, the same state the floors print as "not measured"; anything else that is not
+    PASS ran and did not clear one. A PASS entry carries its number, and a drifting one carries
+    its marker beside it. The reason a cell is ``N/A`` is on its row in its own run's
+    leaderboard, which has the notes column the two joined tables do not.
 
     *drift_marker* is the caller's to set, because whether the marker belongs beside this entry
     depends on what the entry's number is. The figure is a decode rate's movement, so it
@@ -1797,8 +1826,10 @@ def _entry(row: dict | None, rank: str, *, drift_marker: bool = True) -> str:
     cell carries its drift percentage: the number is the row's own and the count says how much
     of the window it stands on, which the joined tables have no notes column to say in words.
     """
-    if row is None or row.get("status") == "N/A":
+    if row is None:
         return "—"
+    if row.get("status") == "N/A":
+        return "N/A"
     if row.get("status") != "PASS":
         return "FAIL"
     if row.get(rank) is None:
@@ -1886,11 +1917,7 @@ def _readings(groups: list[tuple], columns: list[dict], labels: list[str], rank:
         lines.append("")
         lines += [f"**Runtime axis — one format, its runtimes ordered.** {CAVEAT['runtime']}.", ""]
         if rank in CROSS_RUNTIME_UNCOMPARABLE:
-            lines += [
-                f"> **`{rank}` is not one quantity across runtimes.** "
-                f"{CROSS_RUNTIME_UNCOMPARABLE[rank]}",
-                "",
-            ]
+            lines += [_cross_runtime_note(rank), ""]
         # One group per format, built once and read by both the note and the lines below it, so
         # the note cannot name a format the readings were not grouped by.
         by_label = [
@@ -1942,6 +1969,49 @@ def _channel_note(rank: str, mixed: list[str]) -> str:
     )
 
 
+def _cross_runtime_note(rank: str) -> str:
+    """The one note a runtime-axis ordering of *rank* prints where the metric is not one
+    quantity across runtimes at all: the refusal, then the reason written at its constant.
+
+    Read by the grid's runtime-axis section and by the single-run leaderboard's
+    `axis="runtime"` table, because they are the same reading of the same rows -- one format,
+    its runtimes the variable -- and two renderings of one refusal that disagreed would be two
+    refusals. The channel refusal's sibling is ``_channel_note``.
+    """
+    return (
+        f"> **`{rank}` is not one quantity across runtimes.** {CROSS_RUNTIME_UNCOMPARABLE[rank]}"
+    )
+
+
+def _runtime_axis_note(rows: list[dict], rank: str) -> str:
+    """The note a refused runtime-axis ordering prints, and which of the two refusals it was.
+
+    ``_uncomparable_across_runtimes`` decides *whether* a group's ordering is refused; this
+    decides *which* refusal it was and returns that refusal's own note -- ``_cross_runtime_note``
+    where the metric is not one quantity across runtimes at all, ``_channel_note`` where it is
+    one per channel and the group does not share one -- so the text a reader gets is the text
+    the grid's runtime-axis section carries, not a second wording of it. A channel note names
+    the formats whose rows mix them; here that is the group's own labels, because a
+    leaderboard's table is one workload's rows and the group is the whole of what it orders.
+    """
+    if rank in CROSS_RUNTIME_UNCOMPARABLE:
+        return _cross_runtime_note(rank)
+    mixed = sorted({str(row.get("label")) for row in rows if row.get("label") is not None})
+    return _channel_note(rank, mixed)
+
+
+def _unpositioned(rows: list[dict], key: str) -> list[dict]:
+    """The rows of a listing that makes no ordering claim: alphabetically by the axis key.
+
+    A refused ordering keeps every value and gives up the positions, and what it must not do is
+    hand back a ranking under another name — the metric order *is* the claim, so listing in it
+    and dropping the numbers would leave the reading saying what it refuses to say. Alphabetical
+    by the variable is an order no reader mistakes for a result, and it is the one both the
+    grid's runtime-axis reading and the single-run leaderboard's refused table list in.
+    """
+    return sorted(rows, key=lambda row: str(row.get(key) or ""))
+
+
 def _ordering(rows: list[dict], rank: str, key: str) -> str:
     """One axis reading's ordering, with what kept each unranked cell out of it.
 
@@ -1957,7 +2027,7 @@ def _ordering(rows: list[dict], rank: str, key: str) -> str:
     if key == "runtime" and _uncomparable_across_runtimes(rows, rank):
         return "; ".join(
             f"`{_text(row.get(key))}` = {_rank_number(row, rank)}"
-            for row in sorted(rows, key=lambda row: str(row.get(key) or ""))
+            for row in _unpositioned(rows, key)
         )
     parts = []
     for row in order_rows(rows, rank):
@@ -2127,6 +2197,23 @@ CONCURRENCY_DRIFT_SENTENCE = (
 )
 
 
+# The sentence a table ordered on a first-token latency carries when its runs drove more than
+# one request at a time, verbatim. The phase-6 design says it plainly
+# (`docs/research/2026-09-16-phase6-design.md`): at N=1 TTFT is time-to-first-token, and at N it
+# includes however long the request waited for a slot, which is a real user-facing cost and a
+# different quantity. The ranks it rides are the first-token-latency family,
+# `CHANNEL_DEPENDENT_RANKS` -- the same set Decision 122 refuses a mixed-channel runtime-axis
+# ordering on, because the value is that latency or is computed from it, so the wait is in the
+# number either way. A rank outside the family reads a figure no queue can move and gets no
+# sentence. Printed by `render_sweep` for a concurrent sweeping run and by `render_markdown` for
+# a concurrent run's rows.
+CONCURRENCY_TTFT_SENTENCE = (
+    "At concurrency > 1, TTFT includes a request's wait for its batch slot: it is a queueing "
+    "measurement, not the time-to-first-token a sequential run measures, and a prefill rate "
+    "computed from it carries that wait."
+)
+
+
 def render_sweep(
     runs: list[tuple[str, dict, list[dict]]], *, varying: str, rank: str = DEFAULT_RANK
 ) -> str:
@@ -2176,6 +2263,13 @@ def render_sweep(
     the unfinished warm-up that annotation was written for. The sentence explains markers, and
     a non-decode rank prints none, so it rides only a rank in ``DECODE_DERIVED_RANKS`` too — a
     sweep ordered on `ttft_p50_s` would otherwise explain a figure none of its entries carries.
+
+    The same runs carry ``CONCURRENCY_TTFT_SENTENCE`` when the rank is a first-token latency:
+    the table is then ordered on a figure the queue is inside, which is the design's "TTFT
+    becomes a queueing measurement" read as a caveat on the table that publishes it. Its rank
+    test is ``CHANNEL_DEPENDENT_RANKS`` — the ranks read off that latency or computed from it —
+    for the reverse reason: a sweep ordered on `decode_tps` would attach a queueing caveat to a
+    figure the queue does not move.
 
     An entry carries the drift marker only where the drift figure qualifies the number it sits
     beside. ``measure.measured_drift`` compares per-request decode rates, so the percentage is one
@@ -2231,11 +2325,13 @@ def render_sweep(
         "A `reasoning timed` marker means TTFT and decode use the reasoning stream, not content.",
         "",
     ]
-    if rank in DECODE_DERIVED_RANKS and (
-        varying == "concurrency"
-        or any(_drove_more_than_one_request(header) for _label, header, _rows in runs)
-    ):
+    concurrent = varying == "concurrency" or any(
+        _drove_more_than_one_request(header) for _label, header, _rows in runs
+    )
+    if rank in DECODE_DERIVED_RANKS and concurrent:
         lines += [f"> {CONCURRENCY_DRIFT_SENTENCE}", ""]
+    if rank in CHANNEL_DEPENDENT_RANKS and concurrent:
+        lines += [f"> {CONCURRENCY_TTFT_SENTENCE}", ""]
     lines += _sweep_provenance(runs, varying)
 
     for workload, _rows in _by_workload(

@@ -291,6 +291,28 @@ single number would encode an arbitrary trade-off as though it were measured, hi
 what this project exists to show. The metric card carries every measured value behind the
 ranking, so the ordering can always be checked against the numbers that produced it.
 
+**A runtime-axis table ordered by a metric that is not one quantity across runtimes prints its
+values and no ordering.** The two refusals are the grid's own, applied through the same
+`_uncomparable_across_runtimes`: `CROSS_RUNTIME_UNCOMPARABLE` (`peak_mb`, `cold_load_s`)
+whatever the rows are, and `CHANNEL_DEPENDENT_RANKS` (`ttft_p50_s`, `prefill_tps`) where the
+rows were not all timed on one channel. The rank column is empty on every row, the rows list
+alphabetically by runtime (`_unpositioned` — a metric order with the numbers removed is the
+same claim in another typeface), and the note above the table is the text the grid's
+runtime-axis section prints, not a second wording of it. The format axis holds one runtime,
+where those figures are one quantity, and orders unchanged. Added 2026-09-25; before it, a
+single run's runtime-axis table numbered `peak_mb` 1 and 2 and published the sampler's page
+accounting as a ranking.
+
+**A table ordered on a first-token latency says so when its rows were driven concurrently.**
+At N=1 TTFT is time-to-first-token; at N it includes the request's wait for a batch slot, which
+is a real user-facing cost and a different quantity (`docs/research/2026-09-16-phase6-design.md`).
+`CONCURRENCY_TTFT_SENTENCE` is printed by `render_markdown` when the rank is in
+`CHANNEL_DEPENDENT_RANKS` and any row's `concurrent` is true, and by `render_sweep` on the same
+rank when its runs' `concurrency` pin is above 1 — and only then: no other rank's value moves
+with the queue, and a sequential run has no slot to wait for. The leaderboard reads the row
+because it is handed rows and no header; `concurrent` is `bool(CellResult.batch_spans)`, the one
+record of a batch of more than one request.
+
 **Exactly one runtime may hold weights at any moment.** `run_cells` stops the current
 runtime and confirms its port is free before starting the next. Two resident 20 GB models
 on a 64 GB machine saturate unified memory and quietly poison every number in the run
@@ -317,7 +339,8 @@ def summarize(results: list[CellResult], *, measured: int | None = None) -> list
 # status — plus the short-window
 # fields in "the lost visit and the short measured window" below. E2E percentiles use
 # returned samples' total_s, share MIN_PERCENTILE_N and percentile() with TTFT, and are not
-# produced for failed requests.
+# produced for failed requests. `concurrent` is `bool(batch_spans)`: whether the run drove
+# more than one request at a time, which the queueing sentences read.
 
 def render_markdown(rows: list[dict], *, axis: str, rank: str = DEFAULT_RANK) -> str: ...
 ```
@@ -451,20 +474,27 @@ One grid per workload, never averaged across them — the same rule that governs
 leaderboard. Rows are format labels, columns are runtime names, and each entry is the
 `rank` metric for that cell.
 
-**Four entry states, and they must not render alike:**
+**Five entry states, and they must not render alike:**
 
 | state | renders | means |
 |---|---|---|
 | measured, PASS | the number | a result |
 | PASS, no value for *this* metric | `no value` | the cell cleared every floor; the metric has no domain on this stream |
 | measured, not PASS | `FAIL` | the cell ran and did not clear a floor |
+| not measured, `N/A` | `N/A` | the cell was planned and the runtime could not be driven into it; the reason is on the row in its own run's leaderboard |
 | never measured | `—` | that combination does not exist |
 
 The second state exists because `_number` renders `None` as the same em dash as the
-fourth. A cell that produced language, cleared the floors, and streamed its whole
+fifth. A cell that produced language, cleared the floors, and streamed its whole
 completion in one content delta has no decode rate — `order_rows` already ranks such a row
 last with a note rather than excluding it, and the grid must not be the one place that
 distinction collapses back into "does not exist".
+
+The fourth is its own state for the same reason one step further out: a cell the runtime could
+not be driven into was on the plan, so rendering it as the dash a combination nobody ran gets
+files a refusal beside an omission — which is what the KV-quant sweep did, where every
+non-OptiQ codec cell is `N/A`, until 2026-09-25. `ENTRY_LEGEND` names all five and both joined
+tables print it.
 
 The matrix is ragged by nature — no runtime loads JANG and the other formats both — so
 `—` is the ordinary case, and a reader who cannot tell it from `FAIL` is reading a

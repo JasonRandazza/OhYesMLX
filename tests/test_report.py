@@ -1840,17 +1840,98 @@ def test_a_higher_is_better_metric_sorts_descending():
 def test_a_lower_is_better_metric_sorts_ascending():
     rows = report.summarize(
         [
-            cell_result(SLOW, cell_id="oq4__mlxlm", runtime="mlxlm", memory={"peak_mb": 9150.0}),
-            cell_result(
-                HEALTHY, cell_id="oq4__osaurus", runtime="osaurus", memory={"peak_mb": 4200.0}
-            ),
+            cell_result(SLOW, cell_id="oq4__mlxlm", runtime="mlxlm"),
+            cell_result(HEALTHY, cell_id="oq4__osaurus", runtime="osaurus"),
         ]
     )
-    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime", rank="peak_mb"))
+    printed = leaderboard_rows(report.render_markdown(rows, axis="runtime", rank="itl_s"))
 
     assert [row["cell"] for row in printed] == ["oq4__osaurus", "oq4__mlxlm"]
-    assert [row["peak MB"] for row in printed] == ["4200.0", "9150.0"]
-    assert report.RANK_METRICS["peak_mb"] == "lower"
+    assert [row["ITL s"] for row in printed] == ["0.0100", "0.0500"]
+    assert report.RANK_METRICS["itl_s"] == "lower"
+
+
+def test_the_single_run_leaderboard_refuses_a_cross_runtime_uncomparable_ordering():
+    """The leaderboard's runtime axis is the grid's runtime axis read whole, so A7 has to reach
+    it: `footprint` is not one quantity across runtimes whatever the rows are, and a table
+    numbered 1 and 2 by `peak_mb` reads as "Osaurus uses half the memory" — the sampler's
+    behaviour published as a fact about the runtime. The values stay printed, the positions go,
+    and the note above them is the grid's own words. The format axis holds one runtime, where
+    the same figure is one quantity, and orders as it always did.
+    """
+    rows = report.summarize(
+        [
+            cell_result(HEALTHY, cell_id="oq4__mlxlm", runtime="mlxlm", memory={"peak_mb": 9150.0}),
+            cell_result(SLOW, cell_id="oq4__osaurus", runtime="osaurus", memory={"peak_mb": 4200.0}),
+        ]
+    )
+    runs = [
+        (RUN_A, run_header(("chat",)), [rows[0]]),
+        (RUN_B, run_header(("chat",)), [rows[1]]),
+    ]
+
+    for rank in report.CROSS_RUNTIME_UNCOMPARABLE:
+        markdown = report.render_markdown(rows, axis="runtime", rank=rank)
+        printed = leaderboard_rows(markdown)
+
+        # Alphabetical by runtime with no position, and every number still on the line.
+        assert [row["cell"] for row in printed] == ["oq4__mlxlm", "oq4__osaurus"], rank
+        assert [row[f"rank by {rank}"] for row in printed] == ["—", "—"], rank
+        assert [row["peak MB"] for row in printed] == ["9150.0", "4200.0"], rank
+        assert [row["cold load s"] for row in printed] == ["12.50", "12.50"], rank
+        # One note for the refusal, and it is the grid's own text rather than a second wording.
+        note = report._cross_runtime_note(rank)
+        assert note in markdown, rank
+        assert note in report.render_grid(runs, rank=rank), rank
+
+    formats = report.summarize(
+        [
+            cell_result(HEALTHY, cell_id="oq4__mlxlm", label="oq4", runtime="mlxlm",
+                        memory={"peak_mb": 9150.0}),
+            cell_result(SLOW, cell_id="jang__mlxlm", label="jang", runtime="mlxlm",
+                        artifact_dir="/models/jang", memory={"peak_mb": 4200.0}),
+        ]
+    )
+    by_format = leaderboard_rows(report.render_markdown(formats, axis="format", rank="peak_mb"))
+
+    assert [row["cell"] for row in by_format] == ["jang__mlxlm", "oq4__mlxlm"]
+    assert [row["rank by peak_mb"] for row in by_format] == ["1", "2"]
+    assert "is not one quantity across runtimes" not in report.render_markdown(
+        formats, axis="format", rank="peak_mb"
+    )
+
+
+def test_the_single_run_leaderboard_refuses_an_ordering_across_timed_channels():
+    """Decision 122, one rendering down: a run whose rows answered in different channels is
+    ordered at `ttft_p50_s` the way the grid refuses to order it. mlx-lm answered in the
+    reasoning channel and Osaurus in the content one, so the two `TTFT p50 s` values are two
+    definitions of first-token latency — the values are printed with no positions and the grid's
+    own note names the format whose rows mix. An unmixed run still orders.
+    """
+    runs = list(reversed(channel_runs(first_channel="reasoning", second_channel="content")))
+    rows = [row for _label, _header, group in runs for row in group]
+
+    markdown = report.render_markdown(rows, axis="runtime", rank="ttft_p50_s")
+    printed = leaderboard_rows(markdown)
+
+    assert [row["cell"] for row in printed] == ["oq4__mlxlm", "oq4__osaurus"]
+    assert [row["rank by ttft_p50_s"] for row in printed] == ["—", "—"]
+    first, second = CHANNEL_VALUES["ttft_p50_s"]
+    assert [row["TTFT p50 s"] for row in printed] == [first, second]
+
+    note = report._channel_note("ttft_p50_s", ["oq4"])
+    assert note in markdown
+    assert note in report.render_grid(runs, rank="ttft_p50_s")
+
+    unmixed = [
+        row
+        for _label, _header, group in channel_runs(first_channel="content", second_channel="content")
+        for row in group
+    ]
+    ordered = leaderboard_rows(
+        report.render_markdown(unmixed, axis="runtime", rank="ttft_p50_s")
+    )
+    assert [row["rank by ttft_p50_s"] for row in ordered] == ["1", "2"]
 
 
 def test_every_rank_metric_is_named_and_carries_its_direction():
@@ -2446,19 +2527,41 @@ def test_a_ragged_cell_and_a_failed_cell_and_a_missing_cell_are_three_entries():
     assert "| `FAIL` | a measured cell that did not clear one |" in grid
 
 
-def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure():
-    """`N/A` is measure's word for a cell that never ran here — the state the floors print as
-    "not measured" — so its entry is the same `—` a combination that was never on the plan gets.
+def test_a_cell_that_never_ran_says_na_and_is_not_a_rag():
+    """`N/A` is measure's word for a cell the runtime could not be driven into — the state the
+    floors print as "not measured" — and it is a fact of its own, not the `—` a combination no
+    run measured gets: a cell that was on the plan and refused files beside one nobody planned
+    otherwise, on the very tables whose legends exist to keep those apart. Both joined tables
+    say `N/A` and name it; the reason it could not run stays on the row in its own run's
+    leaderboard, which has the notes column the joined tables do not.
     """
     rows = report.summarize(
         [cell_result([], status="N/A", reason="unknown runtime 'nope'", label="oq4")]
     )
     run = (RUN_A, run_header(("chat",)), rows)
 
-    table = grid_tables(report.render_grid([run]))["chat"]
+    grid = report.render_grid([run])
+    table = grid_tables(grid)["chat"]
 
-    assert table["oq4"]["mlxlm"] == "—"
+    assert table["oq4"]["mlxlm"] == "N/A"
+    assert table["oq4"]["mlxlm"] != "—"
     assert table["oq4"]["mlxlm"] != "FAIL"
+    assert "| `N/A` | a cell that could not be run here" in grid
+    assert "| `—` | a combination no run measured |" in grid
+    assert "unknown runtime 'nope'" in report.render_markdown(rows, axis="runtime")
+
+    sweep = report.render_sweep(
+        [
+            concurrency_run(SWEEP_RUNS[0], 1),
+            concurrency_run(SWEEP_RUNS[1], 8, status="N/A", reason="unknown runtime 'nope'"),
+        ],
+        varying="concurrency",
+    )
+    sweep_table = sweep_tables(sweep)["chat"]
+
+    assert sweep_table["oq4__mlxlm"]["1"] == "100.0"
+    assert sweep_table["oq4__mlxlm"]["8"] == "N/A"
+    assert "| `N/A` | a cell that could not be run here" in sweep
 
 
 def test_a_drift_annotated_cell_carries_its_marker_into_its_entry():
@@ -4187,6 +4290,59 @@ def test_the_concurrency_drift_sentence_rides_only_the_decode_ranks():
             assert DRIFT_SENTENCE in sweep, rank
         else:
             assert DRIFT_SENTENCE not in sweep, rank
+
+
+# The queueing caveat, written out rather than read from the constant, so a reworded constant
+# fails this file instead of agreeing with it.
+QUEUEING_SENTENCE = (
+    "At concurrency > 1, TTFT includes a request's wait for its batch slot: it is a queueing "
+    "measurement, not the time-to-first-token a sequential run measures, and a prefill rate "
+    "computed from it carries that wait."
+)
+
+
+def test_a_ttft_ranked_table_over_concurrent_rows_carries_the_queueing_caveat():
+    """At N=1 TTFT is time-to-first-token; at N it includes the wait for a slot, which is a real
+    user-facing cost and a different quantity — so a table ordered on it says so. The sentence
+    rides the first-token-latency ranks and only a run that really drove batches: a decode rate
+    is read off a window the queue does not move, and a sequential run has no slot to wait for.
+    The sweep reads its runs' own `concurrency` pin; the leaderboard reads the row's
+    `concurrent`, which is the batch spans a sequential record does not carry.
+    """
+    concurrent = report.summarize(
+        [cell_result([obs() for _ in range(8)], batch_spans=[2.1, 2.1])]
+    )
+    sequential = report.summarize([cell_result([obs() for _ in range(5)])])
+
+    assert concurrent[0]["concurrent"] is True
+    assert sequential[0]["concurrent"] is False
+
+    for rank in report.CHANNEL_DEPENDENT_RANKS:
+        assert QUEUEING_SENTENCE in report.render_markdown(
+            concurrent, axis="runtime", rank=rank
+        ), rank
+    assert QUEUEING_SENTENCE not in report.render_markdown(
+        concurrent, axis="runtime", rank="decode_tps"
+    )
+    assert QUEUEING_SENTENCE not in report.render_markdown(
+        sequential, axis="runtime", rank="ttft_p50_s"
+    )
+
+    driving = [concurrency_run(SWEEP_RUNS[0], 1), concurrency_run(SWEEP_RUNS[1], 8)]
+    for rank in report.CHANNEL_DEPENDENT_RANKS:
+        assert QUEUEING_SENTENCE in report.render_sweep(
+            driving, varying="concurrency", rank=rank
+        ), rank
+    assert QUEUEING_SENTENCE not in report.render_sweep(
+        driving, varying="concurrency", rank="decode_tps"
+    )
+
+    sequential_runs = [prompt_run(SWEEP_RUNS[0], 128, 126), prompt_run(SWEEP_RUNS[1], 4096, 4093)]
+    assert QUEUEING_SENTENCE not in report.render_sweep(
+        sequential_runs, varying="prompt_tokens", rank="ttft_p50_s"
+    )
+
+    assert report.CONCURRENCY_TTFT_SENTENCE == QUEUEING_SENTENCE
 
 
 def test_the_sweep_refuses_a_rank_metric_no_row_carries():
