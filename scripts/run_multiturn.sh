@@ -18,7 +18,8 @@ PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 OUT=${OUT:-results/multiturn}
 DRY=${DRY:-0}
-CELLS="oq4__mlxlm=$Q4,oq4__omlx=$Q4,oq4__optiq=$Q4,oq4__vmlx=$Q4,oq4__osaurus=$Q4"
+CELLS=${CELLS:-"oq4__mlxlm=$Q4,oq4__omlx=$Q4,oq4__optiq=$Q4,oq4__vmlx=$Q4,oq4__osaurus=$Q4"}
+. "$(dirname "$0")/osaurus-pin.sh"
 
 if [ "$DRY" = 1 ]; then
   echo "DRY=1: printing the run command for $OUT -- nothing is started, no port is swept, no directory is written"
@@ -58,8 +59,11 @@ run_one() {  # $1 = the run's marker, which names its log; the rest is the run c
 # Before as well as after: an Osaurus app relaunched between runs must not sit resident through
 # another runtime's cell. The kill is logged.
 [ "$DRY" = 1 ] || sweep
+# One run holds every cell, so the Osaurus pin spans it; the other runtimes never read these files.
+case "$CELLS" in *osaurus*) [ "$DRY" = 1 ] || osaurus_pin ;; esac
 run_one multiturn --study runtime --cells "$CELLS" --workloads multiturn --results-dir "$OUT"
 [ "$DRY" = 1 ] || sweep
+case "$CELLS" in *osaurus*) [ "$DRY" = 1 ] || osaurus_restore_check ;; esac
 
 echo "grid: $PY -m ohyesmlx.cli grid \"$OUT\"/*/"
 echo "SWEEPDONE $(date +%H:%M:%S)"

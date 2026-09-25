@@ -20,6 +20,10 @@ PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 OUT=${OUT:-results/sweep-kvquant}
 DRY=${DRY:-0}
+# RUNTIMES narrows a rerun (2026-09-25: RUNTIMES=osaurus after the unpinned night). Order and the
+# alternation below follow this list, so a one-runtime rerun reads both pins forward.
+RUNTIMES=${RUNTIMES:-mlxlm omlx optiq vmlx osaurus}
+. "$(dirname "$0")/osaurus-pin.sh"
 
 if [ "$DRY" = 1 ]; then
   echo "DRY=1: printing the run commands for $OUT -- nothing is started, no port is swept, no directory is written"
@@ -44,9 +48,8 @@ sweep() {
   sleep 5
 }
 
-# No Osaurus settings are toggled in this study, so there is nothing to put back -- but a killed
-# runner must not leave a runtime holding a port, so the trap sweeps exactly as a finished run
-# does before it exits.
+# A killed runner must not leave a runtime holding a port, so the trap sweeps exactly as a
+# finished run does before it exits; around Osaurus, osaurus-pin.sh's trap also restores settings.
 [ "$DRY" = 1 ] || trap 'echo "ABORTED $(date +%H:%M:%S)"; sweep; exit 130' INT TERM HUP
 
 run_one() {  # $1 = the run's marker, which names its log; the rest is the run command line
@@ -66,8 +69,9 @@ LENGTHS="16384 32768"
 LENGTHS_REV="32768 16384"
 codecs=$CODECS
 lengths=$LENGTHS
-for r in mlxlm omlx optiq vmlx osaurus; do
+for r in $RUNTIMES; do
   echo "--- $r: kv-quant $codecs at prompt-tokens $lengths"
+  [ "$DRY" = 1 ] || { [ "$r" = osaurus ] && osaurus_pin; }
   for t in $lengths; do
     for kv in $codecs; do
       # Before as well as after: an Osaurus app relaunched between runs must not sit resident
@@ -78,6 +82,7 @@ for r in mlxlm omlx optiq vmlx osaurus; do
       [ "$DRY" = 1 ] || sweep
     done
   done
+  [ "$DRY" = 1 ] || { [ "$r" = osaurus ] && osaurus_restore_check; }
   # The next runtime reads both pins the other way round.
   [ "$codecs" = "$CODECS" ] && codecs=$CODECS_REV || codecs=$CODECS
   [ "$lengths" = "$LENGTHS" ] && lengths=$LENGTHS_REV || lengths=$LENGTHS
