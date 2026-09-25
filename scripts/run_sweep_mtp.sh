@@ -18,6 +18,9 @@
 #   join:  python -m ohyesmlx.cli sweep --varying mtp_depth "$OUT"/jang4s__vmlx/*/
 #          (and the same per pairing: optiq4b__optiq, optiq__optiq)
 #
+# The tail of this script runs one join per pairing, writing $OUT/sweep-<cell>.md, and skips one
+# whose glob matches nothing (a PAIRS rerun leaves the other pairings' directories unwritten).
+#
 # Depth order alternates direction per pairing, so thermal drift does not alias onto the pin.
 set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
@@ -70,6 +73,23 @@ run_one() {  # $1 = the run's marker, which names its log; the rest is the run c
   echo "=== $marker exit=$? $(date +%H:%M:%S)"
 }
 
+join_sweep() {  # $1 = the swept pin; $2 = the run-dir glob under $OUT; $3 = the report to write
+  if [ "$DRY" = 1 ]; then
+    echo "join: $PY -m ohyesmlx.cli sweep --varying $1 \"$OUT\"/$2"
+    return 0
+  fi
+  # PAIRS narrows a rerun to some pairings, so the other pairings' globs match nothing and are
+  # skipped rather than joined empty.
+  matched=
+  for d in "$OUT"/$2; do
+    [ -d "$d" ] && { matched=1; break; }
+  done
+  [ -n "$matched" ] || { echo "join skipped: nothing matches \"$OUT\"/$2"; return 0; }
+  echo "=== join $1 $(date +%H:%M:%S)"
+  $PY -m ohyesmlx.cli sweep --varying "$1" "$OUT"/$2 --out "$3"
+  echo "=== join $1 exit=$? $(date +%H:%M:%S)"
+}
+
 DEPTHS="off 1 2 3"
 DEPTHS_REV="3 2 1 off"
 
@@ -95,7 +115,7 @@ mtp_sweep jang4s__vmlx "$JANG4S" ascending
 mtp_sweep optiq4b__optiq "$OPT4B" descending
 mtp_sweep optiq__optiq "$OQ" ascending
 
-echo "join: $PY -m ohyesmlx.cli sweep --varying mtp_depth \"$OUT\"/jang4s__vmlx/*/"
-echo "join: $PY -m ohyesmlx.cli sweep --varying mtp_depth \"$OUT\"/optiq4b__optiq/*/"
-echo "join: $PY -m ohyesmlx.cli sweep --varying mtp_depth \"$OUT\"/optiq__optiq/*/"
+join_sweep mtp_depth 'jang4s__vmlx/*/' "$OUT/sweep-jang4s__vmlx.md"
+join_sweep mtp_depth 'optiq4b__optiq/*/' "$OUT/sweep-optiq4b__optiq.md"
+join_sweep mtp_depth 'optiq__optiq/*/' "$OUT/sweep-optiq__optiq.md"
 echo "SWEEPDONE $(date +%H:%M:%S)"

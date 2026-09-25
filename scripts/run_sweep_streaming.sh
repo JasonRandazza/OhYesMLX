@@ -13,6 +13,9 @@
 #
 #   join:  python -m ohyesmlx.cli sweep --varying stream_experts "$OUT"/stock4bit__*/*/
 #
+# The tail of this script runs that join, writing $OUT/sweep.md, and skips it when its glob
+# matches no run directory.
+#
 # Streaming direction alternates per runtime -- OptiQ off then on, vMLX on then off -- so thermal
 # drift does not alias onto the pin.
 set -u
@@ -58,6 +61,23 @@ run_one() {  # $1 = the run's marker, which names its log; the rest is the run c
   echo "=== $marker exit=$? $(date +%H:%M:%S)"
 }
 
+join_sweep() {  # $1 = the swept pin; $2 = the run-dir glob under $OUT; $3 = the report to write
+  if [ "$DRY" = 1 ]; then
+    echo "join: $PY -m ohyesmlx.cli sweep --varying $1 \"$OUT\"/$2"
+    return 0
+  fi
+  # This study has no subset knob, so the glob is empty only when no run wrote a directory --
+  # a runner stopped before its first run. An empty join is skipped, not handed to the renderer.
+  matched=
+  for d in "$OUT"/$2; do
+    [ -d "$d" ] && { matched=1; break; }
+  done
+  [ -n "$matched" ] || { echo "join skipped: nothing matches \"$OUT\"/$2"; return 0; }
+  echo "=== join $1 $(date +%H:%M:%S)"
+  $PY -m ohyesmlx.cli sweep --varying "$1" "$OUT"/$2 --out "$3"
+  echo "=== join $1 exit=$? $(date +%H:%M:%S)"
+}
+
 stream_sweep() {  # $1 = runtime; $2 $3 = the pin's two states, in the order they run
   echo "--- stock4bit__$1: stream-experts $2 $3"
   for state in "$2" "$3"; do
@@ -71,5 +91,5 @@ stream_sweep() {  # $1 = runtime; $2 $3 = the pin's two states, in the order the
 stream_sweep optiq off on
 stream_sweep vmlx on off
 
-echo "join: $PY -m ohyesmlx.cli sweep --varying stream_experts \"$OUT\"/stock4bit__*/*/"
+join_sweep stream_experts 'stock4bit__*/*/' "$OUT/sweep.md"
 echo "SWEEPDONE $(date +%H:%M:%S)"

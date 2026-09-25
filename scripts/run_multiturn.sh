@@ -5,6 +5,9 @@
 #
 #   grid:  python -m ohyesmlx.cli grid "$OUT"/*/
 #
+# The tail of this script runs that grid, writing $OUT/grid.md, and skips it when no run directory
+# exists under $OUT.
+#
 # `--workloads multiturn` swaps the three pinned shapes for cli.DIALOGUE's ten turns, turn-01 to
 # turn-10, each `max_tokens=128`. The history is the pinned conversation with fixed literal
 # replies, not each runtime's own answers fed back, so turn N is the same prompt on every runtime.
@@ -56,6 +59,22 @@ run_one() {  # $1 = the run's marker, which names its log; the rest is the run c
   echo "=== $marker exit=$? $(date +%H:%M:%S)"
 }
 
+join_grid() {  # $1 = the grid to write; $2 = the run-dir glob under $OUT
+  if [ "$DRY" = 1 ]; then
+    echo "grid: $PY -m ohyesmlx.cli grid \"$OUT\"/$2"
+    return 0
+  fi
+  # A CELLS subset still names directories, so the grid is skipped only when no run wrote one.
+  matched=
+  for d in "$OUT"/$2; do
+    [ -d "$d" ] && { matched=1; break; }
+  done
+  [ -n "$matched" ] || { echo "grid skipped: nothing matches \"$OUT\"/$2"; return 0; }
+  echo "=== grid $(date +%H:%M:%S)"
+  $PY -m ohyesmlx.cli grid "$OUT"/$2 --out "$1"
+  echo "=== grid exit=$? $(date +%H:%M:%S)"
+}
+
 # Before as well as after: an Osaurus app relaunched between runs must not sit resident through
 # another runtime's cell. The kill is logged.
 [ "$DRY" = 1 ] || sweep
@@ -65,5 +84,5 @@ run_one multiturn --study runtime --cells "$CELLS" --workloads multiturn --resul
 [ "$DRY" = 1 ] || sweep
 case "$CELLS" in *osaurus*) [ "$DRY" = 1 ] || osaurus_restore_check ;; esac
 
-echo "grid: $PY -m ohyesmlx.cli grid \"$OUT\"/*/"
+join_grid "$OUT/grid.md" '*/'
 echo "SWEEPDONE $(date +%H:%M:%S)"

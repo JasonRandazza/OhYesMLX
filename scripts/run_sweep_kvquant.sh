@@ -11,6 +11,9 @@
 #   join:  python -m ohyesmlx.cli sweep --varying kv_quant "$OUT"/oq4__*/p16384/*/
 #          python -m ohyesmlx.cli sweep --varying kv_quant "$OUT"/oq4__*/p32768/*/
 #
+# The tail of this script runs both joins, writing $OUT/sweep-p16384.md and $OUT/sweep-p32768.md,
+# and skips one whose glob matches nothing (a RUNTIMES rerun leaves no directory for the rest).
+#
 # Codec order alternates direction per runtime, and so does the prompt-length order, so thermal
 # drift does not alias onto either pin.
 set -u
@@ -63,6 +66,23 @@ run_one() {  # $1 = the run's marker, which names its log; the rest is the run c
   echo "=== $marker exit=$? $(date +%H:%M:%S)"
 }
 
+join_sweep() {  # $1 = the swept pin; $2 = the run-dir glob under $OUT; $3 = the report to write
+  if [ "$DRY" = 1 ]; then
+    echo "join: $PY -m ohyesmlx.cli sweep --varying $1 \"$OUT\"/$2"
+    return 0
+  fi
+  # RUNTIMES narrows a rerun, so a glob can be left matching no run directory at all; an empty
+  # join is skipped rather than handed to the renderer.
+  matched=
+  for d in "$OUT"/$2; do
+    [ -d "$d" ] && { matched=1; break; }
+  done
+  [ -n "$matched" ] || { echo "join skipped: nothing matches \"$OUT\"/$2"; return 0; }
+  echo "=== join $1 $(date +%H:%M:%S)"
+  $PY -m ohyesmlx.cli sweep --varying "$1" "$OUT"/$2 --out "$3"
+  echo "=== join $1 exit=$? $(date +%H:%M:%S)"
+}
+
 CODECS="off affine8 affine4"
 CODECS_REV="affine4 affine8 off"
 LENGTHS="16384 32768"
@@ -88,6 +108,6 @@ for r in $RUNTIMES; do
   [ "$lengths" = "$LENGTHS" ] && lengths=$LENGTHS_REV || lengths=$LENGTHS
 done
 
-echo "join: $PY -m ohyesmlx.cli sweep --varying kv_quant \"$OUT\"/oq4__*/p16384/*/"
-echo "join: $PY -m ohyesmlx.cli sweep --varying kv_quant \"$OUT\"/oq4__*/p32768/*/"
+join_sweep kv_quant 'oq4__*/p16384/*/' "$OUT/sweep-p16384.md"
+join_sweep kv_quant 'oq4__*/p32768/*/' "$OUT/sweep-p32768.md"
 echo "SWEEPDONE $(date +%H:%M:%S)"

@@ -1,11 +1,13 @@
-# Sourced, not run. The Osaurus settings pin for the Phase 4 runners, the one run_grid_35b.sh
-# carries inline: both ~/.osaurus/config files are copied byte-exact, then
+# Sourced, not run. The Osaurus settings pin for the Phase 4 runners, run_grid_35b.sh now among
+# its callers: both ~/.osaurus/config files are copied byte-exact, then
 #   modelIdleResidencyPolicy.seconds = 900 (the host's 30 unloads the model inside the 30 s
 #     cooldown, and the drift guard refuses to start against the committed baseline's 900),
 #   cache.prefix.enabled = cache.blockDisk.enabled = false (the other four runtimes prefill cold),
 # the baseline is re-recorded so the guard passes, and afterwards both files are restored and
 # verified with `cmp`. 2026-09-25: the Phase 4 night ran without this and every Osaurus cell was N/A.
-# ponytail: run_grid*.sh / run_sweep_cache*.sh still carry their own copies; point them here when next touched.
+# ponytail: copies remain in run_grid.sh / run_grid_moe.sh (they pin idle 900 only and leave the
+# host's caches alone), run_sweep_cache*.sh (there the Osaurus cache IS the varied pin), and
+# run_accuracy_*.sh / run_jang_*.sh / run_sweep_prompt.sh; point them here when next touched.
 # Needs $PY and a sweep() from the caller; both traps sweep, as the callers' own does. osaurus_pin installs a restoring trap; callers call
 # osaurus_restore_check when their Osaurus runs are done.
 CONF="$HOME/.osaurus/config/server-runtime.json"
