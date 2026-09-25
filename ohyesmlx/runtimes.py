@@ -2323,8 +2323,8 @@ class Vmlx(Runtime):
         # byte-identical to the recorded ones; the depths and their fixed policy are
         # `MTP_DEPTHS`'. The policy is not the whole of a fixed depth on this release: two
         # controllers it does not turn off still move depth, and `VMLX_MTP_FIXED_ENV` is the
-        # pair of variables that disables them -- carried as an `env` prefix so the recorded
-        # command says the depth was pinned rather than leaving it to the ambient environment.
+        # pair of variables that disables them -- carried as an `env` prefix so the depth never
+        # depends on the ambient environment.
         # Whether a depth is honest on this artifact is not this method's question: see
         # `vmlx_mtp_refusal`.
         mtp = ("--disable-native-mtp",)

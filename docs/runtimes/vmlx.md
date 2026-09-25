@@ -1411,9 +1411,10 @@ adaptation to get a stable number must set `VMLX_NATIVE_MTP_DEPTH_PROBE` /
 
 The harness drives MTP through one header pin, and a depth cell is three things rather than one:
 `--native-mtp-depth N --native-mtp-depth-policy fixed`, the two environment variables that keep
-that policy fixed (`env VMLX_NATIVE_MTP_AR_SAFETY=0 VMLX_NATIVE_MTP_AR_REENTRY=0`, carried as a
-prefix in the recorded command so the provenance says the depth was pinned rather than leaving it
-to the ambient environment), and the log half of the claim (`Vmlx.mtp_depth_missing`, below). The
+that policy fixed (`env VMLX_NATIVE_MTP_AR_SAFETY=0 VMLX_NATIVE_MTP_AR_REENTRY=0`, carried as an
+`env` prefix on the start command so the depth does not depend on the ambient environment; the
+run does not store the command, it stores the `mtp_depth` pin and the harness `source_sha256`
+that together determine it), and the log half of the claim (`Vmlx.mtp_depth_missing`, below). The
 cell records which value it ran.
 
 | pin value | command | why that is the whole of the pin |
@@ -1458,8 +1459,8 @@ of their 212 `accept_by_depth` rows show a non-zero `d3` denominator. A column l
 whose requests mostly ran at another depth is not a depth-3 column. The cost of pinning is real
 and is stated where §7.4 states it: the resulting speed may be a speed the runtime would itself
 have rejected — a fixed-depth cell, which is what the header declares, and the declared state is
-what a reader gets. Both variables are in the recorded start command, so no part of it is
-ambient.
+what a reader gets. Both variables are set by the start command the pin builds, so no part
+of it is ambient.
 
 **The log half: three conditions, and the window is the whole log.** `Vmlx.mtp_depth_missing`
 fails a depth cell when the visit's log shows either mechanism the variables disable —
