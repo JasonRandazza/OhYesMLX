@@ -1384,9 +1384,9 @@ def test_optiq_requires_the_engine_s_own_ready_line_at_the_depth_that_was_pinned
 #
 # The lines below are verbatim from the two depth runs of 2026-09-25, whose commands carried the
 # policy but not the two variables of `VMLX_MTP_FIXED_ENV`:
-# results/logs/vmlx-20260925T062816-11233.log and -20260925T063452-16321.log. Of their 49 and 45
-# depth-3 requests, 47 and 40 inherited a `start rung D1` and 15 and 15 ended in
-# `finish=fallback_to_ar`, while 0 and 5 `accept_by_depth` rows show a non-zero `d3` denominator
+# results/logs/vmlx-20260925T062816-11233.log (depth 2) and -20260925T063452-16321.log (depth 3).
+# Across the depth-3 run's two visits, 78 of 87 requests inherited a `start rung D1` and 29 ended in
+# `finish=fallback_to_ar`, while 9 of 201 `accept_by_depth` rows show a non-zero `d3` denominator
 # -- which is why a depth cell needs both halves of this check.
 
 VMLX_D3_DRAFTED = (

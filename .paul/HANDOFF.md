@@ -1,174 +1,76 @@
 ---
-description: "OhYesMLX — session handoff, 2026-09-24 evening (v3.1 Hardening: Phase 4 code complete, sweeps not yet run)"
+description: "OhYesMLX — session handoff, 2026-09-25 evening (v3.1 Hardening: Phase 4 closed)"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-09-24 evening (Phase 4 code complete; sweeps tonight)
+# Handoff — 2026-09-25 evening (Phase 4 closed)
 
-> Read this, then `.paul/STATE.md` (Current Position, Decisions 122–123), then `AGENTS.md`.
-> STATE wins on conflict. The previous handoff is
-> `.paul/archive/2026-09-24-handoff-morning-phase3-closed.md`.
+> Read this, then `.paul/STATE.md` (Current Position, Decisions 125–126, Deferred Issues), then
+> `AGENTS.md`. STATE wins on conflict. The previous handoff is
+> `.paul/archive/2026-09-24-handoff-evening-phase4-code-complete.md`.
 
 ## Where things stand
 
-Phase 4 of v3.1 Hardening is **code complete and not yet exercised live**. Jason approved all
-four proposed items and the mixed-channel TTFT refusal this morning; each landed as its own
-commit, reviewed by the coordinator with a green suite. **Tests: 618 pass** (543 at the start of
-the day). The measurement half of Phase 4 — the overnight sweeps — is what remains, and Jason
-plans to run it tonight.
+Phase 4 of v3.1 Hardening is **closed**. All four v3 script studies were re-run through the
+harness and written up. **Tests: 634 pass.** Commits after `9bd1814` were local when this was
+written — check `git log origin/main..main` before assuming anything is pushed.
 
-`git log origin/main..main` shows what is unpushed. Jason pushed the first batch mid-session; the
-Phase 4 commits after `cb0bcb1` were local at the time of writing — check before assuming.
+| study | paper | results |
+|---|---|---|
+| 03-05 KV quant | `docs/research/2026-09-25-kv-quant-sweep.md` | `results/sweep-kvquant/sweep-p{16384,32768}.md` |
+| 03-03 expert streaming | `docs/research/2026-09-25-expert-streaming-sweep.md` | `results/sweep-streaming/sweep.md` |
+| 03-04 multi-turn | `docs/research/2026-09-25-multiturn-runtime-axis.md` | `results/multiturn/grid.md`, `results/multiturn-osaurus/grid.md` |
+| 03-06 MTP depth | `docs/research/2026-09-25-mtp-depth-sweep.md` | `results/sweep-mtp-fixed/sweep-jang4s__vmlx.md`, `results/sweep-mtp/sweep-optiq*.md` |
 
-| commit | what |
-|---|---|
-| `e57775d` | Decision 122: runtime-axis TTFT and prefill orderings refuse rows timed on mixed channels (content vs reasoning). `report.CHANNEL_DEPENDENT_RANKS`; new row key `timing_channel`; the group lists values without positions and the recommendation is "none". |
-| `360ca81` | AGENTS.md delegation text follows the fleet profile map (`implement`/`refactor` → DeepSeek v4.1 flash, `test`/`explain` → MiMo flash, `review` → MiMo pro; Luna explicit-only). |
-| `3a47e12` | `docs/research/2026-09-24-kv-quant-surface.md`: the KV-quant control surface of every runtime, from source. |
-| `eec6480` | `--kv-quant off\|affine8\|affine4` header pin. |
-| `c33edc4` | The 2026-09-20 KV paper's vMLX rows are marked an inert codec; runtime notes corrected (`docs/runtimes/{optiq,vmlx,osaurus}.md`). |
-| `3310e33` | `--mtp-depth off\|1\|2\|3` and `--stream-experts off\|on` header pins. |
-| `d868f56` | `run --workloads multiturn`: ten fixed turns of one pinned conversation. |
-| `a376728` | STATE/ROADMAP: Phase 4 code complete; Decisions 122–123. |
+Headlines, each argued with its caveats in its paper:
 
-> **Updated 2026-09-24 afternoon (Decision 124):** `--mtp-depth` now also drives OptiQ, and the
-> Phase 4 runner scripts exist: `sh scripts/run_phase4_night.sh` (`DRY=1` prints the commands).
-> Where this note says MTP is vMLX-only, STATE Decision 124 supersedes it.
+- **KV quant:** only OptiQ drives a live KV codec. affine8/affine4 cut its decode from 69.8 to
+  35.0/33.5 tok/s at 16k and 61.6 to 22.9/21.8 at 32k, for about 2 GB of peak memory. Every other
+  runtime refuses the codecs (N/A).
+- **Expert streaming:** OptiQ `on` decodes at ~9.3 tok/s against ~84 `off`; vMLX `--flash-moe`
+  printed its banner and then failed the coherence gate.
+- **Multi-turn:** decode is flat across ten turns on every runtime; TTFT grows with history. oMLX
+  switches timing channel between turns (so its turn-04 105.4 is content-timed) and its turn-06 is
+  FAIL for no content. The Osaurus column was measured ~6 h after the other four and is its own grid.
+- **MTP:** vMLX on the 4B JANG_4S — depth 1 and 2 are indistinguishable from off, depth 3 is
+  16–20% slower; acceptance per added draft falls 0.73 → 0.50 → 0.29. Every OptiQ depth cell FAILs
+  on its own log (35B head shape mismatch; 4B `TypeError` in `engine.py:760`).
 
-## What each Phase 4 setting does
+## What went wrong on the night, and what fixed it
 
-All three pins follow the `--cache-state` pattern: a `run` flag recorded in the header, a
-member of `report.PIN_FIELDS` / `ABSENT_PINS` / `SWEEP_PINS` / `SWEEP_VALUES` (so
-`sweep --varying <pin>` joins runs that differ only in it), a `Runtime.<pin>_refusal()` asked
-before start that turns a cell into **N/A with the reason**, and an absent pin (`None`) that
-leaves every start command byte-identical to before. The rationale for each refusal is written
-once, in `ohyesmlx/runtimes.py`, at the refusal.
-
-### `--kv-quant off|affine8|affine4` (study 03-05)
-
-- Renamed from the proposed `fp8`/`int4` on evidence: **no runtime here has a float8 KV codec**.
-  Every codec in the set is MLX affine integer quantization (`docs/research/2026-09-24-kv-quant-surface.md` §2).
-- **Only OptiQ quantizes the live cache** (`--kv-bits 8|4 --kv-group-size 64`).
-- **vMLX's q4/q8 applies only to the prefix-cache copy**, and the harness has run with
-  `--disable-prefix-cache` since 2026-09-15 (vMLX `scheduler.py:1393-1404`, `:2444-2458`). vMLX
-  accepts only an explicit `off` (passing `--kv-cache-quantization none`) and refuses codec values.
-  Consequence: **the vMLX rows of the 2026-09-20 KV paper measured nothing** — the paper now says so;
-  its numbers are kept, not rewritten.
-- mlx-lm and oMLX accept `off` only. Osaurus accepts `off` only when `cache.liveKVCodec ==
-  engine_selected`.
-- So a KV-quant sweep is effectively an **OptiQ sweep**; the other runtimes contribute `off` rows or N/A.
-
-### `--mtp-depth off|1|2|3` (study 03-06)
-
-- vMLX only. At depth N the start command drops `--disable-native-mtp` and passes
-  `--native-mtp-depth N --native-mtp-depth-policy fixed`.
-- `vmlx_mtp_refusal(artifact_dir)` is a static check of the bundle: config.json present, family
-  wired in vMLX, MTP not declared dropped, MTP layers declared, and `mtp.*` tensors present in
-  `model.safetensors.index.json`. A bundle without heads would decode plain autoregressive and
-  publish as MTP; it is N/A instead.
-- **Checked this evening against every snapshot in the HF cache: only
-  `JANGQ-AI/Qwen3.5-4B-JANG_4S` passes.** The 35B MTP bundle the paper used,
-  `Jundot/Qwen3.6-35B-A3B-oQ4-mtp`, is no longer on disk (its cache directory is a 4 KB stub), and
-  the paper found it incoherent under vMLX with MTP both on and off anyway. Run the MTP sweep on
-  the 4B JANG_4S; do not download the 35B bundle for it.
-- Acceptance rate is a runtime self-report; it is recorded, not treated as a measurement.
-
-### `--stream-experts off|on` (study 03-03)
-
-- OptiQ: `--stream-experts` for `on`; `--no-stream-experts` for `off` **and** when absent (the
-  existing internal pin stays — AGENTS.md hazard: OptiQ auto-enables streaming at 70% of RAM).
-- vMLX: `--flash-moe` for `on`.
-- Both runtimes can silently fall back to loading everything. So after start,
-  `stream_experts_missing()` reads the head of the server log (`LOG_HEAD_BYTES` = 1 MiB) and the
-  cell is **FAIL, with the log quoted,** unless the banner is there: OptiQ needs both
-  `SSD expert streaming: on` and `pre-loaded`; vMLX needs `Flash MoE enabled:`. The runtime is still
-  stopped in `finally`. `Handle.log_path` was added for this.
-
-### `run --workloads pinned|multiturn` (study 03-04) — not a pin
-
-- Default `pinned` is today's three shapes, byte-identical. `multiturn` swaps in ten workloads,
-  `turn-01`…`turn-10`, all `max_tokens=128`. It is mutually exclusive with `--prompt-tokens`.
-- `cli.DIALOGUE` holds the ten probe questions plus **nine fixed literal assistant replies**. The
-  2026-09-20 probe fed each runtime its own replies back, so every runtime saw a different history —
-  two things varied at once. Fixed replies make turn N the same prompt on every runtime.
-- The header's existing workload list is the provenance; no new pin was needed.
-
-### Not re-run: 03-07 speculative draft
-
-It needs two resident models by design, which breaks the one-model rule. It stays a caveated
-script study.
-
-## Tonight: the sweeps
-
-**No Phase 4 runner scripts exist yet.** The first job is writing them — delegate it
-(`CC_AGENT_MAX_TURNS=300 .paul/orders/dispatch.sh implement <order>`), and land it **before**
-the grid starts: AGENTS.md forbids editing `ohyesmlx/*.py` or running tests while a grid runs.
-Model them on `scripts/run_sweep_cache.sh`, which already has the port sweep, the stale-Osaurus
-sweep by full executable path, the Osaurus baseline snapshot/restore with `cmp`, the abort trap,
-one log per run, and `OUT=` override. `scripts/gridspec-35b.sh` resolves the 35B snapshot paths.
-
-Suggested runs, in the order of value (cheapest first is also fine for a first live check):
-
-| study | runtimes × artifact | varying | extra | expected N/A |
-|---|---|---|---|---|
-| 03-05 KV quant | all five × `oq4` 35B (`$Q4`) | `kv_quant` off/affine8/affine4 | `--prompt-tokens 16384` and `32768` | affine8/affine4 on everything but OptiQ |
-| 03-06 MTP | vMLX × `Qwen3.5-4B-JANG_4S` | `mtp_depth` off/1/2/3 | — | none (it passes the refusal) |
-| 03-03 streaming | OptiQ, vMLX × `stock4bit` 35B (`$S4`) | `stream_experts` off/on | — | mlx-lm, oMLX, Osaurus |
-| 03-04 multi-turn | all five × one 35B artifact | runtime axis, `--workloads multiturn` | — | none expected |
-
-Then `ohyesmlx sweep --varying <pin>` over each study's results directory.
-
-Things to watch in the first results, because none of this has run live:
-
-- a streaming `on` cell that FAILs for a missing banner — read the quoted log before believing
-  either the harness or the runtime; the banner strings were taken from source and recorded logs;
-- an OptiQ `affine4` cell failing the coherence gate — that is a result, not a harness bug;
-- the TTFT refusal (Decision 122) firing on the multi-turn runtime-axis report, which is expected
-  on the Qwen artifacts (OptiQ times on content, the other four on reasoning).
-
-Also queued for a quiet night: **the third 35B replicate**, which settles whether this morning's
-8–27% level shift in mlx-lm/oMLX/vMLX is real (about 2.3 h):
-`OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh`.
-
-The machine must be quiet: no pytest, git, downloads, or Command Code workers while any of this runs.
-
-## Deferred
-
-- The single-run `render_markdown` leaderboard is guarded by neither A7 (no cross-runtime
-  `peak_mb`/`cold_load_s` ordering) nor the Decision 122 channel refusal. Only the grid/sweep
-  paths are. Worth a small order once the sweeps land.
-- The Luna route trial is still owed (Luna is explicit-only now; one data point: it ran out of
-  turns on Phase 2 and left two duplicated definitions).
-- Phase 4 order files are in `.paul/orders/p4-*.md`; their `.log` files are untracked worker
-  transcripts and can be deleted.
+1. **Every Osaurus cell was N/A.** The Phase 4 runners lacked the grid runner's Osaurus pin, so the
+   drift guard refused to start (host residency 30 s vs baseline 900 s). `scripts/osaurus-pin.sh`
+   now carries the pin once (Decision 125, `732eaef`); Osaurus was rerun alone and its settings
+   restored byte-exact. The void runs are kept as `results/sweep-kvquant/void-oq4__osaurus-residency-unpinned/`.
+2. **vMLX's MTP depth was not held.** `--native-mtp-depth-policy fixed` leaves the AR-safety valve
+   and the sticky start rung running; the night's depth-3 column ran 3.7% of its cycles at D3.
+   Jason approved an env pin (Decision 126, `ac90077`); the rerun held every cycle at the pinned
+   depth. The night's vMLX MTP runs are kept as `results/sweep-mtp/void-…depth-not-held…`.
+3. My first order for (2) claimed the depth-3 logs never drafted at d3. They did, 5 and 4 times;
+   the worker went BLOCKED on it, correctly. The same slip then put a depth-2 log's counts into
+   `docs/runtimes/vmlx.md` §7.4.1 as depth-3 ones; the MTP paper's worker caught it and it is corrected.
 
 ## Working notes carried forward
 
-- **Offload to Command Code.** Claude tokens are scarce: Opus writes orders, reviews diffs and
-  runs the suite; workers write code. Always set `CC_AGENT_MAX_TURNS` — 300 for code orders, 400
-  for an order that spans two pins or several modules, never the default 40. One worker hit 200
-  mid-edit today with no report; a 400-turn continuation order finished and trimmed it.
-- A worker's BLOCKED is a finding: today's multi-turn worker correctly stopped on a snapshot test
-  (`tests/test_report.py`, run-flag list) outside its allowlist.
-- **Graphify:** the repo had no git hooks, and the Claude-side hook fires only on `.md` edits. On
-  2026-09-24 `graphify hook install` added post-commit/post-checkout hooks; every commit now
-  rebuilds `graphify-out/` in the background (log: `~/.cache/graphify-rebuild.log`). Uncommitted
-  `.py` edits still need `graphify update .` by hand. Graphify's merge driver created a
-  `.gitattributes`; Jason deleted it — if it reappears, it is harmless and untracked.
+- **Offload to Command Code**; Opus writes orders, reviews, runs the suite. `CC_AGENT_MAX_TURNS`
+  300 for code, 200 for docs. Command Code self-updates: a dispatch that dies with
+  `command-code/dist/index.mjs` ENOENT hit an update in progress — just redispatch.
+- `scripts/run_sweep_mtp.sh` takes `PAIRS=` and `run_sweep_kvquant.sh` `RUNTIMES=` to rerun a subset;
+  `run_multiturn.sh` takes `CELLS=`. Runners print their join commands; run them yourself.
+- `grid` refuses to join two runs holding the same cell (no latest-wins rule) — a rerun column is
+  its own grid.
+- Graphify rebuilds on every commit (post-commit hook, log `~/.cache/graphify-rebuild.log`); wait
+  for it to go idle before a measurement.
 - Test command: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`.
-
-## Host state
-
-- Google Drive was quit for the 2026-09-23 grids — relaunch it if it is still off (quit it again
-  before tonight's run; it held ~100% CPU).
-- About 100 GiB free after the Time Machine snapshot purge; check `df` before any fetch.
-- Osaurus is out of `~/.commandcode/mcp.json` and Login Items (both relaunched the app).
+- Host: Osaurus `modelIdleResidencyPolicy.seconds` is 30 by Jason's choice — the pin restores it.
 
 ## Next moves
 
-1. Push any unpushed commits (`git log origin/main..main`).
-2. Dispatch the Phase 4 runner scripts; review; commit; then start the sweeps on a quiet machine.
-3. Morning after: `sweep --varying` reports per study, a research writeup per study under
-   `docs/research/`, and STATE updated (Phase 4 closes when the studies are written up).
-4. Third 35B replicate on the next free quiet night.
+1. Push (`git log origin/main..main`).
+2. Jason picks what remains of v3.1 from STATE Deferred Issues. The largest is the third 35B
+   replicate (~2.3 h, quiet night): `OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh`. The
+   rest are small orders: the sweep's N/A-as-`—` render, the single-run leaderboard guards, the
+   OptiQ MTP FAIL wording, the mlx-lm prompt-cache question.
+3. Phase 4 order files are `.paul/orders/p4-*.md`; their `.log` files are untracked transcripts
+   and can be deleted.

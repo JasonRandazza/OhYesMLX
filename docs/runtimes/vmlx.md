@@ -1453,9 +1453,9 @@ valve (fixed then never leaves its depth, even when slower than plain decoding)"
 
 **Approved 2026-09-25.** This reverses the earlier reading, which left `AR_SAFETY` at its default
 and called the valve's demotion a property of the runtime as shipped. The study is *fixed depth
-N*, and under the policy alone the two runs of 2026-09-25 put 94 requests through a depth-3
-command: 30 of them ended in `finish=fallback_to_ar`, 87 began at a `start rung D1`, and only five
-of their 212 `accept_by_depth` rows show a non-zero `d3` denominator. A column labelled depth 3
+N*, and under the policy alone the night run of 2026-09-25 put 87 requests through a depth-3
+command (its two visits): 29 of them ended in `finish=fallback_to_ar`, 78 began at a
+`start rung D1`, and 306 of their 8,196 verify cycles (3.7%) ran at D3. A column labelled depth 3
 whose requests mostly ran at another depth is not a depth-3 column. The cost of pinning is real
 and is stated where §7.4 states it: the resulting speed may be a speed the runtime would itself
 have rejected — a fixed-depth cell, which is what the header declares, and the declared state is
@@ -1469,10 +1469,12 @@ fails a depth cell when the visit's log shows either mechanism the variables dis
 the head actually drafting the Nth token in some request of the visit, and it is the only
 condition depth 1 is judged on (there is no rung below it, and its fallback is below the pin
 itself). The measured runs of 2026-09-25 carried the policy but not the variables, and they are
-the reason each condition exists: of the 49 and 45 depth-3 requests in
-`results/logs/vmlx-20260925T062816-11233.log` and `-20260925T063452-16321.log`, 47 and 40
-inherited a `start rung D1`, 15 and 15 ended in `finish=fallback_to_ar`, and only 0 and 5
-`accept_by_depth` rows show a non-zero `d3` denominator.
+the reason each condition exists: of the 87 depth-3 requests in
+`results/logs/vmlx-20260925T063452-16321.log` and `-20260925T063819-16321.log`, 78 inherited a `start rung D1`, 29 ended in
+`finish=fallback_to_ar`, and only 9 of 201 `accept_by_depth` rows show a non-zero `d3`
+denominator. (Corrected 2026-09-25: an earlier version of this paragraph counted the depth-2
+run's `-20260925T062816-11233.log` as a depth-3 one.) The fixed rerun that followed ran all 8,835
+of its depth-3 cycles at D3 — `docs/research/2026-09-25-mtp-depth-sweep.md` §3.
 
 The window is the whole file (`runtimes._read_log_all`), not the head or the tail: a request's row
 is written once per request for as long as the server runs, so a fixed window at one end is a

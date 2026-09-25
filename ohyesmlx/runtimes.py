@@ -2455,10 +2455,11 @@ class Vmlx(Runtime):
         The evidence is per request, so it is a property of the whole log and it is read after
         the visit's measured requests -- see :func:`_read_log_all` for the window and
         ``measure._visit`` for the point it is asked at. The markers are the runtime's own
-        words, taken from its source and from ``results/logs/vmlx-20260925T062816-11233.log``
-        and ``-20260925T063452-16321.log``: of their 49 and 45 depth-3 requests, 47 and 40
-        carry a ``start rung D1`` line, 15 and 15 carry ``finish=fallback_to_ar``, and 0 and 5
-        ``accept_by_depth`` rows have a non-zero denominator at ``d3``.
+        words, taken from its source and from the night depth-3 run's two visit logs,
+        ``results/logs/vmlx-20260925T063452-16321.log`` and ``-20260925T063819-16321.log``: of
+        their 87 requests, 78 carry a ``start rung D1`` line, 29 carry
+        ``finish=fallback_to_ar``, and 9 of 201 ``accept_by_depth`` rows have a non-zero
+        denominator at ``d3``.
         """
         if mtp_depth not in MTP_DEPTHS[1:]:
             return None

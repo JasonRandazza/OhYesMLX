@@ -11,15 +11,15 @@ about: "OhYesMLX"
 See: .paul/PROJECT.md (updated 2026-09-14)
 
 **Core value:** A Mac user can find out whether their serving runtime or their quantization is what's actually costing them speed and memory.
-**Current focus:** v3.1 Hardening — Phases 1–3 done; Phase 4 (re-run v3 script studies) awaits Jason's design call
+**Current focus:** v3.1 Hardening — Phases 1–4 done (2026-09-25); what remains of the milestone is Jason's call
 
 ## Current Position
 
 Milestone: v3.1 — Hardening (0.3.1) — IN PROGRESS. v0.3.0 released 2026-09-23.
-Phase: 4 (Re-run v3 script studies through the harness) — CODE COMPLETE 2026-09-24; the overnight sweeps are not yet run
+Phase: 4 (Re-run v3 script studies through the harness) — COMPLETE 2026-09-25: all four studies swept and written up
 Plan: from the deep review, `.paul/review/2026-09-23/SUMMARY.md` (IDs A1–F below refer to it)
 Status: Phases 1–3 COMPLETE 2026-09-24 (543 tests). Validation grids (35B, dense, MoE) re-run on the hardened harness: `docs/research/2026-09-24-hardening-validation-grids.md`.
-Last activity: 2026-09-24 — Phase 4 pins landed (`--kv-quant`, `--mtp-depth`, `--stream-experts`, `--workloads multiturn`; 618 tests); mixed-channel TTFT refusal; vMLX KV rows of the 09-20 paper marked inert.
+Last activity: 2026-09-25 — Phase 4 sweeps run and written up (634 tests): `docs/research/2026-09-25-kv-quant-sweep.md`, `-expert-streaming-sweep.md`, `-multiturn-runtime-axis.md`, `-mtp-depth-sweep.md`. Headlines: only OptiQ drives a KV codec, and affine8/affine4 halve its decode at 16k–32k; OptiQ expert streaming is ~9× slower and vMLX `--flash-moe` fails coherence; multi-turn decode is flat while TTFT grows with history; vMLX MTP on the 4B JANG_4S buys nothing at depth 1–2 and costs ~18% at depth 3, and every OptiQ MTP depth cell FAILs on its own log.
 
 Progress:
 - Milestone: [██████████] 100%
@@ -122,6 +122,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 122: Runtime-axis TTFT orderings refuse mixed timing channels | Phase 4 2026-09-24 | `CHANNEL_DEPENDENT_RANKS` = `ttft_p50_s`, `prefill_tps`. A group whose rows do not share a channel lists values without positions, and the recommendation is none. Jason's call. |
 | Decision 123: Phase 4 pins approved and landed | Phase 4 2026-09-24 | `--kv-quant off\|affine8\|affine4` (`fp8` is false for every runtime: all affine int codes; live KV quant is OptiQ only; vMLX q4/q8 is prefix-cache storage only and inert under `--disable-prefix-cache`, so the vMLX rows of the 09-20 KV paper are marked as not a codec comparison). `--mtp-depth off\|1\|2\|3` (vMLX, fixed depth policy, refused unless the artifact has wired MTP heads). `--stream-experts off\|on` (OptiQ/vMLX; `on` is FAIL unless the server log shows the streaming banner). Multi-turn is `--workloads multiturn`: ten fixed turns with literal assistant replies, not a pin. 03-07 speculative decoding is not re-run (it needs two resident models). None of this has been exercised live yet. |
 | Decision 124: `--mtp-depth` extended to OptiQ | Phase 4 2026-09-24 | The claim that vMLX is the only runtime with MTP was inferred from flags and was false: OptiQ (`optiq serve --mtp --mtp-depth N`, heads in the `optiq/mtp.safetensors` sidecar), oMLX (per-model `mtp_enabled`, no depth) and Osaurus (`mtp.mode`/`mtp.explicitDepth`, needs `vmlx_mtp_tuning.json`) all have native MTP; mlx-lm strips `mtp.*` at load. The pin now drives vMLX and OptiQ; OptiQ refuses without the sidecar and FAILs a cell whose log lacks the engine-ready line (built on first request). OptiQ MTP only applies because the harness sends a seed (seeded requests bypass BatchGenerator). The MTP study runs vMLX × Qwen3.5-4B-JANG_4S, OptiQ × Qwen3.5-4B-OptiQ-4bit and OptiQ × Qwen3.6-35B-A3B-OptiQ-4bit, each a within-runtime depth sweep. Runner scripts `scripts/run_*` + `run_phase4_night.sh` landed. |
+| Decision 125: Phase 4 runners pin Osaurus residency and cache | Phase 4 2026-09-25 | The night ran without the grid runner's Osaurus pin, so the drift guard refused every Osaurus cell (host `modelIdleResidencyPolicy.seconds` 30 vs baseline 900 — the 30 is Jason's choice and is restored after). `scripts/osaurus-pin.sh` (sourced) pins 900 s + prefix/blockDisk cache off, re-records the baseline, restores byte-exact with `cmp`. Osaurus was rerun alone the same day; its multi-turn column is therefore ~6 h apart from the other four and is its own grid. `732eaef`. |
+| Decision 126: vMLX fixed MTP depth needs two env vars, and a log check | Phase 4 2026-09-25 | `--native-mtp-depth-policy fixed` only disables vMLX 1.6.59's depth probe; the AR-safety valve and the sticky start rung still move depth (night depth-3 run: 306 of 8,196 cycles at D3). Jason approved the new pin surface: depth cells prefix `env VMLX_NATIVE_MTP_AR_SAFETY=0 VMLX_NATIVE_MTP_AR_REENTRY=0` (`runtimes.VMLX_MTP_FIXED_ENV`), and `Vmlx.mtp_depth_missing` FAILs a cell whose whole log shows `fallback_to_ar`, a start rung below N, or no non-zero `d<N>` draft. The depth check is now asked after the visit's measured requests (OptiQ too). The night's vMLX MTP runs are kept as `void-…depth-not-held`. The fixed columns are a state the runtime would itself decline. `ac90077`. |
 
 ### Deferred Issues
 
@@ -144,6 +146,12 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 35B levels moved +8–27% vs the published grid on unchanged runtime versions (orderings held) | Hardening validation 2026-09-24 | M | A third quiet-machine 35B replicate (≈2.3 h) decides which night was the outlier |
 | Runtime-axis TTFT mixes channels: OptiQ is content-timed, the other four reasoning-timed on Qwen | Hardening validation 2026-09-24 | S | Jason's call: refuse a TTFT ordering across mixed channels (like A7) or keep the label only |
 | `docs/runtimes/optiq.md` is scoped to 0.5.6; installed is 0.5.13 | Phase 3 docs worker | S | Re-read against the new build before the next OptiQ claim |
+| Third 35B replicate not run | Phase 4 2026-09-25 | M | Still decides the +8–27% level shift; `OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh` on a quiet night (~2.3 h) |
+| Sweep renders a refused (N/A) cell as `—` ("no run measured") | Phase 4 2026-09-25 | S | KV-quant sweep: every non-OptiQ codec cell. The N/A reason is in each run's leaderboard; the sweep should say N/A |
+| Phase 4 runners print their joins instead of running them; older runners carry their own Osaurus pin copies | Phase 4 2026-09-25 | S | Point `run_grid*.sh`/`run_sweep_cache*.sh` at `scripts/osaurus-pin.sh` when next touched |
+| mlx-lm's prompt cache is on but never hits in the multi-turn run | Phase 4 2026-09-25 | S | Open question in the multi-turn paper; read `mlx_lm.server`'s cache key before claiming anything |
+| OptiQ MTP: 4B dies in `engine.py:760` (`_logits_to_token(None)`), 35B head shape mismatch | Phase 4 2026-09-25 | S | The 4B FAIL note says "nothing about why" because the traceback matches no marker; widen the markers or reword. `optiq_mtp_refusal` could check sidecar shapes. MTP paper §4, Open questions 5–6 |
+| Single-run `render_markdown` leaderboard has neither the A7 nor the Decision 122 guard | Phase 4 2026-09-24 | S | Small order |
 | Thinking-Off MMLU Arm (Candidate 3) | Post-v2 | M | **Preserved for overnight execution.** Ablation study: isolate reasoning contribution on MMLU and resolve MoE HTTP 502 truncation trap. |
 
 ### Blockers/Concerns
@@ -161,9 +169,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-09-23/24 overnight (Claude Opus coordinator)
-Stopped at: Phases 2 and 3 committed (`17b3791`, `4279663`, `deb6189`); validation grids in `results/harden-2026-09-23/`; nothing pushed.
-Next action: Jason decides Phase 4 pins (proposal in HANDOFF) and the mixed-channel TTFT question; a third 35B replicate settles the level shift.
+Last session: 2026-09-25 (Claude Opus coordinator)
+Stopped at: Phase 4 closed — four writeups committed; results in `results/sweep-{kvquant,streaming,mtp,mtp-fixed}/`, `results/multiturn{,-osaurus}/`; commits since `9bd1814` are local until pushed.
+Next action: Jason picks what remains of v3.1 (Deferred Issues: the third 35B replicate, the small report defects).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
 
 ---
