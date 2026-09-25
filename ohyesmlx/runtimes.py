@@ -45,7 +45,9 @@ Two more pins of the same shape follow, one decode-side and one load-side: ``mtp
 (:data:`MTP_DEPTHS`) and ``stream_experts`` (:data:`STREAM_EXPERTS`). Each carries a second
 question the two above do not have, because each flag is accepted on a model that silently falls
 back: a depth is only MTP if the artifact carries the heads the runtime will load
-(:func:`vmlx_mtp_refusal` and :func:`optiq_mtp_refusal`, both before anything starts), and ``on``
+(:func:`vmlx_mtp_refusal` and :func:`optiq_mtp_refusal`, both before anything starts -- and on
+OptiQ, whose head is a sidecar of its own, only if that head's tensors fit the block its own
+config says will be built: :func:`_optiq_head_packing_refusal`), and ``on``
 is only streaming if the server's own log says so (:meth:`Runtime.stream_experts_missing`, after
 it). The depth pin has a log half too, on the one runtime whose engine is built later than its
 start: :meth:`Optiq.mtp_depth_missing`.
@@ -579,6 +581,50 @@ def _read_log_all(path: Path) -> str:
         return ""
 
 
+# A Python traceback, for the one branch below that has no marker of its own to quote. The
+# interpreter prints its frames outermost-first and its final line last, so the innermost frame
+# is the *last* `File "...", line N` in the block and the exception line is the first
+# unindented non-empty line after it -- the frame's own source line and the `~~~^^^` caret line
+# are both indented (measured on the traceback in
+# results/logs/optiq-20260925T064114-21379.log, whose 25 requests each print the same one).
+_TRACEBACK_START = re.compile(r"^\s*Traceback \(most recent call last\)")
+_TRACEBACK_FRAME = re.compile(r'^\s*File "[^"]+", line \d+')
+
+
+def _traceback_cause(text: str) -> tuple[str, str] | None:
+    """The innermost frame and the final exception line of the last traceback in *text*.
+
+    ``(frame, exception)``, both stripped, or ``None`` when the window holds no complete
+    traceback -- no start marker, no frame, or nothing unindented after the innermost frame
+    (which is what a window that ends inside a traceback looks like). The last traceback is the
+    one read, because a log that chained its failures printed the cause of the failure it ended
+    with last.
+
+    # ponytail: the exception line is taken as the first unindented line after the innermost
+    # frame rather than pattern-matched, because the interpreter's last line can name any
+    # exception class. A log whose window ends mid-traceback, or one interleaved at exactly that
+    # point, can therefore put another line there; the alternative is not quoting the cause at
+    # all, and the runtimes here write a traceback as one block under one logging lock.
+    """
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if _TRACEBACK_START.match(line):
+            start = index
+    if start is None:
+        return None
+    frame: tuple[str, int] | None = None
+    for index in range(start + 1, len(lines)):
+        if _TRACEBACK_FRAME.match(lines[index]):
+            frame = (lines[index].strip(), index)
+    if frame is None:
+        return None
+    for line in lines[frame[1] + 1 :]:
+        if line.strip() and not line[:1].isspace():
+            return frame[0], line.strip()
+    return None
+
+
 def _banner_evidence(
     name: str,
     log_path: str | None,
@@ -593,8 +639,13 @@ def _banner_evidence(
 
     ``required`` is every line the runtime prints when *claim* really holds, and ``fallback`` is
     the lines it prints instead when it does not -- the same set that makes a flag in a command
-    no evidence at all. A log that carries no fallback line either says so rather than quoting
-    nothing: the absence is the finding, and the log path is what a reader follows.
+    no evidence at all. A log that carries neither is read once more before the refusal is
+    written, because "it says nothing about why" is a claim about the log as much as about this
+    check and it was false on a real cell: the 4B OptiQ depth cell's log held no marker of
+    either kind and did hold a traceback ending `TypeError: 'NoneType' object is not
+    subscriptable` at `engine.py:760` (docs/research/2026-09-25-mtp-depth-sweep.md §4). So the
+    cause is quoted when there is one (:func:`_traceback_cause`) and the message says the
+    narrower, true thing when there is not: this check reads no line of it either way.
 
     Both halves of the two pins that follow this pattern read their evidence here, because it is
     one reading of one window (:data:`LOG_HEAD_BYTES`) and two copies of it would be two places
@@ -622,12 +673,24 @@ def _banner_evidence(
         None,
     )
     if quoted is None:
-        # The absence is the finding and the cause is not known, so it is not guessed at: the
-        # line this check reads may simply be beyond the head window (see LOG_HEAD_BYTES).
+        # Neither marker is in the window, and the cause is read out of it rather than guessed
+        # at. What this branch may not say is "the log says nothing": a log can hold a traceback
+        # under both markers, which is exactly what the 4B depth cell's did.
+        cause = _traceback_cause(text)
+        if cause is None:
+            # The absence is the finding: the line this check reads may simply be beyond the
+            # head window (see LOG_HEAD_BYTES), and this window holds no traceback either.
+            return (
+                f"{claim} was not delivered: {name}'s own log never printed {missing[0]!r}, and "
+                "prints no line this check reads. The flag was accepted, so this cell is FAIL "
+                f"rather than a number published under a pin nothing confirmed (log: {log_path})."
+            )
+        frame, exception = cause
         return (
-            f"{claim} was not delivered: {name}'s own log never printed {missing[0]!r}, and it "
-            "says nothing about why. The flag was accepted, so this cell is FAIL rather than a "
-            f"number published under a pin nothing confirmed (log: {log_path})."
+            f"{claim} was not delivered: {name}'s own log never printed {missing[0]!r}, and the "
+            f"failure it holds instead is {exception!r} at {frame!r}. The flag was accepted, so "
+            "this cell is FAIL rather than a number published under a pin nothing confirmed "
+            f"(log: {log_path})."
         )
     return (
         f"{claim} was not delivered: {name}'s own log never printed {missing[0]!r}, and it says "
@@ -662,6 +725,21 @@ def _stream_evidence(
         ),
         fallback_why="the load fell back to the resident path",
     )
+
+
+# A safetensors file's own header, and the only place a sidecar's tensor shapes are readable
+# without importing the format: eight little-endian bytes holding the length of a JSON object,
+# then that object, whose entries carry `dtype`, `shape` and the byte offsets of the payload.
+# Read with `json` rather than through `safetensors` or `mlx` because neither is a dependency of
+# this harness and this is the whole of what it needs. The ceiling is the length prefix itself:
+# the two OptiQ heads here are 29 and 37 tensors, a few KB of JSON each, so a header larger than
+# this is not one of these artifacts and is refused as unreadable rather than allocated.
+SAFETENSORS_HEADER_MAX_BYTES = 8 * 1024 * 1024
+
+# The fused HuggingFace expert layout, as the two keys `_split_fused_experts` rewrites into
+# mlx-lm's `switch_mlp.{gate,up,down}_proj.weight` (mtp_patch.py:130-140). Matched as suffixes:
+# the keys live under `layers.<n>.`, and that is what the split reaches.
+OPTIQ_FUSED_EXPERTS = ("mlp.experts.gate_up_proj", "mlp.experts.down_proj")
 
 
 def _read_json_object(path: Path) -> dict | None:
@@ -841,15 +919,204 @@ def vmlx_mtp_refusal(artifact_dir: str) -> str | None:
     return None
 
 
+def _safetensors_shapes(path: Path) -> dict[str, tuple[int, ...]] | None:
+    """A safetensors file's tensor shapes, or ``None`` when its header cannot be read.
+
+    The format's own prefix and nothing else (see :data:`SAFETENSORS_HEADER_MAX_BYTES`): the
+    shapes are what a caller can compare against what a runtime will build, and they are in the
+    file's first few KB.
+
+    An absent, empty, truncated or malformed file answers ``None`` -- no shapes. Every caller
+    reports that as *no evidence* rather than as a refusal, which is the direction this module
+    fails in everywhere: a header this reader cannot parse is one whose shapes are not known, and
+    the checks that do not need shapes are already asked. The log half of the same pin is what
+    catches a head that exists and cannot load (see :meth:`Optiq.mtp_depth_missing`).
+    """
+    try:
+        with open(path, "rb") as handle:
+            prefix = handle.read(8)
+            if len(prefix) != 8:
+                return None
+            length = int.from_bytes(prefix, "little")
+            if not 0 < length <= SAFETENSORS_HEADER_MAX_BYTES:
+                return None
+            payload = json.loads(handle.read(length).decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    shapes: dict[str, tuple[int, ...]] = {}
+    for key, entry in payload.items():
+        shape = entry.get("shape") if isinstance(entry, dict) else None
+        if isinstance(shape, list) and all(isinstance(dim, int) for dim in shape):
+            shapes[str(key)] = tuple(shape)
+    return shapes
+
+
+def _optiq_head_packing_refusal(config: dict, head: Path, artifact_dir: str) -> str | None:
+    """Why OptiQ cannot build this head's weights into its block, or ``None`` when it can.
+
+    Every ``mtp_patch.py`` line below is the installed ``mlx-optiq`` **0.5.13**
+    (``optiq/runtime/mtp/mtp_patch.py``; the version and the install path are recorded in
+    docs/runtimes/optiq.md §1), and every line number was read from it rather than remembered.
+
+    The third artifact condition, and the one the runtime's own log caught afterwards on
+    2026-09-25: ``Qwen3.6-35B-A3B-OptiQ-4bit`` passes the two checks above -- the head is where
+    the resolver looks and the config declares the layer -- and its head still cannot load.
+    ``MTP head weight 'layers.0.mlp.switch_mlp.gate_proj.weight' has shape (256, 512, 2048),
+    block expects (256, 512, 256) (3 mismatched tensors)``
+    (results/logs/optiq-20260925T065802-34585.log:35, printed by ``mtp_patch.py:354-355``), and
+    every request then answers 404. The block is built and quantized *before* its weights are
+    checked, so a head whose tensors are not packed where the block's parameters are fails at
+    the load rather than at the first draft, and this reads that out of the files instead.
+
+    **Whether the block is quantized is settled by the config, exactly as OptiQ settles it.**
+    ``with_config_defaults`` takes ``prequantized``, ``bits``, ``group_size``, ``mode`` and
+    ``policy`` from the config's ``mtplx_mtp_quantization`` (``mtp_patch.py:51-66``), and the
+    block is quantized only when the contract says prequantized *and* carries a bit width --
+    with no width ``_quantize_mtp_module`` returns before it quantizes anything (``:86-87``) --
+    while a prequantized head is loaded as it is, dequantization being the other branch
+    (``:162-168``). So a dense head under a config that declares no prequantization is a dense
+    block and fits, and this check declines without reading a shape.
+
+    **Which tensors that block quantizes is the policy, also from the config.** ``policy: all``
+    quantizes every module ``nn.quantize`` reaches (``:90-96``); ``cyankiwi`` skips ``fc``,
+    ``pre_fc_norm*`` and ``norm`` and quantizes the rest of ``layers.*`` (``:102-113``) -- so
+    ``mtp.fc.weight`` is dense in the 4B and legally so, because that artifact's config says
+    ``cyankiwi``, and it is a dense tensor *under ``layers.``* that cannot fit. An unstated
+    policy means ``all`` (``contract.mtp_quant_policy or "all"``, ``:89``).
+
+    **What a packed tensor looks like is mlx's own packing arithmetic**, which the two shapes in
+    the runtime's message state: a quantized weight is ``(out, in * bits / 32)`` and its affine
+    scales are ``(out, in / group_size)``. So a packed pair is checkable against itself --
+    ``weight[-1] * 32 == scales[-1] * group_size * bits`` -- with no model dimensions needed, and
+    both artifacts on this host satisfy it exactly at bits 4, group 64. Two ways a tensor fails:
+    the pair is absent (the tensor is dense, and the 35B's fused experts are the measured case),
+    or the pair is there and the two axes disagree about the input dimension.
+
+    **The fused HF expert layout is refused outright**, and not only for its shapes:
+    ``_split_fused_experts`` rewrites the two fused weight keys into ``switch_mlp.*`` weights and
+    splits the fused axis in half (``:130-140``) but rewrites no ``.scales``/``.biases``, so a
+    prequantized head's expert weights arrive dense and its expert scales have no source at all
+    -- the mismatched shapes at ``:350-355`` and the missing weights at ``:356-364`` are two
+    independent refusals of the same artifact.
+
+    The accepted cases are both on this host: the 4B's 29 tensors are all packed where the block
+    quantizes them (its one dense tensor is ``fc``, outside the policy's scope), and the 35B's 37
+    are packed everywhere except the two fused expert tensors, which is the refusal below.
+
+    # ponytail: two routes are left to the log half rather than read here, and both ceilings are
+    # a miss rather than a false refusal. A head that is prequantized *by its key set* rather than
+    # by its config (``_mtp_contract_for_weight_keys``, ``mtp_patch.py:204-233``, against the two
+    # expected sets at ``mtp/constants.py:54-76``) is not read: those sets are per-family tables
+    # that live inside the package, and a head whose keys match one has every one of its weights
+    # paired with scales and biases anyway, so this check would pass it. And a *packed* fused
+    # expert tensor is skipped in the loop below, because the arithmetic that catches a dense one
+    # says nothing about it while OptiQ's own missing-weights check refuses it regardless.
+    """
+    quantization = config.get("mtplx_mtp_quantization")
+    quantization = quantization if isinstance(quantization, dict) else {}
+    bits = quantization.get("bits")
+    if not quantization.get("prequantized") or bits is None:
+        return None
+    try:
+        bits = int(bits)
+        group = int(quantization.get("group_size") or 64)
+    except (TypeError, ValueError):
+        return None
+    mode = str(quantization.get("mode") or "affine")
+    policy = str(quantization.get("policy") or "all")
+    shapes = _safetensors_shapes(head)
+    if shapes is None:
+        return None
+    names = {key: (key[4:] if key.startswith("mtp.") else key) for key in shapes}
+
+    def in_scope(key: str) -> bool:
+        """Whether the block this config builds quantizes the module *key* names."""
+        return policy == "all" or names[key].startswith("layers.")
+
+    # The fused experts first, and gate_up before down: that is the order `_split_fused_experts`
+    # takes them in, and the order the runtime's own message names them in
+    # (results/logs/optiq-20260925T065802-34585.log:35 quotes the gate_proj half of gate_up).
+    for suffix in OPTIQ_FUSED_EXPERTS:
+        for key in sorted(shapes):
+            name = names[key]
+            if not name.endswith(suffix) or not in_scope(key):
+                continue
+            shape = shapes[key]
+            if shapes.get(key + ".scales") is not None:
+                # Already packed: not the measured failure, and the shape arithmetic below is
+                # about a dense tensor. OptiQ's own missing-weights check refuses this head
+                # anyway, because the split rewrites the weight keys and no scales key (:130-140,
+                # :356-364) -- the log half catches what this check does not.
+                continue
+            split = (
+                (shape[0], shape[1] // 2, shape[2])
+                if len(shape) == 3 and name.endswith("mlp.experts.gate_up_proj")
+                else shape
+            )
+            packed = split[:-1] + (split[-1] * bits // 32,)
+            return (
+                f"mtp_depth cannot be pinned on {artifact_dir}: this artifact declares its head "
+                f"prequantized (mtplx_mtp_quantization: bits={bits}, group_size={group}, "
+                f"policy={policy!r}), so the block OptiQ builds is quantized before the head's "
+                "weights are checked (mtp_patch.py:444-445) -- and its routed experts are in the "
+                "fused HF layout, which `_split_fused_experts` rewrites into `switch_mlp.*` "
+                f"weights but not into their `.scales`/`.biases` (:116-141): {key!r} is {shape}, "
+                f"so the split hands the block a dense {split} weight where its own parameter is "
+                f"{packed} (:345-355), and the scales and biases that parameter needs are never "
+                "rewritten at all (:356-364). That is the mismatch recorded on "
+                "Qwen3.6-35B-A3B-OptiQ-4bit, whose engine attached without a draft head and "
+                "answered 404s (results/logs/optiq-20260925T065802-34585.log:35). This cell is "
+                "N/A at a depth rather than measured at one whose head cannot load."
+            )
+
+    for key in sorted(shapes):
+        name = names[key]
+        shape = shapes[key]
+        if not name.endswith(".weight") or len(shape) < 2 or not in_scope(key):
+            continue
+        stem = key[: -len(".weight")]
+        scales = shapes.get(stem + ".scales")
+        biases = shapes.get(stem + ".biases")
+        if scales is None or (mode == "affine" and biases is None):
+            packed = shape[:-1] + (shape[-1] * bits // 32,)
+            return (
+                f"mtp_depth cannot be pinned on {artifact_dir}: this artifact declares its head "
+                f"prequantized (mtplx_mtp_quantization: bits={bits}, group_size={group}, "
+                f"policy={policy!r}), so the block OptiQ builds is quantized at that width "
+                "before the head's weights are checked (mtp_patch.py:444-445) and its "
+                f"{name!r} parameter is the packed {packed}. The sidecar's {key!r} is {shape} "
+                "with no `.scales`/`.biases` beside it, so it is not a packed weight at all and "
+                "cannot fit that parameter (mtp_patch.py:345-355). The injection then fails "
+                "before the first request, the engine attaches without a draft head "
+                "(:297-304) and every request is answered HTTP 404 (serve.py:459-464). This cell "
+                "is N/A at a depth rather than measured at one whose head cannot load."
+            )
+        if scales[-1] * group * bits != shape[-1] * 32:
+            packed = shape[:-1] + (scales[-1] * group * bits // 32,)
+            return (
+                f"mtp_depth cannot be pinned on {artifact_dir}: this artifact declares its head "
+                f"prequantized at bits={bits}, group_size={group}, and the sidecar's {key!r} is "
+                f"{shape} with `.scales` of {scales}, which is not that packing -- a packed "
+                "weight's last axis is `scales[-1] * group_size * bits / 32`, so the block's "
+                f"parameter is {packed} and the head cannot fit it (mtp_patch.py:345-355, "
+                "`_finalize_mtp_weights` at :144-168 reads the same two blocks of the config). "
+                "This cell is N/A at a depth rather than measured at one whose head cannot load."
+            )
+    return None
+
+
 def optiq_mtp_refusal(artifact_dir: str) -> str | None:
     """Why OptiQ cannot be measured at an MTP depth on this artifact, or ``None`` when it can.
 
-    Two checks, both read off the files before anything is started and both OptiQ's own: the
+    Three checks, all read off the files before anything is started and all OptiQ's own: the
     config must declare an MTP layer (``_num_mtp_layers``, ``mtp_patch.py:69-76``, whose answer
-    of zero sends the injector home before it looks for a head at ``:382-385``), and the head
+    of zero sends the injector home before it looks for a head at ``:382-385``), the head
     file must be where its resolver looks (``expected_mtp_file``, ``mtp/artifacts.py:104-115``:
     the path the config names under ``mlx_lm_extra_tensors.mtp_file`` first, then the four
-    spellings of :data:`OPTIQ_MTP_HEAD_RELS`).
+    spellings of :data:`OPTIQ_MTP_HEAD_RELS`), and the head's tensors must fit the block its own
+    config says OptiQ will build (:func:`_optiq_head_packing_refusal`).
 
     Why up front rather than only from the log, when this runtime does not fall back quietly:
     it fails **loudly but late**. With ``--mtp`` and no head it attaches one anyway, logs a
@@ -860,10 +1127,14 @@ def optiq_mtp_refusal(artifact_dir: str) -> str | None:
     head really attached -- is asked of the log after the start, by
     :meth:`Optiq.mtp_depth_missing`.
 
-    The accepted case is on this host: both of ``mlx-community/Qwen3.5-4B-OptiQ-4bit`` and
+    The two artifacts this study drives are both on this host and both pass the first two
+    checks: ``mlx-community/Qwen3.5-4B-OptiQ-4bit`` and
     ``mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit`` name ``optiq/mtp.safetensors`` in
     ``mlx_lm_extra_tensors.mtp_file`` and declare ``mtp_num_hidden_layers: 1``, and the 35B
-    sidecar is 1,644,816,560 B on disk.
+    sidecar is 1,644,816,560 B on disk. They do not both pass the third: the 4B was measured at
+    three depths on 2026-09-25 and the 35B's head cannot load at any of them -- the artifact half
+    of this pin is necessary and not sufficient, and the log half is what the 4B needed
+    (docs/research/2026-09-25-mtp-depth-sweep.md §4).
 
     # ponytail: an artifact carrying ``mtp.*`` tensors in its *main* weights is refused here,
     # and OptiQ can read those too (``_embedded_mtp_weight_map``, ``mtp_patch.py:277-299``). That
@@ -916,7 +1187,8 @@ def optiq_mtp_refusal(artifact_dir: str) -> str | None:
         candidates = (bundle / named,)
     else:
         candidates = tuple(bundle / rel for rel in OPTIQ_MTP_HEAD_RELS)
-    if not any(candidate.exists() for candidate in candidates):
+    head = next((candidate for candidate in candidates if candidate.exists()), None)
+    if head is None:
         return (
             f"mtp_depth cannot be pinned on {artifact_dir}: no MTP head is where OptiQ resolves "
             "one -- looked for "
@@ -925,7 +1197,10 @@ def optiq_mtp_refusal(artifact_dir: str) -> str | None:
             "answers every request HTTP 404 (serve.py:459-464, mlx_lm/server.py:1424-1427). This "
             "cell is N/A at a depth rather than measured at one the decode never used."
         )
-    return None
+
+    # The head this artifact found, against the block this artifact's own config builds: the
+    # third condition, and one only the file's header can answer.
+    return _optiq_head_packing_refusal(config, head, artifact_dir)
 
 
 def log_load_error(text: str) -> str | None:
@@ -2156,6 +2431,16 @@ class Optiq(Runtime):
         account of attaching without a head (``engine.py:297-304``); the error that follows is
         answered to the client as HTTP 404 and never logged (``serve.py:459-464``,
         ``mlx_lm/server.py:1424-1427``), so the warning is what the log holds.
+
+        **Neither marker is not "nothing to read".** The 4B's three depth cells carried no ready
+        line and no attach warning, and their logs did hold the cause -- a per-request traceback
+        ending ``TypeError: 'NoneType' object is not subscriptable`` at ``engine.py:760``, the
+        generate path that would have used the loaded head returning nothing -- which the check
+        as written reported as "it says nothing about why" (docs/research/2026-09-25-mtp-depth-
+        sweep.md §4, open question 5). :func:`_banner_evidence` therefore quotes the traceback's
+        exception line and its innermost frame when the window holds one, and says "prints no
+        line this check reads" when it does not. The window is unchanged: the log head, read
+        once (:data:`LOG_HEAD_BYTES`).
         """
         if mtp_depth not in MTP_DEPTHS[1:]:
             return None

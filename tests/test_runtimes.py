@@ -1261,6 +1261,268 @@ def test_an_artifact_whose_config_declares_no_mtp_layer_refuses_a_depth(tmp_path
     assert "config.json" in runtimes.optiq_mtp_refusal(missing)
 
 
+# --- the third artifact condition: does the head fit the block OptiQ builds ----------------
+
+# The two OptiQ quants of the 2026-09-25 depth study, as their sidecars' own headers: every
+# tensor name and shape, read with `struct` + `json` from
+# ~/.cache/huggingface/hub/models--mlx-community--Qwen3.5-4B-OptiQ-4bit/snapshots/
+# 6cb5bdfd0bf15f484881fb9f1ab6d7c840fddde9/optiq/mtp.safetensors (29 tensors) and
+# ...--Qwen3.6-35B-A3B-OptiQ-4bit/.../70a3aa32c7feef511182bf16aa332f37e8d82014 (37). The packing
+# the check reads is the `.scales`/`.biases` pairs and the two fused expert tensors; the widths
+# are the real ones.
+OPTIQ_4B_HEAD = (
+    ("mtp.fc.weight", (2560, 5120)),
+    ("mtp.layers.0.input_layernorm.weight", (2560,)),
+    ("mtp.layers.0.mlp.down_proj.biases", (2560, 144)),
+    ("mtp.layers.0.mlp.down_proj.scales", (2560, 144)),
+    ("mtp.layers.0.mlp.down_proj.weight", (2560, 1152)),
+    ("mtp.layers.0.mlp.gate_proj.biases", (9216, 40)),
+    ("mtp.layers.0.mlp.gate_proj.scales", (9216, 40)),
+    ("mtp.layers.0.mlp.gate_proj.weight", (9216, 320)),
+    ("mtp.layers.0.mlp.up_proj.biases", (9216, 40)),
+    ("mtp.layers.0.mlp.up_proj.scales", (9216, 40)),
+    ("mtp.layers.0.mlp.up_proj.weight", (9216, 320)),
+    ("mtp.layers.0.post_attention_layernorm.weight", (2560,)),
+    ("mtp.layers.0.self_attn.k_norm.weight", (256,)),
+    ("mtp.layers.0.self_attn.k_proj.biases", (1024, 40)),
+    ("mtp.layers.0.self_attn.k_proj.scales", (1024, 40)),
+    ("mtp.layers.0.self_attn.k_proj.weight", (1024, 320)),
+    ("mtp.layers.0.self_attn.o_proj.biases", (2560, 64)),
+    ("mtp.layers.0.self_attn.o_proj.scales", (2560, 64)),
+    ("mtp.layers.0.self_attn.o_proj.weight", (2560, 512)),
+    ("mtp.layers.0.self_attn.q_norm.weight", (256,)),
+    ("mtp.layers.0.self_attn.q_proj.biases", (8192, 40)),
+    ("mtp.layers.0.self_attn.q_proj.scales", (8192, 40)),
+    ("mtp.layers.0.self_attn.q_proj.weight", (8192, 320)),
+    ("mtp.layers.0.self_attn.v_proj.biases", (1024, 40)),
+    ("mtp.layers.0.self_attn.v_proj.scales", (1024, 40)),
+    ("mtp.layers.0.self_attn.v_proj.weight", (1024, 320)),
+    ("mtp.norm.weight", (2560,)),
+    ("mtp.pre_fc_norm_embedding.weight", (2560,)),
+    ("mtp.pre_fc_norm_hidden.weight", (2560,)),
+)
+OPTIQ_35B_HEAD = (
+    ("mtp.fc.weight", (2048, 4096)),
+    ("mtp.layers.0.input_layernorm.weight", (2048,)),
+    ("mtp.layers.0.mlp.experts.down_proj", (256, 2048, 512)),
+    ("mtp.layers.0.mlp.experts.gate_up_proj", (256, 1024, 2048)),
+    ("mtp.layers.0.mlp.gate.biases", (256, 32)),
+    ("mtp.layers.0.mlp.gate.scales", (256, 32)),
+    ("mtp.layers.0.mlp.gate.weight", (256, 256)),
+    ("mtp.layers.0.mlp.shared_expert.down_proj.biases", (2048, 8)),
+    ("mtp.layers.0.mlp.shared_expert.down_proj.scales", (2048, 8)),
+    ("mtp.layers.0.mlp.shared_expert.down_proj.weight", (2048, 64)),
+    ("mtp.layers.0.mlp.shared_expert.gate_proj.biases", (512, 32)),
+    ("mtp.layers.0.mlp.shared_expert.gate_proj.scales", (512, 32)),
+    ("mtp.layers.0.mlp.shared_expert.gate_proj.weight", (512, 256)),
+    ("mtp.layers.0.mlp.shared_expert.up_proj.biases", (512, 32)),
+    ("mtp.layers.0.mlp.shared_expert.up_proj.scales", (512, 32)),
+    ("mtp.layers.0.mlp.shared_expert.up_proj.weight", (512, 256)),
+    ("mtp.layers.0.mlp.shared_expert_gate.biases", (1, 32)),
+    ("mtp.layers.0.mlp.shared_expert_gate.scales", (1, 32)),
+    ("mtp.layers.0.mlp.shared_expert_gate.weight", (1, 256)),
+    ("mtp.layers.0.post_attention_layernorm.weight", (2048,)),
+    ("mtp.layers.0.self_attn.k_norm.weight", (256,)),
+    ("mtp.layers.0.self_attn.k_proj.biases", (512, 32)),
+    ("mtp.layers.0.self_attn.k_proj.scales", (512, 32)),
+    ("mtp.layers.0.self_attn.k_proj.weight", (512, 256)),
+    ("mtp.layers.0.self_attn.o_proj.biases", (2048, 64)),
+    ("mtp.layers.0.self_attn.o_proj.scales", (2048, 64)),
+    ("mtp.layers.0.self_attn.o_proj.weight", (2048, 512)),
+    ("mtp.layers.0.self_attn.q_norm.weight", (256,)),
+    ("mtp.layers.0.self_attn.q_proj.biases", (8192, 32)),
+    ("mtp.layers.0.self_attn.q_proj.scales", (8192, 32)),
+    ("mtp.layers.0.self_attn.q_proj.weight", (8192, 256)),
+    ("mtp.layers.0.self_attn.v_proj.biases", (512, 32)),
+    ("mtp.layers.0.self_attn.v_proj.scales", (512, 32)),
+    ("mtp.layers.0.self_attn.v_proj.weight", (512, 256)),
+    ("mtp.norm.weight", (2048,)),
+    ("mtp.pre_fc_norm_embedding.weight", (2048,)),
+    ("mtp.pre_fc_norm_hidden.weight", (2048,)),
+)
+
+# The head-quantization block both of those configs carry, verbatim (`mtplx_mtp_quantization`),
+# and what `with_config_defaults` (mtp_patch.py:51-66) hands the contract from it.
+MTPLX_CYANKIWI_4BIT = {
+    "bits": 4,
+    "group_size": 64,
+    "mode": "affine",
+    "policy": "cyankiwi",
+    "prequantized": True,
+}
+
+
+def write_safetensors_header(path, tensors):
+    """Give *path* a real safetensors header: 8 little-endian bytes of length, then the JSON.
+
+    The dtype is not what the packing check reads, so every entry carries one; the shapes and
+    the names are the real artifacts' own.
+    """
+    payload = json.dumps(
+        {
+            str(key): {"dtype": "BF16", "shape": list(shape), "data_offsets": [0, 0]}
+            for key, shape in tensors
+        }
+    ).encode()
+    path.write_bytes(len(payload).to_bytes(8, "little") + payload)
+    return path
+
+
+def test_the_35b_head_that_does_not_fit_its_block_is_refused_with_both_shapes(tmp_path):
+    """The measured case, and the third artifact condition. This bundle passes the two checks
+    above -- the config declares the layer and the head is where the resolver looks -- and its
+    head still cannot load: `_split_fused_experts` hands the block a dense (256, 512, 2048) where
+    its own quantized parameter is (256, 512, 256), which is the runtime's own message on this
+    artifact (results/logs/optiq-20260925T065802-34585.log:35). Refused here, the cell costs no
+    model load; measured on the night, it cost a full load and 25 answered 404s."""
+    bundle = optiq_bundle(tmp_path, config_extra={"mtplx_mtp_quantization": MTPLX_CYANKIWI_4BIT})
+    write_safetensors_header(Path(bundle) / "optiq/mtp.safetensors", OPTIQ_35B_HEAD)
+
+    reason = runtimes.optiq_mtp_refusal(bundle)
+
+    assert "gate_up_proj" in reason, "the tensor the split starts from"
+    assert "(256, 512, 2048)" in reason, "the weight the split hands the block"
+    assert "(256, 512, 256)" in reason, "and the packed parameter it cannot fit"
+    assert "N/A" in reason, "a depth cell on it is N/A rather than FAIL"
+    assert RUNTIMES["optiq"].mtp_depth_refusal("1", bundle) == reason
+
+
+def test_the_4b_head_that_fits_its_block_is_still_accepted(tmp_path):
+    """The other artifact of the same study, and the check must not cost it its depth cells: all
+    29 of its tensors are packed where the block quantizes them. The one dense tensor it carries
+    is `mtp.fc.weight`, and `cyankiwi` does not quantize `fc` (mtp_patch.py:103) -- which is what
+    the policy field records, since the converter writes `cyankiwi` exactly when `fc` was left
+    dense (mtp_convert.py:200)."""
+    bundle = optiq_bundle(tmp_path, config_extra={"mtplx_mtp_quantization": MTPLX_CYANKIWI_4BIT})
+    write_safetensors_header(Path(bundle) / "optiq/mtp.safetensors", OPTIQ_4B_HEAD)
+
+    assert runtimes.optiq_mtp_refusal(bundle) is None
+    assert RUNTIMES["optiq"].mtp_depth_refusal("3", bundle) is None
+
+
+def test_a_weight_the_block_quantizes_without_its_scales_is_refused(tmp_path):
+    """The general form of the 35B's failure, one tensor at a time: a head is loaded as it is
+    when its config says prequantized (`_finalize_mtp_weights`'s prequantized branch,
+    mtp_patch.py:162-168) into a block that was quantized first (:444-445), so a `layers.*`
+    weight with no `.scales` beside it is dense where the parameter is packed, and the shape
+    check refuses it (:345-355)."""
+    bundle = optiq_bundle(tmp_path, config_extra={"mtplx_mtp_quantization": MTPLX_CYANKIWI_4BIT})
+    write_safetensors_header(
+        Path(bundle) / "optiq/mtp.safetensors",
+        (
+            ("mtp.fc.weight", (2560, 5120)),
+            ("mtp.norm.weight", (2560,)),
+            ("mtp.layers.0.self_attn.q_proj.weight", (8192, 2048)),
+        ),
+    )
+
+    reason = runtimes.optiq_mtp_refusal(bundle)
+
+    assert "q_proj" in reason
+    assert "(8192, 2048)" in reason, "the dense shape the sidecar holds"
+    assert "(8192, 256)" in reason, "the packed parameter 2048 at 4 bits makes"
+    assert "with no `.scales`" in reason
+
+
+def test_a_packed_pair_that_disagrees_with_the_declared_width_is_refused(tmp_path):
+    """A head quantized at another width is the same class of mismatch: a packed weight's last
+    axis is `scales[-1] * group_size * bits / 32`, which is the arithmetic `mx.dequantize` is
+    called with on the other branch (mtp_patch.py:180-186). Here the tensor is packed for 4 bits
+    and the config declares 8."""
+    bundle = optiq_bundle(
+        tmp_path,
+        config_extra={
+            "mtplx_mtp_quantization": {**MTPLX_CYANKIWI_4BIT, "bits": 8},
+        },
+    )
+    write_safetensors_header(
+        Path(bundle) / "optiq/mtp.safetensors",
+        (
+            ("mtp.layers.0.self_attn.q_proj.weight", (8192, 320)),
+            ("mtp.layers.0.self_attn.q_proj.scales", (8192, 40)),
+            ("mtp.layers.0.self_attn.q_proj.biases", (8192, 40)),
+        ),
+    )
+
+    reason = runtimes.optiq_mtp_refusal(bundle)
+
+    assert "bits=8" in reason, "the declared width is named"
+    assert "(8192, 640)" in reason, "and the parameter that width implies"
+    assert "(8192, 320)" in reason, "beside the tensor that is there"
+
+
+def test_fc_is_only_read_where_the_policy_quantizes_it(tmp_path):
+    """`policy` decides which modules the block quantizes, so it decides which dense tensors are
+    a mismatch: `all` quantizes `fc` too (mtp_patch.py:90-96), while `cyankiwi` skips `fc`,
+    `pre_fc_norm*` and `norm` (:102-113). The 4B is a `cyankiwi` head with a dense `fc`, which is
+    the accepted case beside this one."""
+    dense_fc = (("mtp.fc.weight", (2560, 5120)),)
+
+    policy_all = optiq_bundle(
+        tmp_path,
+        config_extra={
+            "mtplx_mtp_quantization": {**MTPLX_CYANKIWI_4BIT, "policy": "all"},
+        },
+        name="policy-all",
+    )
+    write_safetensors_header(Path(policy_all) / "optiq/mtp.safetensors", dense_fc)
+    assert "mtp.fc.weight" in runtimes.optiq_mtp_refusal(policy_all)
+
+    unstated = optiq_bundle(
+        tmp_path,
+        config_extra={
+            "mtplx_mtp_quantization": {
+                key: value for key, value in MTPLX_CYANKIWI_4BIT.items() if key != "policy"
+            },
+        },
+        name="policy-unstated",
+    )
+    write_safetensors_header(Path(unstated) / "optiq/mtp.safetensors", dense_fc)
+    # An unstated policy is "all" to `_quantize_mtp_module` (`contract.mtp_quant_policy or "all"`,
+    # mtp_patch.py:89), so the same dense fc is a mismatch there too.
+    assert "mtp.fc.weight" in runtimes.optiq_mtp_refusal(unstated)
+
+    cyankiwi = optiq_bundle(
+        tmp_path, config_extra={"mtplx_mtp_quantization": MTPLX_CYANKIWI_4BIT}, name="cyankiwi"
+    )
+    write_safetensors_header(Path(cyankiwi) / "optiq/mtp.safetensors", dense_fc)
+    assert runtimes.optiq_mtp_refusal(cyankiwi) is None
+
+
+def test_a_head_the_config_does_not_declare_prequantized_is_not_read_for_shapes(tmp_path):
+    """The direction this check must not fail in. `_quantize_mtp_module` returns before it
+    quantizes anything when the contract carries no width (mtp_patch.py:86-87), and a head with
+    no `mtplx_mtp_quantization` writes none -- so the block is dense, dense weights fit it, and a
+    shape rule applied to it would refuse a legal cell."""
+    bundle = optiq_bundle(tmp_path, name="dense-head")
+    write_safetensors_header(
+        Path(bundle) / "optiq/mtp.safetensors",
+        (
+            ("mtp.fc.weight", (2560, 5120)),
+            ("mtp.layers.0.mlp.experts.gate_up_proj", (256, 1024, 2048)),
+            ("mtp.layers.0.self_attn.q_proj.weight", (8192, 2048)),
+        ),
+    )
+
+    assert runtimes.optiq_mtp_refusal(bundle) is None
+
+
+def test_a_sidecar_with_no_readable_header_is_no_evidence_rather_than_a_refusal(tmp_path):
+    """The reader's own ceiling, and what the fixture beside these tests relies on: an empty or
+    unparsable file answers no shapes, which is *not known* rather than *wrong* -- the log half of
+    the pin is what catches a head that exists and cannot load (Optiq.mtp_depth_missing). A
+    bundle with an empty sidecar is the shape `optiq_bundle` writes."""
+    empty = optiq_bundle(tmp_path, config_extra={"mtplx_mtp_quantization": MTPLX_CYANKIWI_4BIT},
+                         name="empty-header")
+    assert runtimes.optiq_mtp_refusal(empty) is None
+
+    truncated = optiq_bundle(tmp_path, config_extra={"mtplx_mtp_quantization": MTPLX_CYANKIWI_4BIT},
+                             name="truncated-header")
+    header = Path(truncated) / "optiq/mtp.safetensors"
+    header.write_bytes((4096).to_bytes(8, "little") + b'{"mtp.fc.weight": {"shape": [2, 3]}')
+    assert runtimes.optiq_mtp_refusal(truncated) is None
+
+
 # --- the log half of the streaming pin ---------------------------------------------------
 
 
@@ -1378,6 +1640,106 @@ def test_optiq_requires_the_engine_s_own_ready_line_at_the_depth_that_was_pinned
     reason = runtime.mtp_depth_missing("3", fell_back)
     assert "MTP head not attached" in reason, "the fallback line is quoted"
     assert "continuing without MTP" in reason
+
+
+# Verbatim from the 4B depth cells of 2026-09-25 (results/logs/optiq-20260925T064114-21379.log,
+# an excerpt of the block at :38-94): what each of the visit's 25 requests printed. Neither
+# marker this check reads is in the log at all -- no ready line and no attach warning -- and the
+# cause is here, one frame from the bottom of the stack.
+OPTIQ_4B_DEPTH_TRACEBACK = """\
+Traceback (most recent call last):
+  File "/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq/serve.py", line 1781, in counted
+    for gen in response:
+               ^^^^^^^^
+  File "/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/mlx_lm/server.py", line 1041, in _inner
+    raise response
+  File "/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/mlx_lm/server.py", line 976, in _serve_single
+    for gen in stream_generate(
+               ^^^^^^^^^^^^^^^^
+  File "/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq/serve.py", line 969, in vlm_stream_generate
+    yield from current_stream_generate(
+  File "/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq/serve.py", line 516, in patched_stream_generate
+    for ev in engine.generate_stream(**gen_kwargs):
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq/runtime/engine.py", line 760, in generate_stream
+    first_token = _logits_to_token(logits[0, -1], temperature)
+                                   ~~~~~~^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+----------------------------------------
+"""
+
+
+def test_a_depth_log_that_holds_a_traceback_quotes_its_cause_not_its_silence(tmp_path):
+    """Open question 5 of the 2026-09-25 depth paper: the 4B's three depth cells carried no ready
+    line and no attach warning, and the check reported that as the log saying "nothing about why"
+    -- while the log held the generate path that would have used the loaded head returning
+    nothing. The message quotes the interpreter's final exception line and the innermost
+    `File ..., line N` frame instead, from the same window and with the same verdict."""
+    runtime = RUNTIMES["optiq"]
+    log = write_log(
+        tmp_path,
+        "INFO:optiq.runtime.mtp.mtp_patch:[MTP inject] Loaded 29 tensors from /models/4b/optiq/"
+        "mtp.safetensors\n" + OPTIQ_4B_DEPTH_TRACEBACK,
+        name="4b-depth.log",
+    )
+
+    reason = runtime.mtp_depth_missing("3", log)
+
+    assert "TypeError: 'NoneType' object is not subscriptable" in reason, "the final line is quoted"
+    assert 'engine.py", line 760, in generate_stream' in reason, "the innermost frame, not the first"
+    assert "socketserver" not in reason and "serve.py" not in reason, "and not an outer one"
+    assert "says nothing about why" not in reason, "the wording the log does not support"
+    assert "MTP engine ready (depth=3)." in reason, "the line that was required is still named"
+    assert "FAIL" in reason
+    assert log in reason, "the log path is named"
+
+
+def test_a_depth_log_with_neither_marker_nor_traceback_says_what_the_check_read(tmp_path):
+    """The other arm of the same branch: a log that holds no traceback either is described as
+    what it is -- a log this check reads no line of -- rather than as a log that explains
+    nothing."""
+    runtime = RUNTIMES["optiq"]
+    bare = write_log(
+        tmp_path,
+        "[optiq.serve] MTP speculation enabled (depth=2, model=/models/x)\n"
+        "[optiq.serve] server is starting at http://127.0.0.1:8080\n",
+        name="no-cause.log",
+    )
+
+    reason = runtime.mtp_depth_missing("2", bare)
+
+    assert "prints no line this check reads" in reason
+    assert "says nothing about why" not in reason
+    assert "MTP engine ready (depth=2)." in reason
+    assert bare in reason
+
+
+def test_the_depth_check_reads_the_traceback_from_the_same_head_window_as_the_markers(tmp_path):
+    """One window, unchanged. A failure line scrolls out of a tail and a banner out of a head, and
+    this check reads the head (:data:`runtimes.LOG_HEAD_BYTES`); a traceback past that window is
+    not quoted, and the message says so rather than reporting a cause it did not read."""
+    runtime = RUNTIMES["optiq"]
+    line = "INFO:optiq.serve:tick\n"
+    padding = line * 60_000
+    assert len(padding) > runtimes.LOG_HEAD_BYTES
+    beyond = write_log(tmp_path, padding + OPTIQ_4B_DEPTH_TRACEBACK, name="beyond.log")
+
+    reason = runtime.mtp_depth_missing("3", beyond)
+
+    assert "prints no line this check reads" in reason
+    assert "TypeError" not in reason, "a window it does not read is not a cause it reports"
+    assert beyond in reason
+
+    # And a window that ends *inside* the block is the same absence: its start marker is in the
+    # head and none of its frames are, so there is no innermost frame to quote.
+    straddling = write_log(
+        tmp_path,
+        line * ((runtimes.LOG_HEAD_BYTES - 40) // len(line)) + OPTIQ_4B_DEPTH_TRACEBACK,
+        name="straddling.log",
+    )
+    reason = runtime.mtp_depth_missing("3", straddling)
+    assert "prints no line this check reads" in reason
+    assert "engine.py" not in reason
 
 
 # --- the depth pin's log half on vMLX, which is per request ------------------------------

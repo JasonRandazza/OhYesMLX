@@ -1,13 +1,19 @@
 # OptiQ (`mlx-optiq` 0.5.13) — capability and configuration reference
 
-> **Version and line numbers corrected 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §8).**
-> This document was written against `mlx-optiq` **0.5.6**. The installed version is **0.5.13**
-> (`optiq --version` → `mlx-optiq, version 0.5.13`; the bundle carries
-> `mlx_optiq-0.5.13.dist-info/`). The `serve` flag block has moved by roughly 170 lines and grown.
-> The KV flag citations in §2.2 and the fused-KV citations in §7.7 have been re-read against
-> 0.5.13; the `dist-info` paths in §1.1 and §1.4 have been updated with it. **Every other line
-> number in §2.2 is still a 0.5.6 number and is stale** — re-read it from the installed source
-> before relying on it.
+> **Re-verified against `mlx-optiq` 0.5.13 on 2026-09-25.** This document was written against
+> 0.5.6; on 2026-09-25 every `file:line` citation and capability claim in §1–§8 (and the non-MTP
+> material in §9) was walked against the installed source at
+> `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/` (`optiq --version` →
+> `mlx-optiq, version 0.5.13`), with stale line numbers corrected in place. `mlx-lm` is
+> unchanged at 0.31.3 and every `mlx_lm/` citation was re-checked against it. The pass changed
+> three claims materially: OptiQ now reports `usage.completion_tokens_details.reasoning_tokens`
+> (§6.2 — this document's "never present" blocker is lifted), it injects `--prompt-cache-size`
+> and `--max-tokens` as well as `--prompt-cache-bytes` (§7.3), and both shims consume the
+> closing usage frame so neither bypasses `--context-scale` (§6.6). The `serve` flag block also
+> declares four flags this document had not listed (`--ngram-draft`, `--ngram-gate`,
+> `--ngram-min`, `--on-generation-death`). Still not verified: everything marked **NEEDS
+> PROBE** — no server was started, no model loaded, and no request sent in this pass. §9.2's
+> MTP-gate passages are documented separately and were not part of this pass.
 
 Static inspection. Nothing in this document was produced by starting the server, loading a
 model, or sending a request. Where a claim depends on live behaviour rather than code, it is
@@ -17,19 +23,25 @@ Sources, all read directly:
 
 | Component | Version | Path |
 |---|---|---|
-| `mlx-optiq` | **0.5.13** (0.5.6 when written; research §8) | `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq` |
+| `mlx-optiq` | **0.5.13** (every citation re-read 2026-09-25) | `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/optiq` |
 | `mlx-lm` (the actual HTTP server) | **0.31.3** | `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/mlx_lm` |
 
 Everything below is cited as `file:line` relative to
-`/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/` unless stated.
+`/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/` unless stated. Bare module
+names resolve there: `cli.py` is `optiq/cli.py`, `serve.py` is `optiq/serve.py`, `server.py` is
+`mlx_lm/server.py`, and `variants.py` / `mtp_patch.py` / `artifacts.py` live under
+`optiq/runtime/` (`optiq/runtime/mtp/` for the last two) rather than at the root.
 
 **The single most important structural fact:** `optiq serve` is not a server. It is a stack of
-~25 monkeypatches applied to `mlx_lm.server`, ending in an unconditional hand-off:
+patch installs — 33 distinct `install_*` functions called inside `serve_cmd` alone, plus a handful
+of patches installed under other names (`install_rot_merge`, `install_fused_sdpa`,
+`install_sampler_rng`, `install_context_cap`, `install_idle_unload`) — applied to
+`mlx_lm.server`, ending in an unconditional hand-off:
 
 ```
-optiq/cli.py:3030    sys.argv = ["mlx_lm.server"] + argv_extra
-optiq/cli.py:3031    from mlx_lm.server import main as mlx_main
-optiq/cli.py:3032    mlx_main()
+optiq/cli.py:3310    sys.argv = ["mlx_lm.server"] + argv_extra
+optiq/cli.py:3311    from mlx_lm.server import main as mlx_main
+optiq/cli.py:3312    mlx_main()
 ```
 
 So the HTTP surface, the sampler, the chat template, the SSE format and the `usage` block are
@@ -91,7 +103,7 @@ venv.
 
 ### 1.3 Other executables in the same bundle
 
-`.venv/bin` holds 68 scripts. Two categories matter:
+`.venv/bin` holds 72 scripts. Two categories matter:
 
 - **`mlx_lm.server`** — the stock, unpatched upstream server, same absolute venv shebang. It is
   directly runnable. Running it serves the same model **with every OptiQ patch absent**: no
@@ -106,11 +118,11 @@ venv.
 `optiq/runtime/mtp/server/openai.py` is a **complete second OpenAI-compatible server**
 (8,891 lines, FastAPI/uvicorn-style, distinct from `mlx_lm.server`) with its own argparse at
 `optiq/runtime/mtp/server/openai.py:8525` and its own sampler defaults
-(`openai.py:5465-5471`: `temperature 0.6`, `top_p 0.95`, `top_k 20`, `max_tokens 16384`,
+(`openai.py:5468-5472`: `temperature 0.6`, `top_p 0.95`, `top_k 20`, `max_tokens 16384`,
 `reasoning "auto"`).
 
 It is launched as a subprocess by
-`optiq/runtime/mtp/commands/public.py:5274-5276`:
+`optiq/runtime/mtp/commands/public.py:5271-5274`:
 
 ```python
 cmd = [
@@ -128,9 +140,11 @@ None
 ```
 
 There is no `mtplx` package and no `.pth` providing it. `optiq/runtime/mtp/cli.py` is not wired
-to any `optiq` subcommand either — the top-level command list is
+to any `optiq` subcommand either — the top-level command set is
 `benchmark, cloud, cluster, code, config, convert, eval, kv-cache, lab, latency, lora,
-prune-experts, serve` (`optiq/cli.py:18-55`), plus a hidden `game`.
+prune-experts, run, serve`, plus a hidden `game` (registered at `optiq/cli.py:68, 210, 338,
+941, 1097, 1165, 2089 (hidden), 2108, 2123, 2214, 2441, 2498, 3324, 3471, 3766` — there is no
+`add_command` call anywhere in the module).
 
 **Consequence for this document, and it is the load-bearing one for §5:** `reasoning_content`
 appears only in that unreachable tree. Nothing on the `optiq serve` path can emit it. See §5.1.
@@ -153,8 +167,7 @@ the version alone.
 
 ### 2.2 `optiq serve` — OptiQ's own flags
 
-Declared at `optiq/cli.py:2498-2656` (0.5.13, research `2026-09-24-kv-quant-surface.md` §8; it was
-`cli.py:2330-2461` in 0.5.6, and the block has grown since);
+Declared at `optiq/cli.py:2498-2656`, with
 `context_settings={"ignore_unknown_options": True, "allow_extra_args": True}` (`cli.py:2500`),
 which is what makes the forwarding in §2.3 possible.
 
@@ -164,37 +177,43 @@ which is what makes the forwarding in §2.3 possible.
 | `--kv-group-size INTEGER` | `64` | KV quant group size | `cli.py:2504` |
 | `--quantized-kv-start INTEGER` | `0` | Token offset where KV quant begins | `cli.py:2505-2506` |
 | `--kv-config FILE` | `None` | Per-layer mixed-precision KV; **overrides `--kv-bits`** | `cli.py:2507-2509` |
-| `--adapter TEXT` (repeatable) | `()` | LoRA adapter(s), HF id or local dir; switches to mounted-LoRA mode | `cli.py:2342` |
-| `--anthropic/--no-anthropic` | **on** | OpenAI **Anthropic** `/v1/messages` endpoint | `cli.py:2354` |
-| `--responses/--no-responses` | **on** | OpenAI `/v1/responses` endpoint | `cli.py:2360` |
-| `--context-scale FLOAT` | `1.0` | **Multiplies reported usage token counts** — see §6.3 | `cli.py:2366` |
-| `--max-concurrent INTEGER` | `8` | Decode parallelism; also sets prompt-concurrency to `max(1, n//4)` | `cli.py:2374` |
-| `--auth/--no-auth` | **on** | Requires `Bearer sk-optiq-*` **if a header is present** | `cli.py:2382` |
+| `--adapter TEXT` (repeatable) | `()` | LoRA adapter(s), HF id or local dir; switches to mounted-LoRA mode | `cli.py:2510-2521` |
+| `--anthropic/--no-anthropic` | **on** | OpenAI **Anthropic** `/v1/messages` endpoint | `cli.py:2522-2527` |
+| `--responses/--no-responses` | **on** | OpenAI `/v1/responses` endpoint | `cli.py:2528-2533` |
+| `--context-scale FLOAT` | `1.0` | **Multiplies reported usage token counts** — see §6.3 | `cli.py:2534-2541` |
+| `--max-concurrent INTEGER` | `8` | Decode parallelism; also sets prompt-concurrency to `max(1, n//4)` | `cli.py:2542-2549` |
+| `--auth/--no-auth` | **on** | Requires `Bearer sk-optiq-*` **if a header is present** | `cli.py:2550-2553` |
 | `--mtp` | off | MTP speculative decoding via `OptiqEngine`; **the header pin's road in — §9.2** | `cli.py:2554-2558` |
 | `--mtp-depth INTEGER` | `2` | Draft tokens per verify cycle; fixed for the whole call — §9.2 | `cli.py:2559-2563` |
-| `--drafter TEXT` | `None` | Separate drafter model (γ=1 greedy); **mutually exclusive with `--mtp`** | `cli.py:2396` |
-| `--no-fused-kv` | off | Opts out of the tight-RAM KV-quant path — see §7.7 | `cli.py:2593` |
-| `--stream-experts/--no-stream-experts` | `None` = **auto** | SSD expert streaming — see §7.1 | `cli.py:2418` |
-| `--stream-experts-cache INTEGER` | `0` | LRU expert cache per projection | `cli.py:2427` |
-| `--models-dir DIRECTORY` | `None` | Advertise local quants in `/v1/models`; **implies `--allow-model-switch`** | `cli.py:2432` |
-| `--allow-model-switch/--single-model` | single | Whether a request's `model` can hot-swap the server | `cli.py:2439` |
-| `--idle-timeout INTEGER` | `0` (off) | Unload model after N idle seconds | `cli.py:2447` |
-| `--max-context TEXT` | `"auto"` | `auto` / integer hard cap / `off` | `cli.py:2454` |
+| `--drafter TEXT` | `None` | Separate drafter model (γ=1 greedy); **mutually exclusive with `--mtp`** | `cli.py:2564-2571` |
+| `--ngram-draft INTEGER` | `0` (off) | Prompt-lookup speculation: draft up to N tokens copied from the conversation itself; combines with `--mtp`, mutually exclusive with `--drafter` | `cli.py:2572-2582` |
+| `--ngram-gate/--no-ngram-gate` | **on** | Choose the n-gram draft length per pass (calibrated once on first use) instead of using `--ngram-draft` as a fixed length | `cli.py:2583-2588` |
+| `--ngram-min INTEGER` | `3` | Shortest n-gram match that triggers a draft | `cli.py:2589-2592` |
+| `--no-fused-kv` | off | Opts out of the tight-RAM KV-quant path — see §7.7 | `cli.py:2593-2606` |
+| `--stream-experts/--no-stream-experts` | `None` = **auto** | SSD expert streaming — see §7.1 | `cli.py:2607-2615` |
+| `--stream-experts-cache INTEGER` | `0` | LRU expert cache per projection | `cli.py:2616-2620` |
+| `--models-dir DIRECTORY` | `None` | Advertise local quants in `/v1/models`; **implies `--allow-model-switch`** | `cli.py:2621-2627` |
+| `--allow-model-switch/--single-model` | single | Whether a request's `model` can hot-swap the server | `cli.py:2628-2635` |
+| `--idle-timeout INTEGER` | `0` (off) | Unload model after N idle seconds | `cli.py:2636-2642` |
+| `--max-context TEXT` | `"auto"` | `auto` / integer hard cap / `off` | `cli.py:2643-2650` |
+| `--on-generation-death CHOICE` | `restart` | What to do when the generation loop dies (`restart` or `exit`); beats the `serve_on_generation_death` setting (§3.1). Implementation `serve.py:754-806` | `cli.py:2651-2656` |
 
 Two defaults are worth stating twice because they are on by default and change the wire
 surface: `--anthropic` and `--responses` both ship **enabled**.
 
-**Line-number warning, added 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §8).** Only the
-five KV rows above have been re-read against 0.5.13. The rest of this table's `Source` column is a
-0.5.6 reading, and the block has moved and grown since — a line number from this table that is not
-one of the KV five should be treated as a pointer to the flag, not to the line, until it is
-re-read from the installed source.
+**Whole block re-read 2026-09-25.** Every `Source` in this table is now a 0.5.13 line number,
+taken from the installed source. Four flags that this table did not previously carry are listed
+here for the first time: `--ngram-draft`, `--ngram-gate`, `--ngram-min` (prompt-lookup
+speculation) and `--on-generation-death` (generation-watchdog policy). One default is worth
+stating precisely: `--max-concurrent 8` is *injected* as `--decode-concurrency` /
+`--prompt-concurrency` only when the caller did not pass those flags (`cli.py:2937-2945`, §7.4).
 
 ### 2.3 Everything else is mlx-lm's
 
-Unknown options land in `ctx.args` and are re-emitted verbatim as `mlx_lm.server`'s argv
-(`cli.py:2571`, `cli.py:3030`). The real, authoritative flag set is therefore mlx_lm.server's
-argparse, `mlx_lm/server.py:1751-1887`:
+Unknown options land in `ctx.args` (`cli.py:2500` sets `ignore_unknown_options` /
+`allow_extra_args`; `cli.py:2768` takes `argv_extra = list(ctx.args)`) and are re-emitted verbatim
+as `mlx_lm.server`'s argv (`cli.py:3310`). The real, authoritative flag set is therefore
+mlx_lm.server's argparse, `mlx_lm/server.py:1751-1887`:
 
 | Flag | Default | Controls |
 |---|---|---|
@@ -224,7 +243,9 @@ argparse, `mlx_lm/server.py:1751-1887`:
 
 Two upstream defaults are actively hostile on unified memory and OptiQ overrides both, silently,
 unless you passed the underlying flag (§7.3, §7.4): `--decode-concurrency 32`,
-`--prompt-cache-bytes` uncapped.
+`--prompt-cache-bytes` uncapped. Two more are now injected the same way and are easy to miss:
+`--prompt-cache-size` (already touched, contrary to what this document used to say) and
+`--max-tokens` (§7.3).
 
 Also executed unconditionally at startup, not a flag:
 
@@ -251,16 +272,20 @@ optiq/settings.py:22    repo:  <repo>/.optiq/optiq.json     -- checked in, share
 optiq/settings.py:23    user:  ~/.optiq/config.json         -- personal, applies everywhere
 ```
 
-`OPTIQ_HOME` relocates the state root (`settings.py:198-214`); both config files then move
-under it. Every setting also has a canonical `OPTIQ_<NAME>` environment variable
-(`settings.py:88-90`), and some have legacy aliases (`settings.py:285-289`).
+`OPTIQ_HOME` relocates the state root (`state_root()`, `settings.py:213-229`), and both config
+paths derive from it (`user_config_path()`, `settings.py:232-234`; `repo_config_path()`,
+`settings.py:237-238`). Every setting also has a canonical `OPTIQ_<NAME>` environment variable
+(`settings.py:88-90`); the legacy-alias mechanism still exists (`Setting.aliases`,
+`settings.py:86`, consulted at `settings.py:300-304`) but **no setting in 0.5.13 declares one**,
+so that path is dead code today.
 
 **Neither config file exists on this machine** — there is no `~/.optiq/config.json` and no
 `.optiq/` in this repository. Every setting below is therefore at its default for any run this
 harness makes today. That is worth re-checking before publishing a table, because a stray
-`~/.optiq/config.json` would silently move every number.
+`~/.optiq/config.json` would silently move every number. Re-checked 2026-09-25: both absent, and
+no `OPTIQ_*` variable is set in the shell that ran the check.
 
-The whole registry is one tuple, `SETTINGS` at `optiq/settings.py:96-189`:
+The whole registry is one tuple, `SETTINGS` at `optiq/settings.py:96-204`:
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -288,36 +313,48 @@ The whole registry is one tuple, `SETTINGS` at `optiq/settings.py:96-189`:
 | **`lowbit_search`** | **`True`** | Range-search per group when quantizing |
 | `lowbit_search_max_bits` | `3` | Widest bit-width the search applies to |
 | `adapter_cache` | `None` → `~/.cache/optiq/adapters` | Remote adapter cache |
+| **`kernels`** | **`True`** | Custom Metal kernels, enabled per model from a `TESTED` allowlist (`serve.py:540-578`, read at `:568`) |
+| **`serve_on_generation_death`** | `"restart"` | Generation-watchdog action; `optiq serve --on-generation-death` beats it for that run (`serve.py:754-780`) |
+| **`prefill_step`** | `512` | Prefill chunk size for the OptiQ engine (distinct from mlx-lm's `--prefill-step-size`) |
+| **`dump_requests`** | `None` | When set, **every POST body is written** to that directory as `<n>-<path>.json` (`serve.py:1832-1852`, called at `:2086`) |
 | `kv_debug` | `False` | Log KV rotation/quant decisions |
 | `merge_debug` | `False` | Log batched rotating-cache merges |
 
-`optiq config` prints every resolved value **and its source** (`settings.py:404-428`), which is
-the intended way to record this in a run artifact.
+`optiq config` prints every resolved value **and its source** (`describe()`, `settings.py:401-410`;
+printing at `settings.py:419-444`), which is the intended way to record this in a run artifact.
+Credentials are redacted (`settings.py:384-398`), though none of the settings above is one.
 
 ### 3.2 Which settings have no command-line equivalent
 
-**All of them.** `optiq serve` declares no flag that writes any setting in `SETTINGS`. The
-settings are reachable only through `OPTIQ_*` environment variables or the two JSON files, and
-the ones that touch the serving path are marked in bold above:
+**Almost all of them.** No `optiq serve` flag *writes* a setting in `SETTINGS` — none calls
+`settings.set_override` — but two have a flag that reaches the same behaviour by another route
+(`--low-bit-search` on `convert`, `--on-generation-death` on `serve`). Everything else is
+reachable only through `OPTIQ_*` environment variables or the two JSON files. The ones that touch
+the serving path are marked in bold above:
 
 - `stream_prefetch` — read at `optiq/runtime/moe_stream.py:183`, off by default.
 - `stream_scales_budget_gb` — `moe_stream.py:370`.
-- `no_think` — `optiq/cli.py:2640-2642`; `OPTIQ_NO_THINK=1` installs a global patch forcing
-  `enable_thinking=False` on every chat request (`optiq/no_think.py:37-45`). This one *does*
+- `no_think` — `optiq/cli.py:2837-2841`; `OPTIQ_NO_THINK=1` installs a global patch forcing
+  `enable_thinking=False` on every chat request (`optiq/no_think.py:26-49`). This one *does*
   have a per-request equivalent (`:no-think` suffix, §4.3) but no CLI flag.
-- `anthropic_no_think` — `optiq/anthropic_shim.py:284-287`.
+- `anthropic_no_think` — `optiq/anthropic_shim.py:284-290`.
 - `flash_attn`, `flash_attn_budget_gb`, `flash_block` — `optiq/ops/attention_patch.py:91-110`,
   `optiq/ops/flash_attention_tiled.py:56`.
 - `fused_ce`, `fused_ce_budget_mb` — `optiq/lora/trainer.py:120-128`.
-- `lowbit_search`, `lowbit_search_max_bits` — `optiq/core/lowbit.py:169-185`. These are the only
-  settings with a CLI flag, and it is on `optiq convert` (`--low-bit-search`,
-  `cli.py:1009`), not `serve`.
+- `lowbit_search`, `lowbit_search_max_bits` — `optiq/core/lowbit.py:169-185`. `--low-bit-search` /
+  `--no-low-bit-search` exists, and it is on `optiq convert` (`cli.py:956-961`, applied at
+  `cli.py:1038-1046`), not `serve`.
+- `kernels` — `optiq/serve.py:540-578`; part of the `serve` path but with no flag.
+- `serve_on_generation_death` — `optiq/serve.py:754-780`. The one setting with a **serve** flag:
+  `--on-generation-death` (`cli.py:2651-2656`) passes the action straight to the watchdog, which
+  prefers it over the setting. No other serve flag reaches this registry.
 
 These are the ones that "silently decide what a cell measures": `OPTIQ_NO_THINK` alone changes
-whether reasoning tokens exist at all, and `OPTIQ_FLASH_ATTN` changes the attention kernel on a
-training path, not the serving path.
+whether reasoning tokens exist at all, `OPTIQ_FLASH_ATTN` changes the attention kernel on a
+training path, not the serving path, and `OPTIQ_KERNELS=0` turns off the serving-path kernel
+rewrites that ship **enabled** by default (§3.1) — so an environment check has to include it.
 
-### 3.3 Three more hidden configuration surfaces
+### 3.3 Four more hidden configuration surfaces
 
 Not in `SETTINGS`, but read at serve time:
 
@@ -326,16 +363,21 @@ Not in `SETTINGS`, but read at serve time:
    announces.
 2. **`~/.optiq/`** as a state root, and `~/.cache/optiq/adapters` for adapters
    (`settings.py:180-182`).
-3. **Cloud Boost config** — `optiq/cli.py:2875-2883` loads `optiq.code.config` and installs
+3. **Cloud Boost config** — `optiq/cli.py:3114-3127` loads `optiq.code.config` and installs
    a `/boost` handler **unconditionally**, even with no API key. A `/boost` request is
-   intercepted before it reaches the model (`serve.py:1729-1737`).
+   intercepted before it reaches the model (`serve.py:2071-2186`; the trigger test is at
+   `serve.py:2133`).
+4. **`OPTIQ_DUMP_REQUESTS`** — with the `dump_requests` setting set, every POST body the server
+   receives is written to disk (`serve.py:1832-1852`, called at `serve.py:2086`). Off by
+   default, so it is invisible unless someone sets it; when on, it records every prompt a
+   published run sent.
 
 ### 3.4 Adapters do not use mlx-lm's adapter route
 
-`--adapter` does **not** forward `--adapter-path`. The comment at `optiq/cli.py:2600-2606` says
+`--adapter` does **not** forward `--adapter-path`. The comment at `optiq/cli.py:2797-2803` says
 the upstream route "is a no-op on OptiQ's mixed-precision quantized base in some configs, so we
-no longer use it." All adapters go through `install_multi_adapter` (`cli.py:2607-2608`), which
-registers sidecars and gates a `ContextVar` per request.
+no longer use it." All adapters go through `install_multi_adapter` (`cli.py:2804-2805`, definition
+`serve.py:1203-1402`), which registers sidecars and gates a `ContextVar` per request.
 
 ---
 
@@ -350,11 +392,12 @@ registers sidecars and gates a `ContextVar` per request.
 | `guided_choice` | Constrain to one of a list | `structured.py:144-145` | falsy → skipped |
 | `response_format` | `json_object` / `json_schema` | `structured.py:130-136` | `None` |
 | `tool_choice` | Only `"required"` and `{"type":"function",...}` are honoured | `structured.py:94,105` | `None` |
-| `adapters` (or `adapter`) | Selects a mounted LoRA adapter | `optiq/serve.py:1008` | `None` |
+| `adapters` (or `adapter`) | Selects a mounted LoRA adapter | `optiq/serve.py:1398` | `None` |
 
-`structured.py` is installed unconditionally (`cli.py:2932-2935`) and **forces
-`enable_thinking=False`** on any request carrying a constraint
-(`structured.py:322-324`), so constrained requests never produce reasoning tokens.
+`structured.py` is installed unconditionally (`cli.py:3176-3177`) and **defaults
+`enable_thinking=False`** on any request carrying a constraint (`structured.py:322-331` — it uses
+`setdefault`, so an explicit client value still wins), so constrained requests do not produce
+reasoning tokens unless the client asked for them.
 
 ### 4.2 Non-standard fields mlx-lm honours
 
@@ -389,22 +432,24 @@ rewritten.
 ### 4.3 Model-id suffixes — a per-request field hidden in `model`
 
 `install_thinking_variants` is installed **unconditionally** on every `optiq serve`
-(`cli.py:2691-2692`), and `install_variants` again afterwards (`cli.py:2958-2961`). Together
-they make the `model` string carry control data:
+(`cli.py:2888-2889`), and `install_variants` again afterwards (`cli.py:3202-3203`). Together
+they make the `model` string carry control data (`optiq/runtime/variants.py:29-36`):
 
 | Suffix | Effect | Source |
 |---|---|---|
-| `:no-think` | `enable_thinking=False` | `no_think.py:79-84`; `variants.py:31` |
-| `:nothink` | `enable_thinking=False` | `variants.py:32` |
-| `:think` | `enable_thinking=True` | `no_think.py:79-84`; `variants.py:30` |
-| `:precise` | **Sets `temperature = 0.0`** | `variants.py:33` |
-| `:creative` | **Sets `temperature = 0.8, top_p = 0.95`** | `variants.py:34` |
-| `:balanced` | **Sets `temperature = 0.4, top_p = 0.9`** | `variants.py:35` |
+| `:no-think` | `enable_thinking=False` | `no_think.py:79-84`; `optiq/runtime/variants.py:31` |
+| `:nothink` | `enable_thinking=False` | `optiq/runtime/variants.py:32` |
+| `:think` | `enable_thinking=True` | `no_think.py:79-84`; `optiq/runtime/variants.py:30` |
+| `:precise` | **Sets `temperature = 0.0`** | `optiq/runtime/variants.py:33` |
+| `:creative` | **Sets `temperature = 0.8, top_p = 0.95`** | `optiq/runtime/variants.py:34` |
+| `:balanced` | **Sets `temperature = 0.4, top_p = 0.9`** | `optiq/runtime/variants.py:35` |
 
 `precise` / `creative` / `balanced` overwrite the handler's sampler attributes for that request
-(`variants.py:83-85`), so they beat both the body and the CLI. The harness uses
-`:no-think` (`Optiq.model_id_candidates`) — which is sound, and is the variant whose text lands in
-`delta.content` rather than `delta.reasoning` (see §5).
+(`optiq/runtime/variants.py:83-85`), so they beat both the body and the CLI. An unknown suffix is
+left alone (`variants.py:53-56`), and only `think`, `no-think`, `precise` and `creative` are
+advertised in `/v1/models` (`variants.py:42`) — `nothink` and `balanced` work if sent but are not
+listed. The harness uses `:no-think` (`Optiq.model_id_candidates`) — which is sound, and is the
+variant whose text lands in `delta.content` rather than `delta.reasoning` (see §5).
 
 ### 4.4 Accepted but ignored
 
@@ -412,11 +457,11 @@ These are traps: they parse cleanly and do nothing.
 
 | Field | Reality | Evidence |
 |---|---|---|
-| `n` | Never read. Always one choice. | No `body.get("n")` in `mlx_lm/server.py`; grep across both packages finds none |
-| `user` | Never read. | Same |
+| `n` | Never read. Always one choice. | No request-body read of `n` in `mlx_lm/server.py`; a grep for `body.get("n")` / `body["n"]` across both packages finds none (re-run 2026-09-25) |
+| `user` | Never read. | Same, for `body.get("user")` / `body["user"]` |
 | `tool_choice: "none"` / `"auto"` | mlx-lm ignores `tool_choice`; OptiQ acts only on `"required"`/function form | `structured.py:89` states mlx-lm "ignores `tool_choice` entirely" |
 | `role_mapping` | Only used on the no-chat-template fallback path | `server.py:558-559` |
-| `logprobs` on OptiQ's replaced generators | Returns placeholder `0.0` | `serve.py:283-287` `_NullLogprobs`; used at `serve.py:378,631,770,1011` |
+| `logprobs` on OptiQ's replaced generators | Returns placeholder `0.0` | `serve.py:407-414` `_NullLogprobs`; used at `serve.py:521,996,1160,1174` |
 | Anthropic `thinking`, `metadata` | Never read | `anthropic_shim.py` |
 | Responses `metadata`, `store`, `reasoning`, `text`, `truncation` | Never read from the request | `responses_shim.py` |
 
@@ -441,16 +486,26 @@ mlx_lm/server.py:1358                choice[key_name]["reasoning"] = reasoning_t
 ```
 $ grep -rln "reasoning_content" optiq/ mlx_lm/
 optiq/runtime/mtp/server/openai.py     <- unreachable, §1.4
-optiq/runtime/mtp/opencode.py
-optiq/runtime/mtp/cli.py
-optiq/runtime/mtp/commands/public.py
+optiq/runtime/mtp/opencode.py          <- the same unreachable tree
+optiq/runtime/mtp/cli.py               <- the same unreachable tree
+optiq/runtime/mtp/commands/public.py   <- the same unreachable tree
 optiq/code/engine.py                   <- a CLIENT, reads either name
-optiq/code/trace_writer.py
-optiq/eval/backends.py
+optiq/code/loop.py                     <- a CLIENT, replays it on the next turn
+optiq/code/config.py                   <- a CLIENT, a help string
+optiq/code/trace_writer.py             <- a CLIENT
+optiq/compaction.py                    <- drops it when compacting history
+optiq/eval/backends.py                 <- an eval CLIENT
+optiq/responses_shim.py                <- REQUEST side only, see below
 mlx_lm/chat_templates/deepseek_v32.py  <- a chat template string
+optiq/mlx_lm_patches/deepseek_v4_chat_template.jinja  <- another template string
 ```
 
-Not one of those is the `mlx_lm.server` code path. This matters directly: the oMLX finding was
+Re-run 2026-09-25; the list has grown since this document was written, and every addition is a
+*client* or a *request*. `responses_shim.py` mentions the name only while building the OpenAI
+request it forwards — an assistant turn's stored reasoning is replayed as `reasoning_content` so
+the chat template can render it (`responses_shim.py:169-326`) — and it emits Anthropic-style
+`thinking` / Responses-style `reasoning` items, never a `reasoning_content` field. Not one of
+those is the `mlx_lm.server` response path. This matters directly: the oMLX finding was
 that oMLX streams **only** in `reasoning_content`
 (`docs/research/2026-09-15-omlx-streams-in-the-reasoning-channel.md`). OptiQ does the opposite —
 it streams in `reasoning` and never writes `reasoning_content`. **A harness that reads only
@@ -458,7 +513,7 @@ it streams in `reasoning` and never writes `reasoning_content`. **A harness that
 OptiQ emits no reasoning.** The two runtimes put the same information in differently-named
 fields.
 
-OptiQ's own client hedges for exactly this reason (`optiq/code/engine.py:233-234`):
+OptiQ's own client hedges for exactly this reason (`optiq/code/engine.py:583-584`):
 
 ```python
 reasoning = (getattr(delta, "reasoning", None)
@@ -492,6 +547,11 @@ mlx_lm/server.py:1359        if tool_calls: choice[key_name]["tool_calls"] = too
 The emitter is `APIHandler.handle_completion` (`mlx_lm/server.py:1368-1552`) writing at
 `server.py:1489`: `self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())`.
 
+One further channel is added by OptiQ, not mlx-lm: `usage.completion_tokens_details` appears on
+every non-streaming response and every streamed usage frame because of `install_reasoning_token_usage`
+(cli.py:3111-3112, §6.2), and `usage.optiq_boost` appears when a Boost fell back to the local
+model (`serve.py:1800-1802`).
+
 Granularity is controlled by the loop variable, **not** by any numeric interval:
 
 ```
@@ -505,23 +565,26 @@ mlx_lm/server.py:1469            text += gen.text
 
 One `Response` per decoded token, so one chunk per token. **There is no optiq equivalent of
 oMLX's `stream_interval`.** OptiQ's `install_streaming_experts` does "prefill bucketing" for
-graph-recompile reasons (`cli.py:2425`), which is prefill, not delta granularity.
+graph-recompile reasons (`cli.py:2614-2615` states it; the bucketing is
+`optiq/runtime/moe_stream.py:250-292`), which is prefill, not delta granularity.
 
 ### 5.3 No channel is mirrored
 
 `reasoning` and `content` are fed by mutually exclusive states (`server.py:1460-1469`) and both
 accumulators are reset after every emit (`server.py:1491-1493`). A single chunk cannot carry
-both. The Anthropic and Responses shims keep them separate too
-(`anthropic_shim.py:435-459`, `responses_shim.py:582-617`).
+both. The Anthropic and Responses shims keep them separate too (`anthropic_shim.py:445-481`,
+where `delta.reasoning` and `delta.content` drive separate content blocks; `responses_shim.py:697-732`,
+where they drive a `reasoning_summary_text.delta` item and an `output_text.delta` item with their
+own accumulators at `:608-612`).
 
 This is the opposite of oMLX, which mirrors the completed text into `content` at the end. **The
 mirroring-dedupe logic the harness built for oMLX must not be applied blindly to OptiQ** — for
 OptiQ, a `content` delta is real content.
 
 Caveat: generator *replacements* change how tokens are produced, not the channel mapping.
-`--mtp` (`serve.py:344-388`), assistant-drafter (`serve.py:717-794`) and diffusion
-(`serve.py:1024-1148`) all yield per-token `GenerationResponse` objects; the diffusion path runs
-the decode to completion and then replays token-by-token (`serve.py:1024-1148`), which would
+`--mtp` (`serve.py:424-537`), assistant-drafter (`serve.py:1107-1202`) and diffusion
+(`serve.py:1414-1545`) all yield per-token `GenerationResponse` objects; the diffusion path runs
+the decode to completion and then replays token-by-token (`serve.py:1414-1545`), which would
 show a real TTFT followed by a compressed burst.
 
 ### 5.4 What controls whether `reasoning` appears at all
@@ -575,12 +638,14 @@ if prompt_cache_count is not None and prompt_cache_count >= 0:
     }
 ```
 
-Exactly four fields, the last only on a prefix-cache hit.
+The stock block emits exactly four fields, the last only on a prefix-cache hit. OptiQ adds two
+more on top of it: `completion_tokens_details.reasoning_tokens` (§6.2) and, after a Boost that
+fell back to the local model, `usage.optiq_boost` (`serve.py:1799-1802`).
 
-### 6.2 Reasoning is **not** separated
+### 6.2 Reasoning **is** now separated
 
-There is no `completion_tokens_details` and no `reasoning_tokens` anywhere in
-`mlx_lm/server.py`. Reasoning tokens are counted, but folded into `completion_tokens`:
+Nothing in `mlx_lm/server.py` has a `completion_tokens_details` or a `reasoning_tokens`; the
+stock count is folded into `completion_tokens`:
 
 ```
 mlx_lm/server.py:1472                tokens.append(gen.token)      # every state
@@ -590,10 +655,27 @@ mlx_lm/server.py:1522                        len(tokens),          # -> completi
 `prompt_tokens` is `len(ctx.prompt)` (`server.py:1533`) and excludes any model-generated
 reasoning.
 
-This is a direct blocker for `docs/interfaces.md`, which pins
-`reasoning_tokens: int | None  # from usage.completion_tokens_details, if present`. For OptiQ it
-is never present, so that field will always be `None` and `completion_tokens` will silently
-include reasoning. **`completion_tokens` from OptiQ is not comparable to a content-only count.**
+**But OptiQ patches that block, and it was patched since this document was written.**
+`install_reasoning_token_usage` (`serve.py:1747-1819`, installed unconditionally at
+`cli.py:3111-3112`) wraps `handle_completion` to count the tokens the server itself classifies as
+`reasoning` (`serve.py:1780-1785`), and `_add_details` (`serve.py:1793-1805`) writes
+
+```
+usage["completion_tokens_details"]["reasoning_tokens"] = <that count>
+```
+
+onto the non-streaming response and the streamed `include_usage` frame alike.
+
+What that means for this harness:
+
+- `docs/interfaces.md` pins
+  `reasoning_tokens: int | None  # from usage.completion_tokens_details, if present`. On 0.5.13
+  that field **is** present on OptiQ — this document used to call it a permanent `None` and a
+  blocker for `interfaces.md`. That claim is withdrawn.
+- `completion_tokens` still *includes* reasoning: the patch adds the breakdown, it does not
+  subtract. `completion_tokens - reasoning_tokens` is the content-only count, and that subtraction
+  is only comparable against a runtime that reports the same breakdown.
+- `usage.optiq_boost` (`serve.py:1799-1802`) can also appear, and is not a token field.
 
 ### 6.3 Reported usage is scaled by `--context-scale`
 
@@ -607,7 +689,7 @@ p, c = u.get("prompt_tokens"), u.get("completion_tokens")
     u["total_tokens"] = p + c
 ```
 
-Installed only when `context_scale != 1.0` (`cli.py:2965-2968`). The harness passes
+Installed only when `context_scale != 1.0` (`cli.py:3209-3211`). The harness passes
 `--context-scale 1.0` (`Optiq.start_command`), so this is a **no-op today** — but it is
 one keystroke from silently multiplying every published token count, and the module docstring is
 explicit that generation is untouched (`context_scale.py:11-13`).
@@ -627,21 +709,24 @@ What does exist are internal `GenerationResponse` fields that are never serializ
 `prompt_tps` / `generation_tps` — and OptiQ computes them with a **clamped denominator**:
 
 ```
-optiq/serve.py:381        prompt_tps=ev["prompt_tokens"] / max(ev["prefill_time_s"], 1e-6),
-optiq/serve.py:766        elapsed = max(time.time() - t0, 1e-6)
-optiq/serve.py:775        generation_tps=n_tokens / elapsed,
-optiq/runtime/engine.py:753    "decode_tps": (n_generated + 1) / max(elapsed, 1e-6),
+optiq/serve.py:524            prompt_tps=ev["prompt_tokens"] / max(ev["prefill_time_s"], 1e-6),
+optiq/serve.py:1156           elapsed = max(time.time() - t0, 1e-6)
+optiq/serve.py:1165           generation_tps=n_tokens / elapsed,
+optiq/runtime/engine.py:775   "decode_tps": (n_generated + 1) / max(elapsed, 1e-6),
 ```
 
 `max(elapsed, 1e-6)` converts a zero or negative interval into a denominator of `1e-6`, so
 `n / 1e-6` — up to 10⁶ × the token count. **The absurd-rate generator is present; only the
 field that would publish it is missing.** Anything that reads these objects (rather than the
-HTTP `usage` block) inherits the trap.
+HTTP `usage` block) inherits the trap. (The `prompt_tps` division appears twice, at `serve.py:524`
+and `:999`; the clamped-elapsed `generation_tps` twice, at `serve.py:1165` and `:1179`. The
+diffusion and Dhara replay paths pass a literal `generation_tps=0.0`, `serve.py:1492-1493` and
+`:1594-1595`.)
 
 The exact source quote the dispatch asked for, for the record:
 
 ```
-optiq/serve.py:381:  prompt_tps=ev["prompt_tokens"] / max(ev["prefill_time_s"], 1e-6),
+optiq/serve.py:524:  prompt_tps=ev["prompt_tokens"] / max(ev["prefill_time_s"], 1e-6),
 ```
 
 ### 6.5 Usage on streaming is opt-in
@@ -662,16 +747,21 @@ mlx_lm/server.py:1519    ):
 
 | Endpoint | `input_tokens` | `output_tokens` | Reasoning |
 |---|---|---|---|
-| `/v1/chat/completions` | real | real (incl. reasoning) | folded in |
-| `/v1/messages`, non-stream | from `prompt_tokens` (`anthropic_shim.py:358-361`) | from `completion_tokens` | absent |
-| `/v1/messages`, **streaming** | **hard-coded `0`** (`anthropic_shim.py:398`) | counts SSE content chunks (`anthropic_shim.py:460,484`) | **excluded** |
-| `/v1/responses`, non-stream | from `prompt_tokens` | from `completion_tokens` | `max(1, len(reasoning_text.split()))` — **a word count** (`responses_shim.py:404`) |
-| `/v1/responses`, streaming | from `prompt_tokens` or 0 (`responses_shim.py:573`) | counted per delta (`responses_shim.py:610`) | word count (`responses_shim.py:784-787`) |
+| `/v1/chat/completions` | real | real (incl. reasoning) | folded in, and also broken out as `completion_tokens_details.reasoning_tokens` (§6.2) |
+| `/v1/messages`, non-stream | from `prompt_tokens`, minus the cache read (`anthropic_shim.py:364-377`, used at `:360`) | from `completion_tokens` | carried as a `thinking` content block, not counted |
+| `/v1/messages`, **streaming** | from the usage frame when one arrives (`anthropic_shim.py:447-448`), else the hard-coded `0` in the opening frame (`:408-416`) | from the usage frame, else one per `content` delta (`:478`); emitted as `self.usage or {output_tokens: count}` (`:499-503`) | thinking deltas are emitted (`:453-463`) but the fallback count excludes them |
+| `/v1/responses`, non-stream | from `prompt_tokens` (`responses_shim.py:511-515`) | from `completion_tokens` | `_reasoning_tokens`: the server's count when present, else `max(1, len(reasoning_text.split()))` (`:408-414`) |
+| `/v1/responses`, streaming | from the usage frame (`responses_shim.py:684-689`), else `0` (`:616`) | same, else one per delta (`:725`) | same `_reasoning_tokens` helper (`:899-910`) |
 
-The Anthropic streaming path bypasses `--context-scale` entirely (it never consumes the OpenAI
-usage), and the Responses shim's `reasoning_tokens` is a **fabricated word count**, admitted in
-its own comment at `responses_shim.py:401-403` ("Rough estimate — actual count is hidden inside
-mlx-lm"). Neither endpoint should be used for token accounting.
+**Both shims now request and consume the closing usage frame** (`anthropic_shim.py:269-271`,
+`responses_shim.py:388-390`), so both inherit `--context-scale`; this document used to say the
+Anthropic streaming path bypassed it entirely. The word count is now only a fallback for a
+server that reports no `reasoning_tokens` (`responses_shim.py:408-414`) — the "actual count is
+hidden inside mlx-lm" comment this document quoted is gone. The Responses shim also reports the
+prompt-cache hit as `input_tokens_details.cached_tokens` (`responses_shim.py:417-429`).
+
+The harness pins `--no-anthropic --no-responses`, so none of this is on a measured cell; it
+matters only to anyone who turns either endpoint on.
 
 ---
 
@@ -704,7 +794,7 @@ The threshold is `headroom = 0.70` (`moe_stream.py:621`), applied as
 snapshot's `*.safetensors` (`moe_stream.py:612-618`).
 
 Note it compares against **total** RAM, not available RAM — a distinction the codebase itself
-calls out at `cli.py:3563-3566`:
+calls out at `cli.py:3870-3875`:
 
 > `should_stream()` compares against total RAM, so a 20 GB quant "fits" in 70% of 36 GB while
 > 4 GB is actually free -- and the process is killed with no traceback, which reads as a crash
@@ -714,8 +804,8 @@ So the heuristic has **both** failure directions: it turns streaming on when the
 by total RAM but not by available RAM (slow), and it leaves streaming off when total RAM is
 large but the machine is busy (OOM).
 
-Wiring: `install_streaming_experts` (`optiq/serve.py:1222-1305`) patches
-`mlx_lm.server.ModelProvider._load`. The decision is `optiq/serve.py:1251-1253`:
+Wiring: `install_streaming_experts` (`optiq/serve.py:1612-1695`) patches
+`mlx_lm.server.ModelProvider._load`. The decision is `optiq/serve.py:1641-1643`:
 
 ```python
 def _wants(mp: str) -> bool:
@@ -724,14 +814,14 @@ def _wants(mp: str) -> bool:
 ```
 
 `--stream-experts` maps `None → "auto"`, `True → "on"`, `False → "off"`
-(`optiq/cli.py:2856-2857`), and `mode == "off"` returns before installing anything
-(`serve.py:1239-1240`), so `--no-stream-experts` is a **complete** opt-out, not a partial one.
+(`optiq/cli.py:3095-3096`), and `mode == "off"` returns before installing anything
+(`serve.py:1629-1630`), so `--no-stream-experts` is a **complete** opt-out, not a partial one.
 
 **Is `is_streamable_moe` even reached for the harness's `--no-stream-experts`?** No. Good.
 
 ### 7.2 **Sampler injection from `generation_config.json` — the one that fires for this harness**
 
-`optiq/cli.py:2756-2763`:
+`optiq/cli.py:2968-2975`:
 
 ```python
 from .runtime.gen_config import read_recommended_sampling, merge_into_argv
@@ -744,20 +834,26 @@ if model_arg:
         )
 ```
 
-`merge_into_argv` (`optiq/runtime/gen_config.py:103-148`) appends `--temp`, `--top-p`,
+`merge_into_argv` (`optiq/runtime/gen_config.py:124-169`) appends `--temp`, `--top-p`,
 `--top-k`, `--min-p` for any recommended key **not already present in argv**:
 
 ```python
-optiq/runtime/gen_config.py:141        already = any(a == flag or a.startswith(flag + "=") for a in out)
-optiq/runtime/gen_config.py:142        if already:
-optiq/runtime/gen_config.py:143            continue
-optiq/runtime/gen_config.py:144        out += [flag, str(value)]
+optiq/runtime/gen_config.py:162        already = any(a == flag or a.startswith(flag + "=") for a in out)
+optiq/runtime/gen_config.py:163        if already:
+optiq/runtime/gen_config.py:164            continue
+optiq/runtime/gen_config.py:165        out += [flag, str(value)]
 ```
 
 **This was the harness's "temperature 0" hazard, and four flags close it.**
 `Optiq.start_command` passes `--temp 0 --top-p 1 --top-k 0 --min-p 0` explicitly, so every key
 `merge_into_argv` can forward is already in argv, `already` is true for all of them, and the
-injection is a no-op. The three that matter most are the ones the request body does not carry:
+injection is a no-op. The hazard is live rather than hypothetical, and was checked on 2026-09-25:
+**every OptiQ quant in this host's HF cache carries a `generation_config.json`**, and
+`read_recommended_sampling` resolves it from the cache snapshot (`gen_config.py:110-121`). The
+three cached ones recommend `temperature 0.2` / `top_k 80` (LFM2.5-8B-A1B-OptiQ-4bit) and
+`temperature 0.7` / `top_p 0.8` / `top_k 20` / `min_p 0.0` (Qwen3.5-4B and Qwen3.6-35B-A3B).
+
+The three that matter most are the ones the request body does not carry:
 `measure._request` sends `temperature` and `seed` and nothing else, so an injected `--top-p`,
 `--top-k` or `--min-p` would otherwise set the sampling distribution from a line in the
 artifact, with nothing in the recorded command saying so.
@@ -772,61 +868,100 @@ The injection is not fully silent — it prints
 the command the harness records, which is the whole category this document is about.
 
 `read_recommended_sampling` also **never raises** (`gen_config.py:28-59`) and reads only
-`temperature`, `top_p`, `top_k`, `min_p`, `repetition_penalty` (`gen_config.py:25`). With
+`temperature`, `top_p`, `top_k`, `min_p`, `repetition_penalty` (`gen_config.py:25`), dropping any
+value that means "disabled" in another stack's convention — `top_k: -1`, a `top_p` outside
+`(0, 1]`, a negative temperature or penalty (`_sane`, `gen_config.py:62-80`). With
 `allow_hf_fetch=False` (the serve default) it is local-only.
 
-### 7.3 `--prompt-cache-bytes` is injected
+### 7.3 `--prompt-cache-bytes`, `--prompt-cache-size` and `--max-tokens` are injected
 
-`optiq/cli.py:2713-2719` computes a budget and appends the flag unless already present:
-
-```
-optiq/cli.py:2713    pc_bytes = default_prompt_cache_bytes(_resolve_model_dir(model_arg))
-optiq/cli.py:2715    argv_extra = inject_prompt_cache_bytes(argv_extra, pc_bytes)
-```
-
-`default_prompt_cache_bytes` (`optiq/lab/mlx_cleanup.py:81-107`) derives from **what is left
-after the weights**, not total RAM:
+`optiq/cli.py:2908-2931` computes a cache budget and appends flags unless the caller already
+passed them:
 
 ```
-optiq/lab/mlx_cleanup.py:104    free = total - weights
-optiq/lab/mlx_cleanup.py:105    budget = int(free * PROMPT_CACHE_FREE_FRACTION)     # 0.25
-optiq/lab/mlx_cleanup.py:106    capped = min(int(total * PROMPT_CACHE_FRACTION), budget)   # 0.15 of total
-optiq/lab/mlx_cleanup.py:107    return max(MIN_PROMPT_CACHE_FLOOR, capped)         # floor 512 MiB
+optiq/cli.py:2912    _model_dir = _resolve_model_dir(model_arg)
+optiq/cli.py:2913    pc_bytes = default_prompt_cache_bytes(_model_dir)
+optiq/cli.py:2915    argv_extra = inject_prompt_cache_bytes(argv_extra, pc_bytes)
+optiq/cli.py:2917    argv_extra = inject_prompt_cache_size(argv_extra, default_prompt_cache_size(_model_dir))
+optiq/cli.py:2921    install_prompt_cache_byte_cap(_pc_budget)
+optiq/cli.py:2924    inflates = inject_default_max_tokens(argv_extra)   # --max-tokens 32768
 ```
+
+`default_prompt_cache_bytes` (`optiq/lab/mlx_cleanup.py:85-112`) derives from **what is left
+after the weights and the live conversation**, not total RAM:
+
+```
+optiq/lab/mlx_cleanup.py:109    free = total - weights - _live_kv_bytes(model_dir, context_tokens)
+optiq/lab/mlx_cleanup.py:110    budget = int(free * PROMPT_CACHE_FREE_FRACTION)     # 0.25
+optiq/lab/mlx_cleanup.py:111    capped = min(int(total * PROMPT_CACHE_FRACTION), budget)   # 0.15 of total
+optiq/lab/mlx_cleanup.py:112    return max(MIN_PROMPT_CACHE_FLOOR, capped)         # floor 512 MiB
+```
+
+The `_live_kv_bytes` subtraction is new since this document was written (`mlx_cleanup.py:115-135`)
+and it is a real change of behaviour, not a refactor: the budget used to count only the weights,
+so the cache and the live conversation were handed the same bytes twice. On a 36 GB M3 running
+Qwen3.6-35B-A3B-REAP-19B that read 5.4 GB of cache as affordable while an 88k-token conversation
+was itself holding 1.8 GB, and the session died of memory at turn 280 with the cache at its cap
+and obeying it.
 
 If the model dir cannot be resolved, it falls back to `max(2 GiB, 15% of RAM)`
-(`mlx_cleanup.py:99-100`). The value is RAM-derived, so **it differs between machines** — a
-36 GiB and a 64 GiB Mac run the same artifact with different cache budgets, and prefix-cache
-hit rates are therefore not comparable across machines without recording this number.
+(`mlx_cleanup.py:104-105`; constants at `:55-56`). The value is RAM-derived, so **it differs
+between machines** — a 36 GiB and a 64 GiB Mac run the same artifact with different cache
+budgets, and prefix-cache hit rates are therefore not comparable across machines without
+recording this number.
 
-`--prompt-cache-size` (upstream default 10) is **not** touched.
+**Three things 0.5.13 does that the 0.5.6 this document was written against did not:**
+
+1. **`--prompt-cache-size` is now injected too** (`cli.py:2917`). `default_prompt_cache_size`
+   (`mlx_cleanup.py:138-155`) returns 10 for an ordinary model and
+   `HYBRID_PROMPT_CACHE_SIZE = 3` (`mlx_cleanup.py:67`) for a model whose cached prefixes cannot
+   be trimmed (a Qwen3.5/3.6-style hybrid: ten turns of one conversation are ten full copies).
+   This document used to say the flag was not touched; that is no longer true, and the injected
+   value is model-shaped rather than constant.
+2. **The byte cap is applied to the cache object itself**, not only passed as a flag
+   (`install_prompt_cache_byte_cap`, `cli.py:2919-2921`, implementation `mlx_cleanup.py:226-263`).
+   `--prompt-cache-bytes` reaches `LRUPromptCache` only on mlx-lm's *batch* path; on the
+   sequential path — the one KV quantization forces (§7.7) and `--ngram-draft` forces too
+   (`serve.py:611`) — the flag alone is silently ignored and the cache keeps up to ten whole
+   conversations.
+3. **`--max-tokens` is injected** at `DEFAULT_MAX_TOKENS = 32768` unless the caller passed one
+   (`cli.py:2922-2927`; `mlx_cleanup.py:223` and `:266-275`). mlx-lm's own default is 512, and a
+   request that omits `max_tokens` is exactly what that 512 truncated — an OpenAI client reads an
+   absent limit as "up to the context". So on OptiQ an absent `max_tokens` means up to 32768
+   tokens, not 512, and any harness assumption built on the §2.3 default is wrong for the
+   no-`max_tokens` case.
+
+`--prompt-cache-size` is the only one of the three the harness ever passes itself — and only on a
+run that pins a cache state (§9, `runtimes.prompt_cache_flags`), which disables the injection for
+that run.
 
 ### 7.4 Concurrency is capped below upstream's default
 
-`optiq/cli.py:2725-2737`. With the `--max-concurrent` default of `8`:
+`optiq/cli.py:2933-2949`. With the `--max-concurrent` default of `8`:
 
 ```
-optiq/cli.py:2731            argv_extra += ["--decode-concurrency", str(int(max_concurrent))]
-optiq/cli.py:2733            argv_extra += ["--prompt-concurrency", str(max(1, int(max_concurrent) // 4))]
+optiq/cli.py:2943            argv_extra += ["--decode-concurrency", str(int(max_concurrent))]
+optiq/cli.py:2945            argv_extra += ["--prompt-concurrency", str(max(1, int(max_concurrent) // 4))]
 ```
 
 So the effective values are decode 8 / prompt 2, against upstream's 32 / 8
 (`mlx_lm/server.py:1856,1862`) — unless the caller passed the underlying flag, which wins
-(`cli.py:2726-2729`). The harness passes `--max-concurrent 1`, giving decode 1 / prompt 1. Fine,
+(`cli.py:2938-2945`). The harness passes `--max-concurrent 1`, giving decode 1 / prompt 1. Fine,
 but note the number that matters is `--decode-concurrency`, which the harness does not record.
 
 ### 7.5 MLX reuse-pool cleanup on every request
 
-`optiq/cli.py:2703-2707` installs a post-response hook:
+`optiq/cli.py:2902-2903` installs a post-response hook:
 
 ```
-optiq/cli.py:2703    cleanup_threshold = default_threshold_bytes()
-optiq/cli.py:2704    install_server_cleanup(cleanup_threshold)
+optiq/cli.py:2902    cleanup_threshold = default_threshold_bytes()
+optiq/cli.py:2903    install_server_cleanup(cleanup_threshold)
 ```
 
 `default_threshold_bytes()` is `max(1 GiB, 10% of total RAM)`
-(`optiq/lab/mlx_cleanup.py:76-78`). When MLX's buffer reuse pool exceeds it, the hook runs
-`gc.collect()` then `mx.clear_cache()` (`mlx_cleanup.py:148-152`). The hook is installed
+(`optiq/lab/mlx_cleanup.py:80-82`; constants at `:39-44`). When MLX's buffer reuse pool exceeds
+it, the hook runs `gc.collect()` then `mx.clear_cache()` (`mlx_cleanup.py:191-200`; the calls are
+at `:198-199`). The hook is installed
 **unconditionally** on every `optiq serve` and is not exposed as a flag. It is RAM-derived, so
 it fires at different points on different machines, and it costs a re-allocation from Metal when
 it fires (`mlx_cleanup.py:16-18` estimates 10–100 ms).
@@ -834,7 +969,8 @@ it fires (`mlx_cleanup.py:16-18` estimates 10–100 ms).
 ### 7.6 Context cap `auto`
 
 `--max-context auto` (the default) estimates a KV token cap and installs a rotating window
-**only when the model's native context would not fit RAM** (`optiq/cli.py:2980-3024`). When it
+**only when the model's native context would not fit RAM** (`optiq/cli.py:3222-3258`; the `auto`
+estimation is `:3230-3248`). When it
 fires it changes the KV cache class to `RotatingKVCache`, which changes long-context behaviour
 and can change output. The harness passed `--max-context 8192` until 2026-09-16 and passes `off` since: an integer
 cap rotates rather than refuses, and on Qwen3.5 / LFM2 it was a no-op because both define
@@ -843,8 +979,7 @@ path is bypassed, which is correct and should stay.
 
 ### 7.7 Fused KV path is automatic when KV quantization is on
 
-**Citations in this section re-read against 0.5.13, 2026-09-24 (research
-`2026-09-24-kv-quant-surface.md` §4.4).** `optiq/cli.py:2730-2739`: with `--kv-bits` or
+`optiq/cli.py:2730-2739`: with `--kv-bits` or
 `--kv-config` set and no `--no-fused-kv`, two patches install automatically (streaming per-layer
 conversion + fused quantized SDPA). The `--no-fused-kv` help states the effect as a ~2x memory
 reduction at 32k on a 24 GB Mac (`cli.py:2602-2604`: "24 GB Mac, granite-4.1-8b-4bit at 32k peak
@@ -863,38 +998,47 @@ stock-mlx-lm-with-a-quantized-cache** — it is a different attention kernel and
 conversion strategy. `--no-fused-kv` is the opt-out and produces stock behaviour, which is the
 right control arm if the codec is the variable.
 
-**Second automatic side effect, added 2026-09-24 (research `2026-09-24-kv-quant-surface.md`
-§4.4).** KV quant can silently cost cross-request batching. `install_quantized_kv` tries
+**Second automatic side effect.** KV quant can silently cost cross-request batching.
+`install_quantized_kv` tries
 `install_batch_kv_quant(default=(kv_bits, kv_group_size))` first — a mergeable quantizing cache
 class for `BatchGenerator` — and falls back to `force_sequential_for_kv_quant("--kv-bits")` when
-the hook point is missing (`optiq/serve.py:95-117`, `262-…`). That function's own docstring is
-explicit that mlx-lm's batch path never quantizes the KV cache and that the sequential path is
-forced instead, "strictly better than honoring the flag in name only". At the harness's
+the hook point is missing (`optiq/serve.py:79-81`; the `--kv-config` path does the same at
+`:286-287`). That function's own docstring is explicit that mlx-lm's batch path never quantizes
+the KV cache and that the sequential path is forced instead, "strictly better than honoring the
+flag in name only" (`serve.py:95-115`). At the harness's
 `--max-concurrent 1` this costs nothing, but a future concurrency sweep on this runtime could
 measure a batching loss that the flag caused.
 
 ### 7.8 The sampling RNG fix
 
-`optiq/cli.py:2927-2930` installs a thread-safe sampler, because "mlx-lm's compiled categorical
+`optiq/cli.py:3168-3174` installs a thread-safe sampler, because "mlx-lm's compiled categorical
 sampler freezes the RNG on the generation worker thread, so temperature/seed are ignored and
-output is effectively greedy". This changes what `temperature`/`seed` do relative to stock
+output is effectively greedy" (`runtime/sampler_rng.py`, installed at `cli.py:3171-3172`). This
+changes what `temperature`/`seed` do relative to stock
 mlx-lm. It is a behavioural difference from the `mlxlm` runtime in this harness — the same
 request body can produce different sampling behaviour on the two runtimes.
 
 ### 7.9 Installed unconditionally, for completeness
 
 Each of these patches `mlx_lm.server` on every `optiq serve` run, with no flag:
-tool-argument normalization (`cli.py:2506-2507`), EOS-terminated tool calls (`cli.py:2512-2513`),
-rotating-cache merge fix (`cli.py:2520-2527`), message-shape `content: null` on non-streaming
-messages (`cli.py:2869-2870`), Cloud Boost (`cli.py:2879-2880`), structured output
-(`cli.py:2932-2935`), tool-call healing (`cli.py:2941-2944`), model variants
-(`cli.py:2958-2961`), thinking variants (`cli.py:2691-2692`), single-model field policy
-(`cli.py:2744-2749`), and a download-retry shim (`cli.py:2500-2501`).
+download-retry shim (`cli.py:2695-2696`), tool-argument normalization (`cli.py:2701-2702`),
+EOS-terminated tool calls (`cli.py:2707-2708`), generation watchdog (`cli.py:2709-2710`),
+rotating-cache merge fix (`cli.py:2717-2724`), thinking variants (`cli.py:2888-2889`), server
+cleanup and the prompt-cache byte cap (`cli.py:2902-2903`, `:2919-2921`), single-model field
+policy (`cli.py:2957-2958`), tested kernels (`cli.py:2993-2994`), custom-code tokenizer
+(`cli.py:2998-2999`), message-shape `content: null` on non-streaming messages
+(`cli.py:3108-3109`), reasoning-token usage (`cli.py:3111-3112`, §6.2), Cloud Boost
+(`cli.py:3117-3123`), sampling RNG fix (`cli.py:3171-3172`), structured output
+(`cli.py:3176-3177`), tool-call healing (`cli.py:3185-3186`), and model variants
+(`cli.py:3202-3203`). Conditional on the model or the flags, and equally invisible in the
+recorded command: vision serving for a checkpoint with an `optiq_vision` sidecar
+(`cli.py:3072-3089`), and the diffusion / Dhara / n-gram generator replacements
+(`cli.py:2980-2990`, `:3016-3025`, `:3041-3066`).
 
 `install_message_shape` is worth singling out: it adds `"content": None` to non-streaming
 messages that produced only reasoning, and **deliberately does not touch `delta`**
-(`serve.py:1325-1346`). Its docstring records that this was found when a live test read
-`message["content"]` and got a `KeyError`.
+(`serve.py:1698-1744`). Its docstring records that this was found when a live test read
+`message["content"]` and got a `KeyError` (`serve.py:1713`).
 
 ### 7.10 Settings-level heuristics that are not flags
 
@@ -928,7 +1072,7 @@ mostly mlx-lm questions.
 | Repo-name convention | `…-OptiQ-<N>bit` (parsed, not a loader key) | `optiq/lab/optiq_models.py:136-138` |
 | Sidecars | `optiq/mtp.safetensors`, `optiq/optiq_vision.safetensors` — the MTP one is a **gate** on the depth pin, §9.2 | `optiq/sidecar_layout.py:28-31`; resolution at `optiq/runtime/mtp/artifacts.py:104-115` |
 | MTP quant block | `mtplx_mtp_quantization` (`prequantized`, `policy`) | `optiq/runtime/mtp/artifacts.py:44-46` |
-| Architecture | `model_type` (`diffusion_gemma`, `llada2_moe`, `dhara_ar`) | `optiq/models/diffusion.py:50`; `optiq/cli.py:2771` |
+| Architecture | `model_type`: `diffusion_gemma` / `llada2_moe` (diffusion serving), `dhara_ar` (self-speculation) | `optiq/models/diffusion.py:50` lists only `diffusion_gemma` (`DIFFUSION_MODEL_TYPES`); the other two are matched at `optiq/cli.py:2980-2990` and `:3041-3048` |
 
 Because `class_predicate` returns the per-path entry verbatim (`mlx_lm/utils.py:349-355`), a
 `quantization` block can give **every layer a different bit-width and group size**. Two
@@ -961,8 +1105,8 @@ The important one, and the codebase documents it against itself (`moe_stream.py:
 > through to a normal load.
 
 That specific segment was added, but the **fall-through remains**: if `_wants()` is false the
-loader silently takes the resident path (`serve.py:1301-1302`). A failed streaming attempt is
-also swallowed to a resident load with only a log line (`serve.py:1298-1300`). So
+loader silently takes the resident path (`serve.py:1691-1692`). A failed streaming attempt is
+also swallowed to a resident load with only a log line (`serve.py:1688-1690`). So
 `--stream-experts` being present in a command says nothing about whether streaming happened —
 only the `[optiq.serve] SSD expert streaming: on` banner plus
 `[optiq.serve] SSD expert streaming: pre-loaded <path>` does.
@@ -1004,15 +1148,15 @@ An unrecognised `mode` string is **not** refused by OptiQ — it passes straight
 ### 8.6 Refusal to start
 
 `optiq serve` refuses to boot on a model whose weights are missing, rather than answering
-`/health` forever (`cli.py:2663-2684`, implementation `cli.py:2298-2328`). The docstring
-records that mlx-lm's `/health` is hardcoded to 200 and never consults model state:
+`/health` forever (`cli.py:2860-2881`; implementation `_model_cannot_load`, `cli.py:2409-2439`).
+The comment records that mlx-lm's `/health` is hardcoded to 200 and never consults model state:
 
 ```
 GET  /health              -> 200 {"status": "ok"}
 POST /v1/chat/completions -> nothing, forever
 ```
 
-Note this check is **local-only and never touches the network** (`cli.py:2301-2304`), so an
+Note this check is **local-only and never touches the network** (`cli.py:2412-2413`), so an
 uncached repo id is not rejected. It catches an on-disk directory with no `.safetensors` and no
 weight index.
 
@@ -1082,20 +1226,56 @@ slower on Apple Silicon and removed (`engine.py:897-905`) — the opposite of vM
 `adaptive` default is why that runtime needs `--native-mtp-depth-policy fixed` beside every
 depth.
 
-**Two artifact conditions, both OptiQ's own, and the harness refuses a cell that fails either**
+**Three artifact conditions, all OptiQ's own, and the harness refuses a cell that fails any**
 (`runtimes.optiq_mtp_refusal`):
 
 | condition | source | what it costs otherwise |
 |---|---|---|
 | the head file is where the resolver looks | `expected_mtp_file`: the path the config names under `mlx_lm_extra_tensors.mtp_file`, else `optiq/mtp.safetensors`, `mtp.safetensors`, `mtp/weights.safetensors`, `model-mtp.safetensors` (`mtp/artifacts.py:104-115`; the subfolder-first/root-fallback pair at `sidecar_layout.py:39-50`) | `--mtp` attaches an engine with no draft head, warns once (`engine.py:297-304`) and answers every request as HTTP 404 (`serve.py:459-464`, `mlx_lm/server.py:1424-1427`) |
 | the config declares an MTP layer | `_num_mtp_layers` reads `text_config.mtp_num_hidden_layers`, `text_config.num_nextn_predict_layers`, then `num_nextn_predict_layers` (`mtp_patch.py:69-76`); zero returns before any head is looked for (`:382-385`) | the same 404, with a sidecar sitting on disk unread |
+| the head's tensors fit the block its own config says will be built | the config's `mtplx_mtp_quantization` (`with_config_defaults`, `mtp_patch.py:51-66`) against the sidecar's safetensors header (`runtimes._safetensors_shapes`, stdlib: 8-byte LE length + JSON) | the head loads and the block refuses it — `MTP head weight '…' has shape (256, 512, 2048), block expects (256, 512, 256)`, the injection fails, and all 25 requests of the visit answer HTTP 404 (`mtp_patch.py:345-355`, `:444-445`) |
 
-Both OptiQ quants on this host satisfy both: they name `optiq/mtp.safetensors` in
+Both OptiQ quants on this host satisfy the first two: they name `optiq/mtp.safetensors` in
 `mlx_lm_extra_tensors.mtp_file` and declare `mtp_num_hidden_layers: 1`. The 35B's sidecar is
 1,644,816,560 B. An artifact carrying `mtp.*` tensors in its *main* weights is refused here even
 though OptiQ can read those too (`_embedded_mtp_weight_map`, `mtp_patch.py:277-299`) — the
 sidecar is the shape every OptiQ quant ships, and a false refusal costs a cell rather than a
 number.
+
+**The third condition, added 2026-09-25 after the depth night** (`runtimes._optiq_head_packing_refusal`,
+the artifact gate's third question). The 35B passed the first two on the night and its head still
+could not load: the sidecar's routed experts are in the fused HuggingFace layout
+(`mlp.experts.gate_up_proj` `(256, 1024, 2048)`, `mlp.experts.down_proj` `(256, 2048, 512)`),
+`_split_fused_experts` rewrites those into `switch_mlp.*` weights carrying the dense shapes
+unchanged (`mtp_patch.py:116-141`), and the block was built quantized — so the shape check raised
+and the engine attached without a draft head. The four facts that decide it are all readable
+before a server starts:
+
+- **Whether the block is quantized.** `with_config_defaults` takes `prequantized`, `bits`,
+  `group_size`, `mode` and `policy` from the config's `mtplx_mtp_quantization` (`mtp_patch.py:51-66`),
+  and the block is quantized only when prequantized *and* a width is stated — with no width
+  `_quantize_mtp_module` returns first (`:86-87`). A prequantized head is loaded as it is, without
+  dequantization (`:162-168`), and the block is quantized *before* the weights are checked (`:444-445`).
+- **Which tensors that quantizes.** `policy: all` quantizes every module `nn.quantize` reaches
+  (`:90-96`); `cyankiwi` skips `fc`, `pre_fc_norm*` and `norm` and quantizes the rest of
+  `layers.*` (`:102-113`); an unstated policy means `all` (`:89`). The converter writes the field by
+  exactly that question — `cyankiwi` unless `mtp.fc.weight` was quantized (`mtp_convert.py:200`).
+- **What a packed tensor is.** A quantized weight is `(out, in * bits / 32)` and its affine scales
+  are `(out, in / group_size)`, so the pair is checkable against itself —
+  `weight[-1] * 32 == scales[-1] * group_size * bits` — with no model dimensions. Both artifacts
+  satisfy it exactly at bits 4, group 64.
+- **What a fused expert tensor cannot be.** Its scales are never rewritten by the split, so the
+  block's expert `.scales`/`.biases` have no source at all (`mtp_patch.py:356-364`) — an
+  independent refusal from the shape mismatch beside it.
+
+Measured against both artifacts: **`Qwen3.6-35B-A3B-OptiQ-4bit` is refused** (N/A with the two
+shapes and the cell's own config quoted) and **`Qwen3.5-4B-OptiQ-4bit` still passes** — its 29
+tensors are packed where the block quantizes them, and the one dense tensor it carries,
+`mtp.fc.weight`, is outside a `cyankiwi` head's scope. Two ceilings, both a miss rather than a
+false refusal: a head that is prequantized *by its key set* rather than by its config
+(`_mtp_contract_for_weight_keys`, `mtp_patch.py:204-233`, against the per-family tables at
+`mtp/constants.py:54-76`) is not read for shapes, and a sidecar whose header cannot be parsed
+answers no shapes at all — the log half below is what catches those.
 
 **The flag is not evidence that a head drafted, and the line that says so arrives late.** The
 startup echo `[optiq.serve] MTP speculation enabled (depth=N, model=…)` (`cli.py:3057-3060`) is
@@ -1114,6 +1294,19 @@ fallback lines quoted when it is missing are the engine's own warning that it at
 head (`MTP head not attached …`, `MTP engine…`; `engine.py:297-304`); the HTTP 404 that follows
 goes to the client and never to the log.
 
+**A log with neither marker is not a log that says nothing** (2026-09-25, open question 5 of
+`docs/research/2026-09-25-mtp-depth-sweep.md`). The 4B's three depth cells printed no ready line
+and no attach warning, and the check's own words reported that as the log saying "nothing about
+why" — while the log held the cause, a per-request traceback ending
+`TypeError: 'NoneType' object is not subscriptable` at `engine.py:760` (the generate path that
+would have used the loaded head returning nothing). The message now reads the window once more
+before it is written (`runtimes._traceback_cause`) and quotes the interpreter's final exception
+line and its innermost `File …, line N` frame; a window that holds no traceback — including one
+that ends inside a block, or one with neither marker at all — says the narrower true thing,
+"prints no line this check reads". The window is unchanged and so is the verdict: the log head
+(`runtimes.LOG_HEAD_BYTES`), and a FAIL either way. The same branch serves the two `on` cells of
+the streaming pin, so an `on` cell whose log holds a traceback gets it quoted too.
+
 **How a depth cell reaches the MTP generate path at all — and the one way it would not.** MTP is
 installed by patching `mlx_lm.server.stream_generate` (`serve.py:470-471`), which the **sequential**
 path calls (`_serve_single`, `mlx_lm/server.py:976`) and the `BatchGenerator` path never does. The
@@ -1128,8 +1321,10 @@ stopped sending a seed would silently measure plain autoregressive under an MTP 
 | Add | Why |
 |---|---|
 | `--prompt-cache-bytes <N>` | Otherwise a RAM- and weights-derived value is injected (§7.3), differing across machines and not recorded in the start command. |
+| `--prompt-cache-size <N>` | Same injection channel, and the injected value is 10 or 3 depending on whether the model can trim (§7.3). The run already pins it when it pins a cache state; pinning it always removes the model-shape dependence. |
+| `--max-tokens <N>` | Otherwise OptiQ injects 32768, so a request that omits `max_tokens` is capped at 32768 rather than mlx-lm's 512 (§7.3). Recording the cap makes the cell's ceiling explicit. |
 | `--decode-concurrency 1 --prompt-concurrency 1` | `--max-concurrent 1` already produces these, but recording the real flags removes the indirection. |
-| Confirm `OPTIQ_*` unset | `OPTIQ_NO_THINK`, `OPTIQ_STREAM_PREFETCH`, `OPTIQ_FLASH_ATTN` etc. are not flags and would not show in the recorded command (§3.2). Capture `optiq config` output into the run artifact. |
+| Confirm `OPTIQ_*` unset | `OPTIQ_NO_THINK`, `OPTIQ_STREAM_PREFETCH`, `OPTIQ_FLASH_ATTN`, `OPTIQ_KERNELS`, `OPTIQ_DUMP_REQUESTS` etc. are not flags and would not show in the recorded command (§3.2). Capture `optiq config` output into the run artifact. |
 | Record `generation_config.json` | Provenance: it is the file whose sampler recommendations the four flags in the start command now pre-empt (§7.2). Snapshot it like the Osaurus settings baseline. |
 | Record the `quantization` block | Per-layer overrides mean the headline bit-width is not the format (§8.2). |
 
@@ -1138,8 +1333,9 @@ Not needed, and why: `--no-fused-kv` only matters with KV quantization (§7.7);
 no-op (§6.3) but is worth keeping as documentation of intent.
 
 Also worth pinning in the observation, not the command: `--prompt-cache-size` stays at
-upstream's 10, and `mx.set_wired_limit` raises the wired limit to the device maximum on every
-run (§2.3).
+upstream's 10 **only because the harness pins it (0 or 10) whenever it pins a cache state** —
+left unpinned, OptiQ injects 10, or 3 on a non-trimmable hybrid (§7.3); and `mx.set_wired_limit`
+raises the wired limit to the device maximum on every run (§2.3).
 
 ---
 
@@ -1161,5 +1357,11 @@ run (§2.3).
    Read where it bears on format detection, the `reasoning_content` question and §9.2's attach
    path (`attach`, `inject_mtp_support`, `_num_mtp_layers`, `expected_mtp_file`); the generation
    internals beneath those are not read, and no MTP cell has been run.
-6. **Whether any `generation_config.json` exists for the artifacts this harness serves.** Not
-   checked — but §7.2 means it should be, before the next published run.
+6. **`generation_config.json` for the artifacts this harness serves** — asked in an earlier
+   revision and answered 2026-09-25 from the local HF cache: **all three cached OptiQ quants ship
+   one.** LFM2.5-8B-A1B-OptiQ-4bit: `temperature 0.2`, `top_k 80`, `repetition_penalty 1.05`;
+   Qwen3.5-4B-OptiQ-4bit and Qwen3.6-35B-A3B-OptiQ-4bit: `temperature 0.7`, `top_p 0.8`,
+   `top_k 20`, `min_p 0.0`, `presence_penalty 1.5`. So the §7.2 read fires on every `optiq serve`
+   of these artifacts and the four sampler flags in the start command are doing real work. Still
+   open: the same check for any artifact added later, and the fact that the recommendation's
+   *values* live in the artifact, not in the recorded command.
