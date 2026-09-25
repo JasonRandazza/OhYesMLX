@@ -24,7 +24,7 @@ they live once, in `ohyesmlx/runtimes.py` (`MlxLm.kv_quant_refusal`, `.mtp_depth
 ## 1. Start command and the flag surface the harness uses
 
 `python -m mlx_lm.server --model <artifact dir> --port 8081`, plus `--prompt-cache-size 0|10` when
-and only when `cache_state` is taken (`ohyesmlx/runtimes.py:1551-1575`, `:1595-1604`).
+and only when `cache_state` is taken (`ohyesmlx/runtimes.py:1826-1850`, passed at `:1878`).
 `--prompt-cache-size`'s default is **10** (`server.py:1871-1876`), so an unpinned run measures the
 default LRU. Other defaults that matter to a cell and are not passed:
 `--prefill-step-size 2048` (`server.py:1865-1870`), `--decode-concurrency 32`,

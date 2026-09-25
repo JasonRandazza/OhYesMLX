@@ -468,3 +468,28 @@ against what did run:
 - **No claim that the night's `off` column is wrong.** With MTP disabled there is no depth to move;
   that cell is the same measurement the rerun made, in the same block, and it is cited above as
   context rather than joined into the rerun's tables.
+
+---
+
+## Update 2026-09-25 (later the same day): Open questions 5 and 6, answered by `773b739`
+
+The findings above are unchanged; what follows is what the harness does now, where the two open
+questions asked what it should.
+
+- **Open question 5 — should the depth check quote a traceback? Yes.** `runtimes._banner_evidence`
+  reads the log head once more when the window holds neither a required line nor a fallback
+  marker, and quotes that traceback's exception line and innermost frame
+  (`_traceback_cause`); a window with no traceback either says the log "prints no line this check
+  reads", which is the narrower, true claim §4's cells showed the old wording getting wrong. On
+  the 4B's cells the FAIL now names the `TypeError` at `engine.py:760` instead of saying nothing
+  about why; the cells themselves are still FAIL (the check could not confirm a draft head ran).
+- **Open question 6 — should `optiq_mtp_refusal` gain a shape check? Yes, as a third condition.**
+  `runtimes._optiq_head_packing_refusal` reads the sidecar's safetensors header with the stdlib and
+  refuses a head the config declares prequantized when a weight has no `.scales`/`.biases` pair,
+  when the pair's axes disagree with the packing arithmetic, or when its routed experts are in the
+  fused HF layout `_split_fused_experts` rewrites without their scales. `Qwen3.6-35B-A3B-OptiQ-4bit`
+  is now `N/A` before a runtime starts, so §4's load-then-404 failure is not reachable on that
+  artifact; the 4B passes all three conditions and its depth cells are driven as before.
+
+Neither change moves a number in this paper: §3's void ladder and the 4B's fixed-depth columns were
+measured under the code as it stood, and the record of what those runs printed is what §4 is.

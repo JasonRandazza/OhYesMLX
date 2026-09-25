@@ -1281,9 +1281,9 @@ scheduler.py:1396               self._wrap_make_cache_quantized(bits, self.confi
 
 `--disable-prefix-cache` makes `enable_prefix_cache = args.enable_prefix_cache and not
 args.disable_prefix_cache` false (`cli.py:2639`), and that value is handed to the scheduler config
-at `cli.py:2667`. The harness passes `--continuous-batching` (`runtimes.py:1191`), so the branch is
+at `cli.py:2667`. The harness passes `--continuous-batching` (`runtimes.py:2649`), so the branch is
 taken — **but `runtimes.Vmlx.start_command` also passes `--disable-prefix-cache` unless the run was
-pinned `cache_state="on"` (`ohyesmlx/runtimes.py:1161-1163`).** Under a default harness start
+pinned `cache_state="on"` (`ohyesmlx/runtimes.py:2596-2598`).** Under a default harness start
 command, `--kv-cache-quantization q4|q8` on vMLX is therefore **inert**: the runtime logs its own
 warning and serves the model's native cache. A future `--kv-quant` cell on this runtime must either
 also enable the prefix cache — which would make the run vary two things — or record the value as

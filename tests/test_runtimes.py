@@ -977,8 +977,8 @@ def test_only_the_two_mtp_runtimes_have_a_depth_and_the_other_three_refuse_every
 
 def test_osaurus_accepts_the_off_depth_only_while_the_host_forces_mtp_off(monkeypatch):
     """`mtp.mode` is a tracked key, so the drift gate already attests it -- but it is not `off`
-    at `auto`, under which Osaurus runs a draft head on any bundle that carries one
-    (docs/runtimes/osaurus.md:307, :900-901). A cell labelled MTP-free has to be MTP-free."""
+    at `auto`, under which Osaurus launches a draft head on any bundle whose MTP tuning it verifies
+    (docs/runtimes/osaurus.md:307, :862-876). A cell labelled MTP-free has to be MTP-free."""
     osaurus = RUNTIMES["osaurus"]
 
     host_mtp_mode(monkeypatch, "force_off")
@@ -1032,7 +1032,7 @@ def test_vmlx_drives_both_streaming_states_through_its_own_opt_in_flag():
 def test_the_runtimes_with_no_streaming_surface_refuse_on_and_accept_off():
     """mlx-lm has no expert-loading path at all, oMLX's nearest mechanism is burst decode --
     which sets how many decode steps are coalesced before a delta is emitted, not where expert
-    weights live (docs/runtimes/omlx.md:798-841) -- and Osaurus's is host state with no start
+    weights live (docs/runtimes/omlx.md:510-572) -- and Osaurus's is host state with no start
     flag in either direction."""
     for name in ("mlxlm", "optiq", "omlx", "vmlx"):
         assert RUNTIMES[name].stream_experts_refusal(None) is None, name

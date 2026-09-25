@@ -271,3 +271,15 @@ Two things to read from it, and one not to:
 - **Not a 16k-vs-32k comparison in one table.** The prompt length is a separate pin and the two
   joins are separate documents; each table above is one length, and the two are read side by side,
   never averaged.
+
+---
+
+## Update 2026-09-25: Open question 4, answered by `f998dcd`
+
+**Should the sweep print `—` for a refused combination? It no longer does.** `report._entry` now
+renders a cell whose status is `N/A` as `N/A` and keeps `—` for a combination no run measured, and
+`report.ENTRY_LEGEND` — printed by both joined tables — names all five states. The 16 combinations
+§2 describes as `—` render as `N/A` in the same tables today, with the reason still on the row in
+its own run's leaderboard. §2's finding is about the renderer as it stood on 2026-09-25 and is not
+rewritten by this: what it found was a refusal filed as an omission, and that filing is what
+changed.

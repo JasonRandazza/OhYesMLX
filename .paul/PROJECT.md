@@ -29,17 +29,20 @@ runtime or their quantization is what's actually costing them speed and memory.
 | Attribute | Value |
 |-----------|-------|
 | Type | Application (CLI tool) |
-| Version | 0.0.1 |
-| Status | Prototype |
-| Last Updated | 2026-09-14 |
+| Version | 0.3.0 released 2026-09-23; v3.1 Hardening (0.3.1) in progress |
+| Status | Active — Phases 1–4 of v3.1 complete (STATE.md is the live position) |
+| Last Updated | 2026-09-25 |
+
+> This file is the 2026-09-14 charter. The requirement lists and metrics below are kept as
+> written then; `.paul/STATE.md` and `.paul/ROADMAP.md` hold what has shipped since.
 
 ## Requirements
 
 ### Core Features
 
-- Uniform lifecycle for four heterogeneous runtimes (a Swift app, a Python daemon, a CLI) — start, health-check, warm, stop, release the port.
+- Uniform lifecycle for five heterogeneous runtimes (vMLX added in v2) (a Swift app, a Python daemon, a CLI) — start, health-check, warm, stop, release the port.
 - Streaming SSE measurement over OpenAI-compatible endpoints: TTFT, ITL/TPOT, end-to-end P50/P90/P99, per-request and aggregate throughput, cold-load time.
-- macOS memory sampling via `footprint -p <pid>`, with optional `powermetrics` for power and thermal pressure.
+- macOS memory sampling via `footprint -p <pid>`. (`powermetrics` sampling was planned, never worked, and was removed 2026-09-23, Decision 118.)
 - On-disk artifact size including sidecar files.
 - One joined `results.jsonl` plus a rendered markdown leaderboard, retaining every raw observation so summaries stay recomputable.
 
@@ -64,7 +67,7 @@ runtime or their quantization is what's actually costing them speed and memory.
 - **JANG as a point on either axis** — it loads in no runtime that loads the other formats, so it is a runtime+format bundle rather than a quantization you can isolate. It gets its own labelled study after v1.
 - ~~**Any new model download**~~ **Lifted 2026-09-16 for what v1 needs.** The rule existed because free disk was 36 GiB; it is now 238 GiB. 21.9 GB of LFM2.5-8B-A1B was fetched for the MoE format axis. A download still needs a stated phase purpose and a committed fetch script — see `AGENTS.md`.
 - **35B model families** — deferred until models move to `/Volumes/Storage`.
-- **vMLX/MLX Studio, LM Studio, llama.cpp** as runtimes — v2.
+- **~~vMLX/MLX Studio~~, LM Studio, llama.cpp** as runtimes — v2. *(vMLX was added in v2; LM Studio and llama.cpp remain out.)*
 - **A governance layer** — no plan hashing, no sealed evidence bundles, no action grants, no operator policy, no workspace scaffolding. A directory name plus `results.jsonl` is the right amount of provenance for a single-user Mac tool.
 - **A second cell-selection mechanism.** `--cells a,b,c` is the only one. Ever.
 
@@ -131,8 +134,8 @@ Testing that claim fairly is the sharpest single reason this project should exis
 | Decode tok/s reported as a real number | 100% of passing cells | — | Not started |
 | Cells passing the coherence gate before any number is reported | 100% | — | Phase 2.1 |
 | Same-cell rerun variance | within 5% | — | Not started |
-| Ports released after a run (1337/8080/8081/8100) | 100% | — | Not started |
-| Total source size | under ~1,000 lines | 0 | On track |
+| Ports released after a run (1337/8080/8081/8100/8000) | 100% | — | Not started |
+| Total source size | ~~under ~1,000 lines~~ retired 2026-09-23 (Decision 118) | ~8,500 lines | — |
 | Published leaderboard rows | 4 (Study A) | 0 | Not started |
 
 ## Tech Stack / Tools
@@ -141,7 +144,7 @@ Testing that claim fairly is the sharpest single reason this project should exis
 |-------|------------|-------|
 | Language | Python 3.11+ | Matches every runtime's own ecosystem. |
 | HTTP/SSE | `http.client` (stdlib) | Ported from LMRE. Zero dependencies, and it already handles chunked encoding and OptiQ's slow keepalives. |
-| Memory sampling | `footprint`, `vmmap`, `powermetrics` | All at `/usr/bin/`. `powermetrics` needs sudo and degrades gracefully without it. |
+| Memory sampling | `footprint` | At `/usr/bin/`. `powermetrics` was removed 2026-09-23 (Decision 118). |
 | Load generation (later) | GuideLLM | For the concurrency sweeps. Purpose-built; percentile machinery is tedious to get right. |
 | Accuracy (v2) | lm-evaluation-harness | `local-chat-completions` against the same endpoints. |
 | Process | PAUL 1.4.0 | `PLAN → APPLY → UNIFY`. |
@@ -156,4 +159,4 @@ Testing that claim fairly is the sharpest single reason this project should exis
 
 ---
 *PROJECT.md — Updated when requirements or context change*
-*Last updated: 2026-09-15*
+*Last updated: 2026-09-25*

@@ -23,9 +23,9 @@ Choosing the right local LLM serving configuration on Apple Silicon usually invo
 
 | Your Hardware & Workload | What OhYesMLX Measures & Reveals | Practical Decision You Can Make |
 |---|---|---|
-| **Tight Unified Memory (16 GB / 24 GB / 32 GB)** | True kernel `phys_footprint`, on-disk sidecars, INT4/FP8 KV cache compression, and NVMe expert streaming floors. | Know with certainty whether a 35B MoE or 8B model will fit in unified memory without OS memory paging or swap thrashing. |
+| **Tight Unified Memory (16 GB / 24 GB / 32 GB)** | True kernel `phys_footprint`, on-disk sidecars, affine 4-bit/8-bit KV cache compression, and NVMe expert streaming floors. | Know with certainty whether a 35B MoE or 8B model will fit in unified memory without OS memory paging or swap thrashing. |
 | **Interactive Chat & Coding (Snappy UX)** | Time-to-First-Token (TTFT), cold vs warm KV cache hit speedups, and multi-turn context latency growth. | Identify runtimes that deliver sub-20ms inter-token latency and preserve prompt cache across conversation turns without re-prefill penalties. |
-| **Long-Document & RAG Ingestion** | Prompt prefill throughput (tok/s), chunked prefill stability up to 32k/64k, and GPU watchdog resilience. | Avoid runtimes that deadlock or hit macOS Metal watchdog timeouts during heavy prefill batches. |
+| **Long-Document & RAG Ingestion** | Prompt prefill throughput (tok/s), chunked prefill stability up to 32k, and GPU watchdog resilience. | Avoid runtimes that deadlock or hit macOS Metal watchdog timeouts during heavy prefill batches. |
 | **Quality vs Storage Optimization** | Decode speed, memory footprint and on-disk size per format; the published accuracy studies add MMLU, IFEval and GSM8K. | Determine empirically whether a 2-bit or proprietary quant saves enough disk/RAM to justify its quality trade-off, or if uniform 4-bit strictly dominates. |
 
 Instead of spending weeks guessing or writing throwaway test scripts, you can run a single-variable study in an afternoon and get reproducible data to select the best setup for your exact needs.
@@ -167,7 +167,10 @@ this harness can drive and therefore the whole of what it can claim to have meas
 - **Incomplete / omitted parameter weights:** Weights missing architecture-mandated tensor blocks will fail loadability (e.g. dense OptiQ weights missing the 297 vision parameter blocks required by multimodal runtimes like vMLX).
 - **Speculative draft decoding on hybrid linear-attention:** Stock `mlx_lm.server --draft-model` refuses models using non-trimmable recurrent KV caches (e.g. hybrid linear-attention `ArraysCache`).
 - **Non-macOS systems:** OhYesMLX requires macOS Apple Silicon unified memory and uses `/usr/bin/footprint -p <pid>` for true hardware memory residency. Linux and Windows are not supported.
-- **Mid-run network downloads:** The harness explicitly prohibits downloading weights while a measurement is active. Network and NVMe disk contention silently corrupts cold load timings (`cold_load_s`) and TTFT latency.
+- **Mid-run network downloads:** Weights are never downloaded while a measurement is
+  active. Network and NVMe disk contention silently corrupts cold load timings
+  (`cold_load_s`) and TTFT latency, and the harness cannot detect the contention, so the
+  rule is a discipline rather than a check.
 
 ## Horizon Roadmap (v3.1 / v4 Candidates)
 
@@ -180,7 +183,7 @@ We plan to expand the harness's scope in upcoming releases:
 
 - **v1 — Small-Model Format Axis & Sweeps (v0.1.0):** Dense (`Qwen3.5-4B`) and MoE (`LFM2.5-8B-A1B`) format benchmarks across 4 runtimes, concurrency and prompt-length sweeps, and KV cache reuse.
 - **v2 — The JANG Study & Task Accuracy Scoring (v0.2.0):** Single-variable evaluation of JANG proprietary quantizations, cross-runtime performance synthesis, and automated MMLU accuracy scoring via `lm-evaluation-harness`.
-- **v3 — Large-Model Scaling, Context Dynamics & Public Release (v0.3.0):** 35B MoE scaling (`Qwen3.6-35B-A3B`), NVMe expert streaming under high memory pressure, multi-turn conversational dynamics, quantized KV caches (INT4/FP8), native Multi-Token Prediction (MTP) vs speculative draft decoding and zero-dependency distribution.
+- **v3 — Large-Model Scaling, Context Dynamics & Public Release (v0.3.0):** 35B MoE scaling (`Qwen3.6-35B-A3B`), NVMe expert streaming under high memory pressure, multi-turn conversational dynamics, quantized KV caches (MLX's affine codec at 4 and 8 bits — the codecs are named `affine4`/`affine8`, and no runtime here has a float8 codec), native Multi-Token Prediction (MTP) vs speculative draft decoding and zero-dependency distribution.
 
 Key findings are published in `docs/research/`:
 - [Dense format axis](docs/research/2026-09-16-phase5-joined-grid.md)

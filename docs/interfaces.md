@@ -334,7 +334,7 @@ full window; see "the lost visit and the short measured window".
 
 ```python
 def summarize(results: list[CellResult], *, measured: int | None = None) -> list[dict]: ...
-# one row per cell: ttft_p50_s/p90/p99, e2e_p50_s/p90/p99, reasoning_timed_note,
+# one row per (cell, workload): ttft_p50_s/p90/p99, e2e_p50_s/p90/p99, reasoning_timed_note,
 # itl_s, decode_tps, prefill_tps, cold_load_s, peak_mb, disk_bytes, runtime_version,
 # status — plus the short-window
 # fields in "the lost visit and the short measured window" below. E2E percentiles use
@@ -507,9 +507,11 @@ downgrade of the same data.
 Joining five separately-invoked runs is the one place this project can vary two things
 without noticing, so the join refuses rather than renders when:
 
-1. **The pins disagree.** Every run header field — `temperature`, `seed`, `warmup`,
-   `measured`, `cooldown_s` — and every workload's `messages` and `max_tokens` must be
-   identical across all runs. Columns that answered different prompts are not one grid.
+1. **The pins disagree.** Every run header field — `report.PIN_FIELDS`:
+   `temperature`, `seed`, `warmup`, `measured`, `cooldown_s`, `concurrency`,
+   `prompt_tokens`, `cache_state`, `kv_quant`, `mtp_depth`, `stream_experts` — and every
+   workload's `messages` and `max_tokens` must be identical across all runs. Columns that
+   answered different prompts are not one grid.
 2. **A cell appears twice.** The same `(label, runtime, workload_id)` from two run
    directories is ambiguous; name both directories and refuse. There is no "latest wins"
    rule, because which run is newer is not which run is right.
@@ -523,11 +525,16 @@ without noticing, so the join refuses rather than renders when:
    `runtime_version` beginning with `unknown` in `render_grid` or `render_sweep`, naming the
    run directory, cell and value; a join cannot establish that the runtime stayed constant
    when its version is not stated. Single-run leaderboards render these rows unchanged.
+6. **The harness source differs.** `_check_harness` compares each header's
+   `harness.source_sha256` and refuses a join whose columns were measured by different
+   harness source, naming both directories; a header predating the block carries none and is
+   skipped. Two revisions of the loop are not one grid.
 
-Guard 4 compares `runtime_version` as an exact string. mlx-optiq reports
-`"mlx-optiq, version 0.5.6"` rather than a bare `0.5.6` — uniform within its column today,
-so the guard does not misfire, but a runtime that rephrases its `--version` output would
-read as a version change. Normalise here if it ever does.
+Guard 4 compares `runtime_version` as an exact string, after each runtime's
+`parse_version`. mlx-optiq's own parser strips the prose off `"mlx-optiq, version 0.5.6"`
+so the bare `0.5.6` is what gets recorded (`runtimes.Optiq.parse_version`, commit
+`1f61ee2`), which is what keeps the guard comparing versions rather than `--version`
+phrasings. Anything not shaped `..., version X` is passed through whole.
 
 Every guard names the offending run directory or both disagreeing directories in its message.
 A grid or sweep that refuses must say which
@@ -733,7 +740,10 @@ same measurement as one request, and nothing about the existing grid changes.
 
 Prompt lengths are **token** counts verified against the tokenizer that will serve them, with
 the achieved count recorded beside the target. A prompt that exceeds a runtime's context is
-`—` with the refusal recorded, never a `FAIL` and never silently truncated.
+never silently truncated — OptiQ's cap is pinned `off` so nothing rotates it — but no
+`REFUSED` status is built for it: the runtimes' own HTTP 400/413 reports as the `FAIL` it is
+(see "Refusals are not built yet, on purpose" below), and a cell a *pin* refuses renders
+`N/A` with its reason.
 
 ---
 
@@ -929,7 +939,7 @@ runtime's own start command:
 | runtime | `off` | `on` | where it comes from |
 |---|---|---|---|
 | mlx-lm 0.31.3 | `--prompt-cache-size 0` | `--prompt-cache-size 10` | `mlx_lm/server.py:1872` — "Maximum number of distinct KV caches to hold in the prompt cache", default 10. At 0 the cache holds nothing: every insert evicts the entry it just added (`models/cache.py:1696-1737`), so the `fetch_nearest_cache` at `server.py:753` always answers `None` and every request prefills its prompt whole. |
-| mlx-optiq 0.5.6 | the same two flags | the same two flags | `optiq serve` is a fork of the same server: unknown options are collected (`optiq/cli.py:2332` `ignore_unknown_options`, `:2571` `ctx.args`) and handed to the bundled `mlx_lm.server`'s own argparse (`:3030`), and the bundle is the same mlx-lm 0.31.3. |
+| mlx-optiq 0.5.13 | the same two flags | the same two flags | `optiq serve` is a fork of the same server: unknown options are collected (`optiq/cli.py:2500` `ignore_unknown_options`, `:2768` `ctx.args`) and handed to the bundled `mlx_lm.server`'s own argparse (`:3310`), and the bundle is the same mlx-lm 0.31.3. |
 | oMLX 0.6.4 | `--no-cache` (already in the command) | omit `--no-cache` | `omlx/cli.py:1139-1143` — "Disable oMLX paged SSD cache". Absent it, `CacheSettings.enabled` is True (`omlx/settings.py:331`) and the SSD directory resolves to `<base-path>/cache` (`settings.py:387-399`) — for a run, the per-run scratch the runtime is handed and that `stop()` removes. |
 | vMLX 1.6.59 | `--disable-prefix-cache` | `--enable-prefix-cache` | `vmlx_engine/cli.py:3658-3670` — `--enable-prefix-cache` defaults True, `--disable-prefix-cache` is the explicit off. `--disable-block-disk-cache` is in **both** states: left unset, the engine turns the SSD L2 on by itself whenever continuous batching and prefix caching are active (`cli.py:661-701`) and persists it under `~/.cache/vmlx-engine/block-cache/<model_hash>`, so the two states would differ in two things and an `on` cell could serve another run's prefix. |
 | Osaurus 0.25.x | refused unless the host is already off | refused unless the host is already on | No flag exists in either direction. The state is `cache.prefix.enabled` in `~/.osaurus/config/server-runtime.json`, which the harness does **not** edit — the sweep script does, with a byte-exact backup and restore. |
@@ -1110,20 +1120,28 @@ config must declare at least one MTP layer (`:538-546`), and the safetensors ind
 its own failure in vMLX's source: a config that expects MTP over an index with no tensors reads
 `metadata_inconsistent` (`:983-986`), and tensors under a config that disables MTP read the same
 (`:987-988`). For OptiQ: the config must declare at least one MTP layer
-(`optiq/runtime/mtp/mtp_patch.py:69-76`, whose zero sends the injector home at `:382-385`), and
-the head file must be where its resolver looks (`mtp/artifacts.py:104-115` — the path the config
-names under `mlx_lm_extra_tensors.mtp_file` first, then the four published spellings). The
-accepted cases are on this host — `models--JANGQ-AI--Qwen3.5-4B-JANG_4S` declares one layer in
+(`optiq/runtime/mtp/mtp_patch.py:69-76`, whose zero sends the injector home at `:382-385`),
+the head file must be where its resolver looks (`mtp/artifacts.py:104-115` — the path the
+config names under `mlx_lm_extra_tensors.mtp_file` first, then the four published
+spellings), and the head's tensors must fit the block that artifact's own config says OptiQ
+will build (`runtimes._optiq_head_packing_refusal`): a head the config declares
+prequantized is refused when a weight has no `.scales`/`.biases` pair, when the pair's two
+axes disagree about the input dimension, or when its routed experts are in the fused HF
+layout `_split_fused_experts` rewrites into weights without their scales. The accepted cases
+are on this host — `models--JANGQ-AI--Qwen3.5-4B-JANG_4S` declares one layer in
 `text_config.mtp_num_hidden_layers`, indexes 31 `mtp.layers.0.*` tensors, stamps family
 `qwen3_5`, and its recorded start log carries `Qwen3.5/3.6 MTP model adapter applied`
 (`results/logs/vmlx-20260924T032906-11424.log:38`); both OptiQ quants name
 `optiq/mtp.safetensors` in `mlx_lm_extra_tensors.mtp_file` and declare
-`mtp_num_hidden_layers: 1`.
+`mtp_num_hidden_layers: 1` — two of the three conditions, not all three. The 4B passes the
+third and the 35B does not: its head is prequantized and its routed experts are fused, so
+`Qwen3.6-35B-A3B-OptiQ-4bit` is `N/A` before a runtime starts
+(`docs/research/2026-09-25-mtp-depth-sweep.md` §4, open question 6).
 
 | runtime | `off` | `1` / `2` / `3` |
 |---|---|---|
 | vMLX 1.6.59 | accepted, and it is the command of today: `--disable-native-mtp` sets `VMLINUX_NATIVE_MTP=0` and clears any depth the environment left behind (`cli.py:1662-1667`) | **driven**, then decided from the artifact: `--native-mtp-depth N --native-mtp-depth-policy fixed` on a bundle whose MTP heads vMLX will wire, and `N/A` with the check that failed on one whose heads it will not |
-| OptiQ 0.5.13 | accepted, no flag change: `--mtp` is `is_flag=True, default=False` (`optiq/cli.py:2554-2558`), so a command without the pair is a command that never drafts | **driven**, then decided twice: `--mtp --mtp-depth N` on an artifact whose head `optiq_mtp_refusal` accepts, and `FAIL` quoting the log if the engine's own ready line at the pinned depth does not appear (below) |
+| OptiQ 0.5.13 | accepted, no flag change: `--mtp` is `is_flag=True, default=False` (`optiq/cli.py:2554-2558`), so a command without the pair is a command that never drafts | **driven**, then decided twice: `--mtp --mtp-depth N` on an artifact whose head passes `optiq_mtp_refusal`'s three checks — declared layer, resolvable file, tensors that fit the block its config builds — and `FAIL` quoting the log if the engine's own ready line at the pinned depth does not appear (below) |
 | mlx-lm 0.31.3 | accepted, no flag — the only state the server has: its 23 options include none for MTP, the string `mtp` does not occur in `server.py`, and its model code drops the head's weights at load (`models/qwen3_5.py:313`) | **refused**: no MTP exists in the server for a depth to apply to |
 | oMLX 0.6.4 | accepted, no flag, and structural: the per-run `--base-path` scratch holds no `model_settings.json`, so `mtp_enabled` is `False` (`model_settings.py:303`) | **refused**: `mtp_num_draft_tokens` is a per-model settings field with no flag, and it is adaptive even when set (`model_settings.py:304-308`) |
 | Osaurus 0.25.12 | accepted only when the host's `mtp.mode` is `force_off` — read through the tracked key the drift gate already records | **refused**: the depth is the host setting `mtp.explicitDepth`, which "must be 1, 2, or 3" (docs/runtimes/osaurus.md:344), with no start-command surface |
@@ -1143,8 +1161,14 @@ The required line carries the pinned depth — `serve.py:465` interpolates it �
 asked for 3 and got an engine built at 2 is a `FAIL` rather than a number published under a
 depth the decode did not hold. The fallback lines are the engine's own warning that it attached
 without a head (`engine.py:297-304`); the `HTTP 404` that follows is answered to the client and
-never logged, so the warning is what the log holds. The evidence window is the log head
-(`LOG_HEAD_BYTES`), the same one the streaming banner is read from.
+never logged, so the warning is what the log holds. A window holding neither the required line
+nor a fallback marker is read once more for a traceback, and the message then quotes that
+traceback's exception line and its innermost frame rather than claiming the log says nothing —
+the 4B's depth cells carried no ready line and no attach warning and held a `TypeError` at
+`engine.py:760`, which is the case `docs/research/2026-09-25-mtp-depth-sweep.md` §4 /
+open question 5 asked for; a window with no traceback either says the log "prints no line this
+check reads" (`runtimes._banner_evidence`, `_traceback_cause`). The evidence window is the log
+head (`LOG_HEAD_BYTES`), the same one the streaming banner is read from.
 
 vMLX answers it too (2026-09-25). A vMLX depth cell carries `env VMLX_NATIVE_MTP_AR_SAFETY=0
 VMLX_NATIVE_MTP_AR_REENTRY=0` in front of `vmlx serve` (`runtimes.VMLX_MTP_FIXED_ENV`), because
@@ -1194,7 +1218,7 @@ the port (`server.py:6176-6177`, `:6199`).
 | OptiQ 0.5.13 | accepted, no flag change: `--no-stream-experts` is a complete opt-out — `mode == "off"` returns before anything is installed (`optiq/serve.py:1629-1630`) | **driven**, then read from the log: `--stream-experts` plus both banner lines, and `FAIL` quoting the log otherwise |
 | vMLX 1.6.59 | accepted, no flag — `--flash-moe` is `default=False` (`vmlx_engine/cli.py:3966`; `FlashMoEConfig.enabled: bool = False`, `flash_moe_config.py:29`) | **driven**, then read from the log: `--flash-moe` plus `Flash MoE enabled:` |
 | mlx-lm 0.31.3 | accepted, no flag — there is no expert-loading path in the server at all (`expert` does not occur in `server.py`) | **refused**: the streaming loader is OptiQ's, patched onto this server from the outside |
-| oMLX 0.6.4 | accepted, no flag — no option in `omlx/cli.py` names experts and no module in the package mentions expert streaming | **refused**: the mechanism that resembles it, burst decode (`server.burst_decode_mode` → `OMLX_DECODE_BURST_*`, `settings.py:148-162`), sets how many decode steps are coalesced before a delta is emitted — docs/runtimes/omlx.md:798-841 — not where expert weights live |
+| oMLX 0.6.4 | accepted, no flag — no option in `omlx/cli.py` names experts and no module in the package mentions expert streaming | **refused**: the mechanism that resembles it, burst decode (`server.burst_decode_mode` → `OMLX_DECODE_BURST_*`, `settings.py:148-162`), sets how many decode steps are coalesced before a delta is emitted — docs/runtimes/omlx.md:510-572 — not where expert weights live |
 | Osaurus 0.25.12 | accepted only when the host's `concurrency.smeltMode` is `disabled` — not a tracked key, so read by `runtimes.osaurus_smelt_mode` | **refused**: `flashMoE` and `ssdStreaming` are values of that host setting (docs/runtimes/osaurus.md:298), with no start-command flag in either direction |
 
 **`render_sweep` gains both.** `SWEEP_VALUES` orders `mtp_depth` `off` before `1` before `2`

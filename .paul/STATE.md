@@ -49,7 +49,6 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Two single-variable studies replace LMRE's native diagonal | Pre-phase | Every run declares which axis it varies; nothing varies both. |
 | PAUL is the only process spine | Pre-phase | No CONTEXT.md, no ADRs, no handoff docs, no wayfinder. This file is the only state store. |
 | Speed + memory only in v1 | Pre-phase | Accuracy work is refused until v1 ships, however tempting. |
-| ~~Hero model is `gemma-4-12B-it-qat`~~ **Superseded Phase 1** | Pre-phase | Zero downloads; 36 GiB free disk forbade more. Replaced by the Qwen3.5-4B + LFM2.5-8B-A1B row below. |
 | `--cells a,b,c` is the only cell selector | Pre-phase | Any second mechanism gets deleted on sight. |
 | Implementation delegated to `cc-agent` (deepseek-v4.1-flash, max effort) | Pre-phase | Opus reviews every diff and every test run personally; worker prose is not evidence. |
 | Hero models are `Qwen3.5-4B` + `LFM2.5-8B-A1B` | Phase 1 | `gemma4_unified` is not shipped by mlx-lm, so that family can carry no stock-mlx control. 33.7 GB for both, all four formats each. |
@@ -129,37 +128,20 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 | Issue | Origin | Effort | Revisit |
 |-------|--------|--------|---------|
-| LMRE not yet archived to ~/Dev/archive/ | Pre-phase | S | After Phase 4, once nothing more is needed from it |
 | Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: 238 GiB free, both hero models on disk. Worth doing only if disk tightens again |
-| ~~LMRE's rubric/ruling design not ported~~ **PULLED FORWARD 2026-09-15** | Pre-phase | — | Floors + one ordering metric now pinned in docs/interfaces.md. The accuracy axis stays in v2; only the honest half moved. |
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
-| ~~Tokenizer-unavailable should make a cell N/A~~ **ALREADY FIXED, entry was stale** | Phase 4 | — | `_visit` checks the counter before starting the runtime and writes N/A with the reason; `test_an_unavailable_tokenizer_is_na_rather_than_a_silent_fallback` covers it. Verified 2026-09-16. |
 | Eight pre-`first_request_workload_id` run dirs cannot be loaded | Phase 5 | S | `load_run` refuses them by line number rather than defaulting the field. A schema migration, only if those columns are ever wanted |
-| ~~mlx-optiq reports `"mlx-optiq, version 0.5.6"`~~ **FIXED on branch `defects`** | Phase 3 | — | `OptiqRuntime.parse_version` records the version and passes an unrecognised shape through whole. Merges to main once the in-flight grid lands. |
-| `footprint` vs resident on Osaurus is inferred, not probed | Phase 5 | S | The file-backed-pages explanation needs a probe before any memory ranking is published |
-| ~~`mlx-lm` 0.31.3 lives only in `/tmp/mlxspike`~~ **RESOLVED 2026-09-15** | Phase 4 | — | Reinstalled at `~/.local/share/ohyesmlx/mlx-lm-0.31.3` with the spike's exact pins (mlx 0.32.2, transformers 5.17.0, tokenizers 0.23.2, numpy 2.5.3). |
-| Runner stdout logs come out 0 bytes | Phase 6 | S | **DIAGNOSED 2026-09-17, cause is launch-side, not in-repo.** Nothing in the repo ever names `runner.log`; both runners send progress to their own stdout and only per-cell logs are redirected in-script. The empty files are caller-side redirect targets created at launch (`cmd & > file` shape — redirect unbound from the command) that received zero bytes over the whole run; per-cell logs prove redirection itself works. Correct launch: `sh scripts/run_sweep_prompt.sh > results/sweep-prompt/runner.log 2>&1 &` (redirect before `&`). In-repo hardening proposed but NOT applied (behavior change — progress would reach only the file): `exec > "$OUT/runner.log" 2>&1` after `mkdir -p "$OUT"`. Jason's call. |
-| Drift markers in a TTFT-ranked table are decode drift | Phase 6 | S | **FIXED 2026-09-17 in `render_sweep` and `render_grid`.** Entries carry the marker solely for decode-derived ranks (`DECODE_DERIVED_RANKS = {decode_tps}`); all other ranks print bare. Grids byte-identical, both TTFT sweeps and grids marker-free, decode renders keep markers, `CONCURRENCY_DRIFT_SENTENCE` scoped to decode ranks, 495 tests green. |
-| ~~Grid TTFT-ranked entries carry decode drift (same latent mislabel, `render_grid`)~~ **FIXED 2026-09-17** | Phase 6 | — | `_grid_table` passes `drift_marker=rank in DECODE_DERIVED_RANKS`. Default decode-ranked grid byte-identical; non-decode grids marker-free. |
-| ~~`CONCURRENCY_DRIFT_SENTENCE` now describes markers absent from non-decode tables~~ **FIXED 2026-09-17** | Phase 6 | — | Scoped to `rank in DECODE_DERIVED_RANKS` in `render_sweep`. |
-| TTFT-ranked concurrent table carries no queueing caveat | Phase 6 | S | The design says concurrent TTFT is a queueing measurement; the render doesn't. Minor. |
-| 35B levels moved +8–27% vs the published grid on unchanged runtime versions (orderings held) | Hardening validation 2026-09-24 | M | A third quiet-machine 35B replicate (≈2.3 h) decides which night was the outlier |
-| Runtime-axis TTFT mixes channels: OptiQ is content-timed, the other four reasoning-timed on Qwen | Hardening validation 2026-09-24 | S | Jason's call: refuse a TTFT ordering across mixed channels (like A7) or keep the label only |
-| `docs/runtimes/optiq.md` is scoped to 0.5.6; installed is 0.5.13 | Phase 3 docs worker | S | Re-read against the new build before the next OptiQ claim |
-| Third 35B replicate not run | Phase 4 2026-09-25 | M | Still decides the +8–27% level shift; `OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh` on a quiet night (~2.3 h) |
-| Sweep renders a refused (N/A) cell as `—` ("no run measured") | Phase 4 2026-09-25 | S | KV-quant sweep: every non-OptiQ codec cell. The N/A reason is in each run's leaderboard; the sweep should say N/A |
-| Phase 4 runners print their joins instead of running them; older runners carry their own Osaurus pin copies | Phase 4 2026-09-25 | S | Point `run_grid*.sh`/`run_sweep_cache*.sh` at `scripts/osaurus-pin.sh` when next touched |
-| mlx-lm's prompt cache is on but never hits in the multi-turn run | Phase 4 2026-09-25 | S | Open question in the multi-turn paper; read `mlx_lm.server`'s cache key before claiming anything |
-| OptiQ MTP: 4B dies in `engine.py:760` (`_logits_to_token(None)`), 35B head shape mismatch | Phase 4 2026-09-25 | S | The 4B FAIL note says "nothing about why" because the traceback matches no marker; widen the markers or reword. `optiq_mtp_refusal` could check sidecar shapes. MTP paper §4, Open questions 5–6 |
-| Single-run `render_markdown` leaderboard has neither the A7 nor the Decision 122 guard | Phase 4 2026-09-24 | S | Small order |
+| Third 35B replicate not run | Hardening validation 2026-09-24 | M | Decides whether the 2026-09-24 +8–27% 35B level shift (mlx-lm/oMLX/vMLX, orderings held) is real; `OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh` on a quiet night (~2.3 h) |
+| Osaurus pin copies remain in run_grid.sh / run_grid_moe.sh / run_sweep_cache*.sh / run_accuracy_* / run_jang_* / run_sweep_prompt.sh | v3.1 2026-09-25 | S | Their semantics differ (idle-900 only, or the cache is the varied pin); listed in `scripts/osaurus-pin.sh`. Consolidate only where identical |
+| Harness does not record `usage.cached_tokens` | v3.1 2026-09-25 | S | mlx-lm reports the served prefix per request (`server.py:1344-1346`); only its log holds it today |
 | Thinking-Off MMLU Arm (Candidate 3) | Post-v2 | M | **Preserved for overnight execution.** Ablation study: isolate reasoning contribution on MMLU and resolve MoE HTTP 502 truncation trap. |
 
 ### Blockers/Concerns
 
 | Blocker | Impact | Resolution Path |
 |---------|--------|-----------------|
-| ~~Stock mlx-lm executes a 256-expert oQ4 MoE incorrectly~~ **RESOLVED Phase 4** | Was: invalidates any speed number taken without a coherence check | Runtime-specific, not format-specific. oMLX serves the same bytes coherently. Gate catches it. `docs/research/2026-09-15-phase4-256-expert.md` |
-| ~~36 GiB free~~ **RESOLVED 2026-09-15** | Was: caps model choice | 312 GiB free after Jason cleared JANG models and deleted the Time Machine local snapshots that were pinning the blocks. Phase 3 is unconstrained. |
+| **AGENTS.md says `top_p`/`repetition_penalty` and the chat template are pinned; only OptiQ's sampler is** (found 2026-09-25) | The harness sends temperature, seed, max_tokens and the messages only; the other four runtimes use their own sampler defaults and chat templates (README says so). At temperature 0 `top_p` cannot change a greedy token, but a non-1.0 default `repetition_penalty` can. | Jason's call: pin `repetition_penalty` per request (and read each runtime's default), or amend the AGENTS rule to what the harness does. |
+| **The fixed seed disables batching on mlx-lm and OptiQ** (found 2026-09-25) | mlx-lm: `_is_batchable` is false whenever a request carries a seed (`server.py:685-686`), so every harness request takes the sequential path — no continuous batching, no prefix-cache snapshots (`docs/runtimes/mlx-lm.md`). OptiQ: seeded requests bypass BatchGenerator (Decision 124). So finding "none of the five runtimes batch" (`docs/research/2026-09-16-concurrency-omlx.md`) and the mlx-lm/OptiQ cache readings are at least partly harness-induced. | Jason's call: at temperature 0 decoding is greedy and the seed does not change output, so a seedless arm (or dropping the seed at temp 0) would measure the runtimes' real batching path. Until then those papers need a caveat. |
 
 ## Boundaries (Active)
 

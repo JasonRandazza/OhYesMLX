@@ -729,3 +729,18 @@ third, and onto nothing for the last two.
 | **oMLX 0.6.4** | **yes, structurally**: the per-run `--base-path` scratch holds no `model_settings.json`, so `turboquant_kv_enabled` is `False` (`model_settings.py:235`, `runtimes.py:464-483`, `1014-1027`) | **N/A** — no float8 KV codec found in the model-settings surface or `turboquant_kv.py` | **not exact**: `turboquant_kv_enabled=true` + `turboquant_kv_bits=4` in the scratch's `model_settings.json`, or `PUT /api/models/{id}/settings` (`admin/routes.py:2219`) — TurboQuant, K=4/V=4, last layer skipped (`scheduler.py:3325-3345`) |
 | **Osaurus 0.25.12** | **only if the host already is**: `cache.liveKVCodec = engine_selected` (`G:100592538`), verified by `check_host_state` against the committed baseline (`runtimes.py:951-969`, `osaurus_settings.py:40-41`). No flag exists in either direction | **N/A** — the affine route (`kvMode: .affine` / legacy `kvBits`) is *inert under batched decode* and falls back to float KV (`G:111612368`, `:111612192`), and no float8 codec appears in the string table | **N/A as stated** — same fallback; the drivable TurboQuant state needs `cache.liveKVCodec=turboquant` plus both bit keys, i.e. host settings, and is a codebook codec rather than int4 |
 | **vMLX 1.6.59** | **yes, explicitly**: `--kv-cache-quantization none` (`cli.py:3864-3882`), the production default | `vmlx serve … --kv-cache-quantization q8 --kv-cache-group-size 64` — **but only with the prefix cache enabled** (`scheduler.py:1393-1404`, `mllm_scheduler.py:1165-1177`); the harness's default command passes `--disable-prefix-cache` (`runtimes.py:1161-1163`, `cli.py:2639`), which makes it a logged no-op | `--kv-cache-quantization q4` — same gate, same condition |
+
+---
+
+## Update 2026-09-25: the pin this document mapped has landed
+
+§9 was written as a mapping "so the follow-up order starts from facts", and it is now the code
+rather than a plan: `runtimes.KV_QUANTS` holds the three codec names (with the `fp8` rationale at
+its definition), each runtime's `kv_quant_refusal` carries the reason §3–§7 gave it, and
+`measure._visit` asks that refusal before anything is started, so a cell a runtime cannot be
+driven into is `N/A` with its reason instead of a number published under a pin it does not hold.
+`report.SWEEP_PINS` and `report.SWEEP_VALUES` carry `kv_quant` with `off` before the codecs, and
+`f998dcd` (2026-09-25) made the joined tables print that `N/A` state as `N/A` rather than as the
+`—` a combination nobody ran gets (`report.ENTRY_LEGEND`). The live result of the mapping — one
+runtime with a readable codec column, and the other four refusing it with the reasons recorded
+here — is `docs/research/2026-09-25-kv-quant-sweep.md`.

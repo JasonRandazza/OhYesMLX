@@ -191,7 +191,7 @@ KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
 # rather than a fixed depth, and no option in `omlx/cli.py` names either. Osaurus's depth is host
 # config, `mtp.mode` and `mtp.explicitDepth` ("must be 1, 2, or 3", docs/runtimes/osaurus.md:344)
 # in `~/.osaurus/config/server-runtime.json`, with no start-command surface in either direction
-# and a force-on that is refused without a `vmlx_mtp_tuning.json` sidecar (docs/runtimes/osaurus.md:900).
+# and a force-on that is refused without a `vmlx_mtp_tuning.json` sidecar (docs/runtimes/osaurus.md:862-876).
 # mlx-lm 0.31.3 drops the head at load -- `weights = {k: v for k, v in weights.items() if "mtp."
 # not in k}` (`mlx_lm/models/qwen3_5.py:313` in ~/.local/share/ohyesmlx/mlx-lm-0.31.3) -- so there
 # is nothing left for a depth to apply to. OptiQ is that same server, and it is the runtime that
@@ -1838,8 +1838,8 @@ def prompt_cache_flags(cache_state: str | None) -> tuple[str, ...]:
     later version's default became.
 
     OptiQ runs this same server -- ``optiq serve`` passes flags it does not know through to
-    ``mlx_lm.server``'s own argparse (``optiq/cli.py:2571`` collecting ``ctx.args``, ``:3030``
-    handing them to ``mlx_lm.server``, with ``ignore_unknown_options`` set at ``:2332``) and
+    ``mlx_lm.server``'s own argparse (``optiq/cli.py:2768`` collecting ``ctx.args``, ``:3310``
+    handing them to ``mlx_lm.server``, with ``ignore_unknown_options`` set at ``:2500``) and
     bundles the same mlx-lm 0.31.3 -- so both runtimes read one definition of what the flag
     means instead of two that would drift.
     """
@@ -2071,8 +2071,8 @@ class Osaurus(Runtime):
         return (
             "mtp_depth='off' needs Osaurus's MTP forced off, and the host has mtp.mode "
             f"{live!r} in ~/.osaurus/config/server-runtime.json. Osaurus exposes no "
-            "start-command flag for MTP, and its mtp.mode 'auto' runs a draft head on any "
-            "bundle that carries one (docs/runtimes/osaurus.md:307, :900-901) -- so a restart "
+            "start-command flag for MTP, and its mtp.mode 'auto' launches a draft head on any "
+            "bundle whose MTP tuning it verifies (docs/runtimes/osaurus.md:307, :862-876) -- so a restart "
             "would not make this cell MTP-free and the harness does not edit the host's "
             "settings. This cell is N/A in this state rather than measured in another one."
         )
@@ -2270,7 +2270,7 @@ class Omlx(Runtime):
             "server.burst_decode_mode -> OMLX_DECODE_BURST_* (settings.py:148-162, exported by "
             "cli.py:179-182, read at engine construction engine_core.py:176-188) -- and that "
             "sets how many decode steps are coalesced before a delta is emitted, not where the "
-            "expert weights live (docs/runtimes/omlx.md:798-841). It is a different mechanism, "
+            "expert weights live (docs/runtimes/omlx.md:510-572). It is a different mechanism, "
             "so this cell is N/A in this state rather than measured under a pin it does not "
             "hold."
         )

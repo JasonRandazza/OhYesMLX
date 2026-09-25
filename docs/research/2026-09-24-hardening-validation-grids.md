@@ -144,3 +144,25 @@ removed both on 2026-09-23. Written up in `docs/runtimes/osaurus.md` §1.2.
 2. Decision: should the runtime axis refuse TTFT orderings across rows with mixed timing channels?
 3. Check that OptiQ's completion-token count and the reasoning-timed runtimes' counts cover the
    same tokens, before reading decode tok/s across that boundary.
+
+---
+
+## Update 2026-09-25: Follow-up 2 decided, and both refusals extended to the leaderboard (`f998dcd`)
+
+**Follow-up 2 was decided as Decision 122** (2026-09-24): a runtime-axis ordering of
+`ttft_p50_s` or `prefill_tps` over rows that were not all timed on one channel prints its values
+with no positions and names no best cell — `report.CHANNEL_DEPENDENT_RANKS`, with
+`_uncomparable_across_runtimes` enforcing it and `_channel_note` saying which rows mixed, landed in
+`report.py` as `e57775d`. That is the runtime axis doing what this paper's §"New finding" said A7
+does for `peak_mb`.
+
+**`f998dcd` (2026-09-25) then gave the single-run leaderboard the same treatment**: a runtime-axis
+table in `render_markdown` over a rank in `CROSS_RUNTIME_UNCOMPARABLE` or a channel-dependent rank
+over mixed rows lists its rows alphabetically with the rank column empty and prints the grid's own
+note, and a first-token-latency table over concurrent rows carries `CONCURRENCY_TTFT_SENTENCE`.
+Before it, a single run's runtime-axis table numbered `peak_mb` 1 and 2 and published the sampler's
+page accounting as a ranking. Nothing in this paper's numbers moves; what changed is the rendering
+of the columns it published.
+
+Follow-up 1 (a third 35B replicate) is still open and is carried in `.paul/STATE.md`, Deferred
+Issues. Follow-up 3 is still open.

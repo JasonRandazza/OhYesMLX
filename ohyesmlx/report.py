@@ -1609,8 +1609,11 @@ def _check_one_value_per_key(
     grid working as intended. The same runtime at 0.25.3 in one directory and 0.25.4 in another
     is the grid's held-constant variable moving — Osaurus measured 1.15x across exactly that
     step — so it is refused rather than joined. Guard 4 compares ``runtime_version`` as an exact
-    string: mlx-optiq reports ``"mlx-optiq, version 0.5.6"`` rather than a bare ``0.5.6``, and a
-    runtime that rephrases its ``--version`` output would read as a version change here.
+    string, over what each runtime's own ``parse_version`` recorded: mlx-optiq's strips the prose
+    off ``"mlx-optiq, version 0.5.6"`` so the bare version is what is compared
+    (``runtimes.Optiq.parse_version``, commit ``1f61ee2``), and a runtime whose ``--version``
+    output is not shaped ``..., version X`` is recorded whole, where a rephrasing would read as a
+    version change.
 
     *key_of* returns the row's ``(key, value)``, *field* is the value's name in the refusal,
     *kind* names the key, and *verb* and *clause* say what the two directories did with it and
