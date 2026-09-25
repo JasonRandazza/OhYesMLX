@@ -896,6 +896,38 @@ def test_vmlx_drops_the_kill_switch_for_a_depth_and_pins_the_fixed_policy_with_i
         assert runtime.mtp_depth_refusal(depth, bundle) is None, "vMLX drives every depth"
 
 
+def test_a_vmlx_depth_command_carries_the_two_variables_that_keep_it_fixed():
+    """`--native-mtp-depth-policy fixed` turns off one controller, and it is the depth economics
+    probe: the CLI writes `VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH=0` for the policy (cli.py:1679-1681),
+    which is what makes the probe's own default False
+    (`_native_mtp_depth_probe_enabled`, mllm_batch_generator.py:6403-6418). The AR-safety valve
+    (`native_mtp_ar_safety.py:113-114`, on by default) and the sticky start rung
+    (`mllm_batch_generator.py:17275-17286`, gated by `_native_mtp_reentry_enabled`) are not policy
+    gates and still move depth -- measured 2026-09-25, only five of the 104 `accept_by_depth` rows
+    of that run's depth-3 log show any `d3` draft at all. Both are `env_flag`-shaped reads for
+    which `0` is off
+    (`native_mtp_ar_safety.py:89-93`, `mllm_batch_generator.py:5913-5925`), so a depth command
+    passes them as an `env K=V ...` prefix -- the recorded command is the provenance that the
+    depth was pinned, rather than an assumption about the ambient environment."""
+    runtime = RUNTIMES["vmlx"]
+
+    for depth in ("1", "2", "3"):
+        command = runtime.start_command(ARTIFACT, HF_ID, mtp_depth=depth)
+        assert command[:5] == (
+            "env",
+            "VMLX_NATIVE_MTP_AR_SAFETY=0",
+            "VMLX_NATIVE_MTP_AR_REENTRY=0",
+            "vmlx",
+            "serve",
+        ), command
+
+    # `off` and the absent pin are byte-identical to today and carry neither variable: the kill
+    # switch is the whole of their command, and the pin is not taken.
+    for absent in ({}, {"mtp_depth": "off"}):
+        assert runtime.start_command(ARTIFACT, HF_ID, **absent) == TODAY["vmlx"]
+        assert not any(part.startswith("VMLX_NATIVE_MTP_AR") for part in TODAY["vmlx"])
+
+
 def test_optiq_adds_the_mtp_pair_for_a_depth_and_moves_nothing_else(tmp_path):
     """`--mtp` is `is_flag=True, default=False` and `--mtp-depth` defaults to `2`
     (optiq/cli.py:2554-2563), so `off` and the absent pin pass neither flag -- a command without
@@ -1346,6 +1378,141 @@ def test_optiq_requires_the_engine_s_own_ready_line_at_the_depth_that_was_pinned
     reason = runtime.mtp_depth_missing("3", fell_back)
     assert "MTP head not attached" in reason, "the fallback line is quoted"
     assert "continuing without MTP" in reason
+
+
+# --- the depth pin's log half on vMLX, which is per request ------------------------------
+#
+# The lines below are verbatim from the two depth runs of 2026-09-25, whose commands carried the
+# policy but not the two variables of `VMLX_MTP_FIXED_ENV`:
+# results/logs/vmlx-20260925T062816-11233.log and -20260925T063452-16321.log. Of their 49 and 45
+# depth-3 requests, 47 and 40 inherited a `start rung D1` and 15 and 15 ended in
+# `finish=fallback_to_ar`, while 0 and 5 `accept_by_depth` rows show a non-zero `d3` denominator
+# -- which is why a depth cell needs both halves of this check.
+
+VMLX_D3_DRAFTED = (
+    "INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[chatcmpl-d4a57027] "
+    "accept_by_depth[d1=37/53,d2=21/53,d3=16/53] "
+    "forwards[seed_main=1,verify_main=54,replay_main=0,mtp=162]\n"
+)
+VMLX_D2_ONLY = (
+    "INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[chatcmpl-4a310528] "
+    "accept_by_depth[d1=52/71,d2=4/12,d3=0/0] "
+    "forwards[seed_main=1,verify_main=72,replay_main=0,mtp=84]\n"
+)
+VMLX_FELL_BACK = (
+    "INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[chatcmpl-1f53276e] "
+    "finish=fallback_to_ar cycles=97 accepted=73/106 (68.9%) "
+    "emits[init=2,draft=73,bonus=67,verify=30] margin_truncated=0 cycles_by_depth[d1=88,d2=9] "
+    "policy=fixed configured=D3 confirmed_tok_s=0.0 span_s=0.00\n"
+)
+VMLX_START_RUNG = (
+    "INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[chatcmpl-71c1df01] "
+    "start rung D1 (previous request ended in D1); promotion probe to D2 after 8 cycles\n"
+)
+
+
+def test_vmlx_a_depth_3_log_that_fell_back_to_ar_is_fail_with_the_log_quoted(tmp_path):
+    """`fixed` does not stop the AR-safety valve, so a request can still finish in plain
+    autoregressive decode (`mllm_batch_generator.py:7029-7047`, `:18387-18402`) -- and a cell
+    whose decode ended there is not a cell at depth 3. Depth 1 is a different question: it has no
+    rung or fallback below it, so only the accept line is read."""
+    runtime = RUNTIMES["vmlx"]
+    log = write_log(tmp_path, VMLX_D3_DRAFTED + VMLX_FELL_BACK, name="fell-back.log")
+
+    reason = runtime.mtp_depth_missing("3", log)
+
+    assert "finish=fallback_to_ar" in reason, "the log line is quoted"
+    assert "policy=fixed configured=D3" in reason, "the quoted line is the whole one"
+    assert "VMLX_NATIVE_MTP_AR_SAFETY=0" in reason, "the mechanism the pin disables is named"
+    assert "FAIL" in reason
+    assert log in reason, "the log path is named"
+
+    # The same log at depth 1: the accept row below it has d1 drafts, and a fallback is not a
+    # condition depth 1 is judged on.
+    assert runtime.mtp_depth_missing("1", log) is None
+
+
+def test_vmlx_a_start_rung_below_the_pinned_depth_is_the_same_fail(tmp_path):
+    """The sticky start rung inherits the previous request's demotion
+    (`mllm_batch_generator.py:17275-17286`), and `_native_mtp_reentry_enabled` -- the variable
+    the command now passes -- is what gates it. The rung is matched for its number: a rung at the
+    pinned depth, or above it, is not what this fails on."""
+    runtime = RUNTIMES["vmlx"]
+    log = write_log(tmp_path, VMLX_D3_DRAFTED + VMLX_START_RUNG, name="start-rung.log")
+
+    reason = runtime.mtp_depth_missing("3", log)
+
+    assert "start rung D1" in reason, "the log line is quoted"
+    assert "VMLX_NATIVE_MTP_AR_REENTRY=0" in reason, "the mechanism the pin disables is named"
+    assert "FAIL" in reason
+
+    # Above the pin and at it, the same line is not a failure: depth 1 has no rung below it, and
+    # a depth-2 cell that started at D2 held what it was pinned to.
+    assert runtime.mtp_depth_missing("1", log) is None
+    at_two = write_log(
+        tmp_path,
+        VMLX_D3_DRAFTED + VMLX_START_RUNG.replace("start rung D1", "start rung D2"),
+        name="start-rung-2.log",
+    )
+    assert "start rung D2" in runtime.mtp_depth_missing("3", at_two)
+    assert runtime.mtp_depth_missing("2", at_two) is None
+
+
+def test_vmlx_a_depth_nobody_drafted_at_is_fail_on_the_accept_row_alone(tmp_path):
+    """The positive half, and the one condition depth 1 is judged on: at least one
+    `accept_by_depth` row has to show a non-zero denominator at the pinned level. A `d3=0/0` row
+    is a request whose head chain never produced a third draft -- the common case in last night's
+    logs -- and no row at all is the same absence. An empty or unreadable log is a FAIL, not a
+    pass: the runtime's own account is the only evidence there is."""
+    runtime = RUNTIMES["vmlx"]
+    d2_only = write_log(tmp_path, VMLX_D2_ONLY, name="d2-only.log")
+
+    reason = runtime.mtp_depth_missing("3", d2_only)
+
+    assert "accept_by_depth" in reason and "d3" in reason, "the line that was required is named"
+    assert "FAIL" in reason
+    assert d2_only in reason, "the log path is named"
+
+    # The same row is exactly the evidence a depth-2 cell needs.
+    assert runtime.mtp_depth_missing("2", d2_only) is None
+
+    empty = write_log(tmp_path, "", name="empty.log")
+    assert "d1" in runtime.mtp_depth_missing("1", empty)
+    assert "accept_by_depth" in runtime.mtp_depth_missing("1", str(tmp_path / "no-such.log"))
+
+    # `off` and the absent pin claim no depth, so no log is read and nothing is required of one.
+    assert runtime.mtp_depth_missing(None, None) is None
+    assert runtime.mtp_depth_missing("off", None) is None
+    assert runtime.mtp_depth_missing("off", d2_only) is None
+
+
+def test_vmlx_a_handle_with_no_log_path_is_a_failure_to_verify_rather_than_a_pass():
+    """The log half needs a log: a start that left no path cannot be checked, which is a FAIL
+    with that reason rather than a silent pass."""
+    reason = RUNTIMES["vmlx"].mtp_depth_missing("3", None)
+
+    assert "log path" in reason
+    assert "FAIL" in reason
+
+
+def test_vmlx_depth_evidence_is_read_from_the_whole_log_not_a_window(tmp_path):
+    """The evidence is per request, so the window is the file: a banner sits in the head and a
+    failure line in the tail, but a request's row is written once per request for as long as the
+    server runs. A log whose early requests are clean and whose last request fell back is a FAIL,
+    however far past the head or tail window that line lands."""
+    runtime = RUNTIMES["vmlx"]
+    padding = "INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[chatcmpl-pad] " + (
+        "cycles_by_depth[d1=40,d2=9] policy=fixed configured=D3\n"
+    ) * 50_000
+    log = write_log(tmp_path, VMLX_D3_DRAFTED + padding + VMLX_FELL_BACK, name="long.log")
+
+    # The first requests' row is out of the tail's reach and the last request's out of the
+    # head's, so each of the two windows alone gets this log wrong in one direction.
+    assert len(padding) > max(runtimes.LOG_HEAD_BYTES, runtimes.LOG_TAIL_BYTES)
+    reason = runtime.mtp_depth_missing("3", log)
+    assert "finish=fallback_to_ar" in reason, "the last request's line is what failed the cell"
+    # And the positive half is read the same way: the evidence at the front is still there.
+    assert runtime.mtp_depth_missing("1", log) is None
 
 
 def test_a_handle_with_no_log_path_is_a_failure_to_verify_rather_than_a_pass():

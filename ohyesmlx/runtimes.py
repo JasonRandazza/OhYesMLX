@@ -202,6 +202,52 @@ KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
 MTP_DEPTH_OFF = "off"
 MTP_DEPTHS = ("off", "1", "2", "3")
 
+# The two environment variables that make `--native-mtp-depth-policy fixed` actually fixed on
+# vMLX 1.6.59, and the whole of the depth pin's second half beside the flag. `fixed` turns off one
+# controller and leaves two running:
+#
+#   * it disables the depth *economics* probe, and only that -- the CLI writes
+#     ``VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH=0`` for the policy (cli.py:1679-1681), which makes
+#     ``_native_mtp_adaptive_policy()`` False (mllm_batch_generator.py:6397-6400) and so makes the
+#     probe's own default False (``:6403-6418``). The probe's own docstring says what is still
+#     live: "With the probe off and ``VMLX_NATIVE_MTP_AR_SAFETY=0`` the depth is pinned; the
+#     per-cycle first-draft confidence gate (``VMLX_NATIVE_MTP_DRAFT_MARGIN``) is a separate,
+#     older mechanism and still shortens low-confidence drafts."
+#   * the AR-safety valve still demotes -- one rung per trip while the depth is above 1
+#     (``:6988-7002``), and to plain autoregressive decode at depth 1 (``:7029-7047``), which ends
+#     the request in the handoff the log calls ``finish=fallback_to_ar`` (``:18387-18402``). It is
+#     on by default (``native_mtp_ar_safety.py:113-114``, ``env_flag(True, ...)``) and is what the
+#     CLI's own help names as the mechanism this variable disables: "fixed then never leaves its
+#     depth, even when slower than plain decoding" (cli.py:4325-4329).
+#   * the sticky start rung still inherits the previous request's demotion -- ``start_depth = 1``
+#     when the last request on the engine ended in AR or D1 (``:17275-17286``), gated by
+#     ``_native_mtp_reentry_enabled()`` (``:6345-6348``), the same flag shape one variable over.
+#
+# Both reads take ``0`` as off (``native_mtp_ar_safety.py:89-93``,
+# ``mllm_batch_generator.py:5913-5925``); nothing in the engine writes either spelling into
+# ``os.environ`` ahead of them, and the process the harness spawns is the one that runs the
+# engine -- ``~/.local/bin/vmlx`` execs the bundle's console script, which runs
+# ``vmlx_engine.cli.main()`` in place and reaches ``uvicorn.run`` (cli.py:2943) -- so the
+# ``env K=V ...`` prefix a depth cell's command carries reaches both readers. The values are
+# written rather than left to the ambient environment for that reason: a shell that exported
+# either one would otherwise move depth underneath the pin.
+#
+# `off` and the absent pin pass neither variable and stay byte-identical to the commands recorded
+# before this pin existed.
+VMLX_MTP_FIXED_ENV = (
+    "VMLX_NATIVE_MTP_AR_SAFETY=0",
+    "VMLX_NATIVE_MTP_AR_REENTRY=0",
+)
+
+# The two lines `Vmlx.mtp_depth_missing` reads out of that log, as patterns rather than as
+# substrings: each carries the number the verdict is about. Verbatim shapes, from
+# results/logs/vmlx-20260925T063452-16321.log:
+#
+#   MLLM MTP[chatcmpl-71c1df01] start rung D1 (previous request ended in D1); promotion probe ...
+#   MLLM MTP[chatcmpl-71c1df01] accept_by_depth[d1=51/71,d2=5/12,d3=0/0] forwards[...]
+_VMLX_START_RUNG = re.compile(r"start rung D(\d+)")
+_VMLX_ACCEPT_BY_DEPTH = re.compile(r"accept_by_depth\[([^\]]*)\]")
+
 # Where OptiQ looks for an MTP head when the config does not name one, in its own order. Its
 # resolver takes the path the config gives under `mlx_lm_extra_tensors.mtp_file` first and only
 # then tries these four spellings, because the sidecar has lived in all of them
@@ -510,6 +556,25 @@ def _read_log_head(path: Path) -> str:
     try:
         with open(path, "rb") as log:
             return log.read(LOG_HEAD_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _read_log_all(path: Path) -> str:
+    """The whole of a runtime's log, or ``""`` when there is nothing to read yet.
+
+    The third window this module reads, and the one a *per-request* claim needs: a start banner
+    is in the head (:func:`_read_log_head`) and a failure line is in the tail (:func:`_read_log`),
+    but a request's own accounting -- its start rung, its finish, its ``accept_by_depth`` row -- is
+    written once per request for as long as the server runs, so any fixed window at one end is a
+    window on part of the visit's requests. The whole file is the definition because the file is
+    the visit's: one ``vmlx serve`` process writes one log, and these logs are a few hundred KB
+    (the two depth runs of 2026-09-25 are ~290-300 KB), so the read is bounded by the visit and
+    not by a copy budget. An unreadable or absent file answers ``""`` -- the absence of evidence,
+    which every caller reports rather than passes.
+    """
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
 
@@ -1289,11 +1354,13 @@ class Runtime:
     def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
         """Why this runtime's own log does not show a draft head running, or ``None`` when it is.
 
-        The second half of the depth pin, asked the same way the streaming one is -- with the
-        start's log and nothing else -- and the default needs no evidence for the same reason:
-        the three runtimes that refuse every depth never reach a depth cell. OptiQ is the one
-        override, and it is the one runtime whose depth flag is accepted on an engine it builds
-        later than the start: see :meth:`Optiq.mtp_depth_missing`.
+        The second half of the depth pin, asked with the start's log and nothing else, and the
+        default needs no evidence for the same reason: the three runtimes that refuse every
+        depth never reach a depth cell. The two overrides are the two runtimes a depth reaches,
+        and each reads the evidence its own engine emits -- ``measure._visit`` asks this once
+        the visit's measured requests have answered, which is the earliest either can have any:
+        see :meth:`Optiq.mtp_depth_missing` (an engine built on the first request) and
+        :meth:`Vmlx.mtp_depth_missing` (a per-request account of the depth that ran).
         """
         return None
 
@@ -2081,7 +2148,7 @@ class Optiq(Runtime):
         ``[optiq.serve] MTP engine ready (depth=N).`` (``serve.py:465``), cannot exist before one
         has been made. That is the one place this check departs from
         :meth:`Runtime.stream_experts_missing`'s timing, and it is why ``measure._visit`` asks it
-        after the first workload rather than before the first request.
+        after the visit's measured requests rather than before the first request.
 
         The required line carries the pinned depth, because ``serve.py:465`` interpolates it:
         a cell that asked for 3 and got an engine built at 2 is a FAIL here rather than a number
@@ -2254,9 +2321,14 @@ class Vmlx(Runtime):
             jit = ("--enable-jit",)
         # The absent pin and `off` pass the kill switch, which is what keeps their command
         # byte-identical to the recorded ones; the depths and their fixed policy are
-        # `MTP_DEPTHS`'. Whether a depth is honest on this artifact is not this method's
-        # question: see `vmlx_mtp_refusal`.
+        # `MTP_DEPTHS`'. The policy is not the whole of a fixed depth on this release: two
+        # controllers it does not turn off still move depth, and `VMLX_MTP_FIXED_ENV` is the
+        # pair of variables that disables them -- carried as an `env` prefix so the recorded
+        # command says the depth was pinned rather than leaving it to the ambient environment.
+        # Whether a depth is honest on this artifact is not this method's question: see
+        # `vmlx_mtp_refusal`.
         mtp = ("--disable-native-mtp",)
+        mtp_env: tuple[str, ...] = ()
         if mtp_depth in MTP_DEPTHS[1:]:
             mtp = (
                 "--native-mtp-depth",
@@ -2264,11 +2336,13 @@ class Vmlx(Runtime):
                 "--native-mtp-depth-policy",
                 "fixed",
             )
+            mtp_env = ("env", *VMLX_MTP_FIXED_ENV)
         # Off by default and opt-in (`STREAM_EXPERTS`), so the absent pin and `off` pass nothing
         # while `on` is the flag -- and the flag is not the evidence: see
         # `stream_experts_missing`.
         flash = ("--flash-moe",) if stream_experts == STREAM_EXPERTS_ON else ()
         return (
+            *mtp_env,
             "vmlx",
             "serve",
             # Positional and first, which is the one interface difference from every other
@@ -2350,6 +2424,100 @@ class Vmlx(Runtime):
         if mtp_depth in (None, MTP_DEPTH_OFF):
             return None
         return vmlx_mtp_refusal(artifact_dir)
+
+    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
+        """Whether the requests really drafted at the pinned depth, read off the runtime's log.
+
+        The depth pin's second half, and on this runtime it carries more of the pin than OptiQ's
+        does: :data:`VMLX_MTP_FIXED_ENV` is what makes ``fixed`` fixed, and this is the reading
+        that says the visit ran that way. Both mechanisms the env pin disables leave their own
+        line, and either one is a FAIL here:
+
+        * ``finish=fallback_to_ar`` -- the request ended in plain autoregressive decode, the
+          AR-safety valve's handoff (``mllm_batch_generator.py:7029-7047``, ``:18387-18402``).
+          The neighbouring ``finish=ar_calibration`` is deliberately not read: it is a winning
+          phase's bounded re-measure, not a demotion (``:18383-18391``).
+        * ``start rung D<k>`` with ``k`` below the pin -- the previous request's demotion was
+          inherited as this request's start rung (``:17275-17286``), the sticky behaviour
+          ``VMLX_NATIVE_MTP_AR_REENTRY`` gates.
+
+        The positive half is the same reading: the log has to show at least one
+        ``accept_by_depth`` line with a non-zero denominator at ``d<N>`` (``:5821-5838``), which
+        is the head actually drafting the Nth token in some request of the visit. A depth is not
+        the depth just because the flag said so -- measured 2026-09-25, five of the 104
+        ``accept_by_depth`` rows in ``results/logs/vmlx-20260925T063452-16321.log`` show any
+        ``d3`` draft at all under the policy alone.
+
+        Depth 1 has no rung to fall below and no fallback below it, so only the positive half
+        applies to it. ``off`` and the absent pin claim no depth a log could contradict and
+        answer before the log is opened.
+
+        The evidence is per request, so it is a property of the whole log and it is read after
+        the visit's measured requests -- see :func:`_read_log_all` for the window and
+        ``measure._visit`` for the point it is asked at. The markers are the runtime's own
+        words, taken from its source and from ``results/logs/vmlx-20260925T062816-11233.log``
+        and ``-20260925T063452-16321.log``: of their 49 and 45 depth-3 requests, 47 and 40
+        carry a ``start rung D1`` line, 15 and 15 carry ``finish=fallback_to_ar``, and 0 and 5
+        ``accept_by_depth`` rows have a non-zero denominator at ``d3``.
+        """
+        if mtp_depth not in MTP_DEPTHS[1:]:
+            return None
+        claim = f"mtp_depth={mtp_depth!r}"
+        if log_path is None:
+            return (
+                f"{claim} cannot be verified on {self.name}: this run was started without a log "
+                "path, and the runtime's own log is the only evidence that the requests drafted "
+                "at the pinned depth rather than being demoted underneath it. This cell is FAIL "
+                "rather than a number published under a pin nothing checked."
+            )
+        text = _read_log_all(Path(log_path))
+        lines = text.splitlines()
+
+        if mtp_depth in MTP_DEPTHS[2:]:
+            quoted = next(
+                (line.strip() for line in lines if "finish=fallback_to_ar" in line), None
+            )
+            if quoted is not None:
+                return (
+                    f"{claim} was not delivered: {self.name}'s own log never printed a cell "
+                    "whose requests all finished on the draft head, and it says "
+                    f"{quoted!r} instead. The flag was accepted and the AR-safety valve fell "
+                    "back to plain autoregressive decode -- the mechanism "
+                    "VMLX_NATIVE_MTP_AR_SAFETY=0 disables -- so this cell is FAIL rather than a "
+                    f"number published under a pin it does not hold (log: {log_path})."
+                )
+            quoted = next(
+                (
+                    line.strip()
+                    for line in lines
+                    if (rung := _VMLX_START_RUNG.search(line)) is not None
+                    and int(rung.group(1)) < int(mtp_depth)
+                ),
+                None,
+            )
+            if quoted is not None:
+                return (
+                    f"{claim} was not delivered: {self.name}'s own log never printed a cell "
+                    f"whose requests all started at D{mtp_depth}, and it says {quoted!r} "
+                    "instead. The flag was accepted and the previous request's demotion was "
+                    "inherited as the start rung -- the mechanism VMLX_NATIVE_MTP_AR_REENTRY=0 "
+                    "disables -- so this cell is FAIL rather than a number published under a "
+                    f"pin it does not hold (log: {log_path})."
+                )
+
+        drafts = (
+            int(drafted)
+            for bracket in _VMLX_ACCEPT_BY_DEPTH.findall(text)
+            for _accepted, drafted in re.findall(rf"\bd{mtp_depth}=(\d+)/(\d+)", bracket)
+        )
+        if not any(drafts):
+            return (
+                f"{claim} was not delivered: {self.name}'s own log never printed an "
+                f"accept_by_depth line with a non-zero denominator at d{mtp_depth}, and it "
+                "says nothing about why. The flag was accepted, so this cell is FAIL rather "
+                f"than a number published under a pin nothing confirmed (log: {log_path})."
+            )
+        return None
 
     def stream_experts_refusal(self, stream_experts: str | None) -> str | None:
         """Accept both values: ``--flash-moe`` is a real flag and its default is off

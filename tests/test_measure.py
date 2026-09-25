@@ -3019,8 +3019,9 @@ def test_a_depth_cell_whose_log_never_shows_the_engine_is_fail_with_the_log_quot
     """The depth pin's log half, and the one timing difference from the streaming check beside
     it: OptiQ builds its MTP engine on the first request (optiq/serve.py:443-471), so its own
     MTP-ready line cannot exist before one has been made. The check is therefore asked after the
-    first workload has answered -- which means requests were made -- and the verdict is FAIL
-    with the log quoted, on the same reading as an `on` cell whose log does not show streaming.
+    visit's measured requests have answered -- which means requests were made -- and the verdict
+    is FAIL with the log quoted, on the same reading as an `on` cell whose log does not show
+    streaming.
     """
     runtime = harness.add_runtime(
         "optiq",
@@ -3066,6 +3067,47 @@ def test_the_depth_evidence_is_asked_for_a_depth_only_and_only_once(harness):
     harness.run([cell], workloads=THREE, measured=1, mtp_depth="3",
                 results_dir=harness.tmp_path / "depth")
     assert harness.recorder.of("mtp_depth_missing") == [("optiq", "/tmp/optiq-mtp.log")]
+
+
+def test_the_depth_check_is_asked_after_every_workloads_measured_requests(harness):
+    """The evidence a depth cell is judged on is per request, so the verdict is asked once the
+    visit's requests have answered and not after the first workload: OptiQ's MTP-ready line
+    needs a request to exist at all (optiq/serve.py:443-471), and vMLX's is the requests' own
+    account of the depth each of them ran -- a start rung, a finish line, an `accept_by_depth`
+    row -- which only a log covering the visit can settle. Nothing is measured after the verdict
+    either: the cell is not visited again, because a second start would buy the same log and one
+    more model load."""
+    runtime = harness.add_runtime(
+        "vmlx",
+        port=8000,
+        log_path="/tmp/vmlx-mtp.log",
+        mtp_depth_missing=(
+            "mtp_depth='3' was not delivered: vmlx's own log never printed a cell whose requests "
+            "all started at D3, and it says 'INFO:vmlx_engine.mllm_batch_generator:MLLM "
+            "MTP[chatcmpl-71c1df01] start rung D1 (previous request ended in D1); promotion "
+            "probe to D2 after 8 cycles' instead. (log: /tmp/vmlx-mtp.log)."
+        ),
+    )
+
+    results = harness.run(
+        [harness.cell("jang__vmlx", "vmlx")], workloads=THREE, measured=2, mtp_depth="3"
+    )
+
+    assert [result.status for result in results] == ["FAIL"] * len(THREE)
+    assert "start rung D1" in results[0].reason
+    assert measure.load_run(harness.results_file())[1][0].status == "FAIL"
+
+    # Every workload's requests were made before the verdict, so the check read a log that
+    # covers the visit -- and the verdict, being final, is what stopped the requests there.
+    assert {call.max_tokens for call in harness.transport.calls} == {
+        workload.max_tokens for workload in THREE
+    }
+    events = harness.recorder.kinds()
+    assert events.index("mtp_depth_missing") > max(
+        index for index, kind in enumerate(events) if kind == "chat"
+    )
+    assert harness.recorder.of("mtp_depth_missing") == [("vmlx", "/tmp/vmlx-mtp.log")]
+    assert runtime.attempts == 1, "a deterministic answer is not retried on the next visit"
 
 
 def test_the_streaming_evidence_is_read_from_the_handles_own_log(harness):

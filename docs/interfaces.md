@@ -108,7 +108,7 @@ class Runtime:
     def stream_experts_missing(self, stream_experts: str | None,
                                log_path: str | None) -> str | None: ...
     def mtp_depth_missing(self, mtp_depth: str | None,
-                          log_path: str | None) -> str | None: ...      # OptiQ only, 03-06
+                          log_path: str | None) -> str | None: ...      # OptiQ and vMLX, 03-06
 
 
 @dataclass
@@ -1098,14 +1098,14 @@ accepted cases are on this host — `models--JANGQ-AI--Qwen3.5-4B-JANG_4S` decla
 | oMLX 0.6.4 | accepted, no flag, and structural: the per-run `--base-path` scratch holds no `model_settings.json`, so `mtp_enabled` is `False` (`model_settings.py:303`) | **refused**: `mtp_num_draft_tokens` is a per-model settings field with no flag, and it is adaptive even when set (`model_settings.py:304-308`) |
 | Osaurus 0.25.12 | accepted only when the host's `mtp.mode` is `force_off` — read through the tracked key the drift gate already records | **refused**: the depth is the host setting `mtp.explicitDepth`, which "must be 1, 2, or 3" (docs/runtimes/osaurus.md:344), with no start-command surface |
 
-### `mtp_depth`'s log half, on OptiQ
+### `mtp_depth`'s log half, on OptiQ and vMLX
 
 The streaming pin is not the only one whose state is settled by the server's own log. OptiQ
 echoes `--mtp --mtp-depth N` at startup, but the engine that echo names is created on the
 **first request** (`optiq/serve.py:443-471`, reached from the patched `stream_generate`), so the
 line that says a draft head is really driving the decode —
 `[optiq.serve] MTP engine ready (depth=N).`, `serve.py:465` — cannot exist before one has been
-made. `Runtime.mtp_depth_missing` is therefore asked **after the first workload of the visit has
+made. `Runtime.mtp_depth_missing` is therefore asked **after the visit's measured requests have
 answered**, and it is the same verdict the streaming check gives: `FAIL` with the log quoted,
 kept on the row's own start facts, and not retried on a later visit.
 
@@ -1115,6 +1115,14 @@ depth the decode did not hold. The fallback lines are the engine's own warning t
 without a head (`engine.py:297-304`); the `HTTP 404` that follows is answered to the client and
 never logged, so the warning is what the log holds. The evidence window is the log head
 (`LOG_HEAD_BYTES`), the same one the streaming banner is read from.
+
+vMLX answers it too (2026-09-25). A vMLX depth cell carries `env VMLX_NATIVE_MTP_AR_SAFETY=0
+VMLX_NATIVE_MTP_AR_REENTRY=0` in front of `vmlx serve` (`runtimes.VMLX_MTP_FIXED_ENV`), because
+`--native-mtp-depth-policy fixed` alone leaves the AR-safety valve and the sticky start rung
+moving depth. Its evidence is per request, so its window is the **whole log**
+(`runtimes._read_log_all`): depth N>1 is `FAIL` on any `finish=fallback_to_ar` or
+`start rung D<k>` with k<N, and every depth is `FAIL` without one `accept_by_depth` row whose
+`d<N>` denominator is non-zero. `Vmlx.mtp_depth_missing` holds the source citations.
 
 ### `stream_experts` — experts from SSD, or resident
 

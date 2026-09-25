@@ -73,8 +73,12 @@ run_one() {  # $1 = the run's marker, which names its log; the rest is the run c
 DEPTHS="off 1 2 3"
 DEPTHS_REV="3 2 1 off"
 
+# PAIRS narrows a rerun to some pairings (2026-09-25: the vMLX pairing alone, after the fixed-depth env pin).
+PAIRS=${PAIRS:-jang4s__vmlx optiq4b__optiq optiq__optiq}
+
 mtp_sweep() {  # $1 = cell id (`<format>__<runtime>`), $2 = artifact dir, $3 = ascending|descending
   cell=$1
+  case " $PAIRS " in *" $cell "*) ;; *) return 0 ;; esac
   case $3 in
     ascending) order=$DEPTHS ;;
     descending) order=$DEPTHS_REV ;;

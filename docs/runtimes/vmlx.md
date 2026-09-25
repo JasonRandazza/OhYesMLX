@@ -1409,21 +1409,86 @@ adaptation to get a stable number must set `VMLX_NATIVE_MTP_DEPTH_PROBE` /
 
 #### 7.4.1 What the harness pins now (`--mtp-depth`, header pin 03-06)
 
-The harness drives MTP through one header pin, and it does **not** reach for the AR-safety
-knobs: `--native-mtp-depth N --native-mtp-depth-policy fixed` is the whole of it, and the cell
-records which of the two it ran.
+The harness drives MTP through one header pin, and a depth cell is three things rather than one:
+`--native-mtp-depth N --native-mtp-depth-policy fixed`, the two environment variables that keep
+that policy fixed (`env VMLX_NATIVE_MTP_AR_SAFETY=0 VMLX_NATIVE_MTP_AR_REENTRY=0`, carried as a
+prefix in the recorded command so the provenance says the depth was pinned rather than leaving it
+to the ambient environment), and the log half of the claim (`Vmlx.mtp_depth_missing`, below). The
+cell records which value it ran.
 
-| pin value | flags | why that is the whole of the pin |
+| pin value | command | why that is the whole of the pin |
 |---|---|---|
 | absent | `--disable-native-mtp` | The command of today. Left alone, MTP turns itself on for a bundle carrying MTP heads, so an absent pin that passed nothing would be an MTP cell nobody declared |
 | `off` | `--disable-native-mtp` | The same command: the flag is this runtime's own explicit off (`cli.py:1662-1667`), setting `VMLINUX_NATIVE_MTP=0` and clearing any depth an inherited environment left behind |
-| `1`, `2`, `3` | `--native-mtp-depth N --native-mtp-depth-policy fixed` | `fixed` is not a second pin. The default policy is `adaptive` ("may also lower the depth on measured acceptance and tries depth 1 once against the configured depth's measured cost, keeping the measured winner", `cli.py:4324-4331`), so an adaptive cell is not a cell at depth N; `fixed` steps down only through the AR-safety valve, which is itself the runtime's own behaviour and stays untouched |
+| `1`, `2`, `3` | `env VMLX_NATIVE_MTP_AR_SAFETY=0 VMLX_NATIVE_MTP_AR_REENTRY=0 vmlx serve … --native-mtp-depth N --native-mtp-depth-policy fixed` | `fixed` is not a second pin, and it is not the whole of a fixed depth on this release. The default policy is `adaptive` ("may also lower the depth on measured acceptance and tries depth 1 once against the configured depth's measured cost, keeping the measured winner", `cli.py:4324-4331`), so an adaptive cell is not a cell at depth N; the two variables above are what make `fixed` mean fixed, because the policy alone leaves two controllers running (next) |
 
-**`AR_SAFETY` is deliberately left at its default.** Setting `VMLX_NATIVE_MTP_AR_SAFETY=0` would
-give a depth that is truly fixed, at the price of a speed the runtime would itself have
-rejected — a measurement of a configuration it does not serve. `fixed` already removes the
-depth *adaptation* this pin is about; the valve's own demotion is a property of the runtime as
-shipped, and a cell that disabled it would be measuring a different product.
+**`fixed` disables the depth economics probe, and only that.** The CLI writes
+`VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH=0` when the policy is `fixed` (`cli.py:1679-1681`), which makes
+`_native_mtp_adaptive_policy()` False (`mllm_batch_generator.py:6397-6400`) and therefore makes the
+probe's own default False (`_native_mtp_depth_probe_enabled`, `:6403-6418`). That function's own
+docstring names what is still live beside it:
+
+> With the probe off and `VMLX_NATIVE_MTP_AR_SAFETY=0` the depth is pinned; the per-cycle
+> first-draft confidence gate (`VMLX_NATIVE_MTP_DRAFT_MARGIN`) is a separate, older mechanism and
+> still shortens low-confidence drafts.
+
+Two controllers are outside the policy's reach and both move depth:
+
+* **The AR-safety valve** is on by default (`native_mtp_ar_safety.py:113-114`, `env_flag(True, …)`)
+  and demotes one rung per trip while the depth is above 1 (`mllm_batch_generator.py:6988-7002`),
+  falling back to plain autoregressive decode at depth 1 (`:7029-7047`) — which ends the request
+  in the handoff the log calls `finish=fallback_to_ar` (`:18387-18402`).
+* **The sticky start rung** (`:17275-17286`) starts a request at D1 when the previous request on
+  the engine ended in AR or D1, gated by `_native_mtp_reentry_enabled()` (`:6345-6348`).
+
+Both are `env_flag`-shaped reads for which `0` is off (`native_mtp_ar_safety.py:89-93`,
+`mllm_batch_generator.py:5913-5925`), nothing in the engine writes either spelling into
+`os.environ` ahead of them, and the process the harness spawns is the one that runs the engine
+(`~/.local/bin/vmlx` execs the bundle's console script, which runs `vmlx_engine.cli.main()` in
+place and reaches `uvicorn.run` at `cli.py:2943`) — so the `env` prefix reaches both readers. The
+CLI's own help states what the first variable buys: *"VMLX_NATIVE_MTP_AR_SAFETY=0 disables the
+valve (fixed then never leaves its depth, even when slower than plain decoding)"*
+(`cli.py:4325-4329`).
+
+**Approved 2026-09-25.** This reverses the earlier reading, which left `AR_SAFETY` at its default
+and called the valve's demotion a property of the runtime as shipped. The study is *fixed depth
+N*, and under the policy alone the two runs of 2026-09-25 put 94 requests through a depth-3
+command: 30 of them ended in `finish=fallback_to_ar`, 87 began at a `start rung D1`, and only five
+of their 212 `accept_by_depth` rows show a non-zero `d3` denominator. A column labelled depth 3
+whose requests mostly ran at another depth is not a depth-3 column. The cost of pinning is real
+and is stated where §7.4 states it: the resulting speed may be a speed the runtime would itself
+have rejected — a fixed-depth cell, which is what the header declares, and the declared state is
+what a reader gets. Both variables are in the recorded start command, so no part of it is
+ambient.
+
+**The log half: three conditions, and the window is the whole log.** `Vmlx.mtp_depth_missing`
+fails a depth cell when the visit's log shows either mechanism the variables disable —
+`finish=fallback_to_ar`, or a `start rung D<k>` line with `k` below the pin — or when no
+`accept_by_depth` line has a non-zero denominator at `d<N>`. The last is the positive half: it is
+the head actually drafting the Nth token in some request of the visit, and it is the only
+condition depth 1 is judged on (there is no rung below it, and its fallback is below the pin
+itself). The measured runs of 2026-09-25 carried the policy but not the variables, and they are
+the reason each condition exists: of the 49 and 45 depth-3 requests in
+`results/logs/vmlx-20260925T062816-11233.log` and `-20260925T063452-16321.log`, 47 and 40
+inherited a `start rung D1`, 15 and 15 ended in `finish=fallback_to_ar`, and only 0 and 5
+`accept_by_depth` rows show a non-zero `d3` denominator.
+
+The window is the whole file (`runtimes._read_log_all`), not the head or the tail: a request's row
+is written once per request for as long as the server runs, so a fixed window at one end is a
+window on part of the visit, and these logs are only ~290-300 KB. The check is asked once the
+visit's measured requests have answered (`measure._visit`), because a log read any earlier covers
+fewer requests than the cell publishes.
+
+**Residual caveat, and this one stays.** `VMLX_NATIVE_MTP_DRAFT_MARGIN` is a third mechanism and
+this pin does not touch it: the confidence gate reads the head's top-1-minus-top-2 logit gap once,
+after the first draft, and stops extending the chain when the gap is below the threshold
+(`mllm_batch_generator.py:4743-4774` for the read, `:16919-16965` for the stop, counted as
+`margin_truncated` in the finish line). It is off by default on the bundles this harness measures —
+the threshold is 0.0 unless the artifact is a `qwen4_exp` under fixed D3, where it is 1.0
+(`:4709-4740`), and the finish lines of the 2026-09-25 runs carry `margin_truncated=0`. But an
+environment that sets it, or a Qwen4 bundle under this same pin, will end a request's draft chain
+early on a low-confidence position. So **"depth 3" here means the configured depth is 3 and no
+controller demoted it; it does not mean every verify cycle drafted three tokens.**
 
 **The flag is accepted on a bundle that cannot use it, so the artifact decides first.** The
 harness refuses a depth up front (`runtimes.vmlx_mtp_refusal`) unless the artifact on disk shows
