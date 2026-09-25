@@ -342,3 +342,144 @@ its own grid's figures, from `results/multiturn-osaurus/grid.md`:
 - **Not a context-length study.** The prompt grows as a side effect of the dialogue; the turn index
   is a conversation axis, not the `prompt_tokens` pin, and the figures here should not be compared
   with the 16k/32k KV sweep's.
+
+---
+
+## Addendum (2026-09-25, later the same day): why mlx-lm's prompt cache never hit — Open question 1, answered from source
+
+Written after the grid closed, against the mlx-lm 0.31.3 the run actually used
+(`~/.local/share/ohyesmlx/mlx-lm-0.31.3/lib/python3.14/site-packages/mlx_lm/_version.py` →
+`"0.31.3"`, the venv `scripts/run_multiturn.sh` puts on `PATH`) and the two mlx-lm visit logs of
+this run. No code changed, no server, model or tensor was touched; every claim below is a line
+citation or a line of those logs. Citations are relative to the package root:
+`server.py` = `mlx_lm/server.py`, `models/cache.py` = `mlx_lm/models/cache.py`.
+
+### The answer
+
+Two facts. Either alone makes every request a full prefill; together they close every branch
+`fetch_nearest_cache` has.
+
+1. **The run never entered the server's batched path, so nothing was ever stored at a prefix.**
+   Every request carried `seed: 0` (`ohyesmlx/measure.py:165`'s `SEED = 0`, in the header at `:544`
+   and on every request at `:1073`; sent by `transport.py:181-182`), and the server's gate is
+   `model_provider.is_batchable and args.seed is None` (`server.py:685-686`) — a pinned seed routes
+   every request to `_serve_single` (`server.py:813-815`). That path inserts **once** per request,
+   at the end of generation (`server.py:1019-1021`), keyed by `cache_key`, which starts as the whole
+   prompt (`server.py:969`) and is appended with every generated token (`server.py:1006`), stored
+   with the default `cache_type="assistant"`. The per-segment snapshots — the only place this
+   server ever creates a *prefix-keyed* entry — exist **only in the batched path**
+   (`server.py:864-880`) and are never reached. The cache therefore holds ten keys of the form
+   `prompt_k + completion_k`, one per turn, and no key that is a prefix of any request.
+
+2. **The one fetch branch that could have served a request from a longer stored key is closed by
+   the model's cache type.** `fetch_nearest_cache` (`models/cache.py:1674-1694`) serves a `longer`
+   entry only under `can_trim_prompt_cache` (`:1683`), which is
+   `all(c.is_trimmable() for c in cache)` (`:88-92`) and a trim. `Qwen3.6-35B-A3B-oQ4` declares
+   `model_type: qwen3_5_moe` with `full_attention_interval: 4`: 30 of its 40 layers are
+   `linear_attention`, and `make_cache` is
+   `[ArraysCache(size=2) if l.is_linear else KVCache() for l in self.layers]`
+   (`models/qwen3_5.py:304-305`, `is_linear` at `:212`; the MoE `Model` inherits it,
+   `models/qwen3_5_moe.py:6`/`:21`, `models/qwen3_5.py:522-523`). `ArraysCache`
+   (`models/cache.py:594-728`) implements `merge`, `extract`, `filter`, `extend`, `prepare`,
+   `finalize`, `advance` — and **neither** `is_trimmable` nor `trim`, so it inherits the base
+   `False` (`:146-147`). One `ArraysCache` in the list makes the predicate false for the whole
+   cache; the branch is skipped, `short_length` is 0, and the function falls through to
+   `return None, tokens` (`:1694`). Full prefill, every request.
+
+### How the key and the reuse decision work, exactly
+
+`PromptTrie.search` (`models/cache.py:1578-1620`) walks the request's tokens down the trie and
+returns three things at once: `exact` (a stored key equal to the query), `shorter` (the deepest
+stored key that is a *prefix* of the query — noted only when it ends at token index > 0, `:1602`),
+and `longer` (the shortest stored key that extends *past* the point where the walk left the trie),
+with `common_prefix` = how far the walk got. `fetch_nearest_cache` then tries them in that order:
+an exact hit is served whole (`:1676-1678`); a `longer` hit, when it reaches deeper than `shorter`,
+is served by **trimming the stored cache back** to `common_prefix` (`:1681-1688`) — the only
+branch that needs a trimmable cache; a `shorter` hit is served with **no trimming at all**
+(`:1690-1692`); everything else is `None, tokens` (`:1694`).
+
+For the multi-turn conversation, every request was a miss on all three:
+
+- **`exact`**: impossible by construction. Keys carry the turn's own 128 generated tokens, and the
+  next turn's prompt carries the *fixed literal* reply in their place (this run's deliberate
+  design), so the query is never a stored key.
+- **`shorter`**: nothing to find, by fact 1 — no stored key is a prefix of anything.
+- **`longer`**: this is the one with a live candidate. Turn N's prompt and turn N−1's key share
+  their whole history prefix (the template renders the shared messages identically even though the
+  message indices shift, `chat_template.jinja`'s `last_query_index` branch), and they diverge
+  exactly where turn N−1's generation prompt had `<think>` and turn N has the literal reply. So the
+  walk stops there with `common_prefix` ≈ `len(prompt_{N-1}) − 2`, `shorter` is `None`, and
+  `longer` is turn N−1's key — `common_prefix > short_length` is true, and the branch is taken
+  right up to `can_trim_prompt_cache`, which is `False` (fact 2). The repeat requests *within* a
+  turn are the same case with `common_prefix` = the whole prompt: the stored key is a strict
+  extension of the query, servable only by trimming (`prefix = min(len(tokens) - 1, common_prefix)`,
+  `:1685`), and it is not trimable.
+
+**Why the count grows one per turn and stops at 10.** Every request of a turn repeats the same
+prompt, and at `temperature 0.0` the server is greedy (`make_sampler` returns `argmax`,
+`sample_utils.py:46-47`), so it reproduces the completion exactly —
+turn-02's 24 warmups and 9 measured requests hold one distinct `reasoning_text` and 128 completion
+tokens each — and therefore the same `prompt + completion` key is *replaced* rather than added
+(`insert_cache`, `models/cache.py:1712-1717`). Ten turns produce ten distinct keys; the cache's
+`max_size` is its default 10 (`server.py:1871-1876`; `cache_state` was not taken, so the harness
+passed no `--prompt-cache-size`, `ohyesmlx/runtimes.py:1551-1575`), and eviction
+(`models/cache.py:1728-1732`) never fires because the count never exceeds 10.
+
+### What the run's own logs show
+
+- **Every one of the 154 (visit 1) and 144 (visit 2) requests printed `0/<its full prompt
+  length>`** as its first progress line, then `<N−1>/N`, then `N/N` (`0/24`, `23/24`, `24/24` at
+  turn 1; `0/1393`, `1392/1393`, `1393/1393` at turn 10). That shape is `stream_generate`'s own
+  callback: `prompt_progress_callback(0, total)` at `generate.py:429`, then the prefill loop, which
+  holds the last token back for the first `_step` (`:430-453`), then `(total, total)` when
+  generation begins (`:463`). The batched path never calls it — it forwards
+  `PromptProcessingBatch.Response.progress` (`generate.py:1824-1836`), whose first element is the
+  tokens consumed by a chunk of at least one, so a batched request cannot print `0/N` at all. The
+  two visits are therefore both sequential-path runs, which is what the seed pin predicts.
+- **The denominators are the *stripped* prompt**: `_serve_single` passes `prompt=rest` into
+  `stream_generate` (`server.py:976-980`) and the callback's `total` is `len(rest)`
+  (`generate.py:425-427`). A fetch that served a prefix of P tokens would print `0/(N−P)`. Every
+  request printed the full length.
+- **Every `Prompt Cache` line in both visits reads `user: 0 sequences` and `system: 0 sequences`**
+  (`_log_cache_stats`, `server.py:461-470`) — the app-side tell that the segment-boundary inserts
+  never ran — and the total walks 0 → 1 → … → 10, one step per turn, ~15 requests at each level.
+- The record cannot show any of this itself: the server reports the served prefix as
+  `usage.cached_tokens` (`server.py:1344-1346`), and the harness's `Observation` does not carry
+  that field. The logs are the artifact that holds it.
+
+### What would have changed it (source predictions, not measurements)
+
+- **A batchable request.** With `seed` omitted, `_is_batchable` is true for this model — every
+  cache in `make_prompt_cache` has `merge` (`ArraysCache.merge`, `models/cache.py:702`; the gate at
+  `server.py:370-374`) — and the batched path's boundary insert would store a snapshot keyed by the
+  end of the prompt's first segment. For this conversation that key is the history up to
+  `…<|im_start|>assistant\n`, which *is* a strict prefix of the next turn's prompt, so the trie
+  would return it as `shorter` and `fetch_nearest_cache` would serve it **without any trim** (the
+  trim branch is not even consulted: there `common_prefix == short_length`). The segmentation that
+  produces it: `tokenizer.has_thinking` is true (the artifact declares `<think>`/`</think>` as added
+  tokens, ids 248068/248069, which is what `_infer_thinking` reads, `tokenizer_utils.py:260-273`),
+  so `_tokenize` splits the prompt into `[history + generation prompt − think tail, think tail]`
+  (`server.py:580-624`). Not measured — it is a reading of the code path this run never took.
+- **A model whose cache is trimmable** (no `ArraysCache` in the list — a plain-attention artifact).
+  The sequential path would then serve turn N out of turn N−1's key through the trim branch,
+  resuming at the shared history prefix, and the same-prompt repeats would be served at
+  `len(prompt) − 1`. This is the prediction `docs/research/2026-09-17-cache-state-split.md` already
+  holds open (its Open question 1); nothing here was run to test it.
+- **A correction of emphasis to the 06-02 document.** Its "the segment-boundary insert
+  (`server.py:864-879`) never fired for this prompt" is true but for a stronger reason: with a seed
+  pinned, the batched path that contains that insert is never entered at all, so it could not fire
+  for *any* prompt in those runs — and their logs carry the same `0/4106` sequential-path
+  signature. The flag was live in both states and storing, as that document says; the insert was
+  simply unreachable.
+
+### What this does not establish
+
+- Nothing about a batchable run on this artifact was measured; the two predictions above come from
+  source and are testable only by a run (no `seed` pin for the first; a non-hybrid artifact for the
+  second).
+- The low-level details of how the tokenizer renders `…assistant\n<think>\n` (token counts and the
+  exact split point) are read off the template and the added-token table, not from a tokenized
+  request.
+- Whether `ArraysCache` could be made trimmable (it would need the linear-attention state
+  snapshotted at a previous length, which the class does not keep) is a question about mlx-lm's
+  design, not about this run.
