@@ -166,3 +166,30 @@ of the columns it published.
 
 Follow-up 1 (a third 35B replicate) is still open and is carried in `.paul/STATE.md`, Deferred
 Issues. Follow-up 3 is still open.
+
+---
+
+## Update 2026-09-25 (evening): Follow-up 1 closed — the third 35B replicate settles the level shift
+
+The third 35B replicate ran 18:17:41 → 20:24:04 EDT on 2026-09-25 into `results/harden-35b-r3/`
+(same runner, gridspec, pins and runtime versions as the r2 columns here) and is written up in
+`docs/research/2026-09-25-35b-third-replicate.md`. Nothing in this paper's text or numbers changes;
+this note records where its open item lands.
+
+- **"Orderings replicate, levels do not" resolves against the published grid.** Over the 9–12
+  shared cell-workloads, r2 and r3 agree within 2.7–6.8% per runtime, and both put mlx-lm, oMLX
+  and OptiQ 10–26% above the published 09-20 levels. **The published levels for those three
+  runtimes are the outlier; finding 17's cross-runtime levels are superseded by the r2/r3 pair,
+  and its format orderings stand.**
+- **The cause of the published shortfall is still not established.** This paper's two untested
+  candidates (host load on the unrecorded 09-20 night, a different thermal state) survive as
+  candidates. r3 is uniformly 2.7–6.8% above r2 and ran in an evening with desktop applications
+  open — a third uncontrolled condition, not the quiet reference the follow-up asked for.
+- The stock4bit row of §"35B grid: orderings replicate, levels do not" becomes published → r2 → r3
+  in the new paper, together with the per-runtime ratio table this note is built on; the r2 figures
+  printed here are unchanged. Every figure was re-derived from the three `grid.md` files, and the
+  three grids were re-rendered with the current tree: r2's and r3's table sections are
+  byte-identical to their committed files, and the published grid's reproduces its figures with the
+  timing-channel labels restored.
+
+Follow-up 2 (Decision 122, above) and Follow-up 3 are unaffected.

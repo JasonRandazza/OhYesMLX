@@ -199,3 +199,28 @@ Both passes clear the pre-registered 2.5% tie band (`R-tie` passed), confirming 
 With Milestone v3 Phase 1 (Plan 03-01) successfully executed, verified, and published:
 1. **Candidate 3 (Thinking-Off MMLU Arm):** Preserved for overnight execution to evaluate reasoning suppression on MMLU.
 2. **Milestone v3 Phase 2 (Context Scaling & Multi-turn Dynamics):** Proceed to Plan 03-04 (multi-turn context sweeps up to 32k) and Plan 03-05 (quantized KV caches on 35B MoE).
+
+---
+
+## Update 2026-09-25: this grid's cross-runtime levels are superseded; its format orderings stand
+
+The 35B grid was re-run twice on the hardened harness — `results/harden-2026-09-23/grid-35b/`
+(2026-09-23/24, "r2") and `results/harden-35b-r3/` (2026-09-25, "r3") — written up in
+`docs/research/2026-09-24-hardening-validation-grids.md` and
+`docs/research/2026-09-25-35b-third-replicate.md`. This paper's text is not rewritten; this note
+says what the two re-runs do to it.
+
+- **The two re-runs agree with each other within 2.7–6.8% per runtime and both read 10–26% above
+  the levels in §4 here for mlx-lm, oMLX and OptiQ.** Any figure in this paper that prices a
+  runtime in absolute tok/s, or orders runtime levels — including the §8 recommendation table's
+  throughput row and the §4/§6 cross-runtime ranges — should be read from the r2/r3 pair instead.
+  Finding 17's cross-runtime levels are superseded.
+- **The format orderings stand.** `stock4bit > oq4 > optiq` holds in every column of both re-runs
+  except the Osaurus column — its `oq4`/`optiq` pair swaps on r2's `decode` and on all three r3
+  workloads, and r3's `prefill` puts `optiq` and `stock4bit` within 0.03 tok/s of each other (a
+  printed tie the ranking resolves upward). Within the vMLX column the §5 orderings hold too:
+  `stock4bit` above `jangtq4`, and `jangtq4` above `optiq`, in both re-runs and all three
+  workloads. The re-runs' own levels are in the third-replicate paper.
+- **No cause for this grid's low levels has been established.** Two later nights on the same
+  gridspec, pins and runtime versions put the shortfall in this grid's unrecorded conditions rather
+  than in a standing harness behaviour; what those conditions were is still unknown.
