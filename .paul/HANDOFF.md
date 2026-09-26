@@ -65,12 +65,21 @@ Headlines, each argued with its caveats in its paper:
 - Test command: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`.
 - Host: Osaurus `modelIdleResidencyPolicy.seconds` is 30 by Jason's choice — the pin restores it.
 
+## Later the same day (2026-09-25 evening)
+
+- v3.1 deferred fixes landed and pushed: N/A cells render `N/A` (`f998dcd`), the single-run leaderboard
+  applies A7 and Decision 122, OptiQ's MTP gate refuses a head that cannot fit the block (`773b739`),
+  runners run their own joins (`afd8655`), mlx-lm prompt-cache answer (`4cb0c9b`), docs aligned to the
+  code (`22c2180`), third 35B replicate written up (`d6931de`, Decision 127).
+- LMRE archived (local `~/Dev/archive/`, GitHub read-only), removed from `sync-omarchy`.
+- Command Code self-updates on launch: stagger dispatches ~45 s apart, or five at once race the update.
+
 ## Next moves
 
-1. Push (`git log origin/main..main`).
-2. Jason picks what remains of v3.1 from STATE Deferred Issues. The largest is the third 35B
-   replicate (~2.3 h, quiet night): `OUT=results/harden-35b-r3 sh scripts/run_grid_35b.sh`. The
-   rest are small orders: the sweep's N/A-as-`—` render, the single-run leaderboard guards, the
-   OptiQ MTP FAIL wording, the mlx-lm prompt-cache question.
-3. Phase 4 order files are `.paul/orders/p4-*.md`; their `.log` files are untracked transcripts
-   and can be deleted.
+1. Jason's two calls in STATE Blockers/Concerns: the fixed seed disables batching on mlx-lm and OptiQ
+   (so the 2026-09-16 "none batch" finding is partly harness-induced), and AGENTS.md's sampler/chat-template
+   pinning rule vs what the harness does.
+2. Remaining Deferred Issues are small or waiting on a trigger (Osaurus pin copies whose semantics differ,
+   `cached_tokens` not recorded, CI, disk audit, old run dirs, thinking-off MMLU).
+3. Phase 4 and v3.1 order files are `.paul/orders/{p4,v31}-*.md`; their `.log` files are untracked
+   transcripts and can be deleted.
