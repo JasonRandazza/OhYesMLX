@@ -854,7 +854,8 @@ three cached ones recommend `temperature 0.2` / `top_k 80` (LFM2.5-8B-A1B-OptiQ-
 `temperature 0.7` / `top_p 0.8` / `top_k 20` / `min_p 0.0` (Qwen3.5-4B and Qwen3.6-35B-A3B).
 
 The three that matter most are the ones the request body does not carry:
-`measure._request` sends `temperature` and `seed` and nothing else, so an injected `--top-p`,
+`measure._request` sends `temperature` and no other sampler field — and `seed` only on the cells
+whose runtime keeps it (`runtimes.Runtime.request_seed`, §9.2) — so an injected `--top-p`,
 `--top-k` or `--min-p` would otherwise set the sampling distribution from a line in the
 artifact, with nothing in the recorded command saying so.
 
@@ -1312,11 +1313,20 @@ installed by patching `mlx_lm.server.stream_generate` (`serve.py:470-471`), whic
 path calls (`_serve_single`, `mlx_lm/server.py:976`) and the `BatchGenerator` path never does. The
 two ways a request is routed sequentially are `_is_batchable` being false — which happens when
 `args.seed is not None` (`server.py:685-686`) — or a KV-quant flag forcing it
-(`force_sequential_for_kv_quant`, `serve.py:95-143`). **This harness always sends `seed: 0`**
-(`measure.SEED`), so every measured OptiQ request takes the sequential path and MTP applies.
-`--max-concurrent 1` alone does *not* do this: it sets `--decode-concurrency 1`
-(`cli.py:2937-2949`), and a batch of one still goes through `BatchGenerator`. A harness that
-stopped sending a seed would silently measure plain autoregressive under an MTP header pin.
+(`force_sequential_for_kv_quant`, `serve.py:95-143`). **A depth cell therefore keeps the seed**:
+`runtimes.Optiq.request_seed` overrides the harness's policy for exactly `mtp_depth` 1/2/3, and
+every request of such a cell carries `SEED` (`measure._visit` asks once per visit and the row
+records it as `request_seed`). A harness that stopped sending it would silently measure plain
+autoregressive under an MTP header pin — which is why the exception exists.
+
+**Every other OptiQ cell sends no seed at all** at temperature 0
+(`runtimes.Runtime.request_seed` — the policy and its rationale are written there, once, and
+switched on 2026-09-26). Omitting it is what puts an ordinary measured OptiQ request on the
+**batched** path, which is what everyday clients use and therefore what the format and runtime
+axes are about; the loop's own request body drops the key entirely when the value is `None`
+(`transport.py:181-182`). `--max-concurrent 1` alone does *not* force the sequential path: it
+sets `--decode-concurrency 1` (`cli.py:2937-2949`), and a batch of one still goes through
+`BatchGenerator`.
 
 | Add | Why |
 |---|---|

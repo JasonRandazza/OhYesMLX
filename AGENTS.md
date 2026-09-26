@@ -41,9 +41,13 @@ varied and carries the caveat naming what it therefore cannot claim.
 - **Peak memory** — `footprint -p <pid>`. **Never `ps` RSS**: Metal buffers, mmap'd weights, and wired GPU memory account inconsistently under MLX. `peak_mb` is sound **within a runtime** and carries **no cross-runtime ranking**: Osaurus puts weights in wired GPU pages and oMLX in anonymous memory, and `phys_footprint` charges those differently (measured 2026-09-16; see `docs/research/2026-09-16-footprint-is-not-one-quantity.md`).
 - **On-disk size** — includes sidecar files (e.g. JANGTQ's runtime sidecar).
 
-Every measured run pins temperature 0, a fixed seed, a fixed chat template, and a fixed
-output length, and records every runtime's version. Runtimes ship different default
-`top_p` and `repetition_penalty`; leaving them unpinned invalidates the comparison.
+Every measured run pins temperature 0, a fixed chat template, and a fixed output length, and
+records every runtime's version. **At temperature 0 no seed is sent** (Jason, 2026-09-26): greedy
+decoding makes it inert, and a seeded request forces mlx-lm and OptiQ onto their sequential path,
+so a seeded harness never measures the batching path everyday clients use. The one exception is an
+OptiQ MTP depth cell, which keeps the seed because OptiQ's MTP engine exists only on that path.
+`Runtime.request_seed` is the one definition; each row records the seed it sent.
+Runtimes ship different default `top_p` and `repetition_penalty`; leaving them unpinned invalidates the comparison.
 
 Raw observations are never discarded. Summaries must stay recomputable from them.
 

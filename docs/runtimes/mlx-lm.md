@@ -6,7 +6,7 @@ established by starting the server; the harness coordinator runs live probes sep
 claim carries its evidence inline. Why this document exists: mlx-lm is the measurement control, and
 two of its behaviours were being read off its command line and got the answer wrong — the prompt
 cache is not a cache that can serve this model, and a pinned seed silently changes the whole
-serving path.
+serving path (the harness sends no seed at temperature 0 as of 2026-09-26 — §2).
 
 **Version.** `_version.py` → `__version__ = "0.31.3"`, the package
 `~/.local/share/ohyesmlx/mlx-lm-0.31.3/lib/python3.14/site-packages/mlx_lm/` that
@@ -42,10 +42,21 @@ def _is_batchable(self, args):
 (`server.py:685-686`). `model_provider.is_batchable` is true when there is no draft model and every
 cache from `make_prompt_cache(model)` has `merge` (`server.py:370-374`) — true for `qwen3_5_moe`
 (caches: `ArraysCache.merge`, `models/cache.py:702`; `KVCache.merge`, `:397`). **A request that
-carries a seed is therefore never batched**, and every harness run pins one
-(`measure.py:165`'s `SEED = 0`, applied per request at `:1073` and sent by `transport.py:181-182`).
+carries a seed is therefore never batched.**
+
+**The harness sends none at temperature 0** (Jason, 2026-09-26). Greedy decoding makes a seed
+inert, and the seed is what would select the sequential path, so
+`runtimes.Runtime.request_seed` — the one definition of the rule, where the rationale is written
+— answers `None` at `runtimes.TEMPERATURE == 0.0`; `measure._visit` asks it once per visit and
+stamps the answer on the row (`request_seed`), and `transport.py:181-182` adds the `seed` key to
+the body only when the value is not `None`. A measured cell therefore takes the **batched** path
+today, which is the one everyday clients use. The single exception is an **OptiQ cell at an MTP
+depth**, which keeps the seed because OptiQ's MTP engine is installed only on the sequential path
+(`runtimes.Optiq.request_seed`, docs/runtimes/optiq.md §9.2).
+
 Consequences of the sequential path
-(`_serve_single`, `server.py:922-1021`):
+(`_serve_single`, `server.py:922-1021`), which is what every column measured before this change
+ran — and what the OptiQ depth cells still run:
 
 - one cache insert per request, at the end of generation, keyed by `prompt + every generated token`
   (`server.py:969`, `:1006`, `:1019-1021`), `cache_type="assistant"`;
@@ -105,9 +116,11 @@ question `docs/research/2026-09-17-cache-state-split.md` holds).
 ## 5. Determinism in a cell
 
 `temperature 0.0` is greedy (`make_sampler` returns `argmax` at `temp == 0`,
-`sample_utils.py:46-47`) and a request's seed is re-applied per request (`server.py:955-957`), so a
-pinned-cell repeat of the same prompt reproduces the completion
-byte-for-byte — turn-02 of the ten-turn run's 24 warmups and 9 measured requests hold one distinct
+`sample_utils.py:46-47`) and greedy needs no RNG state, so a pinned-cell repeat of the same prompt
+reproduces the completion byte-for-byte **whether or not a seed is sent** — and the harness sends
+none (§2). A request's seed is re-applied per request when one *is* sent (`server.py:955-957`),
+which is the OptiQ depth cell's case. Measured under the always-seeded policy the columns before
+2026-09-26 ran: turn-02 of the ten-turn run's 24 warmups and 9 measured requests hold one distinct
 `reasoning_text`. That is what makes a cell's repeats comparable; it is also why repeated requests
 collapse onto one cache key rather than filling the LRU.
 
@@ -115,7 +128,9 @@ collapse onto one cache key rather than filling the LRU.
 
 1. **Whether a batchable (seed-less) run would actually hit for this conversation shape.** Source
    says it should: the boundary snapshot's key is a strict prefix of the next turn's prompt, so the
-   `shorter` branch would serve it with no trim needed. Not measured.
+   `shorter` branch would serve it with no trim needed. Not measured — but it is now the path a
+   measured cell takes, because the harness sends no seed at temperature 0 (§2), so the next run's
+   logs are where this gets its answer.
 2. **Whether mlx-lm can be given a prefix-keyed entry any other way.** The segment inserts
    (`server.py:864-880`) and `cache/prompt_cache` files aside, I found no insert path; the absence
    of others is a reading of the file, not a positive constraint.

@@ -98,7 +98,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import __version__, coherence, runtimes, sample, token_counter, transport
-from .runtimes import CACHE_STATES, KV_QUANTS, MTP_DEPTHS, STREAM_EXPERTS, RuntimeStopError
+from .runtimes import (
+    CACHE_STATES,
+    KV_QUANTS,
+    MTP_DEPTHS,
+    STREAM_EXPERTS,
+    TEMPERATURE,
+    Runtime,
+    RuntimeStopError,
+)
 
 # Imported at runtime, not under TYPE_CHECKING: load_run rebuilds a record with the class
 # that wrote it, from transport.py itself rather than from a re-bound module handle.
@@ -161,8 +169,10 @@ WARMUP_PLATEAU_PCT = 3.0  # the step between two window medians, in percent
 WARMUP_MODE = "plateau"
 
 VISIT_ROUNDS = 2
-TEMPERATURE = 0.0
-SEED = 0
+# The sampling pins -- ``runtimes.TEMPERATURE`` and ``runtimes.SEED`` -- are defined there
+# rather than here: `runtimes.Runtime.request_seed` is the one definition of what a request
+# carries and why, and it reads them. The one this module spells directly is the temperature,
+# which the header and every request body carry; the seed is asked of the runtime, never held.
 RESULTS_FILENAME = "results.jsonl"
 
 # A rate needs an interval. A runtime that returns the entire completion in a single content
@@ -271,6 +281,12 @@ class CellResult:
     # `load_run` carries ``None``, and a caller joining run directories passes each run's own
     # header pin to ``report.summarize`` instead.
     measured_pin: int | None = None
+    # The seed this cell's requests actually carried, or ``None`` when none was sent: the
+    # answer :meth:`runtimes.Runtime.request_seed` gave for this cell's runtime and depth pin,
+    # stamped here by :func:`_visit` before its requests are made. The run header records the
+    # policy for an ordinary cell (``run["seed"]``); this is the per-row fact, and the one
+    # exception -- OptiQ at an MTP depth keeps the seed -- is why the two can differ.
+    request_seed: int | None = None
 
 
 def decode_tps(observation) -> float | None:
@@ -405,6 +421,18 @@ def _warmup_pin(warmup: int | str) -> int | dict:
     }
 
 
+def _header_seed() -> int | None:
+    """The run header's ``seed``: what a cell with no depth exception sends.
+
+    Asked of a bare :class:`runtimes.Runtime` -- the base class, which carries no runtime's
+    override -- so the header states the policy :meth:`runtimes.Runtime.request_seed` defines,
+    with its rationale, rather than a second spelling of it here that could drift. ``None``
+    while ``TEMPERATURE == 0``; the per-row fact, the OptiQ-at-depth exception included, is
+    ``CellResult.request_seed``.
+    """
+    return Runtime(name="", port=0).request_seed(None)
+
+
 def _source_sha256() -> str:
     digest = hashlib.sha256()
     for path in sorted(Path(__file__).parent.glob("*.py"), key=lambda item: item.name):
@@ -484,6 +512,14 @@ def run_cells(
     are written to ``<results_dir>/results.jsonl`` after every visit, so a run that dies still
     has everything it had measured up to that point.
 
+    The **seed** is asked rather than pinned: ``runtimes.Runtime.request_seed`` is the one
+    definition of what a measured request carries, and at ``runtimes.TEMPERATURE == 0`` it
+    answers ``None`` -- the request body carries no ``seed`` key at all, which is what keeps an
+    mlx-lm or OptiQ request on its batchable serving path (the rationale is written at that
+    method). The header records the policy an ordinary cell sends as ``seed``; each row records
+    what its own cell sent as ``request_seed``, which is ``0`` on the one exception, an OptiQ
+    cell at an MTP depth.
+
     The returned results are in first-visit order, each cell's workloads kept together in the
     order they were given.
     """
@@ -541,7 +577,11 @@ def run_cells(
             for workload in workloads
         ],
         "temperature": TEMPERATURE,
-        "seed": SEED,
+        # The seed policy for an ordinary cell: `None` at temperature 0, where the requests
+        # carry no seed at all. The row says what its own cell sent (`request_seed`), and the
+        # one cell that differs is OptiQ at an MTP depth -- both rules live at
+        # `runtimes.Runtime.request_seed`.
+        "seed": _header_seed(),
         "warmup": warmup_pin,
         "measured": measured,
         # How the run drove the cells, pinned beside the sampling pins so a sweep declares it
@@ -789,7 +829,13 @@ def _visit(
 
         cold_visit = all(result.cold_load_s is None for result in results)
 
+        # The seed every request of this visit carries, asked of the runtime once: the policy is
+        # a property of (runtime, depth pin) and not of a request, and `runtimes.Runtime.request_seed`
+        # is its one definition. It is stamped on each row beside the start's own facts, so the
+        # record says what this cell sent rather than what the run's ordinary cell would have.
+        seed = runtime.request_seed(mtp_depth)
         for result in results:
+            result.request_seed = seed
             if result.cold_load_s is None:
                 result.cold_load_s = handle.cold_load_s
                 result.runtime_version = handle.version
@@ -805,7 +851,7 @@ def _visit(
 
         for result, workload in zip(results, workloads):
             memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
-                                     concurrency=concurrency, counter=counter)
+                                     concurrency=concurrency, counter=counter, seed=seed)
             result.memory = _highest_peak(result.memory, memory)
 
         # The second half of the depth pin, asked once the visit's measured requests have
@@ -871,6 +917,7 @@ def _workload_visit(
     quota: int,
     concurrency: int,
     counter,
+    seed: int | None,
 ) -> dict:
     """One workload's requests inside a visit, sampled over that workload's own window.
 
@@ -881,6 +928,10 @@ def _workload_visit(
     ``quota`` counts batches, and every request in one is kept: a batch at ``concurrency=4``
     leaves four observations and one span on the row, because the observations are what the
     per-request figures and the gate are read from and the span is what aggregate throughput is.
+
+    ``seed`` is the visit's resolved seed, asked of the runtime once (see :func:`_request`): it
+    is passed to the warmup window and to every measured batch alike, because a warmup that
+    took a different serving path from the requests it warms would be measuring another cell.
     """
     # The handle's pid, not the one this run spawned: a runtime whose launcher handed the
     # port to an app process is measured on the process that holds the weights.
@@ -890,12 +941,12 @@ def _workload_visit(
         result.warmup_plateau = _plateau_verdict(
             result.warmup_plateau,
             _warmup_window(handle, result, workload, warmup=warmup, concurrency=concurrency,
-                           counter=counter),
+                           counter=counter, seed=seed),
         )
         for _ in range(quota):
             observations, span = _batch(handle, workload.messages,
                                         max_tokens=workload.max_tokens, concurrency=concurrency,
-                                        counter=counter)
+                                        counter=counter, seed=seed)
             result.observations.extend(observations)
             if span is not None:
                 result.batch_spans.append(span)
@@ -912,6 +963,7 @@ def _warmup_window(
     warmup: int | str,
     concurrency: int,
     counter,
+    seed: int | None,
 ) -> bool | None:
     """One workload's warmup window, ending when the cell is warm or its budget is spent.
 
@@ -936,7 +988,7 @@ def _warmup_window(
     rates: list[float | None] = []
     while True:
         observations, span = _batch(handle, workload.messages, max_tokens=workload.max_tokens,
-                                    concurrency=concurrency, counter=counter)
+                                    concurrency=concurrency, counter=counter, seed=seed)
         result.warmup_observations.extend(observations)
         rates.append(_warmup_rate(observations, span, concurrency=concurrency))
         if fixed:
@@ -982,7 +1034,8 @@ def _warmup_rate(observations: list[Observation], span: float | None, *, concurr
 
 
 def _batch(
-    handle, messages: list[dict], *, max_tokens: int, concurrency: int, counter
+    handle, messages: list[dict], *, max_tokens: int, concurrency: int, counter,
+    seed: int | None,
 ) -> tuple[list[Observation], float | None]:
     """One batch: ``concurrency`` requests issued together, and the span of their clock.
 
@@ -999,16 +1052,23 @@ def _batch(
     re-implementing one -- the same :func:`_request` runs in it that runs sequentially, so
     there is one definition of TTFT, one decode window and one failure shape at every N.
 
+    ``seed`` is the visit's resolved policy answer and every request in the batch carries it;
+    it is a batch parameter here because it is a property of the visit, not of a request.
+
     # ponytail: one pool per batch, so thread creation lands inside the span it helps measure.
     # Ceiling: that span reads a fraction of a millisecond long and the aggregate a fraction
     # low -- the conservative direction. Upgrade path: one pool per visit, reused per workload.
     """
     if concurrency == 1:
-        return [_request(handle, messages, max_tokens=max_tokens, counter=counter)], None
+        return [
+            _request(handle, messages, max_tokens=max_tokens, counter=counter, seed=seed)
+        ], None
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [
-            pool.submit(_request, handle, messages, max_tokens=max_tokens, counter=counter)
+            pool.submit(
+                _request, handle, messages, max_tokens=max_tokens, counter=counter, seed=seed
+            )
             for _ in range(concurrency)
         ]
         observations = [future.result() for future in futures]
@@ -1060,8 +1120,17 @@ def _plateau_verdict(current: bool | None, window: bool | None) -> bool | None:
     return None
 
 
-def _request(handle, messages: list[dict], *, max_tokens: int, counter) -> Observation:
-    """One request, with the pins applied and a transport failure kept as an observation."""
+def _request(handle, messages: list[dict], *, max_tokens: int, counter,
+             seed: int | None) -> Observation:
+    """One request, with the pins applied and a transport failure kept as an observation.
+
+    ``seed`` is the value :meth:`runtimes.Runtime.request_seed` answered for this visit, asked
+    once per visit rather than per request because the policy is a property of the runtime and
+    the depth pin and not of a request. At temperature 0 it is ``None`` and the body carries no
+    ``seed`` key at all -- ``transport.chat`` adds the key only when the value is not ``None``
+    -- which is what keeps an mlx-lm or OptiQ request on its batchable path, and the value that
+    will be recorded on the row this request's numbers land on.
+    """
     started = time.monotonic()
     try:
         return transport.chat(
@@ -1070,7 +1139,7 @@ def _request(handle, messages: list[dict], *, max_tokens: int, counter) -> Obser
             messages,
             max_tokens=max_tokens,
             temperature=TEMPERATURE,
-            seed=SEED,
+            seed=seed,
             token_counter=counter,
             # oMLX answers an unauthenticated request with HTTP 401, and a run that never
             # sends this key measures a server that loaded no weights at all.
@@ -1312,6 +1381,12 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     the cells' KV caches were held in, with the same reading of its absence — and the value names
     are ``runtimes.KV_QUANTS``'. ``mtp_depth`` and ``stream_experts`` are the two after it, with
     the same reading of an absence again (``runtimes.MTP_DEPTHS``, ``runtimes.STREAM_EXPERTS``).
+    ``seed`` is the seed policy rather than a seed sent: it is what an ordinary cell's requests
+    carry (``runtimes.Runtime.request_seed``), which at ``runtimes.TEMPERATURE == 0`` is
+    ``None`` — no ``seed`` key in the request body at all, which is what keeps an mlx-lm or
+    OptiQ request on its batchable path. Each record's ``request_seed`` is the other half of it:
+    what that cell's requests actually carried, ``0`` on the one exception (an OptiQ cell at an
+    MTP depth) and ``None`` everywhere else.
 
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything
@@ -1348,6 +1423,10 @@ def _record(result: CellResult) -> dict:
         "memory": result.memory,
         "runtime_version": result.runtime_version,
         "disk_bytes": result.disk_bytes,
+        # The seed this row's requests carried, `None` when they carried none. Written on every
+        # record: the header states the run's policy (`seed`) and this is the per-row fact, so
+        # an OptiQ cell at an MTP depth reads 0 under a header whose ordinary answer is `None`.
+        "request_seed": result.request_seed,
         "measured_count": len(result.observations),
         "warmup_count": len(result.warmup_observations),
         # How the warmup window ended, beside how long it ran. A row that hit the cap was
@@ -1470,6 +1549,12 @@ def _cell_result(record: dict, path: Path, number: int) -> CellResult:
             # absence IS the fact here rather than a default standing in for something unknown.
             lost_visit_reason=record.get("lost_visit_reason"),
             cold_load_after_lost_visit=record.get("cold_load_after_lost_visit", False),
+            # Read leniently, and the default is the historical fact rather than a stand-in:
+            # every record on disk that lacks this key was written before the seed was omitted
+            # at temperature 0, so the request body of every one of them carried `SEED`, which
+            # was 0 -- and its own header says `seed: 0`. A record that has the key says what
+            # it sent, `None` included, because a present `null` is a value and not an absence.
+            request_seed=record.get("request_seed", 0),
             memory=record["memory"],
             runtime_version=record["runtime_version"],
             disk_bytes=record["disk_bytes"],

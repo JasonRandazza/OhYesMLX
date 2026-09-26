@@ -119,7 +119,7 @@ class FakeRuntime:
                  cache_state_refusals=None, kv_quant_refusals=None,
                  mtp_depth_refusals=None, stream_experts_refusals=None,
                  stream_experts_missing=None, mtp_depth_missing=None, log_path=None,
-                 api_key=None):
+                 api_key=None, seed=None, seeded_depths=()):
         self.name = name
         self.port = port
         self.version = version
@@ -130,6 +130,12 @@ class FakeRuntime:
         self.recorder = recorder
         self.attempts = 0
         self.handles: list[FakeHandle] = []
+        # What this runtime's `request_seed` answers when it keeps one, and at which depths it
+        # keeps it: the real base policy answers `None` at temperature 0 for every depth, and
+        # the real OptiQ answers `SEED` at an MTP depth, so these two knobs are the whole
+        # difference a test needs to drive.
+        self.seed = seed
+        self.seeded_depths = tuple(seeded_depths)
         # ``{state: reason}`` for the states this runtime cannot be driven into. Empty by
         # default: every real runtime but Osaurus reaches both with a start flag, and the
         # absent pin reaches both everywhere.
@@ -168,6 +174,15 @@ class FakeRuntime:
 
     def stream_experts_refusal(self, stream_experts):
         return self.stream_experts_refusals.get(stream_experts)
+
+    def request_seed(self, mtp_depth):
+        """This runtime's seed policy, recorded so a test can see it was asked.
+
+        ``None`` unless the depth is one this fake keeps the seed at -- the real base policy,
+        with the real OptiQ's one exception as a knob rather than a fact about the fake.
+        """
+        self.recorder.log("request_seed", self.name, mtp_depth)
+        return self.seed if mtp_depth in self.seeded_depths else None
 
     def stream_experts_missing(self, stream_experts, log_path):
         if stream_experts != "on":
@@ -942,15 +957,63 @@ def test_a_visit_persists_one_line_per_workload_pair(harness):
 # ------------------------------------------------------------------------- every request
 
 
-def test_every_request_pins_temperature_zero_and_the_fixed_seed(harness):
+def test_every_request_pins_temperature_zero_and_sends_no_seed(harness):
+    """At temperature 0 the decode is greedy, so a seed changes no token it produces -- and a
+    request that carries one takes mlx-lm's and OptiQ's sequential path
+    (`runtimes.Runtime.request_seed`), which is the path a seeded harness would never stop
+    measuring. So the body carries no seed at all."""
     harness.add_runtime("mlxlm")
 
     harness.run([harness.cell("oq__mlxlm", "mlxlm")])
 
     assert harness.transport.calls
     assert {call.temperature for call in harness.transport.calls} == {0.0}
-    assert {call.seed for call in harness.transport.calls} == {0}
+    assert {call.seed for call in harness.transport.calls} == {None}
     assert measure.TEMPERATURE == 0.0
+
+
+def test_the_header_records_the_seed_policy_and_each_row_what_its_cell_sent(harness):
+    harness.add_runtime("mlxlm")
+
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")])
+
+    assert harness.header()["seed"] is None
+    record, = harness.lines()
+    assert record["request_seed"] is None
+
+
+def test_only_a_cell_whose_runtime_keeps_the_seed_carries_one(harness):
+    """The one exception to the policy: an OptiQ cell at an MTP depth, because OptiQ's MTP
+    engine is installed on the sequential path only (`runtimes.Optiq.request_seed`). Its row
+    says 0 under a header whose ordinary answer is None; the other cells still send none."""
+    harness.add_runtime("optiq", port=8080, seed=0, seeded_depths=("1", "2", "3"))
+    harness.add_runtime("mlxlm")
+
+    harness.run(
+        [harness.cell("oq__optiq", "optiq"), harness.cell("oq__mlxlm", "mlxlm")],
+        mtp_depth="2",
+        measured=1,
+    )
+
+    seeded = {
+        call.seed for call in harness.transport.calls
+        if call.base_url == "http://127.0.0.1:8080/v1"
+    }
+    plain = {
+        call.seed for call in harness.transport.calls
+        if call.base_url == "http://127.0.0.1:8081/v1"
+    }
+    assert seeded == {0}
+    assert plain == {None}
+    assert harness.header()["seed"] is None
+    assert {
+        record["cell"]["runtime"]: record["request_seed"] for record in harness.lines()
+    } == {"optiq": 0, "mlxlm": None}
+    # Asked once per visit, not once per request.
+    assert harness.recorder.of("request_seed") == [
+        ("optiq", "2"),
+        ("mlxlm", "2"),
+    ]
 
 
 def test_every_request_carries_its_workload_s_max_tokens(harness):
@@ -1652,7 +1715,9 @@ def test_the_persisted_record_carries_raw_observations_and_the_pins(harness):
 
     header = harness.header()
     assert header["temperature"] == 0.0
-    assert header["seed"] == 0
+    # The header carries the seed *policy*, and at temperature 0 the policy is to send none:
+    # the run's ordinary cells carry no seed, which is what the row beside this one records.
+    assert header["seed"] is None
     assert header["warmup"] == WARMUPS
     assert header["measured"] == MEASURED
     # The run-level max_tokens is gone on purpose: three workloads carry three caps, and one
@@ -1667,6 +1732,9 @@ def test_the_persisted_record_carries_raw_observations_and_the_pins(harness):
     assert record["cell"] == {"id": "oq__mlxlm", "runtime": "mlxlm",
                               "artifact_dir": cells[0].artifact_dir, "label": "affine-4bit"}
     assert record["status"] == "PASS"
+    # What this cell's requests actually carried, beside the header's policy: an ordinary cell
+    # sends no seed at temperature 0, and the request bodies above are the same fact.
+    assert record["request_seed"] is None
     assert record["cold_load_s"] == pytest.approx(7.5)
     assert record["first_request_s"] == pytest.approx(2.6)
     assert record["runtime_version"] == "0.31.3"
@@ -1906,9 +1974,16 @@ def test_load_run_round_trips_every_record_of_a_real_run():
     for index, result in enumerate(results):
         line = lines[index + 1]
         # A column written before the plateau rule carries no `warmup_plateau`, and the loader
-        # reads that absence as the `None` it honestly is. The round trip is otherwise exact:
-        # every other field has to come back byte for byte.
-        assert measure._record(result) == {**line, "warmup_plateau": line.get("warmup_plateau")}
+        # reads that absence as the `None` it honestly is. The same for `request_seed`: no
+        # record on disk carries the key, and every one of them sent `SEED` (0) -- its own
+        # header says `seed: 0` -- so the rebuilt object holds that 0 and writes it back. Every
+        # other field has to come back byte for byte.
+        assert result.request_seed == 0
+        assert measure._record(result) == {
+            **line,
+            "warmup_plateau": line.get("warmup_plateau"),
+            "request_seed": line.get("request_seed", 0),
+        }
 
 
 def test_the_run_directory_and_its_file_read_the_same(tmp_path):
@@ -2522,12 +2597,13 @@ def test_a_concurrency_one_run_is_byte_identical_to_one_that_never_heard_of_conc
     record, = harness.lines(harness.tmp_path / "pinned")
     # And byte-identical is checked against the fields the writer emitted before there was a
     # batch to span: nothing ran a batch, so nothing claims a span. A reader of an older column
-    # gets `[]` from the same absence.
+    # gets `[]` from the same absence. `request_seed` is the writer's key for what the cell
+    # sent, written on every record (the run header owns the policy it departs from).
     assert set(record) == {
         "cell", "workload_id", "status", "reason", "cold_load_s", "first_request_s",
         "first_request_workload_id", "memory", "runtime_version", "disk_bytes",
         "measured_count", "warmup_count", "warmup_plateau", "drift", "observations",
-        "warmup_observations",
+        "warmup_observations", "request_seed",
     }
     assert pinned[0].batch_spans == []
     assert len(pinned[0].observations) == MEASURED

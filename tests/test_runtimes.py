@@ -2878,3 +2878,49 @@ def test_optiq_records_the_version_and_not_the_sentence_around_it():
     assert optiq.parse_version("0.5.6") == "0.5.6"
     assert optiq.parse_version("optiq v0.5.6") == "optiq v0.5.6"
     assert optiq.parse_version("") == "unknown: empty version output"
+
+
+# --------------------------------------------------------------------------------------
+# the seed policy (`Runtime.request_seed`)
+# --------------------------------------------------------------------------------------
+
+
+def test_the_base_seed_policy_sends_nothing_at_temperature_zero():
+    """At temperature 0 the decode is greedy, so a seed changes no token -- and a request that
+    carries one takes mlx-lm's sequential path (`_is_batchable` is false on `args.seed is not
+    None`, server.py:685-686), which is the path a seeded harness would never stop measuring.
+    The rationale is written once, at the method; this is that it holds for the four runtimes
+    that take it."""
+    assert runtimes.TEMPERATURE == 0.0
+    assert runtimes.SEED == 0
+
+    for name in ("mlxlm", "osaurus", "omlx", "vmlx"):
+        runtime = RUNTIMES[name]
+        assert runtime.request_seed(None) is None
+        for mtp_depth in runtimes.MTP_DEPTHS:
+            assert runtime.request_seed(mtp_depth) is None
+
+
+def test_optiq_keeps_the_seed_only_at_an_mtp_depth():
+    """Its MTP engine is installed by patching `stream_generate` (`optiq/serve.py:470-471`),
+    which the batch path never calls -- so a depth cell that stopped sending the seed would
+    measure plain autoregressive and publish it under an MTP header pin."""
+    optiq = RUNTIMES["optiq"]
+
+    assert optiq.request_seed(None) is None
+    assert optiq.request_seed(runtimes.MTP_DEPTH_OFF) is None
+    assert [optiq.request_seed(mtp_depth) for mtp_depth in runtimes.MTP_DEPTHS[1:]] == [
+        runtimes.SEED,
+    ] * len(runtimes.MTP_DEPTHS[1:])
+
+
+def test_the_other_four_runtimes_inherit_the_policy_rather_than_restating_it():
+    """A runtime that overrode `request_seed` with the base answer would be a second copy of
+    one policy. Only OptiQ has one, and its override delegates for the values it does not
+    except."""
+    overridden = [
+        name for name, runtime in RUNTIMES.items()
+        if "request_seed" in type(runtime).__dict__
+    ]
+
+    assert overridden == ["optiq"]

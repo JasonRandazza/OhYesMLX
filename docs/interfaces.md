@@ -101,6 +101,7 @@ class Runtime:
               stream_experts: str | None = None) -> "Handle": ...  # see "Phase 6 plan 06-02",
                                                                # "Phase 4 study 03-05" and
                                                                # "Phase 4 studies 03-06, 03-03"
+    def request_seed(self, mtp_depth: str | None) -> int | None: ...       # see "the seed" below
     def cache_state_refusal(self, cache_state: str | None) -> str | None: ...
     def kv_quant_refusal(self, kv_quant: str | None) -> str | None: ...    # 03-05, below
     def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None: ...
@@ -146,6 +147,12 @@ spawn's stdout and stderr were redirected into, and it is the only place a state
 silently decline is visible (see "Phase 4 studies 03-06, 03-03"). `Runtime.start` sets it from
 the path it spawned into; a handle built without a spawn carries `None`, and an `on` cell that
 cannot be checked is a `FAIL` rather than a pass.
+
+`request_seed` is the one method here that decides a **request body** rather than a lifecycle: it
+answers the seed a measured request carries, `None` while `runtimes.TEMPERATURE == 0`, and
+`Optiq` overrides it to keep `SEED` at an MTP depth. The policy and its entire rationale are
+written once at that method; `measure` asks it rather than holding a second copy (see
+"`seed` is a policy, and `request_seed` is what a row sent").
 
 **Readiness is decided by the runtime's log, not by the port.** Observed on mlx-lm 0.31.3:
 on a model-load failure the server still binds its port and logs `Starting httpd` after the
@@ -195,6 +202,7 @@ class CellResult:
     lost_visit_reason: str | None = None    # a planned visit that never measured. See the short-window section.
     cold_load_after_lost_visit: bool = False
     measured_pin: int | None = None         # the run's batch pin; not written to the record
+    request_seed: int | None = None         # what this cell's requests sent. See "the seed" below.
 
 def run_cells(cells: list[Cell], workloads: list[Workload], *,
               warmup: int | str = "plateau", measured: int = 9, concurrency: int = 1,
@@ -212,7 +220,34 @@ A **record** carries every `CellResult` field except `measured_pin`, adds three 
 cell: `batch_spans` (a sequential cell ran no batch and took no clock), `lost_visit_reason` (no
 visit was lost) and `cold_load_after_lost_visit`. `load_run` reads those three back leniently;
 `measured_pin` is never in the file at all, because the run header owns it — one copy per run,
-and a result rebuilt by `load_run` carries `None`.
+and a result rebuilt by `load_run` carries `None`. `request_seed` is carried like any other
+field, and unlike those three it is written on **every** record — the header states the run's
+policy and the row states what its own cell sent, so an OptiQ-at-depth row reads `0` under a
+header whose ordinary answer is `null`.
+
+### `seed` is a policy, and `request_seed` is what a row sent
+
+Every measured request pins `temperature` 0 and, **at temperature 0, no seed at all**. That is not
+a reproducibility choice: greedy decoding makes a seed inert (a temperature-0 completion is
+deterministic without one), and a request that carries a seed takes mlx-lm's **sequential**
+serving path — `_is_batchable` is false on `args.seed is not None` (`mlx_lm/server.py:685-686`)
+— and OptiQ is that same server. A seeded harness therefore never measures the `BatchGenerator`
+path everyday clients use, which is the path both axes are about.
+`runtimes.Runtime.request_seed` is the one definition of the rule and holds its rationale;
+`measure._visit` asks it once per visit and hands the answer to every request of the visit, so
+the warmup and the measured batches take the same path.
+
+The header's `seed` is therefore the **policy for an ordinary cell** — `None` while
+`runtimes.TEMPERATURE == 0` — and each record's `request_seed` is the per-row fact: what that
+cell's requests actually carried. The two differ in exactly one place, an **OptiQ cell at an MTP
+depth**, which keeps the seed because OptiQ installs MTP on the same sequential path
+(`runtimes.Optiq.request_seed`, and docs/runtimes/optiq.md); such a row reads `0`.
+
+Join guard 1 compares the header field (`PIN_FIELDS`), so a run measured now (`seed: None`)
+refuses to join one measured before this change (`seed: 0`): the old columns were measured on
+the sequential path and the new ones are not. `request_seed` is not a pin — it is a record of
+what happened — and a record written before the key existed has none and **sent `0`** (its own
+header says `seed: 0`), which is what `load_run` reads that absence as.
 
 ### `cold_load_s` alone cannot be compared across runtimes
 
@@ -363,9 +398,12 @@ Line 1 of the file is the **run header**: the pins — `temperature`, `seed`, `w
 `stream_experts`, `cooldown_s` — the
 `workloads` the run measured, each with its own `messages` and `max_tokens` (`max_tokens` is a
 workload field, never a run-level pin), and the `harness` block (`version`, `source_sha256`).
-Every line after it is one (cell, workload) pair. A header written before a pin existed simply
+Every line after it is one (cell, workload) pair, and each carries `request_seed`, the seed that
+pair's requests actually sent. A header written before a pin existed simply
 lacks that key — `load_run` returns a header as the dict it is and callers `.get` what they
-need, so an absent key reads as the absence it was.
+need, so an absent key reads as the absence it was. `seed` is the header's own reading of that:
+it is the **policy** an ordinary cell sends (see "`seed` is a policy" above), not a seed this
+run sent.
 
 A stored observation carries **only the `Observation` fields** — never `decode_tps`,
 `prefill_tps`, or `itl_s`. Those are derived, and `report.summarize` computes them from the

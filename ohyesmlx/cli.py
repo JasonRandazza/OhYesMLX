@@ -40,7 +40,7 @@ WORKLOAD_SETS = ("pinned", "multiturn")
 # Pinned for v1: three workload shapes, and no more. One shape measures one corner of the
 # space, and a column keyed by shape is the only honest way to publish them: prefill-heavy and
 # decode-heavy work can have different winners, so a figure averaged across shapes describes
-# no shape that was ever run. measure.py pins temperature 0 and a fixed seed; the prompts and
+# no shape that was ever run. runtimes.py pins temperature 0 and decides the seed (Runtime.request_seed); the prompts and
 # the output caps live here so two runs are the same two runs.
 #
 # `chat` is the short prompt with a 128-token cap: latency and per-request overhead.

@@ -317,6 +317,14 @@ STREAM_EXPERTS_OFF = "off"
 STREAM_EXPERTS_ON = "on"
 STREAM_EXPERTS = (STREAM_EXPERTS_OFF, STREAM_EXPERTS_ON)
 
+# The run's sampling pins, and the seed they leave unsent. They are defined here rather than in
+# `measure.py` because `Runtime.request_seed` -- the one definition of the seed policy, where
+# its rationale is written -- reads them, and the dependency between the two modules runs one
+# way: measure imports runtimes, never the other way. `measure` records the temperature in the
+# run header and asks for the seed through that method rather than holding a copy of the value.
+TEMPERATURE = 0.0
+SEED = 0
+
 # Osaurus's `concurrency.smeltMode` is the one place its expert behaviour is decided, and it is
 # host state: the enum is `engineSelected | disabled | flashMoE | ssdStreaming`
 # (docs/runtimes/osaurus.md:298, and the same four words are in the app binary's key table). It
@@ -1658,6 +1666,31 @@ class Runtime:
     def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
         raise NotImplementedError
 
+    def request_seed(self, mtp_depth: str | None) -> int | None:
+        """The seed a measured request carries, or ``None`` when none may be sent.
+
+        ``None`` while ``TEMPERATURE == 0`` and ``SEED`` otherwise, and the reason is the
+        serving path rather than reproducibility. Temperature 0 is greedy decoding, so a seed
+        changes no token the model produces -- and a request that carries one takes mlx-lm's
+        **sequential** path, because the gate there is ``self.model_provider.is_batchable and
+        args.seed is None`` (``mlx_lm/server.py:685-686``). OptiQ is that same server, so a
+        seeded harness measures one request at a time on both and never the ``BatchGenerator``
+        path everyday clients use, which is the path this study is about. Nothing is lost by
+        omitting it: greedy argmax is deterministic without a seed (``sample_utils.py:46-47``;
+        docs/runtimes/mlx-lm.md §2). oMLX and vMLX read a request seed as best-effort RNG or
+        sampler state and never route on it (``omlx/scheduler.py:5372-5373``, ``:10640``;
+        ``vmlx_engine/scheduler.py:3898-3923``, ``sampling.py:126-138``), so the omission
+        moves nothing about their serving path.
+
+        The one exception is a cell whose mechanism lives **only** on the sequential path, and
+        the runtime that has one overrides this: :meth:`Optiq.request_seed` keeps the seed at
+        an MTP depth. Every other runtime and every other value takes the answer here.
+        ``measure`` asks this once per visit and records the answer twice: in the run header as
+        ``seed`` -- the policy an ordinary cell sends -- and on each row as ``request_seed``,
+        which is what that cell actually sent.
+        """
+        return None if TEMPERATURE == 0 else SEED
+
     def api_key(self) -> str | None:
         return None
 
@@ -2399,6 +2432,20 @@ class Optiq(Runtime):
 
     def version_command(self) -> tuple[str, ...]:
         return ("optiq", "--version")
+
+    def request_seed(self, mtp_depth: str | None) -> int | None:
+        """Keep the seed at a depth: OptiQ's MTP engine exists only on the sequential path.
+
+        MTP is installed by patching ``mlx_lm.server.stream_generate``
+        (``optiq/serve.py:470-471``), which the ``BatchGenerator`` path never calls -- so a
+        depth cell that stopped sending the seed would take the batched path, decode plain
+        autoregressive, and publish that under an MTP header pin. ``off`` and the absent pin
+        take the base answer: neither claims a draft head, so there is nothing on the
+        sequential path for them to lose.
+        """
+        if mtp_depth in MTP_DEPTHS[1:]:
+            return SEED
+        return super().request_seed(mtp_depth)
 
     def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
         """The second runtime a depth can be driven into, decided from the artifact.

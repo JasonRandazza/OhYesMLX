@@ -70,12 +70,19 @@ Anything that varies both axes at once is a press release, not a benchmark.
 - **On-disk size** — including sidecar files, so no format gets credited with a smaller
   footprint than it has.
 
-Every run pins temperature 0 and a fixed seed **in the request body**, records each workload's
-prompt and output cap, and records every runtime version. OptiQ is started with its sampler
-flags pinned too (`--temp 0 --top-p 1 --top-k 0 --min-p 0`, `runtimes.Optiq.start_command`):
+Every run pins temperature 0 **in the request body** — and at temperature 0 it sends **no seed at
+all**. Greedy decoding makes a seed inert, and a request that carries one takes mlx-lm's and
+OptiQ's *sequential* serving path, so a seeded harness never measures the batching path everyday
+clients use; the rule and its evidence are written once, at `runtimes.Runtime.request_seed`. One
+cell keeps the seed: an OptiQ run pinned at an MTP depth (`--mtp-depth 1|2|3`), because OptiQ's
+MTP engine is installed on that same sequential path (`runtimes.Optiq.request_seed`). The run
+header records the policy as `seed` (`null` at temperature 0) and every result row records what
+its own cell actually sent as `request_seed`, so a depth row reads `0`. Every run also records
+each workload's prompt and output cap, and every runtime version. OptiQ is started with its
+sampler flags pinned too (`--temp 0 --top-p 1 --top-k 0 --min-p 0`, `runtimes.Optiq.start_command`):
 left to itself, `optiq serve` injects an artifact's own `generation_config.json` sampling
-values into the command. The other four runtimes are asked for temperature 0 and the seed and
-nothing else, so their `top_p`, `top_k`, `min_p` and `repetition_penalty` are whatever those
+values into the command. The other four runtimes are asked for temperature 0 and nothing else,
+so their `top_p`, `top_k`, `min_p` and `repetition_penalty` are whatever those
 servers default to — which is why a row is read beside the runtime version it was measured
 under.
 

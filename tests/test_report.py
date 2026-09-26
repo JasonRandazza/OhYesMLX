@@ -3012,6 +3012,27 @@ def test_guard_1_refuses_two_runs_that_pinned_a_header_field_differently():
     assert_refused(runs, RUN_A, RUN_B, "temperature")
 
 
+def test_guard_1_refuses_a_new_run_against_an_old_seed_zero_run():
+    """A run measured now sends no seed at temperature 0 and its header says so -- `seed:
+    None`, the policy for an ordinary cell (`runtimes.Runtime.request_seed`, where the
+    rationale lives). Every run measured before it pinned `0`, and a seeded request selects
+    the sequential serving path on mlx-lm and OptiQ, so the two columns are not one grid.
+    The refusal is the guard's own: no field was added to make it fire."""
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(
+            RUN_B,
+            "omlx",
+            "oMLX 0.6.4",
+            ("oq4",),
+            workload_ids=("chat",),
+            header=run_header(("chat",), seed=None),
+        ),
+    ]
+
+    assert_refused(runs, RUN_A, RUN_B, "seed=0", "seed=None", "not one grid")
+
+
 def test_guard_1_refuses_a_concurrent_column_in_a_sequential_grid():
     """The defect plan 06-01c closes: 06-01b pinned the concurrency in the header and never
     added it here, so an N=8 run would have joined an N=1 grid without a word. It is refused
