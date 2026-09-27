@@ -151,7 +151,7 @@ Verified against `omlx/cli.py:1040–1230` and `omlx serve --help`.
 | `--log-level` | `None` | `info` | `trace` includes full message content |
 | `--sse-keepalive-mode` | `None` | `chunk` | `chunk` = protocol-aware no-op event; `comment` = legacy `: keep-alive`; `off` = none. **See §6.3 — this is a measurement hazard.** |
 | `--max-audio-upload-size` | `None` | `100MB` | Per-request RAM cap for audio uploads |
-| `--max-concurrent-requests` | `None` | `8` | Concurrent requests; higher = more memory |
+| `--max-concurrent-requests` | `None` | `8` | Concurrent requests; higher = more memory. **The harness passes the run's `concurrency` here** (`runtimes.Omlx.start_command`), so an N-request sweep gets N; at N=1 this is the flag that used to read a hard-coded `1`. It is also the value `settings.py:1710-1712` hands the BatchGenerator's `completion_batch_size`, and admission is gated on it (`scheduler.py:9979-9982`) |
 | `--embedding-batch-size` | `None` | `32` | Embedding inputs per forward pass |
 | `--memory-guard` | `None` | `balanced` | `off`/`safe`/`balanced`/`aggressive`; passing a tier turns the guard **on** |
 | `--memory-guard-gb` | `None` | unset | Custom ceiling in GB; sets tier to `custom` and turns the guard on |

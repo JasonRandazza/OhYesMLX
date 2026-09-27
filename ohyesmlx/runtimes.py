@@ -1552,6 +1552,7 @@ class Runtime:
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[str, ...]:
         raise NotImplementedError
 
@@ -1706,6 +1707,7 @@ class Runtime:
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[tuple[str, ...], str | None]:
         """The argv to spawn, plus any scratch tree a stop will have to remove."""
         return (
@@ -1716,6 +1718,7 @@ class Runtime:
                 kv_quant=kv_quant,
                 mtp_depth=mtp_depth,
                 stream_experts=stream_experts,
+                concurrency=concurrency,
             ),
             None,
         )
@@ -1782,6 +1785,7 @@ class Runtime:
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> Handle:
         """Spawn the runtime, hold until it can answer, and return its handle.
 
@@ -1794,6 +1798,11 @@ class Runtime:
         -- ``None`` is no flag at all -- and their refusals are likewise the loop's to ask.
         *stream_experts*' second half is asked by the loop as well, after this returns: see
         :meth:`stream_experts_missing`.
+
+        *concurrency* is not a pin but the run's own batch width
+        (``measure.run_cells(concurrency=N)``), threaded into the start command for the three
+        runtimes that carry a cap and ignored by the two that do not. :meth:`Omlx.start_command`
+        is where that rule and its reason are written.
         """
         if not _port_is_free(self.port):
             raise RuntimeStartError(
@@ -1814,6 +1823,7 @@ class Runtime:
             kv_quant=kv_quant,
             mtp_depth=mtp_depth,
             stream_experts=stream_experts,
+            concurrency=concurrency,
         )
         log_path = _log_path(self.name)
         started = _now()
@@ -1895,11 +1905,14 @@ class MlxLm(Runtime):
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[str, ...]:
         # `off` and the absent pin are one command here for all three of the codec, depth and
         # streaming pins -- there is no flag to add for any of them, which is the whole of the
         # refusals below. No codec value, no depth and no `on` reaches this method: the loop
-        # asks first and skips the cell.
+        # asks first and skips the cell. *concurrency* is ignored -- this command passes no
+        # batch cap at all, so the server's own batching is already what the run's N finds
+        # (see `Omlx.start_command`, where the cap rule is written).
         return (
             "python",
             "-m",
@@ -1994,11 +2007,14 @@ class Osaurus(Runtime):
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[str, ...]:
         # No model and no tuning on the command line: what a cell measures is decided by
         # ~/.osaurus/config, which check_host_state refuses to run away from. All four pins are
         # more of those settings, so none adds a flag here in any state -- and the states they
-        # cannot be asked for are refused by the refusals below, never faked.
+        # cannot be asked for are refused by the refusals below, never faked. *concurrency* is
+        # ignored for the same reason: this runtime takes no flags at all (see
+        # `Omlx.start_command`, where the cap rule is written).
         return ("osaurus", "serve", "--port", str(self.port), "--yes")
 
     def cache_state_refusal(self, cache_state: str | None) -> str | None:
@@ -2203,7 +2219,19 @@ class Omlx(Runtime):
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[str, ...]:
+        # The concurrency cap follows the run's own batch width, and this is the first of the
+        # three caps in this file. `measure.run_cells(concurrency=N)` drives N requests at once,
+        # so a cap hard-coded to 1 makes a sweep at N>1 measure the harness's cap instead of the
+        # runtime's own batching -- which is exactly what the 2026-09-27 sweep measured before
+        # this existed (results/sweep-conc-seedless). oMLX's cap is
+        # `--max-concurrent-requests`; OptiQ's `--max-concurrent` and vMLX's `--max-num-seqs` are
+        # the same edit and point back here. mlx-lm passes no cap and Osaurus takes no flags, so
+        # those two accept `concurrency` and ignore it. At `concurrency=1` -- the value of every
+        # run measured before this change -- `str(concurrency)` is the same "1" that sat here,
+        # so every recorded command stays byte-identical.
+        #
         # `off` here is structural and adds nothing: the per-run base path this runtime is
         # handed holds no model_settings.json, so turboquant_kv_enabled sits at its False
         # default whatever the pin says -- see kv_quant_refusal below, which is also where a
@@ -2218,7 +2246,7 @@ class Omlx(Runtime):
             "--port",
             str(self.port),
             "--max-concurrent-requests",
-            "1",
+            str(concurrency),
             "--memory-guard",
             "off",
         )
@@ -2326,6 +2354,7 @@ class Omlx(Runtime):
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[tuple[str, ...], str | None]:
         scratch = create_omlx_scratch(artifact_dir, model_id)
         command = tuple(
@@ -2337,6 +2366,7 @@ class Omlx(Runtime):
                 kv_quant=kv_quant,
                 mtp_depth=mtp_depth,
                 stream_experts=stream_experts,
+                concurrency=concurrency,
             )
         )
         return command + (
@@ -2359,6 +2389,7 @@ class Optiq(Runtime):
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[str, ...]:
         # The KV-codec pin, in the flags OptiQ consumes itself -- these are its own options and
         # are not forwarded to the mlx_lm.server underneath it. `off` is the absence of both
@@ -2408,8 +2439,13 @@ class Optiq(Runtime):
             # that is not there contradicts a 32k figure beside it. `off` is what is true.
             "--max-context",
             "off",
+            # The run's batch width, in OptiQ's own cap: see `Omlx.start_command` for why the cap
+            # follows the run rather than sitting at 1. `--max-concurrent N` is injected as
+            # decode-concurrency N / prompt-concurrency max(1, N//4) unless the underlying flags
+            # are passed (`optiq/cli.py:2937-2949`), and it is the decode one that sizes the
+            # BatchGenerator's `completion_batch_size` (`mlx_lm/server.py:823`).
             "--max-concurrent",
-            "1",
+            str(concurrency),
             "--idle-timeout",
             "0",
             "--context-scale",
@@ -2621,6 +2657,7 @@ class Vmlx(Runtime):
         kv_quant: str | None = None,
         mtp_depth: str | None = None,
         stream_experts: str | None = None,
+        concurrency: int = 1,
     ) -> tuple[str, ...]:
         # The KV-codec pin's one explicit off in this set, and the only value of the three this
         # runtime can be driven into: `--kv-cache-quantization none` is a real accepted value
@@ -2694,8 +2731,11 @@ class Vmlx(Runtime):
             "--stream-interval",
             "1",
             "--continuous-batching",
+            # The run's batch width, in vMLX's own flag -- `--max-num-seqs` is `default=1`
+            # (cli.py:3633) and requires `--continuous-batching`, which is passed above. See
+            # `Omlx.start_command` for why the cap follows the run rather than sitting at 1.
             "--max-num-seqs",
-            "1",
+            str(concurrency),
             *jit,
             *mtp,
             *prefix,

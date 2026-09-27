@@ -545,6 +545,59 @@ TODAY = {
 }
 
 
+# --------------------------------------------------------------------------------------
+# The concurrency cap (2026-09-27)
+# --------------------------------------------------------------------------------------
+#
+# `measure.run_cells(concurrency=N)` drives N requests at once, and the three runtimes that
+# carry a batch cap in their start command have to be given that N: hard-coded to 1, a sweep at
+# N>1 measures the harness's cap instead of the runtime's own batching -- which is what the
+# 2026-09-27 sweep measured (results/sweep-conc-seedless). At concurrency 1 every command is
+# `TODAY`, byte for byte, so every run recorded before this change stays comparable.
+
+CONCURRENCY_CAPS = {
+    "omlx": "--max-concurrent-requests",
+    "optiq": "--max-concurrent",
+    "vmlx": "--max-num-seqs",
+}
+
+
+def test_the_three_batch_caps_follow_the_runs_concurrency():
+    """One literal per runtime moves, and it is the cap: oMLX's `--max-concurrent-requests`,
+    OptiQ's `--max-concurrent` (which it injects as decode N / prompt max(1, N//4),
+    `optiq/cli.py:2937-2949`) and vMLX's `--max-num-seqs`. Putting the `1` back is `TODAY`, so
+    nothing else about any of the three commands moved."""
+    for name, flag in CONCURRENCY_CAPS.items():
+        command = RUNTIMES[name].start_command(ARTIFACT, HF_ID, concurrency=8)
+        at = command.index(flag)
+        assert command[at + 1] == "8", f"{name} does not put the run's N in {flag}"
+        assert command[: at + 1] + ("1",) + command[at + 2 :] == TODAY[name]
+        # An explicit 1 is the absent argument, which is what keeps N=1 columns byte-identical.
+        assert RUNTIMES[name].start_command(ARTIFACT, HF_ID, concurrency=1) == TODAY[name]
+
+
+def test_the_two_runtimes_without_a_cap_ignore_the_runs_concurrency():
+    """mlx-lm's command passes no batch cap and Osaurus takes no flags at all, so N moves
+    nothing there: their batching is what the server does with the N requests the loop drives,
+    and inventing a flag neither accepts would be worse than measuring that."""
+    for name in ("mlxlm", "osaurus"):
+        assert RUNTIMES[name].start_command(ARTIFACT, HF_ID, concurrency=8) == TODAY[name]
+
+
+def test_omlx_start_hands_the_run_concurrency_to_the_catalog_command(rig, artifact):
+    """The path a sweep actually takes: `measure._visit` calls `Runtime.start(concurrency=N)`,
+    and on the one runtime with its own `build_command` override the value has to survive the
+    scratch rewrite and land in the cap."""
+    rig.inventory = ("gemma-4-12B-it-qat-4bit",)
+
+    handle = RUNTIMES["omlx"].start(artifact, "gemma-4-12B-it-qat-4bit", concurrency=8)
+    try:
+        command = rig.commands[0]
+        assert command[command.index("--max-concurrent-requests") + 1] == "8"
+    finally:
+        handle.stop()
+
+
 def test_no_cache_pin_leaves_every_start_command_byte_identical_to_today():
     """Absent is not `off` and not `on`: the pin was never taken, so no runtime's command gains
     a cache flag, and every one of the five is the tuple this module built before the pin

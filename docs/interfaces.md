@@ -98,9 +98,16 @@ class Runtime:
               cache_state: str | None = None,
               kv_quant: str | None = None,
               mtp_depth: str | None = None,
-              stream_experts: str | None = None) -> "Handle": ...  # see "Phase 6 plan 06-02",
-                                                               # "Phase 4 study 03-05" and
-                                                               # "Phase 4 studies 03-06, 03-03"
+              stream_experts: str | None = None,
+              concurrency: int = 1) -> "Handle": ...  # see "Phase 6 plan 06-02",
+                                                      # "Phase 4 study 03-05",
+                                                      # "Phase 4 studies 03-06, 03-03"
+                                                      # and "the concurrency cap" below
+    def start_command(self, artifact_dir: str, model_id: str, *, ...,
+                      concurrency: int = 1) -> tuple[str, ...]: ...
+    def build_command(self, artifact_dir: str, model_id: str, *, ...,
+                      concurrency: int = 1) -> tuple[tuple[str, ...], str | None]: ...
+    # `concurrency` reaches all three: start -> build_command -> start_command.
     def request_seed(self, mtp_depth: str | None) -> int | None: ...       # see "the seed" below
     def cache_state_refusal(self, cache_state: str | None) -> str | None: ...
     def kv_quant_refusal(self, kv_quant: str | None) -> str | None: ...    # 03-05, below
@@ -153,6 +160,19 @@ answers the seed a measured request carries, `None` while `runtimes.TEMPERATURE 
 `Optiq` overrides it to keep `SEED` at an MTP depth. The policy and its entire rationale are
 written once at that method; `measure` asks it rather than holding a second copy (see
 "`seed` is a policy, and `request_seed` is what a row sent").
+
+### The concurrency cap follows the run
+
+`concurrency` is the run's batch width rather than a pin: `measure.run_cells(concurrency=N)`
+drives N requests at once, and `measure._visit` hands the same N to `Runtime.start`. The three
+runtimes whose start command carries a batch cap put it in that cap — oMLX's
+`--max-concurrent-requests`, OptiQ's `--max-concurrent` and vMLX's `--max-num-seqs` — while the
+two without one ignore it (mlx-lm passes no cap; Osaurus takes no flags at all). Hard-coded to
+1, the cap makes an N>1 sweep measure the harness rather than the runtime, which is what the
+2026-09-27 sweep did (`results/sweep-conc-seedless` measured the cap, not their batching, at
+N>1). The rule and its rationale are written once at `runtimes.Omlx.start_command`, and at
+`concurrency=1` — every run measured before it — each command is **byte-identical** to the ones
+recorded before the cap moved, which is what `tests/test_runtimes.py`'s `TODAY` table checks.
 
 **Readiness is decided by the runtime's log, not by the port.** Observed on mlx-lm 0.31.3:
 on a model-load failure the server still binds its port and logs `Starting httpd` after the

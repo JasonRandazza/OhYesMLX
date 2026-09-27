@@ -199,10 +199,10 @@ class FakeRuntime:
         return self.mtp_depth_missing_reason
 
     def start(self, artifact_dir, model_id, *, cache_state=None, kv_quant=None,
-              mtp_depth=None, stream_experts=None):
+              mtp_depth=None, stream_experts=None, concurrency=1):
         self.attempts += 1
         self.recorder.log("start", self.name, artifact_dir, model_id, cache_state, kv_quant,
-                          mtp_depth, stream_experts)
+                          mtp_depth, stream_experts, concurrency)
         if self.start_error is not None and self._fails(self.attempts):
             raise self.start_error
         handle = FakeHandle(
@@ -415,7 +415,7 @@ def harness(monkeypatch, tmp_path):
 def starts(harness):
     return [
         runtime
-        for runtime, _artifact_dir, _model_id, _cache_state, _kv_quant, _depth, _stream
+        for runtime, _artifact_dir, _model_id, _cache_state, _kv_quant, _depth, _stream, _n
         in harness.recorder.of("start")
     ]
 
@@ -424,7 +424,7 @@ def started_cache_states(harness):
     """The cache state every start was asked for, in order."""
     return [
         cache_state
-        for _runtime, _artifact, _model, cache_state, _kv_quant, _depth, _stream
+        for _runtime, _artifact, _model, cache_state, _kv_quant, _depth, _stream, _n
         in harness.recorder.of("start")
     ]
 
@@ -433,7 +433,7 @@ def started_kv_quants(harness):
     """The KV codec every start was asked for, in order, `None` for the pin not taken."""
     return [
         kv_quant
-        for _runtime, _artifact, _model, _cache_state, kv_quant, _depth, _stream
+        for _runtime, _artifact, _model, _cache_state, kv_quant, _depth, _stream, _n
         in harness.recorder.of("start")
     ]
 
@@ -442,7 +442,7 @@ def started_mtp_depths(harness):
     """The MTP depth every start was asked for, in order, `None` for the pin not taken."""
     return [
         depth
-        for _runtime, _artifact, _model, _cache_state, _kv_quant, depth, _stream
+        for _runtime, _artifact, _model, _cache_state, _kv_quant, depth, _stream, _n
         in harness.recorder.of("start")
     ]
 
@@ -451,7 +451,16 @@ def started_stream_experts(harness):
     """The expert-streaming state every start was asked for, in order."""
     return [
         stream
-        for _runtime, _artifact, _model, _cache_state, _kv_quant, _depth, stream
+        for _runtime, _artifact, _model, _cache_state, _kv_quant, _depth, stream, _n
+        in harness.recorder.of("start")
+    ]
+
+
+def started_concurrencies(harness):
+    """The batch width every start was handed, in order, `1` for a run that never raised it."""
+    return [
+        concurrency
+        for _runtime, _artifact, _model, _cache_state, _kv_quant, _depth, _stream, concurrency
         in harness.recorder.of("start")
     ]
 
@@ -1385,10 +1394,10 @@ def test_a_stop_error_while_finishing_a_visit_is_persisted_and_ends_the_run(harn
     original_start = failing.start
 
     def start_with_stop_failure(artifact_dir, model_id, *, cache_state=None, kv_quant=None,
-                                mtp_depth=None, stream_experts=None):
+                                mtp_depth=None, stream_experts=None, concurrency=1):
         handle = original_start(
             artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant,
-            mtp_depth=mtp_depth, stream_experts=stream_experts,
+            mtp_depth=mtp_depth, stream_experts=stream_experts, concurrency=concurrency,
         )
         handle.stop = lambda: (_ for _ in ()).throw(RuntimeStopError("stop unverified"))
         return handle
@@ -1651,10 +1660,11 @@ def test_exception_after_runtime_start_still_stops_handle(harness):
             return getattr(self._handle, name)
 
     def start(artifact_dir, model_id, *, cache_state=None, kv_quant=None, mtp_depth=None,
-              stream_experts=None):
+              stream_experts=None, concurrency=1):
         handle = BrokenVersionHandle(
             original_start(artifact_dir, model_id, cache_state=cache_state, kv_quant=kv_quant,
-                           mtp_depth=mtp_depth, stream_experts=stream_experts)
+                           mtp_depth=mtp_depth, stream_experts=stream_experts,
+                           concurrency=concurrency)
         )
         handles.append(handle)
         return handle
@@ -2634,6 +2644,21 @@ def test_the_run_header_pins_the_concurrency(harness):
 
     harness.run([cell], measured=1, results_dir=harness.tmp_path / "sequential")
     assert harness.header(harness.tmp_path / "sequential")["concurrency"] == 1
+
+
+def test_the_runs_concurrency_is_handed_to_the_start_it_drives(harness):
+    """The loop's half of the cap rule: the same N that sizes the batch goes into `Runtime.start`,
+    where the three runtimes with a start-command cap put it in that cap (`runtimes.Omlx`,
+    `Optiq`, `Vmlx`) and the two without one drop it. A visit that drove eight requests into a
+    runtime still capped at one would measure the cap, not the batching."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.run([cell], measured=1, concurrency=8)
+    assert started_concurrencies(harness) == [8]
+
+    harness.run([cell], measured=1, results_dir=harness.tmp_path / "sequential")
+    assert started_concurrencies(harness) == [8, 1], "a sequential run hands over the default"
 
 
 def test_the_run_header_pins_the_prompt_length_verbatim_or_none(harness):

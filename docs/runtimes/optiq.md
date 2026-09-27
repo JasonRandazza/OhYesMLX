@@ -181,7 +181,7 @@ which is what makes the forwarding in §2.3 possible.
 | `--anthropic/--no-anthropic` | **on** | OpenAI **Anthropic** `/v1/messages` endpoint | `cli.py:2522-2527` |
 | `--responses/--no-responses` | **on** | OpenAI `/v1/responses` endpoint | `cli.py:2528-2533` |
 | `--context-scale FLOAT` | `1.0` | **Multiplies reported usage token counts** — see §6.3 | `cli.py:2534-2541` |
-| `--max-concurrent INTEGER` | `8` | Decode parallelism; also sets prompt-concurrency to `max(1, n//4)` | `cli.py:2542-2549` |
+| `--max-concurrent INTEGER` | `8` | Decode parallelism; also sets prompt-concurrency to `max(1, n//4)`. **The harness passes the run's `concurrency` here** (`runtimes.Optiq.start_command`), so an N-request sweep gets decode N / prompt `max(1, N//4)`; N=1 is the value every sequential run pins | `cli.py:2542-2549` |
 | `--auth/--no-auth` | **on** | Requires `Bearer sk-optiq-*` **if a header is present** | `cli.py:2550-2553` |
 | `--mtp` | off | MTP speculative decoding via `OptiqEngine`; **the header pin's road in — §9.2** | `cli.py:2554-2558` |
 | `--mtp-depth INTEGER` | `2` | Draft tokens per verify cycle; fixed for the whole call — §9.2 | `cli.py:2559-2563` |
@@ -947,8 +947,10 @@ optiq/cli.py:2945            argv_extra += ["--prompt-concurrency", str(max(1, i
 
 So the effective values are decode 8 / prompt 2, against upstream's 32 / 8
 (`mlx_lm/server.py:1856,1862`) — unless the caller passed the underlying flag, which wins
-(`cli.py:2938-2945`). The harness passes `--max-concurrent 1`, giving decode 1 / prompt 1. Fine,
-but note the number that matters is `--decode-concurrency`, which the harness does not record.
+(`cli.py:2938-2945`). The harness passes the run's `concurrency` here
+(`runtimes.Optiq.start_command`), so a sequential run gets decode 1 / prompt 1 and a sweep at N
+gets decode N / prompt `max(1, N//4)`. Note the number that matters on the wire is
+`--decode-concurrency`; the harness records `--max-concurrent N`, and N is what it becomes.
 
 ### 7.5 MLX reuse-pool cleanup on every request
 
@@ -1006,9 +1008,10 @@ class for `BatchGenerator` — and falls back to `force_sequential_for_kv_quant(
 the hook point is missing (`optiq/serve.py:79-81`; the `--kv-config` path does the same at
 `:286-287`). That function's own docstring is explicit that mlx-lm's batch path never quantizes
 the KV cache and that the sequential path is forced instead, "strictly better than honoring the
-flag in name only" (`serve.py:95-115`). At the harness's
-`--max-concurrent 1` this costs nothing, but a future concurrency sweep on this runtime could
-measure a batching loss that the flag caused.
+flag in name only" (`serve.py:95-115`). At `concurrency=1` this costs nothing, but a concurrency
+sweep at N>1 now drives the run's N through `--max-concurrent` (`runtimes.Optiq.start_command`)
+into a runtime the fallback still serializes: such a cell measures the queue, not batching, and
+the loss belongs to the flag rather than to N.
 
 ### 7.8 The sampling RNG fix
 
@@ -1167,7 +1170,8 @@ weight index.
 
 The harness currently passes (`Optiq.start_command`):
 `--model`, `--host`, `--port`, `--no-anthropic`, `--no-responses`, `--no-auth`,
-`--max-context off` (8192 before 2026-09-16), `--max-concurrent 1`, `--idle-timeout 0`,
+`--max-context off` (8192 before 2026-09-16), `--max-concurrent <the run's concurrency, 1 unless
+a sweep raises it>`, `--idle-timeout 0`,
 `--context-scale 1.0`, `--no-stream-experts` or `--stream-experts` (header pin 03-03, below),
 `--mtp --mtp-depth N` when the run pins a draft depth (header pin 03-06, §9.2),
 `--temp 0 --top-p 1 --top-k 0 --min-p 0`, and
@@ -1324,8 +1328,8 @@ autoregressive under an MTP header pin — which is why the exception exists.
 switched on 2026-09-26). Omitting it is what puts an ordinary measured OptiQ request on the
 **batched** path, which is what everyday clients use and therefore what the format and runtime
 axes are about; the loop's own request body drops the key entirely when the value is `None`
-(`transport.py:181-182`). `--max-concurrent 1` alone does *not* force the sequential path: it
-sets `--decode-concurrency 1` (`cli.py:2937-2949`), and a batch of one still goes through
+(`transport.py:181-182`). `--max-concurrent` alone does *not* force the sequential path: it sets
+`--decode-concurrency <N>` (`cli.py:2937-2949`), and a batch of one still goes through
 `BatchGenerator`.
 
 | Add | Why |
@@ -1333,7 +1337,7 @@ sets `--decode-concurrency 1` (`cli.py:2937-2949`), and a batch of one still goe
 | `--prompt-cache-bytes <N>` | Otherwise a RAM- and weights-derived value is injected (§7.3), differing across machines and not recorded in the start command. |
 | `--prompt-cache-size <N>` | Same injection channel, and the injected value is 10 or 3 depending on whether the model can trim (§7.3). The run already pins it when it pins a cache state; pinning it always removes the model-shape dependence. |
 | `--max-tokens <N>` | Otherwise OptiQ injects 32768, so a request that omits `max_tokens` is capped at 32768 rather than mlx-lm's 512 (§7.3). Recording the cap makes the cell's ceiling explicit. |
-| `--decode-concurrency 1 --prompt-concurrency 1` | `--max-concurrent 1` already produces these, but recording the real flags removes the indirection. |
+| `--decode-concurrency <N> --prompt-concurrency <max(1, N//4)>` | `--max-concurrent N` already produces these from the run's concurrency, but recording the real flags removes the indirection. |
 | Confirm `OPTIQ_*` unset | `OPTIQ_NO_THINK`, `OPTIQ_STREAM_PREFETCH`, `OPTIQ_FLASH_ATTN`, `OPTIQ_KERNELS`, `OPTIQ_DUMP_REQUESTS` etc. are not flags and would not show in the recorded command (§3.2). Capture `optiq config` output into the run artifact. |
 | Record `generation_config.json` | Provenance: it is the file whose sampler recommendations the four flags in the start command now pre-empt (§7.2). Snapshot it like the Osaurus settings baseline. |
 | Record the `quantization` block | Per-layer overrides mean the headline bit-width is not the format (§8.2). |

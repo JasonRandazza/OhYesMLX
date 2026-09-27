@@ -808,6 +808,9 @@ def _visit(
         try:
             # The artifact directory doubles as the model-id hint; the runtime resolves it to
             # whatever it calls those weights, and that resolved name is what gets recorded.
+            # The run's batch width goes with the start so the runtime's own cap matches the
+            # batch this visit drives: hard-coded, it would measure the cap rather than the
+            # runtime's batching at N>1 (`runtimes.Omlx.start_command` is where the rule is).
             handle = runtime.start(
                 cell.artifact_dir,
                 cell.artifact_dir,
@@ -815,6 +818,7 @@ def _visit(
                 kv_quant=kv_quant,
                 mtp_depth=mtp_depth,
                 stream_experts=stream_experts,
+                concurrency=concurrency,
             )
         except RuntimeStopError:
             raise

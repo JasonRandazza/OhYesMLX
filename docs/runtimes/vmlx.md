@@ -197,7 +197,7 @@ from model name").
 | `--stream-interval` | **`8`** | Tokens generated before a streaming update is sent. Applied only when `--continuous-batching` is on; forced to `1` otherwise (`cli.py:2892`). **See §5.2 — this is the single most important flag for a streaming measurement on this runtime** |
 | `--continuous-batching` | enabled | Enables prefix cache, in-memory paged cache, stored-cache codecs, concurrent users |
 | `--no-continuous-batching` | — | Direct single-request engine; disables the features above |
-| `--max-num-seqs` | `1` | Simultaneous requests. Requires `--continuous-batching` |
+| `--max-num-seqs` | `1` | Simultaneous requests. Requires `--continuous-batching`. **The harness passes the run's `concurrency` here** (`runtimes.Vmlx.start_command`), so an N-request sweep gets N; families whose caches are single-sequence native are still forced back to 1 by the engine itself (`scheduler.py:899-974`, `mllm_scheduler.py:1736-1766`) |
 | `--prefill-batch-size` | `512` | Prompts processed at once during prefill |
 | `--prefill-step-size` | `2048` | Max tokens per prefill chunk. Lower it for large MoE at long context (Metal single-buffer OOM). **Note:** Hybrid models (e.g. Qwen3.5) default to one-shot prefill and bypass this flag unless `VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` is exported in the environment (see `docs/research/2026-09-17-vmlx-32k-chunked-prefill.md`). |
 | `--completion-batch-size` | `512` | Responses decoding simultaneously |
@@ -1889,7 +1889,7 @@ the question.
 | `--api-key` | omit | Default is no auth (§4.2); `api_key()` returns `None` |
 | `--stream-interval` | `1` | Finest granularity, unless the cell is *about* granularity. **Pin it explicitly** — 8 is the default and a cell must not inherit a number it did not choose |
 | `--continuous-batching` | pin explicitly | Because `--no-continuous-batching` silently forces `stream_interval=1` (`cli.py:2892`), the two flags interact and the interaction is not visible in the argv |
-| `--max-num-seqs` | `1` | Single-stream measurement; requires continuous batching |
+| `--max-num-seqs` | the run's concurrency (`1` unless a sweep raises it) | Requires continuous batching; `runtimes.Vmlx.start_command` threads the run's N in |
 | `--enable-jit` **or** `--no-jit` | pin one, always | Otherwise a JANG affine bundle silently gets JIT while a non-JANG one does not (§7.1) |
 | `--no-speculative-model` | n/a | Not a flag — simply omit `--speculative-model` |
 | `--disable-native-mtp` **or** `--native-mtp-depth N --native-mtp-depth-policy fixed` | pin one, always | MTP adapts at runtime (§7.4); either disable it or pin a depth under the fixed policy. **Done since this document was written:** the header pin `--mtp-depth` drives exactly that pair, and a depth is refused on an artifact whose MTP heads the runtime will not wire (§7.4.1) |
