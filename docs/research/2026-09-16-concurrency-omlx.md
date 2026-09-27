@@ -1,5 +1,12 @@
 # Phase 6 plan 06-01b — the first concurrency sweep: oMLX does not batch
 
+> **Superseded 2026-09-27.** The finding below — that none of the five runtimes gains throughput from
+> concurrency — was the harness's, not the servers': every request carried `seed 0`, which routes mlx-lm and
+> OptiQ onto their sequential path (Decision 128), and the harness hard-coded a concurrency cap of `1` on
+> oMLX, OptiQ and vMLX (Decision 129). Re-run seedless and uncapped, four of the five batch at N=8: the
+> per-request rate falls ~78–82% and aggregate throughput rises 1.45–1.72×. See
+> `docs/research/2026-09-27-concurrency-batching.md`. The body below is kept unchanged.
+
 Date: 2026-09-16, measured 09:09–10:42Z. Run directories (gitignored):
 `results/sweep-conc/20260916T090909Z-format` (N=1), `…T091619Z` (N=2), `…T092911Z` (N=4),
 `…T095351Z` (N=8). One cell: `oq4__omlx`, Qwen3.5-4B-oQ4 on oMLX 0.6.4. All 12 rows PASS.

@@ -1,0 +1,496 @@
+# Concurrency at four batch widths on five runtimes: the 2026-09-16 "none of them batch" finding was the harness's, and removing its caps buys 1.45–1.72× aggregate at ~80% off each request's own rate
+
+**Date:** 2026-09-27 — the seedless sweep 02:56 → 09:56 EDT; the uncapped re-run 12:40 → 15:50 EDT, stopped there and resumed for one cell 19:03 → 19:38 EDT.
+**Study:** v3.1 — Decision 128 (no request seed at temperature 0) then Decision 129 (the runtime batch caps follow the run's `concurrency`); the second pass over Phase 6's plan 06-01 concurrency sweep, following `docs/research/2026-09-16-concurrency-omlx.md`, whose conclusion this paper supersedes.
+**Harness:** 0.3.0 — `source_sha256 423650119dedde78f0873873e3aa41653999eec59001f4cf16242ab4b5748b92` for all twenty run directories under `results/sweep-conc-seedless`, and `6968456b730692c642201632055cfe3271d07db0df2afeb04458cde8f08427a2` for all twelve under `results/sweep-conc-uncapped` — uniform within each sweep, from the joins' own provenance lines.
+**Runner:** `scripts/run_sweep_concurrency.sh` (`RUNTIMES=`, `OUT=`), one run per (runtime, N); each runtime's four runs joined by `ohyesmlx.cli sweep --varying concurrency` into that directory's `sweep-oq4__<runtime>.md`.
+**Subject:** `RepublicOfKorokke/Qwen3.5-4B-oQ4` — 3,160,559,814 bytes, the same artifact directory in every one of the 96 rows — on mlx-lm 0.31.3, oMLX 0.6.4, OptiQ 0.5.13, vMLX 1.6.59 and Osaurus 0.25.13.
+**Author:** Command Code implementer (the write-up); the runs are the coordinator's.
+
+## Why this run exists
+
+The 2026-09-16 paper published one of the project's load-bearing findings: **not one of the five runtimes gains
+throughput from eight simultaneous requests.** Its decode-workload table reads mlx-lm 1.15×, oMLX 1.02×,
+mlx-optiq 1.01×, vMLX 1.01×, Osaurus 1.01× at N=8 against each runtime's own N=1, with four of the five flat
+inside 2%, every batch span ~8× a single request's, and TTFT growing in proportion — serialization, not
+batching, and "concurrency is pure latency cost" on all five. That finding was wrong about four of the five,
+and the reason is the harness rather than the servers:
+
+- **The request seed.** Every run in that grid sent `seed 0`. In mlx-lm the seed is the gate on the serving
+  path: a seeded request bypasses `BatchGenerator` and is served sequentially (`mlx_lm/server.py:685-686`),
+  and OptiQ routes with it, so **their concurrency columns measured a path everyday clients never take**
+  (Decision 128). The older columns' own tell is in the 09-16 paper: mlx-lm's *per-request* rate rose
+  67.0 → 77.1 while its aggregate rose, which the paper correctly called impossible under real batching —
+  it was a seeded sequential runtime happening to run fast.
+- **The concurrency caps.** Since `b1fc311` the harness hard-coded oMLX `--max-concurrent-requests 1`, OptiQ
+  `--max-concurrent 1` and vMLX `--max-num-seqs 1` into their start commands, so on those three every
+  N>1 cell admitted one request at a time no matter what the client sent (Decision 129). The harness measured
+  its own cap.
+
+Both are fixed. Decision 128 removed the request seed at temperature 0 (`Runtime.request_seed` returns `None`;
+`b820bda`), where it changes no token and where a seeded request is not what a client sends. Decision 129 made
+each cap `str(concurrency)` (`47cccb5`), with the N=1 commands byte-identical so no earlier grid shifts. The
+Osaurus column is not one of the four: Osaurus takes no flags for this, its 09-16 flatness was the shipped
+engine's, and its 2026-09-27 flatness is too (§3).
+
+This paper is the re-run, in two sweeps, same runner, same artifact, same pins, one variable each:
+
+- `results/sweep-conc-seedless/` — **Decision 128 alone**: all five runtimes, seedless, caps still 1.
+- `results/sweep-conc-uncapped/` — **Decision 129**: oMLX, OptiQ and vMLX with caps = N.
+
+The result in one paragraph: the capped columns reproduce 09-16's shape. Uncapped — and, on the seedless
+path, mlx-lm too — all four decode like a batching server: per-request rate down ~78–82% at N=8, aggregate up
+**1.45–1.72×**, TTFT up 4–7× instead of 8–148×; Osaurus stays flat as shipped. On the prefill workload,
+oMLX and vMLX still do not gain aggregate even uncapped (§4).
+
+## What ran
+
+**The seedless sweep** — all five runtimes, caps still 1, seedless, one artifact `oq4`:
+
+| runtime | N order | wall clock (EDT) | run directories, in that order (`20260927T…Z-format`) |
+|---|---|---|---|
+| mlx-lm | `1 2 4 8` | 02:56:24 → 03:52:42 | `065624 070250 071157 072639` |
+| oMLX | `8 4 2 1` | 03:52:53 → 05:25:54 | `075253 084132 090616 091905` |
+| OptiQ | `1 2 4 8` | 05:26:04 → 06:44:54 | `092605 093214 094307 100405` |
+| vMLX | `8 4 2 1` | 06:45:05 → 08:17:59 | `104505 113328 115814 121106` |
+| Osaurus | `1 2 4 8` | 08:18:09 → 09:56:14 | `121810 122535 123906 130511` |
+
+**The uncapped sweep** — oMLX, OptiQ, vMLX, caps = N:
+
+| runtime | N order | wall clock (EDT) | run directories, in that order |
+|---|---|---|---|
+| oMLX | `1 2 4 8` | 12:40:44 → 14:11:05 | `164044 164932 170405 172729` |
+| OptiQ | `8 4 2 1` | 14:11:16 → 15:07:28 | `181116 183903 185251 190115` |
+| vMLX | `1 2 4 8` | 15:07:38 → 15:50:10 | `190738 191652 192856` |
+| vMLX N=8 | — | 19:03:02 → 19:38:06 | `230302` |
+
+Wall clocks are the runner's own (`runner.log` in each sweep, an exec-owned redirect). The uncapped sweep's
+run of vMLX **N=8 was stopped with it**: the runner's trap wrote `ABORTED 15:50:16` and swept the ports; the
+Mac had to be moved (the coordinator's reason, not a defect in any measured cell), and vMLX N=8 was then run
+alone at 19:03:02–19:38:06 — the runner.log line says `(resumed after the 15:50 stop)`. The joins written by
+that second session include it, so the uncapped vMLX ladder is three cells from one session and its N=8 from
+another, 3 h 13 m later. Run directory names are the same instants in UTC under
+`results/<sweep>/oq4__<runtime>/`.
+
+**Pins every run in a sweep shared**, from the joins' shared-pins line, verified field by field by the join
+guard: temperature `0.0`, seed `—` (the policy; every row records `request_seed: null`), warmup
+`{cap: 20, floor: 10, mode: plateau, plateau_pct: 3.0, window: 5}`, measured `9`, cooldown `30.0` s, and
+`prompt_tokens`, `cache_state`, `kv_quant`, `mtp_depth`, `stream_experts` all not taken. Workloads `chat`
+(max_tokens 128), `prefill` (64) and `decode` (512), identical messages in all 32 runs — the same three
+shapes the MTP paper of 2026-09-25 ran, down to the benchmark-design question and the engineering standard.
+
+**Each cell is 9 measured batches** — a batch is N requests issued together, so a cell publishes summaries
+over 9 requests at N=1 and 72 at N=8 (`n = 9 / 18 / 36 / 72` in the rows), warmups excluded. **All 96 rows in
+both sweeps are `PASS`**, `floor coherence pass`, `floor metrics pass`; no cell in this paper is a `FAIL`,
+`N/A` or `no value`, and the coherence gate — language on every measured cell — is the floor every number
+here cleared.
+
+**Timing channels.** Every mlx-lm, oMLX, vMLX and Osaurus row in both sweeps carries `timed on reasoning
+channel`; every OptiQ row is content-timed. So a TTFT, ITL or decode figure is channel-dependent *across*
+runtimes (Decision 122 lists `ttft_p50_s` and `prefill_tps` as `CHANNEL_DEPENDENT_RANKS`), and this paper
+draws no cross-runtime ordering from one. Within a runtime the four N columns are one channel, and that is
+the comparison every result below is.
+
+## Conditions
+
+- **Two sessions, one day.** The seedless sweep is 02:56 → 09:56, the uncapped one 12:40 → 15:50 plus the
+  19:03 cell. Within-sweep N-vs-N comparisons are the results; a capped-vs-uncapped pair is two sessions,
+  and a cross-runtime level is five windows in one day's sequential sessions, not a ranking.
+- **The N=1 state is the same in both sweeps** — Decision 129 made the N=1 start commands byte-identical —
+  and the two measurements of it differ by up to 8.9%: oMLX prefill per-request 107.9 (seedless) → 98.3
+  (uncapped) and decode 75.7 → 69.1, vMLX chat 73.6 → 69.4. That spread is the session bar for any
+  cross-sweep reading, and the reason §1's side-by-side is at N=8/N=1 ratios rather than at raw levels.
+- **What each cap does.** oMLX's `--max-concurrent-requests` feeds both `SchedulerConfig.max_num_seqs` and
+  the BatchGenerator's `completion_batch_size` (`settings.py:1710-1712`) and admission gates on it
+  (`scheduler.py:9979-9982`). OptiQ's `--max-concurrent N` is injected as `--decode-concurrency N` and
+  `--prompt-concurrency max(1, N//4)` unless those flags are passed (`cli.py:2937-2945`), so its ladder runs
+  decode/prompt 1/1, 2/1, 4/1, 8/2; mlx-lm and Osaurus take no concurrency flag from the harness at all.
+- **Order and direction.** The runner alternates N direction per runtime so thermal drift cannot alias onto
+  the pin: ascending for mlx-lm, OptiQ and Osaurus, descending for oMLX and vMLX, in the seedless sweep; oMLX
+  ascending, OptiQ descending, vMLX ascending in the uncapped one. The uncapped vMLX N=8 cell is both the
+  largest N and the last measurement, and it is separated by the resume, which cuts both ways and is why its
+  own drift reading matters (it is +0.3%, §5).
+- **Osaurus is pinned around its cells** by `scripts/osaurus-pin.sh` (prefix and blockDisk caches off,
+  `modelIdleResidencyPolicy.seconds` 900) and restored byte-exact with `cmp` afterwards; its engine settings
+  live in `~/.osaurus/config/`, the harness passes no flag because there is none, and whether a setting
+  would change its N>1 behaviour was **not tested** (Open questions, 1).
+- **Warmup and drift at N>1.** Warmup settles on aggregate throughput; a row's `drift %` reads per-request
+  rates, and the joins print the sentence beside every table: at concurrency > 1 a positive drift means the
+  per-request rate was still moving, not that the cell was under-warmed. The rows' own annotation of a
+  positive change uses report.py's generic wording ("insufficient warmup, not a thermal effect"); both are
+  readings of the same observation — a per-request series that had not stopped moving when the window
+  closed — and §5 lists every row where the direction is that visible.
+- **Nothing attests the host's state** during either sweep. The harness cannot detect contention, and the
+  runner swept ports and stale Osaurus apps before and after every cell as it always does.
+
+## Results
+
+### 1. Capped vs uncapped side by side: same runtime, same N, two different answers
+
+**Axis — `concurrency`, and the harness's handling of it.** The capped columns are the seedless sweep (caps
+1, Decision 128 only); the uncapped columns are the Decision 129 re-run. Both are one artifact, one machine,
+one day, and the same four pins otherwise. **Caveat:** the N=1 baselines differ by up to 8.9% between the
+sessions (Conditions, above), and the ratio column carries that; the load-bearing rows are named.
+
+`decode` workload, per-request decode tok/s (the join's `decode_tps`; `results/sweep-conc-{seedless,uncapped}/sweep-oq4__<runtime>.md`):
+
+| runtime | cap | N=1 | N=2 | N=4 | N=8 | N=8/N=1 |
+|---|---|---|---|---|---|---|
+| oMLX | 1 (seedless) | 75.7 | 73.7 | 73.3 | 73.1 | 0.97× |
+| oMLX | = N (uncapped) | 69.1 | 44.6 | 25.5 | 12.4 | **0.18×** |
+| OptiQ | 1 | 68.9 | 69.1 | 69.3 | 69.1 | 1.00× |
+| OptiQ | = N | 67.4 | 44.7 | 26.6 | 14.6 | **0.22×** |
+| vMLX | 1 | 71.4 | 71.7 | 72.2 | 72.2 | 1.01× |
+| vMLX | = N | 68.5 | 41.1 | 25.2 | 14.0 | **0.20×** |
+
+`decode` workload, aggregate tok/s:
+
+| runtime | cap | N=1 | N=2 | N=4 | N=8 | N=8/N=1 |
+|---|---|---|---|---|---|---|
+| oMLX | 1 | 71.5 | 71.6 | 72.2 | 72.2 | 1.01× |
+| oMLX | = N | 65.2 | 85.2 | 95.0 | 94.4 | **1.45×** |
+| OptiQ | 1 | 67.3 | 67.7 | 68.2 | 68.1 | 1.01× |
+| OptiQ | = N | 65.6 | 84.6 | 98.7 | 108.2 | **1.65×** |
+| vMLX | 1 | 69.9 | 70.1 | 70.5 | 70.5 | 1.01× |
+| vMLX | = N | 65.1 | 80.3 | 81.4 | 107.1 | **1.65×** |
+
+`decode` workload, TTFT p50 s:
+
+| runtime | cap | N=1 | N=2 | N=4 | N=8 | N=8/N=1 |
+|---|---|---|---|---|---|---|
+| oMLX | 1 | 0.399 | 3.903 | 10.898 | 25.187 | 63.1× |
+| oMLX | = N | 0.426 | 0.591 | 1.117 | 1.886 | 4.4× |
+| OptiQ | 1 | 0.180 | 3.959 | 11.501 | 26.641 | 148.0× |
+| OptiQ | = N | 0.188 | 0.357 | 0.681 | 1.300 | 6.9× |
+| vMLX | 1 | 0.173 | 3.781 | 11.053 | 25.576 | 147.8× |
+| vMLX | = N | 0.180 | 0.296 | 0.543 | 1.084 | 6.0× |
+
+**Both signatures are in the tables.** The capped rows are the 09-16 finding exactly: per-request rate flat
+(within 3.4%), aggregate flat (within 1.2%), and TTFT growing 63–148× from 0.173–0.399 s — everything after
+the single admitted request queues. The uncapped rows are the opposite pair: per-request down 78–82%,
+aggregate up 1.45–1.65×, TTFT up 4.4–6.9×. Same model, same prompts, same protocol; between the two columns
+in these tables nothing moved but the three literals — the seed half had already moved in the seedless sweep.
+
+Context, for the same `decode` shape in the same seedless sweep: **mlx-lm batches too** on the seedless
+path — per-request 65.9 → 14.5, aggregate 65.3 → 112.5 (**1.72×**), TTFT 0.147 → 0.989 — and **Osaurus does
+not**, as shipped — 67.3 → 68.4, 64.8 → 66.0 (1.02×), TTFT 0.288 → 27.388.
+
+**Against 09-16's own table** (a seeded grid whose directories cannot be joined to these, so this is a
+reading of that paper, not a re-measurement): the capped columns today reproduce its shape and its levels —
+oMLX decode aggregate 71.5/71.6/72.2/72.2 against 70.4/71.4/72.2/72.5, OptiQ 67.3…68.1 against 72.1…73.0,
+vMLX 69.9…70.5 against 71.1…72.1, Osaurus 64.8…66.0 against 66.4…67.0. mlx-lm is the one column the seed
+alone moved — it is the one of the four with no cap — and it is the direct before/after: 09-16's N=8
+aggregate was 73.9 (1.15×, dismissed there because its per-request rate rose); today's seedless column is
+112.5 (1.72×) with the per-request rate falling, which is batching's signature.
+
+### 2. The full ladders
+
+Every required reading is in these six tables: per workload (chat / prefill / decode), per runtime and N,
+the per-request decode rate, the aggregate rate, and TTFT p50. All figures are the joins' rows; each run
+directory under `results/sweep-conc-{seedless,uncapped}/oq4__<runtime>/` carries the same numbers in its own
+`leaderboard.md` and its raw `results.jsonl`. `n` is 9 measured batches per cell (9/18/36/72 requests at
+N = 1/2/4/8).
+
+**Seedless sweep — caps 1, seedless — `chat` (max_tokens 128)**
+
+| runtime | metric | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| mlx-lm | per-request decode tok/s | 72.1 | 46.4 | 27.1 | 15.0 |
+| | aggregate tok/s | 66.1 | 84.4 | 98.2 | 107.0 |
+| | TTFT p50 s | 0.145 | 0.258 | 0.487 | 0.986 |
+| oMLX | per-request decode tok/s | 85.9 | 75.0 | 69.3 | 67.1 |
+| | aggregate tok/s | 67.5 | 67.6 | 67.2 | 66.3 |
+| | TTFT p50 s | 0.404 | 1.307 | 3.133 | 7.101 |
+| OptiQ | per-request decode tok/s | 72.3 | 71.7 | 69.0 | 70.0 |
+| | aggregate tok/s | 66.6 | 66.4 | 66.0 | 66.3 |
+| | TTFT p50 s | 0.144 | 1.122 | 3.069 | 7.091 |
+| vMLX | per-request decode tok/s | 73.6 | 73.0 | 72.4 | 71.7 |
+| | aggregate tok/s | 66.8 | 66.8 | 66.1 | 65.5 |
+| | TTFT p50 s | 0.175 | 1.114 | 3.070 | 6.987 |
+| Osaurus | per-request decode tok/s | 70.2 | 73.7 | 73.8 | 73.7 |
+| | aggregate tok/s | 61.1 | 63.4 | 63.0 | 62.9 |
+| | TTFT p50 s | 0.299 | 1.273 | 3.341 | 7.437 |
+
+**Seedless — `prefill` (64)**
+
+| runtime | metric | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| mlx-lm | per-request decode tok/s | 71.6 | 45.7 | 27.4 | 14.9 |
+| | aggregate tok/s | 61.1 | 77.3 | 89.7 | 96.1 |
+| | TTFT p50 s | 0.152 | 0.262 | 0.499 | 1.017 |
+| oMLX | per-request decode tok/s | 107.9 | 107.3 | 107.4 | 107.3 |
+| | aggregate tok/s | 19.3 | 19.2 | 19.2 | 19.2 |
+| | TTFT p50 s | 2.714 | 4.351 | 7.727 | 14.394 |
+| OptiQ | per-request decode tok/s | 78.6 | 76.0 | 79.1 | 77.5 |
+| | aggregate tok/s | 58.2 | 58.0 | 57.5 | 57.6 |
+| | TTFT p50 s | 0.181 | 0.614 | 1.486 | 3.231 |
+| vMLX | per-request decode tok/s | 73.1 | 73.8 | 72.9 | 73.2 |
+| | aggregate tok/s | 21.0 | 20.9 | 21.0 | 20.9 |
+| | TTFT p50 s | 2.176 | 3.719 | 6.399 | 12.918 |
+| Osaurus | per-request decode tok/s | 88.8 | 86.4 | 87.5 | 88.3 |
+| | aggregate tok/s | 19.7 | 19.6 | 19.7 | 19.7 |
+| | TTFT p50 s | 2.521 | 4.138 | 7.395 | 13.876 |
+
+**Seedless — `decode` (512)**
+
+| runtime | metric | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| mlx-lm | per-request decode tok/s | 65.9 | 43.3 | 26.2 | 14.5 |
+| | aggregate tok/s | 65.3 | 83.6 | 102.0 | 112.5 |
+| | TTFT p50 s | 0.147 | 0.259 | 0.482 | 0.989 |
+| oMLX | per-request decode tok/s | 75.7 | 73.7 | 73.3 | 73.1 |
+| | aggregate tok/s | 71.5 | 71.6 | 72.2 | 72.2 |
+| | TTFT p50 s | 0.399 | 3.903 | 10.898 | 25.187 |
+| OptiQ | per-request decode tok/s | 68.9 | 69.1 | 69.3 | 69.1 |
+| | aggregate tok/s | 67.3 | 67.7 | 68.2 | 68.1 |
+| | TTFT p50 s | 0.180 | 3.959 | 11.501 | 26.641 |
+| vMLX | per-request decode tok/s | 71.4 | 71.7 | 72.2 | 72.2 |
+| | aggregate tok/s | 69.9 | 70.1 | 70.5 | 70.5 |
+| | TTFT p50 s | 0.173 | 3.781 | 11.053 | 25.576 |
+| Osaurus | per-request decode tok/s | 67.3 | 68.0 | 68.4 | 68.4 |
+| | aggregate tok/s | 64.8 | 65.5 | 66.0 | 66.0 |
+| | TTFT p50 s | 0.288 | 4.207 | 11.887 | 27.388 |
+
+**Uncapped sweep — caps = N — `chat`**
+
+| runtime | metric | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| oMLX | per-request decode tok/s | 84.5 | 47.0 | 27.1 | 12.6 |
+| | aggregate tok/s | 64.6 | 75.3 | 89.2 | 81.0 |
+| | TTFT p50 s | 0.428 | 0.596 | 1.015 | 1.827 |
+| OptiQ | per-request decode tok/s | 70.9 | 45.4 | 27.3 | 14.6 |
+| | aggregate tok/s | 64.2 | 79.1 | 94.4 | 98.3 |
+| | TTFT p50 s | 0.155 | 0.362 | 0.686 | 1.370 |
+| vMLX | per-request decode tok/s | 69.4 | 41.2 | 24.3 | 13.4 |
+| | aggregate tok/s | 63.8 | 75.1 | 88.3 | 97.6 |
+| | TTFT p50 s | 0.174 | 0.300 | 0.562 | 1.098 |
+
+**Uncapped — `prefill`**
+
+| runtime | metric | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| oMLX | per-request decode tok/s | 98.3 | 51.0 | 20.1 | 18.7 |
+| | aggregate tok/s | 17.8 | 17.4 | 18.5 | 18.2 |
+| | TTFT p50 s | 2.901 | 5.099 | 8.435 | 15.598 |
+| OptiQ | per-request decode tok/s | 77.6 | 48.0 | 29.0 | 15.2 |
+| | aggregate tok/s | 57.3 | 64.6 | 78.8 | 74.8 |
+| | TTFT p50 s | 0.188 | 0.376 | 0.686 | 1.467 |
+| vMLX | per-request decode tok/s | 72.2 | 40.0 | 24.0 | 13.3 |
+| | aggregate tok/s | 19.8 | 21.3 | 22.2 | 23.1 |
+| | TTFT p50 s | 2.289 | 4.414 | 8.772 | 17.407 |
+
+**Uncapped — `decode`**
+
+| runtime | metric | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| oMLX | per-request decode tok/s | 69.1 | 44.6 | 25.5 | 12.4 |
+| | aggregate tok/s | 65.2 | 85.2 | 95.0 | 94.4 |
+| | TTFT p50 s | 0.426 | 0.591 | 1.117 | 1.886 |
+| OptiQ | per-request decode tok/s | 67.4 | 44.7 | 26.6 | 14.6 |
+| | aggregate tok/s | 65.6 | 84.6 | 98.7 | 108.2 |
+| | TTFT p50 s | 0.188 | 0.357 | 0.681 | 1.300 |
+| vMLX | per-request decode tok/s | 68.5 | 41.1 | 25.2 | 14.0 |
+| | aggregate tok/s | 65.1 | 80.3 | 81.4 | 107.1 |
+| | TTFT p50 s | 0.180 | 0.296 | 0.543 | 1.084 |
+
+### 3. Decode: who batches and by how much
+
+**Axis — `concurrency` within a runtime.** The table below is the `decode` shape's N=8 against its own N=1,
+per runtime and per sweep, and it is the paper's headline in one view. **Caveat:** each row is that sweep's
+own session; the gain column is a within-runtime N=8/N=1 ratio and is the one number here that survives the
+session bar in Conditions.
+
+| runtime | sweep | per-request N=1 → N=8 | aggregate N=1 → N=8 | **N=8/N=1** | TTFT p50 N=1 → N=8 |
+|---|---|---|---|---|---|
+| mlx-lm | seedless (cap 1, seed gone) | 65.9 → 14.5 (−78.0%) | 65.3 → 112.5 | **1.72×** | 0.147 → 0.989 |
+| oMLX | seedless (cap 1) | 75.7 → 73.1 (−3.4%) | 71.5 → 72.2 | 1.01× | 0.399 → 25.187 |
+| oMLX | uncapped (cap = N) | 69.1 → 12.4 (−82.1%) | 65.2 → 94.4 | **1.45×** | 0.426 → 1.886 |
+| OptiQ | seedless (cap 1) | 68.9 → 69.1 (+0.3%) | 67.3 → 68.1 | 1.01× | 0.180 → 26.641 |
+| OptiQ | uncapped | 67.4 → 14.6 (−78.3%) | 65.6 → 108.2 | **1.65×** | 0.188 → 1.300 |
+| vMLX | seedless (cap 1) | 71.4 → 72.2 (+1.1%) | 69.9 → 70.5 | 1.01× | 0.173 → 25.576 |
+| vMLX | uncapped | 68.5 → 14.0 (−79.6%) | 65.1 → 107.1 | **1.65×** | 0.180 → 1.084 |
+| Osaurus | seedless (no flag) | 67.3 → 68.4 (+1.6%) | 64.8 → 66.0 | 1.02× | 0.288 → 27.388 |
+
+The vMLX uncapped row's N=8 cell is the one run alone at 19:03–19:38; its own drift is +0.3% and its N=1–4
+cells are from the earlier window, so the row's *direction* is solid and its magnitude is the least controlled
+number in the table. mlx-lm's distance (1.72×) is not a claim that it is a better server than the other
+three — it is a different session, a different timing channel and a different shape of ladder (see channel
+caveat), and only its direction is comparable.
+
+**Memory moves with the same split.** Peak `phys_footprint` at N=8 against N=1, within each runtime (a
+cross-runtime comparison of these columns is forbidden — `peak_mb` counts different page classes per runtime):
+
+| runtime (sweep) | chat | prefill | decode |
+|---|---|---|---|
+| mlx-lm (seedless) | 3031 → 5133 | 4250 → 11264 | 3375 → 7962 |
+| oMLX (seedless, cap 1) | 4208 → 4232 | 5595 → 5609 | 4209 → 4235 |
+| oMLX (uncapped) | 4217 → 9482 | 5603 → 5768 | 4215 → 17408 |
+| OptiQ (seedless, cap 1) | 3337 → 3574 | 4288 → 4764 | 3125 → 3399 |
+| OptiQ (uncapped) | 3331 → 5083 | 4454 → 7283 | 3084 → 6284 |
+| vMLX (seedless, cap 1) | 3863 → 3881 | 4651 → 4659 | 3875 → 3883 |
+| vMLX (uncapped) | 3885 → 5539 | 4662 → 6847 | 3883 → 5439 |
+| Osaurus (seedless) | 1608 → 1602 | 3566 → 3561 | 2504 → 2491 |
+
+The capped columns barely move (oMLX decode +26 MB across the whole ladder, OptiQ +274, vMLX +8) because one
+request at a time holds one request's KV; uncapped, the same runtimes hold the batches (oMLX decode
+4.2 → 17.4 GB, +13.2 GB at N=8). Osaurus's flat peak is its flat everything.
+
+### 4. Prefill: oMLX and vMLX still hold ~18–23 tok/s, and their N=1 TTFT is a runtime property, not a concurrency one
+
+**Axis — `concurrency`.** Uncapped, the `prefill` shape's aggregate column reads oMLX
+**17.8 / 17.4 / 18.5 / 18.2** and vMLX **19.8 / 21.3 / 22.2 / 23.1** tok/s — a ×1.02 and ×1.17 across the
+ladder, against ×1.45–1.65 on their own `decode` shape and ×1.31–1.57 for OptiQ and mlx-lm on the same
+`prefill` shape (OptiQ 57.3 → 74.8, mlx-lm 61.1 → 96.1). Their per-request decode on this shape still
+collapses (oMLX 98.3 → 18.7, vMLX 72.2 → 13.3) and their TTFT p50 still grows with N (oMLX 2.901 → 15.598,
+vMLX 2.289 → 17.407). So the decode leg of this shape batches and the completion-token aggregate does not
+rise: the wall time is being spent on the prompt leg, which the TTFT columns show scaling close to N
+(×5.4 and ×7.6 for eight requests).
+
+**What the source shows, and what is only inferred.** The flag surfaces are recorded in
+`docs/runtimes/omlx.md` and `docs/runtimes/vmlx.md`, and the source behind them reads: for oMLX,
+`--max-concurrent-requests` is the only *sequence* cap needing to move — it feeds `SchedulerConfig.max_num_seqs`
+**and** `completion_batch_size` (`settings.py:1710-1712`) and admission gates on it (`scheduler.py:9979-9982`)
+— and `prefill_batch_size=1` is **hard-coded at BatchGenerator construction** (`scheduler.py:3088`), with
+prefills done externally per request (`scheduler.py:9960`); `_effective_max_num_seqs()` also returns 1 for
+Llama 4 and overflow recovery (`scheduler.py:9391-9396`). That is a source reading of a batch path that does
+not batch prefills, and the rows are consistent with it. It is **not** a measurement of the cause: no cell in
+either sweep varies a prefill batch size, so "the literal is why the aggregate stays at ~18" is an inference
+from source plus rows, not a result. For vMLX the source reading is the opposite way: `--prefill-batch-size`
+and `--completion-batch-size` are 512 each (`cli.py:3640`, `:3653`; `scheduler.py:590-591`), not limiting at
+N≤8; three engine-side guards do force serial scheduling for specific families
+(`scheduler.py:899-974`, `mllm_scheduler.py:1736-1766`), and none of them matches this Qwen3.5 bundle by
+inspection — so vMLX's near-flat prefill aggregate is **not explained by any limit the harness passed**, and
+nothing in this record says why it is flat.
+
+**The ~2–3 s vs ~0.15–0.19 s N=1 TTFT is a runtime-level split, and the rows are all that is established.**
+The N=1 `prefill` rows: oMLX 2.901 s (uncapped) / 2.714 s (seedless), vMLX 2.289 / 2.176, Osaurus 2.521,
+against mlx-lm 0.152 and OptiQ 0.188 / 0.181. The `prefill_tps` rows tell the same story from the other
+side — 454.6 (oMLX) and 574.1 (vMLX) against 8668.7 (mlx-lm) and 7289.6 (OptiQ) at N=1 — and since
+`prefill_tps = prompt_tokens / ttft_s` (`report.py:6`), the two agree on the same prompt: roughly 1.3k
+tokens in every runtime's own count (their products at N=1 land within 1,314–1,320). **The rows do not
+establish a cause, and this paper does not invent one.** Two things they do establish: the split is present
+at N=1 in *both* sweeps, so it is not a concurrency effect; and it is present on three runtimes, so the one
+source literal that would have been the tidy explanation — oMLX's `prefill_batch_size=1` — cannot be the
+explanation of the level, since vMLX and Osaurus show the same level and that literal is oMLX's.
+
+### 5. Every row with |drift| > 5%
+
+The joins annotate a drift beyond ±5% on the entry and the row notes carry the direction, the half-window
+medians, and report.py's fixed wording for the direction. All thirteen rows in both sweeps are here, quoted
+from the leaderboards under each run directory; the direction clauses below are that wording verbatim
+(`report.py:1039-1043`), and the medians are the rows' own. Drift is not a floor: each of these rows is
+ranked with the rest and annotated, and at N>1 the sweep's own sentence governs — positive means the
+per-request rate was still moving, not that the cell was under-warmed.
+
+| sweep | cell | shape | N | drift % | the row's own reading | early → late median |
+|---|---|---|---|---|---|---|
+| seedless | oMLX | chat | 2 | −6.1 | slowing down — the thermal curve the interleave exists to expose | 77.4 → 72.6 |
+| seedless | oMLX | chat | 4 | +5.7 | still warming up — insufficient warmup, not a thermal effect | 68.0 → 71.9 |
+| seedless | Osaurus | chat | 1 | +9.0 | still warming up — insufficient warmup, not a thermal effect | 69.2 → 75.3 |
+| uncapped | oMLX | chat | 1 | −6.7 | slowing down — the thermal curve the interleave exists to expose | 85.0 → 79.4 |
+| uncapped | oMLX | prefill | 1 | −6.5 | slowing down — the thermal curve the interleave exists to expose | 98.2 → 91.8 |
+| uncapped | oMLX | prefill | 2 | **+118.9** | still warming up — insufficient warmup, not a thermal effect | 37.2 → 81.4 |
+| uncapped | oMLX | prefill | 4 | +8.3 | still warming up — insufficient warmup, not a thermal effect | 19.4 → 21.0 |
+| uncapped | oMLX | decode | 4 | −5.8 | slowing down — the thermal curve the interleave exists to expose | 25.9 → 24.4 |
+| uncapped | OptiQ | chat | 1 | +7.7 | still warming up — insufficient warmup, not a thermal effect | 67.2 → 72.4 |
+| uncapped | OptiQ | prefill | 2 | −15.5 | slowing down — the thermal curve the interleave exists to expose | 49.6 → 42.0 |
+| uncapped | OptiQ | prefill | 8 | +11.1 | still warming up — insufficient warmup, not a thermal effect | 13.8 → 15.3 |
+| uncapped | vMLX | chat | 4 | +8.6 | still warming up — insufficient warmup, not a thermal effect | 23.5 → 25.5 |
+| uncapped | vMLX | decode | 4 | −32.7 | slowing down — the thermal curve the interleave exists to expose | 25.4 → 17.1 |
+
+**What each one does and does not touch.**
+
+- **The batching results rest on aggregate, and no cell a ratio uses is a drift row.** The load-bearing
+  ratios of §3 use the `decode` shape's N=1 and N=8 aggregates, and **none of the sixteen N=1/N=8 `decode`
+  cells across the table is a flagged row**; the one flagged `decode` cell in either sweep is vMLX's N=4,
+  which no ratio uses. An aggregate is computed over the whole measured window, which is the same
+  window the warmup settled on; the drift note is about the per-request series, which is the series that can
+  still move.
+- **uncapped oMLX prefill N=2 (+118.9%)** is the paper's largest positive: 51.0 tok/s published from an early
+  half at 37.2 against a late half at 81.4 — the published per-request figure is an early-window one and the
+  settled value is `≥` it. It touches exactly one cell in one column (oMLX `prefill` per-request at N=2). It
+  does not touch §4's claim, which is about the aggregate column (17.4 at that N, whole-window) or the flat
+  ladder around it.
+- **The other still-warming rows** (oMLX chat N=4 +5.7, oMLX prefill N=4 +8.3, OptiQ chat N=1 +7.7, OptiQ
+  prefill N=8 +11.1, vMLX chat N=4 +8.6, Osaurus chat N=1 +9.0) all move the same way — published per-request
+  is a floor, not a ceiling, for that cell. Two of them are N=1 baselines: OptiQ's chat baseline is the
+  flagged one, while the aggregate the headline's OptiQ ratios use comes from the unflagged `decode` row at
+  both ends (65.6 and 108.2); Osaurus's flagged N=1 chat entry is the lowest of its four and its direction is
+  *away* from a batching reading, and Osaurus's flatness claim rests on aggregate (61.1 → 62.9) and on the
+  three unflagged cells.
+- **The slowing rows** published a first-half figure above the second half's: oMLX chat N=1 −6.7 and prefill
+  N=1 −6.5, oMLX decode N=4 −5.8, OptiQ prefill N=2 −15.5. The two oMLX N=1 cells are chat's and prefill's,
+  so any oMLX ratio built on them would be if anything generous; the quoted 1.45× is the `decode` one, whose
+  baseline row is unflagged (69.1, drift +4.3). OptiQ's prefill −15.5% touches its N=2 per-request
+  value only; its aggregates (64.6 at N=2) are whole-window.
+- **uncapped vMLX decode N=4 (−32.7%)** is the largest negative. The cell ran 15:28:56 → 15:50:10, the last
+  one before the runner's `ABORTED 15:50:16` (the Mac had to be moved). **That is timing, and this paper
+  claims no cause from it** — not the stop, not the move, nothing external; the row's own reading is that the
+  cell was slowing down as it was measured, at 25.4 → 17.1 tok/s across its halves. It touches the vMLX
+  `decode` ladder's N=4 point (the published 25.2 is a first-half figure) and the confidence in any claim
+  that the vMLX ladder is monotone between N=2 and N=8. It does not touch the two cells the 1.65× uses: the
+  unflagged N=1 (−4.8, inside the bar) and the N=8 run alone at 19:03, whose own drift is +0.3%.
+
+## What an everyday user should take from it
+
+- **On today's oMLX, OptiQ and vMLX, sending work concurrently now buys real throughput where it used to buy
+  nothing.** Eight requests at once return **1.45–1.72×** the total tokens per second of eight requests sent
+  one after another (`decode` shape; mlx-lm 1.72×, oMLX 1.45×, OptiQ 1.65×, vMLX 1.65×). Before
+  2026-09-27's two fixes, three of those four rows would have shown ~1.01× — the harness's cap, not the
+  server.
+- **The price is on every request.** The same eight-at-once batch decodes each request at **12–15 tok/s**
+  against **65–74 tok/s** alone, and its first token arrives 1.1–1.9 s (oMLX/OptiQ/vMLX) instead of
+  0.17–0.43 s. That is what batching is: aggregate up, per-request down. Choose per your traffic — one
+  interactive user is better served alone; a queue of requests is better served batched.
+- **Long prompts are the case where batching still does not pay on oMLX and vMLX.** The `prefill` shape's
+  aggregate stays at 18–23 tok/s across the ladder, and its first token at N=8 takes ~15.6 s (oMLX) / ~17.4 s
+  (vMLX). If your traffic is long-prompt, one at a time is not leaving throughput on the table on those two.
+- **mlx-lm batches by default once the seed is gone; Osaurus does not, as shipped.** The harness passes
+  Osaurus no flag because it has none — whether a *setting* changes its picture was not tested.
+- **Quote the direction, not the level.** One model, one machine, one day; within each runtime the ladder is
+  the result. Cross-runtime levels here are five sequential sessions on a laptop.
+
+## Open questions
+
+1. **Does `concurrency.maxConcurrentSequences` change Osaurus?** The host's `server-runtime.json` carries
+   `concurrency.continuousBatching: true` and `concurrency.maxConcurrentSequences: 1`
+   (`docs/runtimes/osaurus.md` §3.2), and that file is where Osaurus's engine settings live — there is no
+   flag. Whether raising the key produces batching was not tested here, and it is the cheapest one-cell
+   question this paper leaves.
+2. **Is oMLX's hard-coded `prefill_batch_size=1` (`scheduler.py:3088`) the reason its prefill aggregate is
+   flat?** The rows are consistent with it and no cell varies it. A test needs a surface that does not
+   exist today; until then the link is source-plus-consistency, labelled as an inference in §4.
+3. **Why is the prompt leg ~N-scaled on vMLX at all?** TTFT ×7.6 for eight requests on a runtime with
+   512-wide prefill flags and no matching serial-scheduling guard in the source. Admission, chunking and
+   memory are all live explanations and nothing here separates them.
+4. **Is the oMLX chat dip at N=8 (89.2 → 81.0 aggregate) a ceiling or memory pressure?** Its peak nearly
+   doubles (5533 → 9482 MB) across the same step, and the N=8 cell is unflagged. One cell; a rerun with a
+   memory read per batch would say.
+5. **How far does mlx-lm's ladder go?** Its own defaults allow 32 decodes / 8 prompts at once; this sweep
+   stops at 8, where its aggregate is still climbing (102.0 → 112.5).
+6. **Why do the oMLX N=1 rows read 8.7–8.9% below the seedless sweep's when the command is byte-identical?**
+   That is larger than the other two runtimes' N=1 session gap (OptiQ 1.3–2.5%, vMLX 1.2–5.7%) and it is the
+   bar under any cross-sweep level; bounding it is a rerun, not an argument.
+
+## What this cannot claim
+
+- **Nothing about a runtime other than these five releases on this one artifact.** `Qwen3.5-4B-oQ4`
+  (3,160,559,814 bytes, one artifact directory in all 96 rows), mlx-lm 0.31.3, oMLX 0.6.4, OptiQ 0.5.13,
+  vMLX 1.6.59, Osaurus 0.25.13, on one M2 Max. A different quant, model or release is a different
+  measurement.
+- **No cross-runtime ranking of any kind.** Each runtime was measured in its own window; the timing channels
+  differ (OptiQ content, the rest reasoning) and Decision 122 forbids ranking the channel-dependent metrics
+  across them; `peak_mb` and `cold_load_s` are uncomparable across runtimes for accounting reasons. The
+  ladders' own N-vs-N direction is the result here, never a level against another runtime's level.
+- **No claim that any runtime "cannot" batch.** Osaurus's flatness is as-shipped, with no flag passed and a
+  settings question untested; oMLX's prefill flatness has a source reading and no measurement of the cause.
+- **Nothing about spread or percentiles beyond the rows**: the paper quotes `decode_tps`, `aggregate_tps`,
+  `ttft_p50_s` and `peak_mb`, each as published; p90/p99 and ITL are in every leaderboard and not read here.
+- **No accuracy claim.** Coherence is a floor — every one of the 96 rows produced language — and nothing in
+  this run scores an output.
+- **The 09-16 comparison is a reading of that paper, not a re-join.** Its runs were seeded and this harness
+  will not join a seed-bearing header to a seedless one (Decision 128); the numbers quoted from it are its
+  published table's.
+- **The two sweeps are two sessions, and the uncapped vMLX N=8 cell is its own.** Nothing here controls for
+  what else the machine was doing; the harness cannot detect contention, and no run in either sweep attests
+  the host's state while it ran.
