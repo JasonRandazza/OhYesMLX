@@ -932,9 +932,10 @@ recording this number.
    tokens, not 512, and any harness assumption built on the §2.3 default is wrong for the
    no-`max_tokens` case.
 
-`--prompt-cache-size` is the only one of the three the harness ever passes itself — and only on a
-run that pins a cache state (§9, `runtimes.prompt_cache_flags`), which disables the injection for
-that run.
+`--prompt-cache-size` is the only one of the three the harness passes itself, and since Decision
+130 (2026-09-28) it passes it on every run (`0`, or `10` under `cache_state=on`; §9,
+`runtimes.prompt_cache_flags`), which disables the injection. Before that it was passed only when
+a run pinned a cache state, so unpinned runs got the injected value.
 
 ### 7.4 Concurrency is capped below upstream's default
 
@@ -1175,7 +1176,8 @@ a sweep raises it>`, `--idle-timeout 0`,
 `--context-scale 1.0`, `--no-stream-experts` or `--stream-experts` (header pin 03-03, below),
 `--mtp --mtp-depth N` when the run pins a draft depth (header pin 03-06, §9.2),
 `--temp 0 --top-p 1 --top-k 0 --min-p 0`, and
-`--prompt-cache-size 0` or `10` when the run pins a cache state.
+`--prompt-cache-size 0`, or `10` when the run pins `cache_state=on` (the absent pin is `0` since
+Decision 130, 2026-09-28; before it no flag was passed and OptiQ injected its own default, §7.3).
 
 **Done since this document was written:** the four sampler flags, which this table used to list
 as its first priority, are now in the command — every key `merge_into_argv` forwards is already
@@ -1335,7 +1337,7 @@ axes are about; the loop's own request body drops the key entirely when the valu
 | Add | Why |
 |---|---|
 | `--prompt-cache-bytes <N>` | Otherwise a RAM- and weights-derived value is injected (§7.3), differing across machines and not recorded in the start command. |
-| `--prompt-cache-size <N>` | Same injection channel, and the injected value is 10 or 3 depending on whether the model can trim (§7.3). The run already pins it when it pins a cache state; pinning it always removes the model-shape dependence. |
+| ~~`--prompt-cache-size <N>`~~ | **Done 2026-09-28 (Decision 130):** always passed now, `0` unless the run pins `cache_state=on`. |
 | `--max-tokens <N>` | Otherwise OptiQ injects 32768, so a request that omits `max_tokens` is capped at 32768 rather than mlx-lm's 512 (§7.3). Recording the cap makes the cell's ceiling explicit. |
 | `--decode-concurrency <N> --prompt-concurrency <max(1, N//4)>` | `--max-concurrent N` already produces these from the run's concurrency, but recording the real flags removes the indirection. |
 | Confirm `OPTIQ_*` unset | `OPTIQ_NO_THINK`, `OPTIQ_STREAM_PREFETCH`, `OPTIQ_FLASH_ATTN`, `OPTIQ_KERNELS`, `OPTIQ_DUMP_REQUESTS` etc. are not flags and would not show in the recorded command (§3.2). Capture `optiq config` output into the run artifact. |
@@ -1346,10 +1348,10 @@ Not needed, and why: `--no-fused-kv` only matters with KV quantization (§7.7);
 `--max-context auto` is bypassed by the explicit `off` (§7.6); `--context-scale 1.0` is a
 no-op (§6.3) but is worth keeping as documentation of intent.
 
-Also worth pinning in the observation, not the command: `--prompt-cache-size` stays at
-upstream's 10 **only because the harness pins it (0 or 10) whenever it pins a cache state** —
-left unpinned, OptiQ injects 10, or 3 on a non-trimmable hybrid (§7.3); and `mx.set_wired_limit`
-raises the wired limit to the device maximum on every run (§2.3).
+Also worth pinning in the observation, not the command: `mx.set_wired_limit` raises the wired
+limit to the device maximum on every run (§2.3). (`--prompt-cache-size` used to be listed here:
+left unpinned, OptiQ injects 10, or 3 on a non-trimmable hybrid (§7.3). Since Decision 130 the
+harness passes it on every run.)
 
 ---
 

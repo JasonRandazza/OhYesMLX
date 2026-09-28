@@ -991,6 +991,16 @@ Reading the absence as `off` would fold two different cache states into one colu
 a comparison. Without the flag every start command is **byte-identical to today**; that is
 checked against recorded literals for all five runtimes, not re-derived.
 
+**Amended 2026-09-28 (Decision 130).** The absent pin is still recorded as `None`, but mlx-lm and
+OptiQ now deliver reuse off under it: their absent-pin command gained `--prompt-cache-size 0`,
+which is the `off` command below. Left at the default 10, the seedless batched path (Decision 128)
+answered repeated prompts from the cache and timed hits as prefill
+(docs/research/2026-09-28-seedless-validation-grids.md §2.2). oMLX and vMLX already passed their
+off flags without a pin, and Osaurus runs with its prefix cache disabled by the sweep script. The
+`TODAY` literals carry the new flag for those two runtimes. Rows recorded before this change with
+an absent pin ran the default 10 on mlx-lm and OptiQ, and nothing in the run header separates
+them from rows recorded after it: keep them in separate run directories and do not join them.
+
 **The mechanism, per runtime.** `off` disables prefix/KV reuse and `on` enables it, through each
 runtime's own start command:
 

@@ -312,6 +312,8 @@ def test_mlxlm_start_command_is_pinned():
         ARTIFACT,
         "--port",
         "8081",
+        "--prompt-cache-size",
+        "0",
     )
 
 
@@ -356,6 +358,8 @@ def test_optiq_start_command_is_pinned():
         "--top-k",
         "0",
         "--min-p",
+        "0",
+        "--prompt-cache-size",
         "0",
     )
 
@@ -516,13 +520,17 @@ def test_no_pinned_command_carries_a_predecessor_placeholder():
 # The cache pin (plan 06-02)
 # --------------------------------------------------------------------------------------
 #
-# The five start commands with no cache pin: what every runtime ran before the pin existed.
-# Written out rather than recomputed, because the claim is about bytes -- the way to check a
-# command did not change is to compare it against the command that was recorded, not against
-# the expression that produced it.
+# The five start commands with no cache pin. Written out rather than recomputed, because the
+# claim is about bytes -- the way to check a command did not change is to compare it against
+# the command that was recorded, not against the expression that produced it. mlx-lm and OptiQ
+# gained `--prompt-cache-size 0` under Decision 130 (2026-09-28); the other three are what they
+# ran before the pin existed.
 
 TODAY = {
-    "mlxlm": ("python", "-m", "mlx_lm.server", "--model", ARTIFACT, "--port", "8081"),
+    "mlxlm": (
+        "python", "-m", "mlx_lm.server", "--model", ARTIFACT, "--port", "8081",
+        "--prompt-cache-size", "0",
+    ),
     "osaurus": ("osaurus", "serve", "--port", "1337", "--yes"),
     "omlx": (
         "omlx", "serve", "--model-dir", runtimes.OMLX_CATALOG_TOKEN, "--host", "127.0.0.1",
@@ -534,7 +542,7 @@ TODAY = {
         "--no-anthropic", "--no-responses", "--no-auth", "--max-context", "off",
         "--max-concurrent", "1", "--idle-timeout", "0", "--context-scale", "1.0",
         "--no-stream-experts", "--temp", "0", "--top-p", "1", "--top-k", "0",
-        "--min-p", "0",
+        "--min-p", "0", "--prompt-cache-size", "0",
     ),
     "vmlx": (
         "vmlx", "serve", ARTIFACT, "--host", "127.0.0.1", "--port", "8000",
@@ -598,11 +606,11 @@ def test_omlx_start_hands_the_run_concurrency_to_the_catalog_command(rig, artifa
         handle.stop()
 
 
-def test_no_cache_pin_leaves_every_start_command_byte_identical_to_today():
-    """Absent is not `off` and not `on`: the pin was never taken, so no runtime's command gains
-    a cache flag, and every one of the five is the tuple this module built before the pin
-    existed. An absent pin read as `off` would have added `--prompt-cache-size 0` to two of
-    these commands and claimed a cache state nobody asked for."""
+def test_no_cache_pin_is_the_today_command():
+    """The absent pin builds `TODAY` for all five, and for the two runtimes whose cache is a
+    start flag that command already holds reuse off (Decision 130): left at mlx-lm's default 10,
+    the seedless batched path answered repeated prompts from the cache and measured a cache hit
+    as prefill (docs/research/2026-09-28-seedless-validation-grids.md §2.2)."""
     assert set(TODAY) == set(RUNTIMES)
     for name, runtime in RUNTIMES.items():
         assert runtime.start_command(ARTIFACT, HF_ID) == TODAY[name]
@@ -613,14 +621,15 @@ def test_mlxlm_and_optiq_pin_the_prompt_cache_size_in_both_states():
     """`--prompt-cache-size` is the LRUPromptCache's only control (mlx_lm/server.py:1872,
     default 10), and at 0 the cache holds nothing: every insert evicts the entry it just added
     (models/cache.py:1696-1737), so no later request can fetch a prefix. OptiQ runs the same
-    server and takes the same flag through it."""
+    server and takes the same flag through it. `off` is the absent pin's command, and `on`
+    differs from it in the one value."""
     for name in ("mlxlm", "optiq"):
         off = RUNTIMES[name].start_command(ARTIFACT, HF_ID, cache_state="off")
         on = RUNTIMES[name].start_command(ARTIFACT, HF_ID, cache_state="on")
 
-        assert off == TODAY[name] + ("--prompt-cache-size", "0")
-        assert on == TODAY[name] + ("--prompt-cache-size", "10")
-        assert "--prompt-cache-size" not in TODAY[name]
+        assert off == TODAY[name]
+        assert TODAY[name][-2:] == ("--prompt-cache-size", "0")
+        assert on == TODAY[name][:-1] + ("10",)
 
 
 def test_omlx_off_is_the_flag_it_already_passed_and_on_is_omitting_it():
@@ -2111,9 +2120,7 @@ def test_start_returns_a_handle_only_after_the_model_id_appears(rig):
     assert handle.base_url == "http://127.0.0.1:8081/v1"
     assert handle.version == "0.31.3"
     assert handle.cold_load_s == pytest.approx(12.5 + 2 * READY_POLL_S)
-    assert rig.commands == [
-        ("python", "-m", "mlx_lm.server", "--model", ARTIFACT, "--port", "8081")
-    ]
+    assert rig.commands == [TODAY["mlxlm"]]
 
 
 def test_start_refuses_a_server_whose_load_died_even_though_the_model_is_listed(rig):

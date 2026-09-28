@@ -28,8 +28,9 @@ The flag tuples below are ported verbatim from LMRE's ``runtime_adapters``. They
 defaults, they are pins, and each one costs something when it is left to the runtime.
 
 The cache pin (Phase 6, plan 06-02) is a start-command flag on four of the five runtimes and
-a host setting on the fifth. ``cache_state=None`` is the pin not taken, and every runtime
-starts exactly as it did before the pin existed. ``"off"`` is prefix/KV reuse disabled and
+a host setting on the fifth. ``cache_state=None`` is the pin not taken; it is recorded as
+``None``, and since Decision 130 every flag-driven runtime delivers reuse disabled under it
+(:func:`prompt_cache_flags` has why). ``"off"`` is prefix/KV reuse disabled and
 ``"on"`` is enabled, and the value a runtime cannot deliver is refused up front rather than
 approximated -- see :meth:`Runtime.cache_state_refusal` and, for the one runtime with no flag
 in either direction, :meth:`Osaurus.cache_state_refusal`.
@@ -1880,17 +1881,26 @@ def prompt_cache_flags(cache_state: str | None) -> tuple[str, ...]:
     command that claimed to pin the cache on while naming no size would be adopting whatever a
     later version's default became.
 
+    **The absent pin is off too** (Decision 130, Jason 2026-09-28), which is where the other
+    three runtimes already were: oMLX passes ``--no-cache`` unless ``on``
+    (:meth:`Omlx.start_command`), vMLX passes ``--disable-prefix-cache``, and Osaurus runs with
+    the host's prefix cache disabled by the sweep script's pin. Until then an absent pin passed
+    nothing here and left the default 10 in place -- harmless while every request carried a seed,
+    because the sequential path never reached it, and a cache hit on every repeated prompt once
+    Decision 128 dropped the seed: the seedless MoE grid measured mlx-lm's 1,332-token prefill
+    TTFT at 0.097 s against 1.044 s seeded (docs/research/2026-09-28-seedless-validation-grids.md
+    §2.2). So only ``on`` leaves reuse in place, and every command recorded with an absent pin
+    before this gained ``--prompt-cache-size 0``.
+
     OptiQ runs this same server -- ``optiq serve`` passes flags it does not know through to
     ``mlx_lm.server``'s own argparse (``optiq/cli.py:2768`` collecting ``ctx.args``, ``:3310``
     handing them to ``mlx_lm.server``, with ``ignore_unknown_options`` set at ``:2500``) and
     bundles the same mlx-lm 0.31.3 -- so both runtimes read one definition of what the flag
     means instead of two that would drift.
     """
-    if cache_state == CACHE_STATE_OFF:
-        return ("--prompt-cache-size", "0")
     if cache_state == CACHE_STATE_ON:
         return ("--prompt-cache-size", "10")
-    return ()
+    return ("--prompt-cache-size", "0")
 
 
 class MlxLm(Runtime):
