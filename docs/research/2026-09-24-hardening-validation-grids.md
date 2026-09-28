@@ -193,3 +193,29 @@ this note records where its open item lands.
   timing-channel labels restored.
 
 Follow-up 2 (Decision 122, above) and Follow-up 3 are unaffected.
+
+---
+
+## Update 2026-09-28: the same three grids, re-run seedless (Decision 128)
+
+The three grids in this paper were re-run on the seedless harness — `results/harden-2026-09-27-seedless/`,
+2026-09-27 22:01 → 2026-09-28 04:51 EDT, harness `source_sha256 6968456b…27a2`, `request_seed: null`
+on all 168 rows — and are written up in `docs/research/2026-09-28-seedless-validation-grids.md`,
+this paper's counterpart. Nothing in this paper's text or numbers moves; this note records what
+the new arm says about them.
+
+- **"Orderings replicate, levels do not" holds, one arm later.** 28 of the 45 within-column
+  format orderings are identical between the 09-23 arm and this one, and four of the 17 changes
+  are above the project's 2.5% tie band. The levels moved down again on dense and MoE — per-runtime
+  medians −14.8 to −18.9% on dense and −6.1 to −25.3% on MoE, deepest on the two runtimes the seed
+  routes — with 35B mixed (oMLX's column rose, and its 35B cells were the run's most drifted).
+- **The one FAIL is still the one FAIL.** `optiq__osaurus` on MoE `decode` fails with the
+  identical `token_source='none'` reason in both arms; this paper's claim that the FAIL is a
+  property of that cell rather than of the harness or the night now has a second arm.
+- **Dense and MoE `prefill` TTFT for mlx-lm and OptiQ changed quantity, not just level.** Those
+  rows here are full-prefill times; the seedless rows are prompt-cache-hit times (about −91%),
+  and on 35B — where `cache_state off` pins the cache off in both arms — neither arm collapses.
+  This paper's dense/MoE figures for those two runtimes on that workload must not be compared
+  with the seedless arm's.
+- The 09-23 arm's rows carry no `request_seed` field at all (the header's `seed: 0` is the only
+  record), so the two arms cannot be joined and this paper's provenance stands as written.

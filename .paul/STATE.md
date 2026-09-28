@@ -143,6 +143,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Blocker | Impact | Resolution Path |
 |---------|--------|-----------------|
 | **AGENTS.md says `top_p`/`repetition_penalty` and the chat template are pinned; only OptiQ's sampler is** (found 2026-09-25) | The harness sends temperature, seed, max_tokens and the messages only; the other four runtimes use their own sampler defaults and chat templates (README says so). At temperature 0 `top_p` cannot change a greedy token, but a non-1.0 default `repetition_penalty` can. | Jason's call: pin `repetition_penalty` per request (and read each runtime's default), or amend the AGENTS rule to what the harness does. |
+| **mlx-lm and OptiQ serve repeated prompts from their prompt cache when `cache_state` is unpinned** (found 2026-09-28, `docs/research/2026-09-28-seedless-validation-grids.md` §2.2) | The absent pin passes no `--prompt-cache-size`, so mlx-lm's default cache (10) is on; the seeded path could not hit it, the seedless batched path does. Dense/MoE `prefill` TTFT for these two fell ~91% (MoE mlx-lm 1.04 → 0.09 s) — cache hits, not prefills. oMLX, vMLX and Osaurus already run cache-off without a pin. Also affects the concurrency sweep's mlx-lm/OptiQ `prefill` rows (0.15–0.19 s TTFT). Decode rates are not a cache quantity. | Jason's call: absent pin means cache off on mlx-lm/OptiQ too (`--prompt-cache-size 0`, changes their absent-pin command), then re-run dense + MoE and the two runtimes' concurrency columns. |
 
 ## Boundaries (Active)
 
