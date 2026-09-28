@@ -42,6 +42,36 @@ json.dump(hardware, open(server, 'w'), indent=2)"
   echo "  osaurus cache off & idle residency pinned to 900 s"
 }
 
+# Set concurrency.maxConcurrentSequences = N, the batch cap following the run's own N -- the rule
+# Decision 129 wrote as runtimes.Omlx.start_command's --max-concurrent-requests (OptiQ's
+# --max-concurrent and vMLX's --max-num-seqs are the same edit). Osaurus takes no such flag, so
+# its cap is this host setting. The baseline is re-recorded exactly as osaurus_pin does it, or
+# osaurus_settings' drift gate refuses every start. Refuses before osaurus_pin has copied $CONF
+# byte-exact: with no copy there is nothing osaurus_restore_check's cmp could put back, and the
+# host would silently keep the run's N.
+osaurus_set_seqs() {
+  case ${1:-} in
+    ''|*[!0-9]*) echo "osaurus_set_seqs: refusing -- expected a positive integer, got '${1:-}'"; return 1 ;;
+  esac
+  if [ ! -f "$CONF_ORIG" ]; then
+    echo "osaurus_set_seqs: refusing -- osaurus_pin has not run, so $CONF has no byte-exact backup to restore"
+    return 1
+  fi
+  $PY -c "
+import json
+from ohyesmlx import osaurus_settings as s
+conf = '$CONF'
+key = 'server-runtime.json:concurrency.maxConcurrentSequences'
+runtime = json.load(open(conf))
+runtime.setdefault('concurrency', {})['maxConcurrentSequences'] = $1
+json.dump(runtime, open(conf, 'w'), indent=2)
+host = s.capture_osaurus_settings()[key]
+if host != $1:
+    raise SystemExit('osaurus_set_seqs: %s reads back %r, not $1' % (key, host))
+s.write_baseline()
+print('  osaurus %s = %r (baseline re-recorded)' % (key, host))"
+}
+
 osaurus_restore_check() {
   [ -f "$CONF_ORIG" ] || { echo "  osaurus settings were never pinned; nothing to restore"; return 0; }
   osaurus_restore

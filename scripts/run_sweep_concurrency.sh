@@ -99,6 +99,16 @@ for r in $RUNTIMES; do
     # Before as well as after: an Osaurus app relaunched between runs must not sit resident
     # through another runtime's cell. The kill is logged.
     [ "$DRY" = 1 ] || sweep
+    # Decision 129: the batch cap follows the run's N -- the rule written in
+    # runtimes.Omlx.start_command, as oMLX's --max-concurrent-requests, OptiQ's --max-concurrent
+    # and vMLX's --max-num-seqs. Osaurus takes no flags, so its cap is the host setting
+    # concurrency.maxConcurrentSequences, set to the same N here and put back byte-exact by
+    # osaurus_restore_check when its runs are done. At N=1 this writes the value the host
+    # already holds.
+    if [ "$r" = osaurus ]; then
+      if [ "$DRY" = 1 ]; then echo "  osaurus_set_seqs $n"
+      else osaurus_set_seqs "$n" || { echo "=== oq4__$r-n$n SKIPPED: cap not set"; continue; }; fi
+    fi
     run_one "oq4__$r-n$n" --study format --cells "oq4__$r=$Q4" --concurrency "$n" \
         --results-dir "$OUT/oq4__$r"
     [ "$DRY" = 1 ] || sweep

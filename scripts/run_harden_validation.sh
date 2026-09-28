@@ -10,7 +10,7 @@
 set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
 PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
-T=results/harden-2026-09-23
+T=${T:-results/harden-2026-09-23}
 mkdir -p "$T"
 
 for g in 35b dense moe; do

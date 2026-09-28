@@ -294,7 +294,7 @@ key is validated (E3, `G`).
 | `cache.prefix.legacyEntryCountCache` | `false` | — |
 | `cache.storedKVCodec` | `auto` | — |
 | `concurrency.continuousBatching` | `true` | "Continuous batching is off, so prefix/paged/block-disk cache reuse will be limited or disabled." |
-| `concurrency.maxConcurrentSequences` | `1` | "Max concurrent sequences must be positive." |
+| `concurrency.maxConcurrentSequences` | `1` (host value) | "Max concurrent sequences must be positive." **The concurrency runner sets this key to the run's N and restores it** (2026-09-27): `osaurus_set_seqs` in `scripts/osaurus-pin.sh` writes the run's request concurrency into this key after `osaurus_pin` has copied the file byte-exact, then re-records the drift baseline exactly as `osaurus_pin` does, and `osaurus_restore_check`'s `cmp` puts the host's `1` back when the runtime's runs are done — the same rule Decision 129 wrote as `--max-concurrent-requests` in `runtimes.Omlx.start_command`. So a concurrency-sweep column's cap is its own N, and the `1` in this row is what every non-sweep cell holds. |
 | `concurrency.smeltMode` | `disabled` | enum `engineSelected` \| `disabled` \| `flashMoE` \| `ssdStreaming` |
 | `generation.diffusionMaxDenoisingSteps` | `16` | "Diffusion budgets below 12 steps measurably break coherency on diffusiongemma-26B-A4B (8 steps produces word-salad spans)." |
 | `generation.streamInterval` | `1` | "Stream interval must be at least 1." **See §5.** |
@@ -320,6 +320,37 @@ key is validated (E3, `G`).
 | `power.jitLoad` | `true` | — |
 | `power.wakeOnRequest` | `true` | — |
 | `tools.enableAutoToolChoice` | `false` | — |
+
+**Does the memory-safety profile also cap sequences? Yes — as an upper bound, and the number it
+resolves to on this host is not statically recoverable.** Added 2026-09-27, read from the installed
+0.25.13 binary (E3; reproduce with the §0 command). The Concurrency section's own footer is
+assembled from three sources, which is the proof that a second, memory-derived cap sits on the same
+quantity as `concurrency.maxConcurrentSequences`:
+
+| Literal | Offset |
+|---|---|
+| `` Effective BatchEngine limit: `` (the footer, twice) | `G:108883712`, `G:108883776` |
+| `` Continuous Batching is off.`` | `G:108883746` |
+| `` Memory Safety profile.`` | `G:108883808` |
+| `` explicit Concurrent Sessions override.`` | `G:108883844` |
+| `` overridden by Memory Safety `` / `` Max Concurrent Sequences.`` | `G:108883892`, `G:108883924` |
+| `Max Concurrent Sequences` (the advanced-override label) | `G:108890864` |
+| `Upper bound for concurrent decode slots under this memory mode.` | `G:108890896` |
+
+So the resolved limit can come from the batching switch, from the memory-safety profile, or from the
+explicit setting — and one fragment states the explicit value can be **overridden by** the
+memory-safety maximum. The override itself is `memorySafety.customMaxConcurrentSequences` (§3.3,
+absent from this host's file), validated "Custom max concurrent sequences must be positive."
+(`G:110812016`); the slider description (`G:108890240`) says 0 favors performance, 2 is Safe Auto,
+3 is strict, and **4 removes automatic Osaurus caps** — and this host is `safe_auto` at `slider: 2`,
+so the automatic caps are live.
+
+What the strings do not show: which source wins in the code, or what number this host's `safe_auto`
+resolves to. A string table carries no numeric defaults (§9.1) and the resolution runs in compiled
+Swift. **So a run that pins `concurrency.maxConcurrentSequences` to N has not thereby proven the
+engine's effective limit was N** — a memory-safety bound below N would win, and nothing in a result
+row would say so. The app's own Server Settings footer prints the resolved value; reading it against
+a pinned N is the check this document leaves for the coordinator.
 
 ### 3.3 `server-runtime.json` — validated keys absent from this host's file
 
