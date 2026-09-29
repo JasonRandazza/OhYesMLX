@@ -2753,6 +2753,15 @@ class Vmlx(Runtime):
             # would publish as prefill throughput. The block disk cache also survives restarts
             # and is trimmed synchronously inside cold load, on a 22 GB cache that is not ours.
             "--disable-block-disk-cache",
+            # Left unset, a request that omits `repetition_penalty` gets the artifact's own:
+            # CLI default, then the bundle's generation_config.json (`_resolve_repetition_penalty`,
+            # server.py:3507). The LFM2.5-8B-A1B oQ4e and OptiQ-4bit bundles ship 1.05 and the
+            # stock, oQ4 and JANG_2L ones ship none, so one runtime ran two penalties across a
+            # format axis; vMLX's own /v1/capabilities reported `effective_defaults.
+            # repetition_penalty: 1.05` for the oQ4e bundle (probed 2026-09-29, Decision 131).
+            # The CLI default outranks the bundle, so every format gets the neutral 1.0.
+            "--default-repetition-penalty",
+            "1.0",
             *flash,
             *kv,
         )

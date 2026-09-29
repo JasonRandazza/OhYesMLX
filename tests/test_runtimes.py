@@ -455,6 +455,8 @@ def test_vmlx_start_command_is_pinned():
         "--disable-native-mtp",
         "--disable-prefix-cache",
         "--disable-block-disk-cache",
+        "--default-repetition-penalty",
+        "1.0",
     )
 
 
@@ -548,7 +550,7 @@ TODAY = {
         "vmlx", "serve", ARTIFACT, "--host", "127.0.0.1", "--port", "8000",
         "--served-model-name", HF_ID, "--stream-interval", "1", "--continuous-batching",
         "--max-num-seqs", "1", "--no-jit", "--disable-native-mtp", "--disable-prefix-cache",
-        "--disable-block-disk-cache",
+        "--disable-block-disk-cache", "--default-repetition-penalty", "1.0",
     ),
 }
 
