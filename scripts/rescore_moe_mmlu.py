@@ -26,6 +26,11 @@ is a re-reading of rows already on disk.
 
     python scripts/rescore_moe_mmlu.py --self-test
     python scripts/rescore_moe_mmlu.py
+    python scripts/rescore_moe_mmlu.py --cell-dir results/accuracy-thinkoff/think-off/jang2l__osaurus
+
+`--cell-dir` re-reads another cell's samples (the thinking-off arm's Osaurus cells). The
+43/1,140 reconciliation below belongs to the one cell it was measured on, so it is skipped
+for any other; every other check, and the 57-file / 1,140-item refusal, applies unchanged.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from __future__ import annotations
 import glob
 import json
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -40,12 +46,32 @@ ROOT = Path(__file__).resolve().parent.parent
 CELL_DIR = ROOT / "results" / "accuracy-moe" / "study-2c" / "jang2l__osaurus"
 MMLU_DIR = CELL_DIR / "mmlu_generative" / "lfm2.5-8b-a1b-jang_2l"
 SUMMARY_PATH = CELL_DIR / "mmlu_rescored.json"
+# Rebound by `configure` for any cell but the original one. The label is the cell directory's
+# name (`<format>__<runtime>`), which is how every accuracy runner names it.
+CELL_LABEL = "jang2l__osaurus"
+MODEL_ID = "lfm2.5-8b-a1b-jang_2l"
+IS_ORIGINAL_CELL = True
 
 EXPECTED_FILES = 57
 EXPECTED_ITEMS = 1140
 LM_EVAL_REPORTED_MATCHES = 43
 LM_EVAL_REPORTED_SCORE = 0.0377
 Z_95 = 1.959963984540054
+
+
+def configure(cell_dir: Path) -> None:
+    """Point the script at another cell's samples: its one model directory under mmlu_generative."""
+    global CELL_DIR, MMLU_DIR, SUMMARY_PATH, CELL_LABEL, MODEL_ID, IS_ORIGINAL_CELL
+    CELL_DIR = cell_dir.resolve()
+    models = sorted(p for p in (CELL_DIR / "mmlu_generative").iterdir() if p.is_dir())
+    if len(models) != 1:
+        raise SystemExit(f"expected one model directory under {CELL_DIR}/mmlu_generative, "
+                         f"found {[p.name for p in models]}")
+    MMLU_DIR = models[0]
+    MODEL_ID = MMLU_DIR.name
+    CELL_LABEL = CELL_DIR.name
+    SUMMARY_PATH = CELL_DIR / "mmlu_rescored.json"
+    IS_ORIGINAL_CELL = False
 
 BASELINE_METHOD = (
     "strict equality, resp.strip() == target.strip(), on lm-eval's filtered_resps "
@@ -156,22 +182,33 @@ def build_summary(paths: list[str], items: list[dict]) -> dict:
 
     baseline_score = baseline_matches / total
     return {
-        "cell": "jang2l__osaurus",
-        "runtime": "osaurus",
-        "model_id": "lfm2.5-8b-a1b-jang_2l",
+        "cell": CELL_LABEL,
+        "runtime": CELL_LABEL.rsplit("__", 1)[-1],
+        "model_id": MODEL_ID,
         "task": "mmlu_generative",
         "metric": "exact_match",
         "source_glob": str((MMLU_DIR / "samples_*.jsonl").relative_to(ROOT)),
         "sample_files": len(paths),
         "items": total,
+        # Characters of the full completion, per item. A thinking-off cell that is really off
+        # answers in a handful of characters; a reasoning trace is hundreds. Read beside the
+        # score, it says whether the switch took (a null arm scores like its comparator).
+        "completion_chars": {
+            "median": statistics.median(len(it["completion"]) for it in items),
+            "max": max(len(it["completion"]) for it in items),
+            "empty": empty,
+        },
         "baseline": {
             "method": BASELINE_METHOD,
             "matches": baseline_matches,
             "accuracy": baseline_score,
             "accuracy_95_wilson": {"low": baseline_low, "high": baseline_high},
-            "lm_eval_reported_matches": LM_EVAL_REPORTED_MATCHES,
-            "lm_eval_reported_score": LM_EVAL_REPORTED_SCORE,
-            "reconciled": baseline_matches == LM_EVAL_REPORTED_MATCHES,
+            # Reconciled against lm-eval's own figure only for the cell that figure was read
+            # off; for any other, it is not applicable and says so rather than claiming a match.
+            "lm_eval_reported_matches": LM_EVAL_REPORTED_MATCHES if IS_ORIGINAL_CELL else None,
+            "lm_eval_reported_score": LM_EVAL_REPORTED_SCORE if IS_ORIGINAL_CELL else None,
+            "reconciled": (baseline_matches == LM_EVAL_REPORTED_MATCHES
+                           if IS_ORIGINAL_CELL else None),
         },
         "recovered": {
             "method": RECOVERED_METHOD,
@@ -209,7 +246,7 @@ def build_summary(paths: list[str], items: list[dict]) -> dict:
         "subjects": subjects,
         "attribution": (
             "Offline re-reading of completed, verified model outputs already on disk under "
-            "results/accuracy-moe/study-2c/jang2l__osaurus/mmlu_generative/. No runtime was "
+            f"{CELL_DIR.relative_to(ROOT)}/mmlu_generative/. No runtime was "
             "started, no model was loaded, no benchmark item was re-run, and no sample row was "
             "modified or discarded: the record keeps what the model actually emitted, including "
             "the empty and truncated completions this script scores zero."
@@ -228,10 +265,14 @@ def report(summary: dict) -> None:
     print(f"sample files  : {summary['sample_files']}")
     print(f"items         : {summary['items']}")
     print()
+    reported = ("" if base["lm_eval_reported_matches"] is None else
+                f"  (lm-eval reported {base['lm_eval_reported_matches']}/"
+                f"{summary['items']} = {base['lm_eval_reported_score'] * 100:.2f}%)")
     print(f"baseline      : {base['matches']}/{summary['items']} = "
-          f"{base['accuracy'] * 100:.2f}%  "
-          f"(lm-eval reported {base['lm_eval_reported_matches']}/"
-          f"{summary['items']} = {base['lm_eval_reported_score'] * 100:.2f}%)")
+          f"{base['accuracy'] * 100:.2f}%{reported}")
+    chars = summary["completion_chars"]
+    print(f"completion    : median {chars['median']:g} chars, max {chars['max']}, "
+          f"{chars['empty']} empty")
     print(f"recovered     : {rec['matches']}/{summary['items']} = "
           f"{rec['accuracy'] * 100:.2f}%  95% Wilson [{low * 100:.2f}%, {high * 100:.2f}%]")
     print(f"delta         : {rec['recovered_over_baseline_matches']:+d} items, "
@@ -269,7 +310,7 @@ def run() -> int:
     summary = build_summary(paths, items)
     report(summary)
 
-    if not summary["baseline"]["reconciled"]:
+    if IS_ORIGINAL_CELL and not summary["baseline"]["reconciled"]:
         print()
         print(f"REFUSING TO PUBLISH: baseline reproduced "
               f"{summary['baseline']['matches']}/{summary['items']}, not lm-eval's "
@@ -279,7 +320,8 @@ def run() -> int:
 
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print()
-    print(f"baseline reconciled with lm-eval's reported {LM_EVAL_REPORTED_SCORE * 100:.2f}%.")
+    if IS_ORIGINAL_CELL:
+        print(f"baseline reconciled with lm-eval's reported {LM_EVAL_REPORTED_SCORE * 100:.2f}%.")
     print(f"wrote {SUMMARY_PATH.relative_to(ROOT)}")
     return 0
 
@@ -345,6 +387,8 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     if "--self-test" in argv:
         return self_test()
+    if "--cell-dir" in argv:
+        configure(Path(argv[argv.index("--cell-dir") + 1]))
     return run()
 
 

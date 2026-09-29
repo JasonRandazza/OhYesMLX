@@ -1,8 +1,21 @@
-# Osaurus 0.25.12 — capability and configuration reference
+# Osaurus 0.25.14 (installed) — capability and configuration reference
 
 Scope: Osaurus `0.25.3` (build `0.25.3`), bundle `com.dinoki.osaurus`, as installed on this
 host on 2026-09-15. Everything below is static inspection. No server was started, no model
 was loaded, and no request was sent to produce this document.
+
+> **Which build is which (updated 2026-09-29).** The installed version is **0.25.14**
+> (`Info.plist` `CFBundleShortVersionString`; Osaurus self-updates, so re-read it rather than
+> trusting this line). This document's observations come from three builds, and each is tagged
+> where it is made: `0.25.3` (2026-09-15, the original inspection), `0.25.12` (2026-09-24) and
+> `0.25.13` (2026-09-27 to 09-28). **Nothing here has been re-verified against 0.25.14.** Between
+> 0.25.6 and 0.25.14 the upstream changelog (94 commits) touches things this harness depends
+> on: bundle sampling defaults (#2814, #2890: request, then saved host defaults, then the model
+> bundle, then engine fallback), thinking defaults (#2874, #2822), prefix and disk-cache internals
+> (#2876, #2881, #2884, #2896), and allocator reuse (#2863). Measured runs record the build they
+> ran on (`runtime_version`): 0.25.12 for the 09-23 grids, 0.25.13 for the 09-27 seedless grids
+> and concurrency sweeps, 0.25.14 for the 09-29 cache-off grids, and 0.25.6 for the 09-19
+> accuracy cells. A comparison across builds is two runtimes, not one; the join guard refuses it.
 
 > **Version corrected 2026-09-24 (research `2026-09-24-kv-quant-surface.md` §6.1, §8).** The
 > installed version is **0.25.12** (`Info.plist` `CFBundleShortVersionString`), not the `0.25.3`
@@ -189,7 +202,7 @@ subcommand groups. This is the complete documented surface.
 | `stop` | — | Stops the server. |
 | `status` | — | Prints `running (port N)` or `stopped`. |
 | `mcp` | `[--access-key KEY]` `[--tools PATTERNS]` | MCP stdio server proxying to local HTTP. `--tools` is comma-separated, `*` suffix matches by prefix. |
-| `version` | also `--version`, `-v` | `Osaurus 0.25.3 (0.25.3)` when observed 2026-09-15; the installed version is now **0.25.12** (research §8) |
+| `version` | also `--version`, `-v` | `Osaurus 0.25.3 (0.25.3)` when observed 2026-09-15; the installed version is now **0.25.14** (it was 0.25.12 on 2026-09-24; see the note under the title) |
 | `doctor` | `[--port N] [--json] [--redact] [--verify-signatures]` | Diagnoses CLI/app skew, duplicate bundles, server startup, model storage. Signature checks are opt-in because they are slow. `--port` domain is `1...65535`. |
 | `list` | — | Lists available model IDs. |
 | `show <model_id>` | — | Prints model metadata. |
