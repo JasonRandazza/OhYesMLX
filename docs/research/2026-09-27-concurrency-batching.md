@@ -100,9 +100,15 @@ columns for these two runtimes were partly cache time as well; their ratios, and
 decode is 30.1 / 30.7 / 31.1 on `chat` / `decode` / `prefill` (cache-on N=2: 45.4 / 44.7 / 48.0), so its N=2
 aggregate (52.5 / 56.4 / 12.5) is below its own N=1 on all three shapes (57.9 / 65.3 / 15.3), before N=4 recovers to 90.8 / 97.8
 / 17.6. It is the same on all three workloads, so it is not one cell's warmup, and Decision 129's rule
-(prompt concurrency `max(1, N//4)`) gives OptiQ the same setting at N=2 as before. This is a
-single run; whether it is the cache-off flag, an N=2 scheduling quirk or that session is untested, and no claim
-is made. A repeat of OptiQ N=2 alone would tell.
+(prompt concurrency `max(1, N//4)`) gives OptiQ the same setting at N=2 as before. **Repeated 2026-09-29 (13:18 → 13:29 EDT, `results/optiq-n2-repeat`, N=2 alone, cache off, all
+three shapes PASS): the dip did not recur.** Per-request decode was 44.9 / 42.3 / 45.6 tok/s on `chat` /
+`decode` / `prefill` (first cache-off run 30.1 / 30.7 / 31.1; cache-on 45.4 / 44.7 / 48.0) and aggregate
+76.6 / 75.0 / 16.3 (first run 52.5 / 56.4 / 12.5), drift within ±2.7% on every shape. So the first run's N=2
+cells were a session or ordering effect — they ran after N=8 and N=4 in the same session — not the
+cache-off flag and not an N=2 scheduling quirk; the cause of the first run's low cells is not identified
+beyond that. Use the repeat's N=2 figures for OptiQ; the first run's N=2 cells stay in the record. Every
+observation in the repeat carries `cached_tokens: 0` (54 of 54), the first live reading of that field on
+OptiQ: the cache was off, as pinned.
 
 ## What ran
 
