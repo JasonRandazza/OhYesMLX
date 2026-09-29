@@ -166,12 +166,14 @@ def _usage(
     prompt_tokens: int = 7,
     completion_tokens: int | None = None,
     reasoning_tokens: int | None = None,
+    extra: dict[str, object] | None = None,
 ) -> bytes:
     usage: dict[str, object] = {"prompt_tokens": prompt_tokens}
     if completion_tokens is not None:
         usage["completion_tokens"] = completion_tokens
     if reasoning_tokens is not None:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    usage.update(extra or {})
     return _sse({"choices": [], "usage": usage})
 
 
@@ -184,6 +186,28 @@ def _without_clocks(observation: Observation) -> Observation:
     return dataclasses.replace(
         observation, ttft_s=None, last_content_s=None, total_s=0.0
     )
+
+
+def _cached_tokens(server, extra):
+    server.respond(
+        (0.0, _content("hi")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=1, reasoning_tokens=0, extra=extra)),
+        (0.0, DONE),
+    )
+    return chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+
+def test_cached_tokens_is_read_from_either_spelling_and_none_when_absent(server):
+    """oMLX/OptiQ/vMLX nest it under prompt_tokens_details, mlx-lm puts it on usage."""
+    nested = _cached_tokens(server, {"prompt_tokens_details": {"cached_tokens": 5}})
+    flat = _cached_tokens(server, {"cached_tokens": 4})
+    both = _cached_tokens(
+        server, {"cached_tokens": 4, "prompt_tokens_details": {"cached_tokens": 5}}
+    )
+    absent = _cached_tokens(server, None)
+    assert [o.cached_tokens for o in (nested, flat, both, absent)] == [5, 4, 5, None]
+    assert all(o.ok for o in (nested, flat, both, absent))
 
 
 def test_chunked_transfer_encoding_stream_is_decoded(server):

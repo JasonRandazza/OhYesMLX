@@ -37,6 +37,7 @@ class FakeObservation:
     token_source: str
     # The channel a response that never left the reasoning channel answers in.
     reasoning_text: str = ""
+    cached_tokens: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)

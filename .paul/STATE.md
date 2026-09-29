@@ -137,7 +137,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | No CI | Pre-phase | S | Before the repo gets its first outside contributor |
 | Eight pre-`first_request_workload_id` run dirs cannot be loaded | Phase 5 | S | `load_run` refuses them by line number rather than defaulting the field. A schema migration, only if those columns are ever wanted |
 | Osaurus pin copies remain in run_grid.sh / run_grid_moe.sh / run_sweep_cache*.sh / run_accuracy_* / run_jang_* / run_sweep_prompt.sh | v3.1 2026-09-25 | S | Their semantics differ (idle-900 only, or the cache is the varied pin); listed in `scripts/osaurus-pin.sh`. Consolidate only where identical |
-| Harness does not record `usage.cached_tokens` | v3.1 2026-09-25 | S | mlx-lm reports the served prefix per request (`server.py:1344-1346`); only its log holds it today |
+| ~~Harness does not record `usage.cached_tokens`~~ **DONE 2026-09-29** | v3.1 2026-09-25 | S | `Observation.cached_tokens` (transport.py) reads `usage.prompt_tokens_details.cached_tokens` (oMLX/OptiQ/vMLX) or `usage.cached_tokens` (mlx-lm), `None` when unsaid; recorded per observation, not yet surfaced in a report or gate. Old records load as `None`. Osaurus sends neither (`docs/runtimes/osaurus.md:668`), so a `None` there means unsaid, not zero. |
 | Thinking-Off MMLU Arm (Candidate 3) | Post-v2 | M | **Preserved for overnight execution.** Ablation study: isolate reasoning contribution on MMLU and resolve MoE HTTP 502 truncation trap. |
 
 ### Blockers/Concerns

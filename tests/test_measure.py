@@ -67,6 +67,7 @@ class FakeObservation:
     text: str = "measured"
     reasoning_text: str = ""
     token_source: str = "usage"
+    cached_tokens: int | None = None
 
 
 class Recorder:
@@ -1986,13 +1987,19 @@ def test_load_run_round_trips_every_record_of_a_real_run():
         # A column written before the plateau rule carries no `warmup_plateau`, and the loader
         # reads that absence as the `None` it honestly is. The same for `request_seed`: no
         # record on disk carries the key, and every one of them sent `SEED` (0) -- its own
-        # header says `seed: 0` -- so the rebuilt object holds that 0 and writes it back. Every
-        # other field has to come back byte for byte.
+        # header says `seed: 0` -- so the rebuilt object holds that 0 and writes it back. The
+        # same for an observation's `cached_tokens`, which a run recorded before it existed does
+        # not carry and which reads back as the `None` it honestly is. Every other field has to
+        # come back byte for byte.
         assert result.request_seed == 0
         assert measure._record(result) == {
             **line,
             "warmup_plateau": line.get("warmup_plateau"),
             "request_seed": line.get("request_seed", 0),
+            "observations": [{"cached_tokens": None, **o} for o in line["observations"]],
+            "warmup_observations": [
+                {"cached_tokens": None, **o} for o in line["warmup_observations"]
+            ],
         }
 
 

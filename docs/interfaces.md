@@ -24,6 +24,7 @@ class Observation:
     text: str                       # CONTENT deltas only
     token_source: str               # "usage" | "local_tokenizer" | "none"
     reasoning_text: str = ""        # reasoning deltas joined; "" when the model emitted none
+    cached_tokens: int | None = None  # prompt tokens the server says its prompt cache served; None if unsaid
 
 def chat(base_url: str, model: str, messages: list[dict], *,
          max_tokens: int, temperature: float = 0.0, seed: int | None = None,

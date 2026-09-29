@@ -64,6 +64,11 @@ class Observation:
     # field with a default cannot precede one without, and the default is what lets the
     # failure path in measure.py build an Observation with no reasoning to report.
     reasoning_text: str = ""
+    # The prompt tokens the server says it served from its prompt cache, or None when it does
+    # not say. A cache hit is otherwise invisible: it publishes as a prefill rate (Decision
+    # 130). Appended after ``reasoning_text`` for the same reason that one is appended last,
+    # and its default lets records written before it existed load unchanged.
+    cached_tokens: int | None = None
 
 
 def timing_channel(observation) -> str:
@@ -168,6 +173,7 @@ def chat(
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
     usage_reasoning_tokens: int | None = None
+    cached_tokens: int | None = None
     try:
         connection, path = _connection(base_url, timeout_s)
         body: dict[str, object] = {
@@ -339,6 +345,20 @@ def chat(
                             details["reasoning_tokens"],
                             "reasoning-token accounting is invalid",
                         )
+                    # OpenAI's spelling is usage.prompt_tokens_details.cached_tokens, which
+                    # oMLX, OptiQ and vMLX send; mlx-lm sends usage.cached_tokens
+                    # (docs/runtimes/mlx-lm.md). The nested one wins when both are present.
+                    cached_value = usage.get("cached_tokens")
+                    prompt_details = usage.get("prompt_tokens_details")
+                    if (
+                        isinstance(prompt_details, dict)
+                        and prompt_details.get("cached_tokens") is not None
+                    ):
+                        cached_value = prompt_details["cached_tokens"]
+                    if cached_value is not None:
+                        cached_tokens = _usage_count(
+                            cached_value, "cached-token accounting is invalid"
+                        )
             if stream_done:
                 break
         if not stream_done:
@@ -448,6 +468,7 @@ def chat(
             text=joined,
             reasoning_text=reasoning_text,
             token_source=token_source,
+            cached_tokens=cached_tokens,
         )
     except TransportError as error:
         failure_message = str(error)
