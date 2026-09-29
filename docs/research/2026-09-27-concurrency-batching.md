@@ -50,7 +50,59 @@ path, mlx-lm too — all four decode like a batching server: per-request rate do
 **1.45–1.72×**, TTFT up 4–7× instead of 8–148×. Osaurus does the same once its host key is at N: per-request
 down 80.6% on `decode`, aggregate up **1.59×**, TTFT 0.306 → 1.439 s (§4); the flat column is the shipped
 default of 1, not a fixed engine. On the prefill workload, oMLX and vMLX still do not gain aggregate even
-uncapped (§5), and Osaurus at cap = N joins them (18.1 → 21.3, ×1.18, §4).
+uncapped (§5), and Osaurus at cap = N joins them (18.1 → 21.3, ×1.18, §4). **mlx-lm and OptiQ joined them
+on 2026-09-29: the rows this paper first printed for them on `prefill` (aggregate 61.1 → 96.1 and 57.3 → 74.8,
+TTFT 0.15–0.19 s) were prompt-cache hits, and with the cache off they read flat too — see the correction below.**
+
+## Correction, 2026-09-29: mlx-lm's and OptiQ's `prefill` rows were prompt-cache hits
+
+**Axis — `concurrency`, with `cache_state` now off.** Decision 130. On the seedless path, mlx-lm and OptiQ ran
+with `--prompt-cache-size` unpassed, which leaves mlx-lm's default LRU prompt cache (10) on, and the batched
+path caches prefix segments (`docs/research/2026-09-28-seedless-validation-grids.md` §2.2). The `prefill`
+workload repeats one ~1,320-token prompt, so from the second request on every request was served from the
+cache: 1,320 tokens in 0.15–0.19 s is not a prefill. The harness now passes `--prompt-cache-size 0` unless
+`cache_state` is pinned `on` (`runtimes.prompt_cache_flags`), and mlx-lm and OptiQ were re-run alone into
+`results/sweep-conc-cacheoff` (2026-09-29 07:32 → 10:03 EDT, harness `6f36eb98`, all eight cells exit 0, one
+session, mlx-lm `1 2 4 8` then OptiQ `8 4 2 1`). oMLX, vMLX and Osaurus already ran cache-off and are unchanged.
+The header still records `cache_state: null` on both sides, so the join guard cannot tell these runs from the
+cache-on ones; they are their own directory and no table here is a join across the two.
+
+`prefill` (64), cache off — the rows that replace §1's and §5's mlx-lm and OptiQ `prefill` figures:
+
+| runtime | metric | 1 | 2 | 4 | 8 | N=8/N=1 |
+|---|---|---|---|---|---|---|
+| mlx-lm | per-request decode tok/s | 78.4 | 44.1 | 25.4 | 13.9 | 0.18× |
+| | aggregate tok/s | 20.6 | 21.8 | 22.8 | 22.3 | **1.08×** |
+| | TTFT p50 s | 2.294 | 4.414 | 8.703 | 17.411 | 7.6× |
+| OptiQ | per-request decode tok/s | 73.0 | 31.1 | 19.4 | 10.2 | 0.14× |
+| | aggregate tok/s | 15.3 | 12.5 | 17.6 | 17.7 | **1.16×** |
+| | TTFT p50 s | 2.441 | 5.943 | 7.853 | 15.377 | 6.3× |
+
+against the cache-on rows they replace: mlx-lm aggregate 61.1 → 96.1 (×1.57), TTFT 0.152 → 1.017 s; OptiQ
+57.3 → 74.8 (×1.31), TTFT 0.188 → 1.467 s. With the cache off both runtimes sit where oMLX (×1.02), vMLX (×1.17)
+and Osaurus at cap = N (×1.18) already sat: N=1 TTFT ~2.2–2.9 s, aggregate ~15–23 tok/s, flat across the ladder.
+OptiQ's N=1 cell is flagged +10.9% still-warming (early → late per-request median, its own leaderboard note),
+which is why its ratio is the least firm of the six; mlx-lm's `prefill` cells are all within ±2.0%.
+
+**What this changes.** The three-way split §5 describes ("~2–3 s vs ~0.15–0.19 s N=1 TTFT ... present on three
+runtimes") is gone: it was the cache, not a runtime property, and all five runtimes read a ~2.2–2.9 s prefill of
+this prompt at N=1. What §5 said about oMLX and vMLX stands, and now describes all five: the decode leg of this
+shape batches (per-request decode collapses 81–86% at N=8 on all five, Osaurus at cap = N) while the completion aggregate
+barely moves, because the wall time is the prompt leg.
+
+**What survives.** The headline. `decode`-shape aggregate at N=8 against N=1, cache off: mlx-lm 65.6 → 110.7
+(**1.69×**, was 1.72×), OptiQ 65.3 → 108.0 (**1.65×**, was 1.65×). `chat` reads 65.5 → 100.6 and 57.9 → 98.7. The
+cache also touched the short prompts a little: N=1 TTFT p50 on `chat` and `decode` is 0.224 and 0.253 s for
+mlx-lm (was 0.145 and 0.147) and 0.268 and 0.273 s for OptiQ (was 0.155 and 0.188), so §1–§4's small-prompt TTFT
+columns for these two runtimes were partly cache time as well; their ratios, and the decode rates, were not.
+
+**One observation this re-run adds and does not explain.** OptiQ at N=2 is the odd cell: its per-request
+decode is 30.1 / 30.7 / 31.1 on `chat` / `decode` / `prefill` (cache-on N=2: 45.4 / 44.7 / 48.0), so its N=2
+aggregate (52.5 / 56.4 / 12.5) is below its own N=1 on all three shapes (57.9 / 65.3 / 15.3), before N=4 recovers to 90.8 / 97.8
+/ 17.6. It is the same on all three workloads, so it is not one cell's warmup, and Decision 129's rule
+(prompt concurrency `max(1, N//4)`) gives OptiQ the same setting at N=2 as before. This is a
+single run; whether it is the cache-off flag, an N=2 scheduling quirk or that session is untested, and no claim
+is made. A repeat of OptiQ N=2 alone would tell.
 
 ## What ran
 
@@ -243,7 +295,7 @@ the four leaderboards under `results/sweep-conc-osaurus-seqs/oq4__osaurus/`.
 | | aggregate tok/s | 61.1 | 63.4 | 63.0 | 62.9 |
 | | TTFT p50 s | 0.299 | 1.273 | 3.341 | 7.437 |
 
-**Seedless — `prefill` (64)**
+**Seedless — `prefill` (64)** — the mlx-lm and OptiQ rows here are prompt-cache hits, superseded by the cache-off table in the 2026-09-29 correction above.
 
 | runtime | metric | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|---|
@@ -297,7 +349,7 @@ the four leaderboards under `results/sweep-conc-osaurus-seqs/oq4__osaurus/`.
 | | aggregate tok/s | 63.8 | 75.1 | 88.3 | 97.6 |
 | | TTFT p50 s | 0.174 | 0.300 | 0.562 | 1.098 |
 
-**Uncapped — `prefill`**
+**Uncapped — `prefill`** — OptiQ's rows here are prompt-cache hits, superseded by the cache-off table in the 2026-09-29 correction above.
 
 | runtime | metric | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|---|
@@ -445,12 +497,17 @@ runtimes' `decode` cells, so the shortfall from 8 is the arithmetic's, not a bou
 twelve rows on this host; it is not a reading of the binary, and it is not a claim about any other session,
 artifact or N.
 
-### 5. Prefill: oMLX and vMLX still hold ~18–23 tok/s, and their N=1 TTFT is a runtime property, not a concurrency one
+### 5. Prefill: no runtime gains aggregate on the long-prompt shape once the cache is off
+
+> **2026-09-29 correction.** This section was written when mlx-lm's and OptiQ's `prefill` rows were prompt-cache hits
+> (see the correction above). Where it contrasts them with oMLX and vMLX, read the contrast as gone: cache off,
+> all five sit at a ~2.2–2.9 s N=1 TTFT and an aggregate of ~15–23 tok/s. The prose below is kept as first
+> written, with the two claims the re-run refutes marked.
 
 **Axis — `concurrency`.** Uncapped, the `prefill` shape's aggregate column reads oMLX
 **17.8 / 17.4 / 18.5 / 18.2** and vMLX **19.8 / 21.3 / 22.2 / 23.1** tok/s — a ×1.02 and ×1.17 across the
 ladder, against ×1.45–1.65 on their own `decode` shape and ×1.31–1.57 for OptiQ and mlx-lm on the same
-`prefill` shape (OptiQ 57.3 → 74.8, mlx-lm 61.1 → 96.1). Their per-request decode on this shape still
+`prefill` shape (OptiQ 57.3 → 74.8, mlx-lm 61.1 → 96.1) **[superseded: cache hits; cache off they read ×1.16 and ×1.08]**. Their per-request decode on this shape still
 collapses (oMLX 98.3 → 18.7, vMLX 72.2 → 13.3) and their TTFT p50 still grows with N (oMLX 2.901 → 15.598,
 vMLX 2.289 → 17.407). So the decode leg of this shape batches and the completion-token aggregate does not
 rise: the wall time is being spent on the prompt leg, which the TTFT columns show scaling close to N
@@ -474,6 +531,7 @@ N≤8; three engine-side guards do force serial scheduling for specific families
 inspection — so vMLX's near-flat prefill aggregate is **not explained by any limit the harness passed**, and
 nothing in this record says why it is flat.
 
+**[Superseded 2026-09-29: the ~2–3 s vs ~0.15–0.19 s split was the prompt cache — mlx-lm 2.294 s and OptiQ 2.441 s at N=1 with it off. What follows describes the cache-on rows.]**
 **The ~2–3 s vs ~0.15–0.19 s N=1 TTFT is a runtime-level split, and the rows are all that is established.**
 The N=1 `prefill` rows: oMLX 2.901 s (uncapped) / 2.714 s (seedless), vMLX 2.289 / 2.176, Osaurus 2.521 /
 2.701 (sequence cap), against mlx-lm 0.152 and OptiQ 0.188 / 0.181. The `prefill_tps` rows tell the same story from the other

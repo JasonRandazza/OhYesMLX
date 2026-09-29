@@ -208,6 +208,33 @@ ttft_s`, `report.py:6`), which on those rows is now a cache-serving rate and not
 Within an arm the format axis is unaffected — every format of those two runtimes was measured
 under the same cache state in that arm.
 
+**Resolved 2026-09-29 (Decision 130).** The cache explanation was tested by re-running the dense
+and MoE grids with the cache off: `runtimes.prompt_cache_flags` now passes `--prompt-cache-size 0`
+on mlx-lm and OptiQ unless the pin is `on`, and the two grids were re-run into
+`results/harden-2026-09-28-cacheoff` (2026-09-29 03:18 → 07:27 EDT, harness `6f36eb98`, every
+column exit 0, `cache_state` and `seed` both `null`). The `prefill` TTFT p50 for the routing pair
+returns to a full-prefill time — three arms, seconds, median over the 36 measured requests each
+runtime-workload has per grid (nine per cell, four formats):
+
+| grid | runtime | 09-23 seeded | 09-27 seedless, cache unpinned | 09-29 seedless, cache off |
+|---|---|---|---|---|
+| dense | mlx-lm | 2.417 | 0.199 | **2.306** |
+| dense | OptiQ | 2.378 | 0.215 | **2.289** |
+| MoE | mlx-lm | 1.040 | 0.091 | **1.033** |
+| MoE | OptiQ | 1.030 | 0.096 | **1.029** |
+| dense / MoE | oMLX, vMLX, Osaurus | 2.916 / 2.184 / 0.247 · 1.449 / 0.941 / 0.182 | 3.182 / 2.517 / 0.295 · 1.762 / 1.170 / 0.201 | 2.758 / 2.180 / 0.255 · 1.466 / 0.959 / 0.172 |
+
+The cache-off column sits within 5% of the seeded one for both runtimes on both grids (dense −4.6% and
+−3.7%, MoE −0.7% and −0.1%), the same as the 35B control predicted; the three runtimes that were
+always cache-off did not move. So the −91% was the cache and only the cache, and mlx-lm's and
+OptiQ's `prefill` TTFT — and the `prefill_tps` derived from it — are comparable across the seed
+change **when both arms are cache-off**: the 09-23 and 09-29 columns. The 09-27 column stays a
+cache-hit column and stays out of any comparison. `chat` and `decode` TTFT moved less (32–34-token
+prompts; dense mlx-lm `chat` 0.284 → 0.202 → 0.228, MoE 0.147 → 0.088 → 0.146), and the cache-off
+column is back within ~20% of the seeded one, a gap §2.3's session term is large enough to hold. Not re-derived
+here: the decode-rate medians of §2 for these two runtimes under cache-off — the TTFT rows above
+are the whole of what was checked.
+
 #### 2.3 What the two arms can and cannot separate
 
 The arm moved two things at once — the seed (and therefore the serving path on two runtimes) and
@@ -340,7 +367,8 @@ r2/r3, this one). Concretely:
   re-litigated here.
 - The one place where the arms are not even the same quantity is dense/MoE **TTFT p50 and
   therefore prefill tok/s for mlx-lm and OptiQ** on repeated long prompts (§2.2): those columns
-  must not be compared across the seed change at all.
+  must not be compared across the seed change at all — **for the 09-27 arm.** The 09-29 cache-off
+  re-run (§2.2, Decision 130) restores the comparison: it is the same quantity as the 09-23 arm's.
 
 ## What this does not claim
 
@@ -368,10 +396,11 @@ r2/r3, this one). Concretely:
 
 ## Follow-ups
 
-1. **Pin `cache_state` on the dense and MoE grids**, as the 35B grid does — either state is
-   fine as long as both arms of a comparison share it — if TTFT or prefill tok/s is ever to be
-   read across a seed change on those two grids. Until then §2.2's warning is the standing
-   answer.
+1. ~~Pin `cache_state` on the dense and MoE grids.~~ **Done 2026-09-29 (Decision 130):** an absent
+   pin now means cache off on mlx-lm and OptiQ, so the dense and MoE grids run cache-off without one,
+   and the cache-off re-run is in §2.2. A grid that wants the cache on must pin `on`. The header
+   still records `None` either way, so cache-on and cache-off runs of the same grid must live in
+   separate directories — the join guard cannot separate them.
 2. **A replicate of the seedless grids** — or at least of the routing pair's MoE/35B columns —
    to bound the session term inside the seedless policy itself. The 21-hour 65.9 → 57.0 mlx-lm gap
    on one artifact says a single arm cannot carry a level.
