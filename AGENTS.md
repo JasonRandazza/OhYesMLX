@@ -55,8 +55,14 @@ runtime does: OptiQ is pinned on its command line (`--top-p 1 --top-k 0 --min-p 
 to `--default-repetition-penalty 1.0`, because left alone it takes the penalty from the model bundle's
 `generation_config.json` (`server.py:3507`) and two of the five LFM2.5-8B-A1B bundles ship 1.05;
 mlx-lm's default is 0.0, which is off (`server.py:1180`, `sample_utils.py:123`); oMLX ships `top_p`
-0.95 and `repetition_penalty` 1.0, inert at temperature 0 (`settings.py:733-735`); Osaurus takes no
-per-request penalties and its defaults are not readable, so they are *not found*, not "neutral". The
+0.95 and `repetition_penalty` 1.0, inert at temperature 0 (`settings.py:733-735`); Osaurus resolves
+them as request, then the host's saved Sampling Default, then the model bundle's
+`generation_config.json` (`MLXBatchAdapter.effectiveGenerationSettings`, with
+`LocalGenerationDefaults` parsing `repetition_penalty` and `presence_penalty`; read from Osaurus's
+public source at 0.25.6 and 0.25.14, same in both), and this host saves none — so a bundle's penalty
+**applies and is not pinned**: the Qwen3.5-4B and Qwen3.6-35B OptiQ bundles ship `presence_penalty:
+1.5` and the LFM2.5-8B-A1B oQ4e and OptiQ ones `repetition_penalty: 1.05`. Whether the HTTP request
+can override `presence_penalty` is not established. The
 chat template is each runtime's own, not pinned, so `prompt_tokens` differs slightly across runtimes
 and thinking mode is each runtime's default. A new runtime, or a new model bundle, is checked for a
 penalty it can take from the artifact before its first measured cell.
