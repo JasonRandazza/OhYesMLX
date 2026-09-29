@@ -9,6 +9,8 @@ item evaluations**. Design, test matrix, budget dial and pre-registered interpre
 re-measured**: [`docs/research/2026-09-17-moe-jang-study.md`](file:///Users/jrazz/Dev/active/OhYesMLX/docs/research/2026-09-17-moe-jang-study.md)
 (§3.1, §4.1) via [`docs/research/2026-09-17-jang-cross-runtime.md`](file:///Users/jrazz/Dev/active/OhYesMLX/docs/research/2026-09-17-jang-cross-runtime.md) (§3.2, §6.1).
 
+> **Caveat added 2026-09-29 (Decision 131):** on vMLX the `oq4e` and OptiQ-4bit `LFM2.5-8B-A1B` bundles carry `repetition_penalty: 1.05` in their `generation_config.json`, which vMLX applies to a request that omits it, and the other formats' bundles carry none; these cells' requests did not pin it. The effect on generated text and on these accuracy scores was not measured, so the `oq4e` and `optiq` vMLX comparisons (e.g. `oq4e` vs `oq4`) carry that unquantified confound. A speed re-run with the penalty pinned to 1.0 moved `oq4e` decode −2.2 to −3.8%, inside the −1.4 to −12.7% the unpenalised controls moved (`results/moe-vmlx-repfix`).
+
 Every number in this document is computed from the 8 cell manifests, their task-level result
 files, and the sample rows under `results/accuracy-moe/`, and each one was re-derived
 independently from those sample rows and checked against

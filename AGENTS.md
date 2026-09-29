@@ -41,13 +41,25 @@ varied and carries the caveat naming what it therefore cannot claim.
 - **Peak memory** — `footprint -p <pid>`. **Never `ps` RSS**: Metal buffers, mmap'd weights, and wired GPU memory account inconsistently under MLX. `peak_mb` is sound **within a runtime** and carries **no cross-runtime ranking**: Osaurus puts weights in wired GPU pages and oMLX in anonymous memory, and `phys_footprint` charges those differently (measured 2026-09-16; see `docs/research/2026-09-16-footprint-is-not-one-quantity.md`).
 - **On-disk size** — includes sidecar files (e.g. JANGTQ's runtime sidecar).
 
-Every measured run pins temperature 0, a fixed chat template, and a fixed output length, and
+Every measured run pins temperature 0 and a fixed output length, sends identical messages, and
 records every runtime's version. **At temperature 0 no seed is sent** (Jason, 2026-09-26): greedy
 decoding makes it inert, and a seeded request forces mlx-lm and OptiQ onto their sequential path,
 so a seeded harness never measures the batching path everyday clients use. The one exception is an
 OptiQ MTP depth cell, which keeps the seed because OptiQ's MTP engine exists only on that path.
 `Runtime.request_seed` is the one definition; each row records the seed it sent.
-Runtimes ship different default `top_p` and `repetition_penalty`; leaving them unpinned invalidates the comparison.
+**Sampler defaults are pinned where the runtime allows, and the rest are surveyed, not assumed**
+(Decision 131, 2026-09-29). The request carries temperature, `max_tokens` and the messages only, so
+`top_p`, `top_k`, `min_p` and the penalties come from the server. At temperature 0 `top_p`, `top_k`
+and `min_p` cannot change a greedy token; a repetition, presence or frequency penalty can. What each
+runtime does: OptiQ is pinned on its command line (`--top-p 1 --top-k 0 --min-p 0`); vMLX is pinned
+to `--default-repetition-penalty 1.0`, because left alone it takes the penalty from the model bundle's
+`generation_config.json` (`server.py:3507`) and two of the five LFM2.5-8B-A1B bundles ship 1.05;
+mlx-lm's default is 0.0, which is off (`server.py:1180`, `sample_utils.py:123`); oMLX ships `top_p`
+0.95 and `repetition_penalty` 1.0, inert at temperature 0 (`settings.py:733-735`); Osaurus takes no
+per-request penalties and its defaults are not readable, so they are *not found*, not "neutral". The
+chat template is each runtime's own, not pinned, so `prompt_tokens` differs slightly across runtimes
+and thinking mode is each runtime's default. A new runtime, or a new model bundle, is checked for a
+penalty it can take from the artifact before its first measured cell.
 
 Raw observations are never discarded. Summaries must stay recomputable from them.
 

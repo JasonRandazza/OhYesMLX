@@ -12,6 +12,8 @@ reading fires, it says so in the design's own vocabulary; where a pre-registered
 the shape of a column, the record is reported as it stands. §8 is the list of limits, and the
 first item in it changes what this campaign's headline is allowed to attribute.
 
+> **Caveat added 2026-09-29 (Decision 131):** on vMLX the `oq4e` `LFM2.5-8B-A1B` bundle carries `repetition_penalty: 1.05` in its `generation_config.json`, which vMLX applied to these requests, while `stock4bit`, `oq4` and `jang2l` carry none. A vMLX MoE re-run with the penalty pinned to 1.0 moved `oq4e` decode −2.2 to −3.8%, inside the −1.4 to −12.7% the unpenalised controls moved, so the decode-speed comparisons here stand; text and accuracy effects were not measured (`results/moe-vmlx-repfix`).
+
 ---
 
 ## 1. Executive summary and headline finding
