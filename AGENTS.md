@@ -62,7 +62,7 @@ them as request, then the host's saved Sampling Default, then the model bundle's
 public source at 0.25.6 and 0.25.14, same in both; the 0.25.15 diff leaves that code untouched), and this host saves none — so a bundle's penalty
 **applies and is not pinned**: the Qwen3.5-4B and Qwen3.6-35B OptiQ bundles ship `presence_penalty:
 1.5` and the LFM2.5-8B-A1B oQ4e and OptiQ ones `repetition_penalty: 1.05`. Whether the HTTP request
-can override `presence_penalty` is not established. The
+can override `presence_penalty` is not established. (Tested 2026-09-30 on the dense OptiQ bundle: removing the penalty left MMLU at 61.01% with no item flipped; STATE has the caveats.) The
 chat template is each runtime's own, not pinned, so `prompt_tokens` differs slightly across runtimes
 and thinking mode is each runtime's default. A new runtime, or a new model bundle, is checked for a
 penalty it can take from the artifact before its first measured cell.
