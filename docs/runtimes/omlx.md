@@ -1,4 +1,4 @@
-# oMLX 0.6.4 — runtime capability and configuration reference
+# oMLX 0.6.4 (document body); 0.7.0 installed — runtime capability and configuration reference
 
 Written 2026-09-15 by static inspection only. Nothing in this document was established by
 starting the server, loading a model, or sending a request; the harness coordinator runs live
@@ -8,6 +8,35 @@ probes separately. Every claim below carries its evidence inline.
 `build_number = "260830015308-macos26-27"`. `Info.plist` `CFBundleShortVersionString` `0.6.4`,
 `CFBundleVersion` `2529`. Bundled engines pinned in `omlx/_engine_commits.json`: mlx-lm
 `ab1806e8`, mlx-embeddings `32981fa4`, mlx-vlm `78b96eb5`, mlx-audio `51753266`.
+
+> **Installed is now 0.7.0 (updated 2026-09-30; `Info.plist` `CFBundleShortVersionString` `0.7.0`,
+> `CFBundleVersion` 2987, `_build_info.py` build `260930235602-macos26-27`).** Everything below was
+> inspected at **0.6.4** and is **not re-verified at 0.7.0**; every measured oMLX row to date is 0.6.4,
+> and a 0.7.0 cell is a different runtime build that the join guard will not join to it. Read from the
+> v0.7.0 release notes plus a spot check of the installed bundle (`settings.py`, `cli.py`,
+> `_engine_commits.json`), not from a run:
+> - **Engine bump:** mlx-lm `ab1806e8` to `94cdcae` (main after 0.32.0), dflash-mlx `0.1.10+omlx.9`,
+>   mlx-vlm `78b96eb5` to `ea79808c`. oMLX's bundled mlx-lm now sits further from the 0.31.3 venv that
+>   serves the `mlx_lm.server` cells.
+> - **Numerics changed on Qwen3.5/3.6:** GDN q/k normalisation was corrected to match mlx-lm, and the
+>   fused GDN norm's SiLU arithmetic was aligned (fp16). Qwen3.5-4B and Qwen3.6-35B output on oMLX can
+>   differ from 0.6.4 at temperature 0. Also new kernels for prefill/decode (fused MoE gather, GDN
+>   pipelined prefill, M5-specific paths; this host is an M2 Max, so the M5 ones should not apply).
+> - **Timing-relevant:** `server.gpu_keep_warm_interval` (default 0.5 s, `settings.py:215`) submits a
+>   trivial kernel while a model is loaded but idle, for up to 5 minutes after the last request, to
+>   avoid the first-command-buffer stall. That is aimed at the first-request deferral `report.py`
+>   documents for 0.6.4 (2.66 to 3.51 s), so the 0.7.0 deferral may shrink or vanish. The harness does
+>   not pin it (env `OMLX_GPU_KEEP_WARM_INTERVAL=0` would; that is a new pin and needs Jason's yes). A
+>   streaming detokenizer built once per tokenizer saves about 45 ms per request (Qwen3.8 figure).
+> - **Not affecting us:** the rebuilt memory guard (the harness passes `--memory-guard off`,
+>   `runtimes.py` `Omlx.start_command`; the CLI still maps `off` to `prefill_memory_guard = False`,
+>   `settings.py:1389`); the top_p bf16/fp16 and XTC sampling fixes (inert at temperature 0);
+>   sampling defaults are unchanged (`top_p` 0.95, `repetition_penalty` 1.0, `settings.py:785-787`);
+>   SSD-cache growth and prefix-rebuild fixes (the harness runs `--no-cache` unless `cache_state=on`);
+>   Qwen3.8, GLM-5.3, MiMo, Gemma audio, clustering, DSH and download-queue changes.
+> - **Worth a look before the next oMLX cell:** non-streaming responses now report token rates
+>   (#4065) and the throughput bench changed, neither of which the harness reads; MTP changes (Lightning
+>   MTP exactness, batching hand-off) bear on the oMLX MTP finding below, which is 0.6.4 behaviour.
 
 **Evidence convention.** Source citations are relative to the bundle root
 `$SRC = /Applications/oMLX.app/Contents/Resources/omlx/`. So `server.py:2233` means

@@ -158,6 +158,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-09-25 (Claude Opus coordinator)
 Stopped at: Phase 4 closed — four writeups committed; results in `results/sweep-{kvquant,streaming,mtp,mtp-fixed}/`, `results/multiturn{,-osaurus}/`; commits since `9bd1814` are local until pushed.
+oMLX is now **0.7.0** (installed 2026-09-30; every measured oMLX row is 0.6.4; engine bump, Qwen3.5/3.6 GDN numerics corrected, new `gpu_keep_warm_interval` that may shrink the first-request deferral; `--memory-guard off` and sampling defaults unchanged; see `docs/runtimes/omlx.md` banner). No oMLX cell is queued, so nothing is invalidated; the next one is a new build.
 Osaurus is now **0.25.15** (self-updated 2026-09-29/30; #2917 changes the MoE gathered-matmul and tied-head engine path, sampling code unchanged; see `docs/runtimes/osaurus.md` banner). The 09-29 grids are 0.25.14 and stay that build; the thinking-off 2×2 was not run on 09-29 night (laptop died) and will run wholly on 0.25.15, so it joins nothing earlier. `run_accuracy_thinkoff.sh` records the build before and after each cell.
 Next action: prepare the thinking-off MMLU arm (Deferred Candidate 3) for an overnight run, then bump to 0.3.1 (Jason, 2026-09-29). Done that day: `cached_tokens` recorded, OptiQ N=2 repeated.
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
