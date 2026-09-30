@@ -59,7 +59,7 @@ mlx-lm's default is 0.0, which is off (`server.py:1180`, `sample_utils.py:123`);
 them as request, then the host's saved Sampling Default, then the model bundle's
 `generation_config.json` (`MLXBatchAdapter.effectiveGenerationSettings`, with
 `LocalGenerationDefaults` parsing `repetition_penalty` and `presence_penalty`; read from Osaurus's
-public source at 0.25.6 and 0.25.14, same in both), and this host saves none — so a bundle's penalty
+public source at 0.25.6 and 0.25.14, same in both; the 0.25.15 diff leaves that code untouched), and this host saves none — so a bundle's penalty
 **applies and is not pinned**: the Qwen3.5-4B and Qwen3.6-35B OptiQ bundles ship `presence_penalty:
 1.5` and the LFM2.5-8B-A1B oQ4e and OptiQ ones `repetition_penalty: 1.05`. Whether the HTTP request
 can override `presence_penalty` is not established. The
