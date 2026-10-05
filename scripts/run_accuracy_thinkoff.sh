@@ -33,7 +33,8 @@ H=$HOME/.cache/huggingface/hub
 S4="$H/models--mlx-community--LFM2.5-8B-A1B-MLX-4bit/snapshots/146590a491db88581884033023f51f6b49a27b89"
 JG="$H/models--JANGQ-AI--LFM2.5-8B-A1B-JANG_2L/snapshots/5fb82773427c2f25395de8821eff6d95e86feb53"
 
-OUT=results/accuracy-thinkoff
+OUT=results/accuracy-thinkoff-cap4096
+CAP=4096   # first run (results/accuracy-thinkoff, cap 1024) was truncated: see its median-0-char thinking-off cells
 
 CONF="$HOME/.osaurus/config/server-runtime.json"
 SERVER="$HOME/.osaurus/config/server.json"
@@ -162,7 +163,7 @@ osaurus_cell() {
   flag=""; [ "$arm" = "on" ] && flag="--no-disable-thinking"
   # thinking OFF is probe_accuracy_cell.py's default (gen_kwargs enable_thinking=false); ON is
   # --no-disable-thinking, exactly as run_accuracy_moe.sh ran the 09-19 cells.
-  cmd="$PY scripts/probe_accuracy_cell.py --runtime osaurus --cell $cell --artifact $art --out $cdir --task mmlu_generative --mmlu-limit 20 $flag"
+  cmd="$PY scripts/probe_accuracy_cell.py --runtime osaurus --cell $cell --artifact $art --out $cdir --task mmlu_generative --mmlu-limit 20 --max-gen-toks $CAP $flag"
   if [ "$DRY_MODE" = "1" ]; then
     echo "$cmd"
     echo "$PY scripts/rescore_moe_mmlu.py --cell-dir $cdir"

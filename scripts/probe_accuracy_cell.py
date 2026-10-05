@@ -195,6 +195,7 @@ def run_cell(
     task_override: str | None = None,
     limit_override: int | None = None,
     disable_thinking: bool = True,
+    max_gen_toks: int = 1024,
     mmlu_limit: int = MMLU_LIMIT_DEFAULT,
 ) -> int:
     os.makedirs(out_dir, exist_ok=True)
@@ -255,7 +256,7 @@ def run_cell(
             f"tokenizer={artifact_path},"
             "think_end_token=</think>,"
             "eos_string=<|im_end|>,"
-            "max_gen_toks=1024,"
+            f"max_gen_toks={max_gen_toks},"
             "max_length=4096"
         )
 
@@ -422,6 +423,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, help="Override item limit per task")
     parser.add_argument("--mmlu-limit", type=int, default=MMLU_LIMIT_DEFAULT, help="Items per MMLU subject (Plan 02-03 budget dial: 20 = 1,140 items)")
     parser.add_argument("--no-disable-thinking", dest="disable_thinking", action="store_false", help="Do not pass enable_thinking=false in gen_kwargs")
+    parser.add_argument("--max-gen-toks", type=int, default=1024, help="Per-item generation cap passed to lm-eval (default 1024, the cap every earlier cell used)")
     parser.add_argument("--replicate", action="store_true", help="Run replicate pass (MMLU only)")
     parser.add_argument("--self-test", action="store_true", help="Run offline unit self-test")
     args = parser.parse_args()
@@ -441,6 +443,7 @@ def main() -> int:
         task_override=args.task,
         limit_override=args.limit,
         disable_thinking=args.disable_thinking,
+        max_gen_toks=args.max_gen_toks,
         mmlu_limit=args.mmlu_limit,
     )
 
