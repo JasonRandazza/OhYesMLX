@@ -1,22 +1,70 @@
-# Osaurus 0.25.15 (installed) — capability and configuration reference
+# Osaurus — capability and configuration reference (written at 0.25.3; installed 0.25.18)
 
 Scope: Osaurus `0.25.3` (build `0.25.3`), bundle `com.dinoki.osaurus`, as installed on this
 host on 2026-09-15. Everything below is static inspection. No server was started, no model
 was loaded, and no request was sent to produce this document.
 
-> **Which build is which (updated 2026-09-30).** The installed version is **0.25.15**
-> (`Info.plist` `CFBundleShortVersionString`; Osaurus self-updates, so re-read it rather than
-> trusting this line). This document's observations come from three builds, and each is tagged
-> where it is made: `0.25.3` (2026-09-15, the original inspection), `0.25.12` (2026-09-24) and
-> `0.25.13` (2026-09-27 to 09-28), and `0.25.14` (09-29 cache-off grids). **Nothing here has been re-verified against 0.25.14 or 0.25.15.** Between
-> 0.25.6 and 0.25.14 the upstream changelog (94 commits) touches things this harness depends
-> on: bundle sampling defaults (#2814, #2890: request, then saved host defaults, then the model
-> bundle, then engine fallback), thinking defaults (#2874, #2822), prefix and disk-cache internals
-> (#2876, #2881, #2884, #2896), and allocator reuse (#2863). Measured runs record the build they
-> ran on (`runtime_version`): 0.25.12 for the 09-23 grids, 0.25.13 for the 09-27 seedless grids
-> and concurrency sweeps, 0.25.14 for the 09-29 cache-off grids, and 0.25.6 for the 09-19
-> accuracy cells. A comparison across builds is two runtimes, not one; the join guard refuses it.
+> **Which build is which (updated 2026-10-05).** The installed version is **0.25.18**
+> (`defaults read /Applications/osaurus.app/Contents/Info.plist CFBundleShortVersionString`;
+> Osaurus self-updates between sessions, so re-read it rather than trusting this line). The body of
+> this document was written against `0.25.3` and **has not been re-verified against any later
+> build**; each observation is tagged with the build it came from. Measured rows record the build
+> they ran on (`runtime_version`), and a comparison across builds is two runtimes, not one: the
+> join guard refuses it.
 >
+> | Build | Date on this host | What ran on it |
+> |---|---|---|
+> | 0.25.3 | 2026-09-15 | the original static inspection (this document's body) |
+> | 0.25.6 | 2026-09-19 | dense accuracy cells (09-19) |
+> | 0.25.12 | 2026-09-23/24 | 09-23 grids |
+> | 0.25.13 | 2026-09-27/28 | seedless grids, concurrency sweeps |
+> | 0.25.14 | 2026-09-29 | cache-off grids |
+> | 0.25.15 | 2026-09-29/30 | bundle-penalty test (09-30) |
+> | 0.25.16 | 2026-10-02 to 10-05 | thinking-off 2×2, cap 1024 and cap 4096 (`results/accuracy-thinkoff*`) |
+> | 0.25.17 | never installed here | between the two compares |
+> | **0.25.18** | 2026-10-05 | installed, **no measured cell yet**; probes only (thinking-switch request fields) |
+>
+> Upstream tags run `0.25.N`; the on-disk `Info.plist` and `osaurus --version` (`Osaurus dev`
+> from the CLI shim) are the version of record. Any cell on a build not listed here is a new
+> build.
+
+> **0.25.16 → 0.25.18 (read 2026-10-05 from the public compare `0.25.16...0.25.18`, 35 commits and
+> the `vmlx-swift` engine pin `a007cd8` to `4a804e5`, 30 commits; not from a run).** Mostly UI,
+> MCP, privacy-filter presets, Insights and image/GLM/Qwen4Exp model support. Things that can
+> reach this harness, in order of risk:
+> 1. **Repetition-cycle termination removed from the engine** (app #2978, engine `vmlx-swift`
+>    #545 `6eb3a81`): generation now ends only on EOS, caller stop strings, cancellation or the
+>    output budget. Before, `RepetitionCycleDetector` could end a looping completion early in
+>    both solo and scheduled (batch) decode. A degenerate cell that used to stop short now runs
+>    to `max_tokens`, so **completion length, decode time and the coherence gate's sample can
+>    differ from a 0.25.16 row for the same weights**. Directly relevant to the thinking-on
+>    MMLU re-run (long reasoning, `max_gen_toks` 8192).
+> 2. **MLX core sorted-gather dtype fix** (#548 `9a989d2`) and **mixed-gather dtype** pin
+>    (app #2986): the MoE expert-gather path again; can move speed or numerics on the LFM2.5-8B-A1B
+>    and Qwen3.6-35B cells. The mixed *QMV* kernel fixes (#542, app #2971) are in
+>    `Qwen4ExpBF16Affine.swift` only, a family this harness does not run.
+> 3. **Cache work** (compiled post-answer persistence, sliding-window positions, stable-prefix
+>    checkpoint reuse `564d6d7`, GLM/Qwen4Exp boundaries): moves cache-hit behaviour. The harness
+>    runs Osaurus with prefix and block-disk caches off, so no effect is expected, but it is
+>    unverified. `usage` still carries no `cached_tokens` (§ see 0.25.15 note).
+> 4. **Native MTP** head-history and sampled-verification fixes (#549-#551): Osaurus MTP is not
+>    pinned or exercised by the harness.
+> 5. **Insights activity log** (app #2964): a new tamper-evident log at
+>    `~/.osaurus/config/activity-log.json` (default retention 30 days, `storeContent: true`)
+>    now records in-process inference; inbound HTTP API traffic keeps its own row in
+>    `HTTPHandler.logRequest`. A new on-disk writer per request: unmeasured per-request cost, not
+>    in the drift guard's watched keys. `server-runtime.json` is unchanged in the diff; on disk it
+>    is `schemaVersion` 4 against the harness backup's 3 (a migration at an earlier build, none of
+>    the watched keys).
+>
+> **Unchanged:** the sampling path (`MLXBatchAdapter`, `LocalGenerationDefaults`,
+> `effectiveGenerationSettings` are not in the file list), so the bundle-penalty finding is read as
+> holding at 0.25.18; and the request-side thinking switches, which a 0.25.18 probe on 2026-10-05
+> found inert for LFM2.5 (`enable_thinking` in `chat_template_kwargs` or top level,
+> `reasoning_effort`, `modelOptions.disableThinking`: identical 1,706-character reasoning).
+> Rotary fusion is gated to a qualified M5 Max and this host is an M2 Max. **Rule for the next
+> measured Osaurus cell: it is 0.25.18, a new build; do not join it to anything earlier.**
+
 > **0.25.15 (released 2026-09-29, installed by self-update; read from the public compare
 > `0.25.14...0.25.15`, 20 commits, not from a run).** Most of it is UI and agent tooling (file
 > change history, document editing, chat window, phone sync, Orchestrator) and does not touch

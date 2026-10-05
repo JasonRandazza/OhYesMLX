@@ -21,7 +21,9 @@
 #
 # DRY=1 prints every command and touches nothing (no runtime, no model, no lm-eval, no Osaurus config).
 # Nothing else may run on this machine while this runs. Run: sh scripts/run_accuracy_thinkoff.sh
-# Optional target: probe | osaurus  (default: all).
+# Optional target: probe | osaurus | on  (default: all). `on` runs only the two thinking-ON Osaurus cells
+# (the thinking-off arm is not measurable on Osaurus: its `until: ["</s>", "\n"]` empties the content).
+# Tonight's re-run: OUT=results/accuracy-thinkon-cap8192 CAP=8192 sh scripts/run_accuracy_thinkoff.sh on
 set -u
 
 cd /Users/jrazz/Dev/active/OhYesMLX
@@ -33,8 +35,8 @@ H=$HOME/.cache/huggingface/hub
 S4="$H/models--mlx-community--LFM2.5-8B-A1B-MLX-4bit/snapshots/146590a491db88581884033023f51f6b49a27b89"
 JG="$H/models--JANGQ-AI--LFM2.5-8B-A1B-JANG_2L/snapshots/5fb82773427c2f25395de8821eff6d95e86feb53"
 
-OUT=results/accuracy-thinkoff-cap4096
-CAP=4096   # first run (results/accuracy-thinkoff, cap 1024) was truncated: see its median-0-char thinking-off cells
+OUT="${OUT:-results/accuracy-thinkoff-cap4096}"
+CAP="${CAP:-4096}"   # first run (results/accuracy-thinkoff, cap 1024) was truncated: see its median-0-char thinking-off cells
 
 CONF="$HOME/.osaurus/config/server-runtime.json"
 SERVER="$HOME/.osaurus/config/server.json"
@@ -197,13 +199,13 @@ if [ "$TARGET" = "all" ] || [ "$TARGET" = "probe" ]; then
   vmlx_refusal_probe
 fi
 
-if [ "$TARGET" = "all" ] || [ "$TARGET" = "osaurus" ]; then
+if [ "$TARGET" = "all" ] || [ "$TARGET" = "osaurus" ] || [ "$TARGET" = "on" ]; then
   echo ">>> STARTING Osaurus 2x2 $(date +%H:%M:%S)"
   osaurus_pin
   # One model resident at a time and one load per model: both arms of a format back to back.
-  osaurus_cell "jang2l__osaurus" "$JG" off
+  [ "$TARGET" = "on" ] || osaurus_cell "jang2l__osaurus" "$JG" off
   osaurus_cell "jang2l__osaurus" "$JG" on
-  osaurus_cell "stock4bit__osaurus" "$S4" off
+  [ "$TARGET" = "on" ] || osaurus_cell "stock4bit__osaurus" "$S4" off
   osaurus_cell "stock4bit__osaurus" "$S4" on
   sweep
   restore_and_check
