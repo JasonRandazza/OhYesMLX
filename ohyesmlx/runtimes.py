@@ -1,9 +1,10 @@
-"""Uniform lifecycle over five heterogeneous local runtimes.
+"""Uniform lifecycle over six heterogeneous local runtimes.
 
 One dataclass per runtime behind one interface, because nothing else about them is alike:
 ``mlx_lm.server`` is Python, Osaurus is a Swift app behind a launcher, oMLX is a CLI shim
-that execs an app binary, ``optiq serve`` is an MLX-optimised fork of mlx-lm, and vMLX is an
-Electron app whose CLI is one entry point into the engine that app bundles. All five
+that execs an app binary, ``optiq serve`` is an MLX-optimised fork of mlx-lm, vMLX is an
+Electron app whose CLI is one entry point into the engine that app bundles, and MTPLX is a
+native app whose launcher execs into its own runtime venv. All six
 speak OpenAI-compatible HTTP on loopback; beyond that, each names the same weights
 differently and each starts with flags the others would choke on.
 
@@ -27,13 +28,14 @@ docs/research/2026-09-15-grid-loadability-probe.md).
 The flag tuples below are ported verbatim from LMRE's ``runtime_adapters``. They are not
 defaults, they are pins, and each one costs something when it is left to the runtime.
 
-The cache pin (Phase 6, plan 06-02) is a start-command flag on four of the five runtimes and
-a host setting on the fifth. ``cache_state=None`` is the pin not taken; it is recorded as
+The cache pin (Phase 6, plan 06-02) is a start-command flag on five of the six runtimes and
+a host setting on the sixth. ``cache_state=None`` is the pin not taken; it is recorded as
 ``None``, and since Decision 130 every flag-driven runtime delivers reuse disabled under it
 (:func:`prompt_cache_flags` has why). ``"off"`` is prefix/KV reuse disabled and
 ``"on"`` is enabled, and the value a runtime cannot deliver is refused up front rather than
-approximated -- see :meth:`Runtime.cache_state_refusal` and, for the one runtime with no flag
-in either direction, :meth:`Osaurus.cache_state_refusal`.
+approximated -- see :meth:`Runtime.cache_state_refusal` and its two overrides: Osaurus's (no
+flag in either direction) and MTPLX's (its SSD tier has one and its RAM session bank has none,
+so ``"off"`` is not claimable yet).
 
 The KV-quantization pin (Phase 4, study 03-05) is the same shape one cache down: the codec a
 runtime's KV cache is held in, pinned by name rather than by width (:data:`KV_QUANTS`, which is
@@ -50,8 +52,15 @@ back: a depth is only MTP if the artifact carries the heads the runtime will loa
 OptiQ, whose head is a sidecar of its own, only if that head's tensors fit the block its own
 config says will be built: :func:`_optiq_head_packing_refusal`), and ``on``
 is only streaming if the server's own log says so (:meth:`Runtime.stream_experts_missing`, after
-it). The depth pin has a log half too, on the one runtime whose engine is built later than its
-start: :meth:`Optiq.mtp_depth_missing`.
+it). MTPLX is the third runtime a depth reaches, and its second question cannot be asked of
+anything but the responses: it accepts the depth flags on an artifact whose heads it cannot wire
+and serves autoregressive without failing anything (`uingei/Qwen3.5-4B-oQ4e` answered HTTP 200
+with ``mode`` "ar" and zero drafted tokens), so its gate is the final chunk's own receipt, read
+after the visit by :func:`mtplx_mtp_refusal` and asked through :meth:`Mtplx.mtp_depth_missing`.
+That is the same point in the visit the two log-reading halves are read at, and the three of them
+are the overrides of :meth:`Runtime.mtp_depth_missing`: :meth:`Optiq.mtp_depth_missing` (an
+engine built on the first request), :meth:`Vmlx.mtp_depth_missing` (a per-request account of the
+depth that ran) and MTPLX's receipt.
 """
 
 from __future__ import annotations
@@ -155,16 +164,17 @@ KV_QUANT_AFFINE8 = "affine8"
 KV_QUANT_AFFINE4 = "affine4"
 KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
 
-# The MTP-depth pin's values, and the whole of them. Two of the five runtimes here have a
-# multi-token-prediction depth to pin -- vMLX's native in-model MTP heads and OptiQ's bundled
-# head both draft N tokens per verify cycle -- and the values are the depths they accept beside
-# an explicit off:
+# The MTP-depth pin's values, and the whole of them. Three of the six runtimes here have a
+# multi-token-prediction depth to pin -- vMLX's native in-model MTP heads, OptiQ's bundled head
+# and MTPLX's own heads all draft N tokens per verify cycle -- and the values are the depths they
+# accept beside an explicit off:
 #
 #   `off`  MTP not running: vMLX's own kill switch, `--disable-native-mtp` (cli.py:1662-1667);
 #          OptiQ's own default, `--mtp` being `is_flag=True, default=False`
-#          (optiq/cli.py:2554-2558), so its off is the absence of two flags
+#          (optiq/cli.py:2554-2558), so its off is the absence of two flags; MTPLX's own pair,
+#          `--no-mtp --generation-mode ar` (docs/research/2026-10-06-mtplx-surface.md §2.3)
 #   `1`    one draft token per verify cycle: `--native-mtp-depth 1 --native-mtp-depth-policy
-#          fixed`, or `--mtp --mtp-depth 1`
+#          fixed`, `--mtp --mtp-depth 1`, or `--depth 1 --generation-mode mtp`
 #   `2`, `3`  the same at those depths
 #
 # The values are strings, `off` beside `1`/`2`/`3`, because the set is a word and three numbers
@@ -199,9 +209,16 @@ KV_QUANTS = (KV_QUANT_OFF, KV_QUANT_AFFINE8, KV_QUANT_AFFINE4)
 # puts a head back: its own loader reads the `optiq/mtp.safetensors` sidecar
 # (optiq/runtime/mtp/artifacts.py:104-115).
 #
+# **MTPLX is the third runtime a depth reaches, and it refuses no value**: `--depth N
+# --generation-mode mtp` drives the depth on any artifact, and what the artifact really did with
+# it is settled from the final chunk's own receipt rather than from the files -- the oQ4e probe
+# loads cleanly and serves autoregressive in silence while the JANG_4S one raises at load before
+# the port binds (docs/research/2026-10-09-mtplx-load-probes.md), so a file check here would
+# refuse a cell that drafts and pass one that does not (see :func:`mtplx_mtp_refusal`).
+#
 # `None` is not a value: it is the pin not taken -- those runs measured each runtime's own MTP
-# default, which for vMLX on a bundle carrying heads is *not* `off` and for OptiQ is `off` -- and
-# it is never read as `off`.
+# default, which for vMLX on a bundle carrying heads is *not* `off`, for OptiQ is `off`, and for
+# MTPLX is the pack's own recommended mode at its default depth -- and it is never read as `off`.
 MTP_DEPTH_OFF = "off"
 MTP_DEPTHS = ("off", "1", "2", "3")
 
@@ -340,6 +357,21 @@ OMLX_CATALOG_TOKEN = "{OHYESMLX_OMLX_CATALOG}"
 OMLX_CATALOG_DIRNAME = "catalog"
 OMLX_BASE_DIRNAME = "base"
 SAFE_CATALOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+# MTPLX's launcher, as the app installs it and as the probes started it: a shell shim that
+# ``exec``s the runtime venv the app keeps under ``~/Library/Application Support/MTPLX``, so the
+# pid a spawn reports is the server (docs/research/2026-10-09-mtplx-load-probes.md,
+# docs/research/2026-10-06-mtplx-surface.md §1). Expanded here rather than left as a ``~``: the
+# command is spawned without a shell, so a tilde would be an argument rather than a home
+# directory.
+MTPLX_BINARY = os.path.expanduser("~/.mtplx/bin/mtplx")
+
+# The placeholder a ``cache_state='on'`` start leaves where the per-run SSD session-cache
+# directory goes, exactly as :data:`OMLX_CATALOG_TOKEN` does for oMLX's catalog: ``start_command``
+# is pure and must name the flag, and :meth:`Mtplx.build_command` is where the directory is
+# actually made and where a stop finds it again to remove. Absent from every other state's
+# command, so the absent pin and ``off`` stay free of a path that does not exist.
+MTPLX_SSD_CACHE_TOKEN = "{OHYESMLX_MTPLX_SSD_CACHE}"
 
 # vMLX's engine source ships inside the app bundle the ``vmlx`` wrapper on PATH execs, and
 # the constant in it is the version the running server reports: server.py passes it as the
@@ -1258,6 +1290,24 @@ def _inventory(base_url: str, *, api_key: str | None = None) -> tuple[str, ...]:
     )
 
 
+def _health(base_url: str) -> dict:
+    """A runtime's own health payload, read off the server root above its ``/v1`` base.
+
+    The one runtime here whose readiness signal is more than its model list is MTPLX, and this is
+    that signal: ``GET /health`` beside ``GET /v1/models``, named by
+    docs/research/2026-10-06-mtplx-surface.md §4.1. It is read the way :func:`_inventory` reads
+    the model list -- a JSON object or a raise -- and the reading of ``ok`` is the caller's
+    (:meth:`Mtplx.readiness_complaint`), because what a payload means is a property of the
+    runtime that sent it.
+    """
+    url = base_url.removesuffix("/v1") + "/health"
+    with urllib.request.urlopen(url, timeout=MODELS_TIMEOUT_S) as response:
+        payload = json.loads(response.read())
+    if not isinstance(payload, dict):
+        raise ValueError(f"unrecognised health payload from {url}")
+    return payload
+
+
 def _hub_repo_parts(name: str) -> tuple[str, str] | None:
     """``(organization, repository)`` out of one ``models--<org>--<name>`` path component.
 
@@ -1568,9 +1618,10 @@ class Runtime:
 
         The default is ``None``: a runtime whose prefix/KV reuse is controlled by a
         start-command flag can be driven into either state by :meth:`start_command`, and the
-        absent pin (``None``) asks for no state at all. The one override is Osaurus, whose
+        absent pin (``None``) asks for no state at all. The two overrides are Osaurus, whose
         cache state is host settings this harness must not edit -- it refuses a state the host
-        is not in rather than measuring something else and labelling it.
+        is not in rather than measuring something else and labelling it -- and MTPLX, whose SSD
+        tier has a flag and whose RAM session bank does not, so it refuses ``off``.
         """
         return None
 
@@ -1580,8 +1631,8 @@ class Runtime:
         The same shape as :meth:`cache_state_refusal`, one cache down: the absent pin asks for
         no codec and reaches every runtime, and the values are :data:`KV_QUANTS` -- defined
         there, codec names rather than widths. The default is ``None`` for the shape
-        :class:`Optiq` has, whose own start flags drive all three values; the four runtimes
-        that cannot are the four that override this.
+        :class:`Optiq` has, whose own start flags drive all three values; the five runtimes
+        that cannot are the five that override this.
         """
         return None
 
@@ -1589,15 +1640,15 @@ class Runtime:
         """Why this runtime cannot be measured at *mtp_depth*, or ``None`` when it can.
 
         The default refuses every depth, the opposite of :meth:`kv_quant_refusal`'s default and
-        for the opposite reason: two of the five runtimes here carry a depth to pin
-        (:data:`MTP_DEPTHS` -- vMLX's in-model heads and OptiQ's bundled one), so an override is
-        what accepts one. ``off`` and the absent pin reach every runtime -- ``off`` is MTP not
-        running, which is what a runtime with no MTP delivers.
+        for the opposite reason: three of the six runtimes here carry a depth to pin
+        (:data:`MTP_DEPTHS` -- vMLX's in-model heads, OptiQ's bundled one and MTPLX's own), so an
+        override is what accepts one. ``off`` and the absent pin reach every runtime -- ``off``
+        is MTP not running, which is what a runtime with no MTP delivers.
 
-        *artifact_dir* is required rather than optional: both answers are decided from the
-        artifact (:func:`vmlx_mtp_refusal`, :func:`optiq_mtp_refusal`), so a caller that could
+        *artifact_dir* is required rather than optional: both artifact-shaped answers are decided
+        from it (:func:`vmlx_mtp_refusal`, :func:`optiq_mtp_refusal`), so a caller that could
         omit it could omit the check. The three runtimes that refuse every depth ignore it -- and
-        each of the five overrides this method, so the reason below is the shape's floor rather
+        each of the six overrides this method, so the reason below is the shape's floor rather
         than the answer any cell on this host gets: the per-runtime evidence is in those
         overrides and in :data:`MTP_DEPTHS`.
         """
@@ -1615,7 +1666,8 @@ class Runtime:
 
         The default refuses ``on``: a runtime with no expert-streaming surface has no flag that
         turns one on, and the two that do -- OptiQ and vMLX -- are the two that override this.
-        ``off`` and the absent pin reach every runtime.
+        MTPLX is the third runtime whose serve parser carries no expert-streaming option, and it
+        takes this default. ``off`` and the absent pin reach every runtime.
         """
         if stream_experts in (None, STREAM_EXPERTS_OFF):
             return None
@@ -1636,16 +1688,27 @@ class Runtime:
         """
         return None
 
-    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
-        """Why this runtime's own log does not show a draft head running, or ``None`` when it is.
+    def mtp_depth_missing(
+        self,
+        mtp_depth: str | None,
+        log_path: str | None,
+        *,
+        observations: list | None = None,
+        artifact_dir: str | None = None,
+    ) -> str | None:
+        """Why a depth cell's own evidence does not show a draft head running, or ``None``.
 
-        The second half of the depth pin, asked with the start's log and nothing else, and the
-        default needs no evidence for the same reason: the three runtimes that refuse every
-        depth never reach a depth cell. The two overrides are the two runtimes a depth reaches,
-        and each reads the evidence its own engine emits -- ``measure._visit`` asks this once
-        the visit's measured requests have answered, which is the earliest either can have any:
-        see :meth:`Optiq.mtp_depth_missing` (an engine built on the first request) and
-        :meth:`Vmlx.mtp_depth_missing` (a per-request account of the depth that ran).
+        The second half of the depth pin, asked once the visit's measured requests have answered
+        -- which is the earliest the three runtimes a depth reaches can have any evidence
+        (``measure._visit`` is where it is asked, and why). What each reads is its own engine's:
+        :meth:`Optiq.mtp_depth_missing` the log line an engine built on the first request prints,
+        :meth:`Vmlx.mtp_depth_missing` the log's per-request account of the depth that ran, and
+        MTPLX the responses' own final-chunk receipts (:func:`mtplx_mtp_refusal`, asked by
+        :meth:`Mtplx.mtp_depth_missing`). *observations* is the visit's measured observations and
+        *artifact_dir* the cell's directory, both handed in for the runtime whose evidence is the
+        responses rather than a file; the two log-reading overrides ignore them, and the default
+        needs no evidence at all for the reason above: the three runtimes that refuse every depth
+        never reach a depth cell.
         """
         return None
 
@@ -1682,7 +1745,9 @@ class Runtime:
         docs/runtimes/mlx-lm.md §2). oMLX and vMLX read a request seed as best-effort RNG or
         sampler state and never route on it (``omlx/scheduler.py:5372-5373``, ``:10640``;
         ``vmlx_engine/scheduler.py:3898-3923``, ``sampling.py:126-138``), so the omission
-        moves nothing about their serving path.
+        moves nothing about their serving path. MTPLX's sampler fills a seed in server-side when
+        the body carries none and its serving path does not route on one either
+        (docs/research/2026-10-09-mtplx-load-probes.md), so it takes this answer too.
 
         The one exception is a cell whose mechanism lives **only** on the sequential path, and
         the runtime that has one overrides this: :meth:`Optiq.request_seed` keeps the seed at
@@ -1768,14 +1833,31 @@ class Runtime:
                 resolved = resolve_model_id(candidates, inventory)
                 if resolved is not None:
                     _raise_on_log_error(self.name, log_path)
-                    return resolved
-                complaint = f"inventory has {len(inventory)} models, none of them ours"
+                    complaint = self.readiness_complaint()
+                    if complaint is None:
+                        return resolved
+                else:
+                    complaint = f"inventory has {len(inventory)} models, none of them ours"
             if _now() >= deadline:
                 raise RuntimeStartError(
                     f"{self.name} did not serve {candidates[0]!r} within "
                     f"{timeout_s:g}s ({complaint}; log: {log_path})"
                 )
             _sleep(READY_POLL_S)
+
+    def readiness_complaint(self) -> str | None:
+        """The reason this runtime is not ready yet past its model list, or ``None``.
+
+        The base readiness rule is the model id plus the log (:meth:`await_ready`), and for the
+        runtimes whose port opening *is* their load finishing there is nothing more to wait for:
+        the default is ``None``. The one override is :meth:`Mtplx.readiness_complaint`, whose
+        ``/health`` is the runtime's own statement of what it loaded -- the surface a model list
+        cannot carry -- and it is asked on every poll pass once the id is in the inventory, so a
+        server that lists its model before it is ready keeps the loop polling rather than
+        returning a handle. The string is what the eventual failure message names as the reason
+        the runtime never came up.
+        """
+        return None
 
     def start(
         self,
@@ -1802,7 +1884,7 @@ class Runtime:
 
         *concurrency* is not a pin but the run's own batch width
         (``measure.run_cells(concurrency=N)``), threaded into the start command for the three
-        runtimes that carry a cap and ignored by the two that do not. :meth:`Omlx.start_command`
+        runtimes that carry a cap and ignored by the three that do not. :meth:`Omlx.start_command`
         is where that rule and its reason are written.
         """
         if not _port_is_free(self.port):
@@ -2507,7 +2589,14 @@ class Optiq(Runtime):
             return None
         return optiq_mtp_refusal(artifact_dir)
 
-    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
+    def mtp_depth_missing(
+        self,
+        mtp_depth: str | None,
+        log_path: str | None,
+        *,
+        observations: list | None = None,
+        artifact_dir: str | None = None,
+    ) -> str | None:
         """A depth is only MTP if the engine says it built one, and OptiQ says so late.
 
         ``--mtp --mtp-depth N`` is accepted and echoed at startup (``cli.py:3057-3060``), but the
@@ -2533,7 +2622,9 @@ class Optiq(Runtime):
         sweep.md §4, open question 5). :func:`_banner_evidence` therefore quotes the traceback's
         exception line and its innermost frame when the window holds one, and says "prints no
         line this check reads" when it does not. The window is unchanged: the log head, read
-        once (:data:`LOG_HEAD_BYTES`).
+        once (:data:`LOG_HEAD_BYTES`). ``observations`` and ``artifact_dir`` are the two
+        arguments MTPLX's receipt gate needs (:func:`mtplx_mtp_refusal`); this check reads a
+        file and ignores both.
         """
         if mtp_depth not in MTP_DEPTHS[1:]:
             return None
@@ -2816,7 +2907,14 @@ class Vmlx(Runtime):
             return None
         return vmlx_mtp_refusal(artifact_dir)
 
-    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None) -> str | None:
+    def mtp_depth_missing(
+        self,
+        mtp_depth: str | None,
+        log_path: str | None,
+        *,
+        observations: list | None = None,
+        artifact_dir: str | None = None,
+    ) -> str | None:
         """Whether the requests really drafted at the pinned depth, read off the runtime's log.
 
         The depth pin's second half, and on this runtime it carries more of the pin than OptiQ's
@@ -2850,7 +2948,9 @@ class Vmlx(Runtime):
         ``results/logs/vmlx-20260925T063452-16321.log`` and ``-20260925T063819-16321.log``: of
         their 87 requests, 78 carry a ``start rung D1`` line, 29 carry
         ``finish=fallback_to_ar``, and 9 of 201 ``accept_by_depth`` rows have a non-zero
-        denominator at ``d3``.
+        denominator at ``d3``. ``observations`` and ``artifact_dir`` are the two arguments
+        MTPLX's receipt gate needs (:func:`mtplx_mtp_refusal`); this check reads a file and
+        ignores both.
         """
         if mtp_depth not in MTP_DEPTHS[1:]:
             return None
@@ -2957,10 +3057,342 @@ class Vmlx(Runtime):
         return _ordered((vmlx_served_name(artifact_dir), model_id), name_forms(artifact_dir))
 
 
+def mtplx_mtp_refusal(
+    mtp_depth: str | None, observations, artifact_dir: str | None
+) -> str | None:
+    """Why MTPLX's own responses do not show a draft head at *mtp_depth*, or ``None`` when they do.
+
+    The depth pin's second half on this runtime, and the reason it is a receipt rather than an
+    artifact check: MTPLX accepts ``--depth N --generation-mode mtp`` on an artifact whose heads
+    it cannot wire, answers HTTP 200 with coherent text, and decodes plain autoregressive. The
+    silent degrade's receipt is ``mode`` "ar", ``draft_head_installed`` false and
+    ``drafted_tokens`` 0, with nothing but one log line to say so, while the two OptiQ packs in
+    the probe drafted 67 tokens at depth 1 (docs/research/2026-10-09-mtplx-load-probes.md). The
+    flags are not evidence; the final chunk is.
+
+    *observations* is the visit's measured observations, handed in by ``measure._visit`` at the
+    point the other two overrides read their logs; *artifact_dir* is the cell's directory, named
+    in the reason because that is what a reader has to change. The verdict is per cell and
+    all-or-nothing: every one of them has to carry the receipt, and it has to show ``mode`` not
+    ``"ar"``, ``draft_head_installed`` true and a positive ``drafted_tokens``. A request with no
+    receipt is FAIL rather than a pass, on the same reading :func:`_banner_evidence` gives a
+    check whose log is missing: an absent receipt is not evidence that a head drafted.
+
+    ``off`` and the absent pin claim no depth, so no receipt is read for them.
+    """
+    if mtp_depth not in MTP_DEPTHS[1:]:
+        return None
+    claim = f"mtp_depth={mtp_depth!r}"
+    if not observations:
+        return (
+            f"{claim} cannot be verified on {artifact_dir}: the receipt this pin is gated on is "
+            "the final SSE chunk's mtplx_stats object, and the visit left no measured request to "
+            "read one from. MTPLX accepts the depth flags on an artifact whose heads it cannot "
+            "wire and serves autoregressive with nothing failing, so this cell is FAIL rather "
+            "than a number published under a pin nothing checked."
+        )
+    for observation in observations:
+        stats = getattr(observation, "mtplx_stats", None)
+        if not isinstance(stats, dict):
+            return (
+                f"{claim} cannot be verified on {artifact_dir}: the receipt this pin is gated on "
+                "is the final SSE chunk's mtplx_stats object, and one of the visit's measured "
+                "requests carries none -- no chunk of its own stream shows a draft head at the "
+                "pinned depth. This cell is FAIL rather than a number published under a pin "
+                "nothing checked."
+            )
+        mode = stats.get("mode")
+        installed = stats.get("draft_head_installed")
+        drafted = stats.get("drafted_tokens")
+        if mode == "ar" or installed is not True or not (
+            isinstance(drafted, int) and not isinstance(drafted, bool) and drafted > 0
+        ):
+            return (
+                f"{claim} was not delivered on {artifact_dir}: every request of the visit has to "
+                "show the draft head installed and drafting, and this cell's own receipt says "
+                f"mode={mode!r}, draft_head_installed={installed!r}, "
+                f"drafted_tokens={drafted!r}. That is the silent autoregressive degrade the pin "
+                "exists to catch -- the runtime accepted the depth flags and served without a "
+                "draft head (uingei/Qwen3.5-4B-oQ4e returned HTTP 200 in exactly this state; "
+                "docs/research/2026-10-09-mtplx-load-probes.md) -- so this cell is FAIL rather "
+                "than a number published under a pin it does not hold."
+            )
+    return None
+
+
+def mtplx_served_name(artifact_dir: str) -> str:
+    """The id MTPLX is told to serve these weights under, and the id readiness looks for.
+
+    Pinned rather than left to the runtime's own derivation: ``--model-id`` defaults to a slug
+    MTPLX derives from the artifact, and a readiness poll that had to re-derive the same slug
+    would be a second copy of that rule (docs/research/2026-10-06-mtplx-surface.md §6, §11). The
+    value is the artifact's own directory name -- the name the cell is known by -- and MTPLX
+    passes an explicit ``--model-id`` through verbatim and serves it on ``/v1/models``, so
+    :meth:`Mtplx.model_id_candidates` leads with exactly this string.
+    """
+    return Path(os.path.abspath(artifact_dir)).name
+
+
+class Mtplx(Runtime):
+    """The native-MTP runtime whose head can be absent without anything failing.
+
+    Its start command is the launcher's own: ``mtplx serve`` resolves and gates the model, then
+    ``exec``s into the server, so the spawned pid is the serving pid and no stop subcommand is
+    needed. Three pins reach it:
+
+    * **The cache pin**, on one of its two tiers. ``--ssd-session-cache`` drives the SSD session
+      cache and its directory, and the RAM session bank that holds warm KV after a turn has no
+      serve flag at all -- its budgets are environment-only -- so ``on`` is the SSD tier on with
+      its directory under this run's scratch (:meth:`build_command`, removed by
+      :meth:`Handle.stop`), the absent pin passes the SSD tier off rather than leaving the
+      runtime's own ``on`` default writing session banks under the user's ``~/.mtplx``, and
+      ``off`` is refused: see :meth:`cache_state_refusal`.
+    * **The KV-codec pin**, refused in the affine values because MTPLX's ``q8``/``q4`` is a
+      different codec: see :meth:`kv_quant_refusal`.
+    * **The depth pin**, ``--no-mtp --generation-mode ar`` for ``off`` and ``--depth N
+      --generation-mode mtp`` for a depth; the family ceiling is 3, the whole of
+      :data:`MTP_DEPTHS[1:]`. Whether the head really drafted is settled after the visit by
+      :func:`mtplx_mtp_refusal`, asked through :meth:`mtp_depth_missing`.
+
+    No start flag turns on expert streaming (the surface doc's flag table is the whole of the
+    serve parser), so the base class's :meth:`Runtime.stream_experts_refusal` and
+    :meth:`Runtime.stream_experts_missing` stand. Readiness is the model list plus ``/health``
+    (:meth:`readiness_complaint`), which is the one override of that hook. Nothing sets a batch
+    cap, so *concurrency* moves nothing here -- the runtime's own ``--scheduler-mode`` default is
+    serial.
+    """
+
+    def start_command(
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
+        concurrency: int = 1,
+    ) -> tuple[str, ...]:
+        # The cache pin, on the tier that has a flag. The absent pin passes the SSD tier off
+        # rather than leaving the runtime's own default in place: that default is on, writing
+        # session banks under ~/.mtplx/session-bank -- state that is not this run's, survives it,
+        # and would make an `on` cell's prefix possibly another run's. `off` never reaches here
+        # (see cache_state_refusal), and `on` carries the per-run directory as a placeholder that
+        # build_command substitutes.
+        cache = ("--ssd-session-cache", "off")
+        if cache_state == CACHE_STATE_ON:
+            cache = (
+                "--ssd-session-cache",
+                "on",
+                "--ssd-session-cache-dir",
+                MTPLX_SSD_CACHE_TOKEN,
+            )
+        # The depth pin: `off` is MTPLX's own pair for target-only AR on the same loaded runtime,
+        # a depth is the pair that drives the draft head, and the absent pin passes neither --
+        # this runtime's own default mode at its default depth is what a run without the pin
+        # measured. Whether the head really drafted is not this method's question: see
+        # `mtplx_mtp_refusal`.
+        depth = ()
+        if mtp_depth == MTP_DEPTH_OFF:
+            depth = ("--no-mtp", "--generation-mode", "ar")
+        elif mtp_depth in MTP_DEPTHS[1:]:
+            depth = ("--depth", mtp_depth, "--generation-mode", "mtp")
+        return (
+            MTPLX_BINARY,
+            "serve",
+            "--model",
+            artifact_dir,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self.port),
+            # The id readiness resolves, pinned instead of leaving the runtime to derive a slug
+            # this module would have to re-derive to look for it (mtplx_served_name).
+            "--model-id",
+            mtplx_served_name(artifact_dir),
+            # API clients have not received the footer since 2.5.3; passed for a deterministic
+            # body anyway (docs/research/2026-10-06-mtplx-surface.md §2.5).
+            "--no-stats-footer",
+            *cache,
+            *depth,
+        )
+
+    def build_command(
+        self,
+        artifact_dir: str,
+        model_id: str,
+        *,
+        cache_state: str | None = None,
+        kv_quant: str | None = None,
+        mtp_depth: str | None = None,
+        stream_experts: str | None = None,
+        concurrency: int = 1,
+    ) -> tuple[tuple[str, ...], str | None]:
+        """The per-run SSD session-cache directory, made here so a stop can remove it.
+
+        :meth:`start_command` names the flag with a placeholder because it is pure; this is where
+        the directory exists. One directory and not oMLX's catalog-plus-base pair: the runtime is
+        handed the path the pickled session bank goes in, and :meth:`Handle.stop` removes the
+        whole tree. The other states make no tree at all -- ``off`` is refused before a start,
+        and the absent pin's command passes the SSD tier off, which writes nothing.
+        """
+        command = self.start_command(
+            artifact_dir,
+            model_id,
+            cache_state=cache_state,
+            kv_quant=kv_quant,
+            mtp_depth=mtp_depth,
+            stream_experts=stream_experts,
+            concurrency=concurrency,
+        )
+        if cache_state != CACHE_STATE_ON:
+            return command, None
+        root = Path(tempfile.mkdtemp(prefix="ohyesmlx-mtplx-"))
+        return (
+            tuple(
+                str(root) if part == MTPLX_SSD_CACHE_TOKEN else part for part in command
+            ),
+            str(root),
+        )
+
+    def cache_state_refusal(self, cache_state: str | None) -> str | None:
+        """Refuse ``off``: the RAM session bank has no flag to turn it off with.
+
+        MTPLX's reuse lives in two tiers and only one of them is a start flag.
+        ``--ssd-session-cache off`` disables the SSD cold tier, and the RAM session bank that
+        holds warm KV after a turn is configured by environment only
+        (``MTPLX_SESSION_BANK_MAX_BYTES`` and its neighbours,
+        docs/research/2026-10-06-mtplx-surface.md §3.2), with no option in the serve parser that
+        disables it -- the probes doc records this as an open item and says plainly that a
+        ``cache_state=off`` cell is gated on it. Until it is settled, ``off`` is N/A here rather
+        than measured: a cell whose requests answered from a warm RAM bank would publish
+        ``cache_state='off'`` over reuse that never stopped, which is the one thing this pin
+        exists to prevent. ``on`` and the absent pin are both drivable and are not refused.
+        """
+        if cache_state != CACHE_STATE_OFF:
+            return None
+        return (
+            "cache_state='off' cannot be claimed on MTPLX: --ssd-session-cache off disables the "
+            "SSD cold tier, but the RAM session bank that holds warm KV after a turn has no "
+            "serve flag -- its budgets are environment-only (MTPLX_SESSION_BANK_*), and whether "
+            "a zero budget honestly stops warm restore is an open item "
+            "(docs/research/2026-10-09-mtplx-load-probes.md, 'Still open'; "
+            "docs/research/2026-10-06-mtplx-surface.md §3.2, §10). So this cell is N/A in this "
+            "state rather than measured in another one."
+        )
+
+    def kv_quant_refusal(self, kv_quant: str | None) -> str | None:
+        """Refuse the affine values: MTPLX's ``q8``/``q4`` is a different codec.
+
+        ``--paged-kv-quantization {off,q8,q4}`` (aliases ``--paged-kv-quant``, ``--kv-quant``) is
+        a real start flag with ``off`` as its default, but the values it takes are MTPLX's own
+        codec -- symmetric per-head quantization with fp32 scales -- while :data:`KV_QUANTS`'
+        names are MLX's affine codec: signed integer codes with a per-group float scale and bias.
+        A pin recorded as ``affine8`` over MTPLX's ``q8`` would be a different codec wearing this
+        one's name, so the values are refused rather than renamed into the runtime's spelling.
+        ``off`` is accepted with no flag change: it is the default the command already leaves in
+        place.
+        """
+        if kv_quant in (None, KV_QUANT_OFF):
+            return None
+        return (
+            f"kv_quant={kv_quant!r} names the affine codec (signed codes with a per-group scale "
+            "and bias), and MTPLX's KV codec is not affine: its own values are q8/q4, a "
+            "symmetric per-head quantization with fp32 scales, so a pin in an affine codec here "
+            "would be a different codec wearing this one's name "
+            "(docs/research/2026-10-06-mtplx-surface.md §2.4, §10). Driving it would also mean "
+            "adding a runtime value that does not exist. So this cell is N/A in this codec "
+            "rather than measured in a neighbouring one; `off` needs no flag -- it is the "
+            "default --paged-kv-quantization already leaves in place."
+        )
+
+    def mtp_depth_refusal(self, mtp_depth: str | None, artifact_dir: str) -> str | None:
+        """Accept every value: whether the artifact drafts is answered by the receipts, not files.
+
+        The two runtimes that decide a depth from the artifact can: vMLX reads the family, the
+        sidecar and the index; OptiQ finds a head at a path its config names. MTPLX's artifacts
+        cannot be judged that way -- the probe's four cells split three ways and only the loads
+        separate them: ``JANGQ-AI/Qwen3.5-4B-JANG_4S`` raises at load and exits 1, the two OptiQ
+        packs attach and draft, and ``uingei/Qwen3.5-4B-oQ4e`` loads cleanly and serves
+        autoregressive in silence (docs/research/2026-10-09-mtplx-load-probes.md). So every depth
+        is a cell here, and what the artifact really did with the flags is asked of the responses
+        after the visit: see :func:`mtplx_mtp_refusal`, which :meth:`mtp_depth_missing` is the
+        hook for.
+        """
+        return None
+
+    def mtp_depth_missing(
+        self,
+        mtp_depth: str | None,
+        log_path: str | None,
+        *,
+        observations: list | None = None,
+        artifact_dir: str | None = None,
+    ) -> str | None:
+        """The receipts rather than the log: :func:`mtplx_mtp_refusal` is the whole of the gate.
+
+        ``log_path`` is the shape's and is not read. The one line the silent degrade prints is
+        one-way -- ``mtp_heads not found -> mtp_off: serving autoregressive`` -- so the log can
+        prove AR and can never show a head that drafted, while the final chunk's receipt carries
+        both halves (``mode``, ``draft_head_installed`` and ``drafted_tokens``).
+        """
+        return mtplx_mtp_refusal(mtp_depth, observations, artifact_dir)
+
+    def readiness_complaint(self) -> str | None:
+        """``/health`` read beside the model list: this runtime's own statement of readiness.
+
+        MTPLX prints its startup banner, constructs the state -- which loads the weights and runs
+        the startup warmup -- and only then opens the port, so the model list and the health
+        payload appear together; the payload is what says the load is the one this cell asked
+        for (``model``, ``generation_mode``, ``depth``, the sampler and the session bank:
+        docs/research/2026-10-06-mtplx-surface.md §4.1, §7). A payload that does not answer
+        ``ok`` keeps the loop polling and is quoted in the failure message if it never turns,
+        which is a start that failed rather than a cell measured against a server still coming
+        up.
+        """
+        try:
+            payload = _health(self.base_url)
+        except _TRANSIENT as error:
+            return f"health check failed: {error.__class__.__name__}: {error}"
+        if payload.get("ok") is not True:
+            return f"/health does not answer ok: {payload.get('ok')!r}"
+        return None
+
+    def version_command(self) -> tuple[str, ...]:
+        return (MTPLX_BINARY, "--version")
+
+    def parse_version(self, output: str) -> str:
+        """``mtplx --version`` answers ``mtplx 2.12.2``, not a bare ``2.12.2``.
+
+        The recorded string is what the grid's join guard compares across run directories to
+        decide whether one runtime appeared at two versions, and it compares it exactly. ``mtplx
+        `` is the runtime's phrasing and is stripped the way OptiQ's ``..., version `` is; what
+        follows it is version data and is kept whole, parenthetical packaged version included
+        when the display version differs from it (``mtplx/__init__``'s ``_version_string``).
+        Anything that does not carry the prefix is passed through whole rather than guessed at:
+        an unrecognised shape is better recorded verbatim than parsed into something that looks
+        like a version and is not.
+        """
+        first = super().parse_version(output)
+        prefix = "mtplx "
+        if not first.startswith(prefix):
+            return first
+        version = first[len(prefix) :].strip()
+        return version or first
+
+    def model_id_candidates(self, artifact_dir: str, model_id: str) -> tuple[str, ...]:
+        # The start command pins the id MTPLX serves under, so that is what the inventory
+        # answers to; every other spelling is a fallback for a command without the pin.
+        return _ordered(
+            (mtplx_served_name(artifact_dir), model_id), name_forms(artifact_dir)
+        )
+
+
 RUNTIMES: dict[str, Runtime] = {
     "mlxlm": MlxLm(name="mlxlm", port=8081),
     "osaurus": Osaurus(name="osaurus", port=1337),
     "omlx": Omlx(name="omlx", port=8100),
     "optiq": Optiq(name="optiq", port=8080),
     "vmlx": Vmlx(name="vmlx", port=8000),
+    "mtplx": Mtplx(name="mtplx", port=8200),
 }

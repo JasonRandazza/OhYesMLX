@@ -633,13 +633,14 @@ def _parser() -> argparse.ArgumentParser:
         help="pin the native-MTP draft depth for this run: `off` for MTP not running, "
         "`1`/`2`/`3` for that many draft tokens per verify cycle under the runtime's fixed "
         "policy (vMLX's default policy moves the depth inside a single request, so it is never "
-        "left to adapt; OptiQ's K is the depth for the whole call). vMLX and OptiQ carry a "
-        "depth; the other three are N/A with the reason. A depth is also refused where the "
+        "left to adapt; OptiQ's K is the depth for the whole call). vMLX, OptiQ and MTPLX carry "
+        "a depth; the other three are N/A with the reason. A depth is also refused where the "
         "artifact cannot back it -- a bundle whose MTP heads vMLX will not wire falls back "
         "silently, and OptiQ's head has to be where it looks for one -- and an OptiQ depth cell "
         "whose own log never shows the engine it built is FAIL, because that engine is built on "
-        "the first request. Leaving the flag out pins nothing: the header records `None`. A "
-        "sweep is several runs differing only in this pin.",
+        "the first request, while an MTPLX depth cell is FAIL unless its own responses' receipts "
+        "show the head installed and drafting. Leaving the flag out pins nothing: the header "
+        "records `None`. A sweep is several runs differing only in this pin.",
     )
     run.add_argument(
         "--stream-experts",

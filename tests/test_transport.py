@@ -210,6 +210,53 @@ def test_cached_tokens_is_read_from_either_spelling_and_none_when_absent(server)
     assert all(o.ok for o in (nested, flat, both, absent))
 
 
+def test_mtplx_stats_is_kept_verbatim_from_the_final_chunk_and_absent_otherwise(server):
+    """MTPLX's final chunk carries its receipt beside `usage` (docs/research/2026-10-09-mtplx-
+    load-probes.md), and the whole object is what the observation keeps: the depth pin's gate
+    reads `mode`, `draft_head_installed` and `drafted_tokens` out of it
+    (`runtimes.mtplx_mtp_refusal`), while a field this harness has no question for today is
+    still the server's own record of the request. No other runtime sends one, so `None` is the
+    ordinary case rather than a missing reading."""
+    receipt = {
+        "mode": "mtpk",
+        "draft_head_installed": True,
+        "drafted_tokens": 67,
+        "accepted_drafts": 60,
+        "rejected_drafts": 7,
+        "mtp_depth": 1,
+        "decode_tok_s": 89.5,
+    }
+    server.respond(
+        (0.0, _content("hi")),
+        (0.0, _stop()),
+        (
+            0.0,
+            _sse(
+                {
+                    "choices": [],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 1},
+                    "mtplx_stats": receipt,
+                }
+            ),
+        ),
+        (0.0, DONE),
+    )
+
+    observation = chat(server.base_url, "model", MESSAGES, max_tokens=16)
+
+    assert observation.ok
+    assert observation.mtplx_stats == receipt
+    assert set(observation.mtplx_stats) == set(receipt), "the whole object, not the fields read"
+
+    server.respond(
+        (0.0, _content("hi")),
+        (0.0, _stop()),
+        (0.0, _usage(completion_tokens=1, reasoning_tokens=0)),
+        (0.0, DONE),
+    )
+    assert chat(server.base_url, "model", MESSAGES, max_tokens=16).mtplx_stats is None
+
+
 def test_chunked_transfer_encoding_stream_is_decoded(server):
     """Osaurus answers with Transfer-Encoding: chunked. Hex sizes are not SSE."""
     server.respond(

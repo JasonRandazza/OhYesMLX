@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ohyesmlx import cli, measure, report
+from ohyesmlx import cli, measure, report, runtimes
 from ohyesmlx.runtimes import RuntimeStopError
 
 WARMUPS = 3
@@ -68,6 +68,7 @@ class FakeObservation:
     reasoning_text: str = ""
     token_source: str = "usage"
     cached_tokens: int | None = None
+    mtplx_stats: dict | None = None
 
 
 class Recorder:
@@ -155,8 +156,9 @@ class FakeRuntime:
         # log settles it (the real OptiQ and vMLX read a file), or a reason for one whose log
         # does not.
         self.stream_experts_missing_reason = stream_experts_missing
-        # The depth pin's log half, which only OptiQ answers: the same shape, and ``None`` for
-        # the runtime whose artifact refusal is the whole of its answer.
+        # The depth pin's second half: the same shape as the streaming check's, and ``None`` for a
+        # runtime whose artifact refusal is the whole of its answer. The real ones read a log or
+        # their own receipts; a fake answers with whatever the test put here.
         self.mtp_depth_missing_reason = mtp_depth_missing
         self.log_path = log_path
         self.api_key = api_key
@@ -191,12 +193,19 @@ class FakeRuntime:
         self.recorder.log("stream_experts_missing", self.name, log_path)
         return self.stream_experts_missing_reason
 
-    def mtp_depth_missing(self, mtp_depth, log_path):
-        # Only a depth has a log half, on the same reading `off` and the absent pin get from the
+    def mtp_depth_missing(self, mtp_depth, log_path, *, observations=None, artifact_dir=None):
+        # Only a depth has a second half, on the same reading `off` and the absent pin get from the
         # streaming check: neither claims a state a log could contradict.
         if mtp_depth not in ("1", "2", "3"):
             return None
         self.recorder.log("mtp_depth_missing", self.name, log_path)
+        # The visit's own observations and the cell's directory, recorded apart from the line
+        # above so the checks that were written against the log path still read the same event.
+        # Only the receipt-reading runtime looks at these; a fake that ignores them is the shape
+        # of the two log-reading ones.
+        self.recorder.log(
+            "mtp_depth_observations", self.name, artifact_dir, tuple(observations or ())
+        )
         return self.mtp_depth_missing_reason
 
     def start(self, artifact_dir, model_id, *, cache_state=None, kv_quant=None,
@@ -1988,17 +1997,21 @@ def test_load_run_round_trips_every_record_of_a_real_run():
         # reads that absence as the `None` it honestly is. The same for `request_seed`: no
         # record on disk carries the key, and every one of them sent `SEED` (0) -- its own
         # header says `seed: 0` -- so the rebuilt object holds that 0 and writes it back. The
-        # same for an observation's `cached_tokens`, which a run recorded before it existed does
-        # not carry and which reads back as the `None` it honestly is. Every other field has to
-        # come back byte for byte.
+        # same for an observation's `cached_tokens` and `mtplx_stats`, which a run recorded
+        # before either existed does not carry and which read back as the `None` they honestly
+        # are. Every other field has to come back byte for byte.
         assert result.request_seed == 0
         assert measure._record(result) == {
             **line,
             "warmup_plateau": line.get("warmup_plateau"),
             "request_seed": line.get("request_seed", 0),
-            "observations": [{"cached_tokens": None, **o} for o in line["observations"]],
+            "observations": [
+                {"cached_tokens": None, "mtplx_stats": None, **o}
+                for o in line["observations"]
+            ],
             "warmup_observations": [
-                {"cached_tokens": None, **o} for o in line["warmup_observations"]
+                {"cached_tokens": None, "mtplx_stats": None, **o}
+                for o in line["warmup_observations"]
             ],
         }
 
@@ -3216,6 +3229,68 @@ def test_the_depth_check_is_asked_after_every_workloads_measured_requests(harnes
     )
     assert harness.recorder.of("mtp_depth_missing") == [("vmlx", "/tmp/vmlx-mtp.log")]
     assert runtime.attempts == 1, "a deterministic answer is not retried on the next visit"
+
+
+def test_the_depth_check_is_handed_the_visits_own_observations_and_the_cells_artifact(harness):
+    """One of the three depth halves is not a file: MTPLX's evidence is the responses' own
+    receipts, so the check is handed the visit's measured observations -- not the row's whole
+    history, and not the warmups -- beside the cell's directory, which is what the reason has to
+    name. The log path still travels with them; it is what the other two read."""
+    harness.add_runtime("mtplx", port=8200, log_path="/tmp/mtplx.log")
+    cell = harness.cell("oq4__mtplx", "mtplx")
+
+    harness.run([cell], workloads=THREE, measured=2, mtp_depth="1")
+
+    handed = harness.recorder.of("mtp_depth_observations")
+    assert len(handed) == 2, "one verdict per visit, and the run's quota makes two"
+    for name, artifact_dir, observations in handed:
+        assert name == "mtplx"
+        assert artifact_dir == cell.artifact_dir
+        # Every measured request of that visit and only those: one batch per workload, the
+        # warmups excluded.
+        assert len(observations) == len(THREE)
+        assert all(isinstance(observation, FakeObservation) for observation in observations)
+
+
+def test_mtplx_depth_cells_are_decided_by_their_own_receipts(harness):
+    """The gate end to end through the loop, with the middle missing: the runtime's check is the
+    real `mtplx_mtp_refusal` behind a start the fake performs, and the responses are the
+    transport's. A receipt that never drafted fails the cell with the artifact named -- the
+    silent degrade the probes measured -- and a receipt that drafted leaves the cell to be
+    measured like any other, with the whole receipt still on the raw row."""
+    runtime = harness.add_runtime("mtplx", port=8200, log_path="/tmp/mtplx.log")
+
+    def receipt_gate(mtp_depth, log_path, *, observations=None, artifact_dir=None):
+        return runtimes.mtplx_mtp_refusal(mtp_depth, observations, artifact_dir)
+
+    runtime.mtp_depth_missing = receipt_gate
+    harness.transport.responder = lambda call: FakeObservation(
+        mtplx_stats={
+            "mode": "ar",
+            "draft_head_installed": False,
+            "drafted_tokens": 0,
+            "mtp_depth": 1,
+        }
+    )
+    cell = harness.cell("oq4e__mtplx", "mtplx")
+
+    results = harness.run([cell], measured=1, mtp_depth="1")
+
+    assert [result.status for result in results] == ["FAIL"]
+    assert "mode='ar'" in results[0].reason
+    assert cell.artifact_dir in results[0].reason, "the reason names the artifact"
+    assert len(results[0].observations) == 1, "the sample that earned the verdict is kept"
+    assert measure.load_run(harness.results_file())[1][0].status == "FAIL"
+    assert runtime.attempts == 1, "a deterministic answer is not retried on the next visit"
+
+    drafted = {"mode": "mtpk", "draft_head_installed": True, "drafted_tokens": 67, "mtp_depth": 1}
+    harness.transport.responder = lambda call: FakeObservation(mtplx_stats=drafted)
+    plain = harness.tmp_path / "drafted"
+    harness.run([cell], measured=1, mtp_depth="1", results_dir=plain)
+
+    measured = measure.load_run(harness.results_file(plain))[1]
+    assert [result.status for result in measured] == ["PASS"]
+    assert harness.lines(plain)[0]["observations"][0]["mtplx_stats"] == drafted
 
 
 def test_the_streaming_evidence_is_read_from_the_handles_own_log(harness):

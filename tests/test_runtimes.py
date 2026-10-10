@@ -42,6 +42,7 @@ from ohyesmlx.runtimes import (
     remove_omlx_catalog,
     resolve_model_id,
 )
+from ohyesmlx.transport import Observation
 
 # Verbatim from the spike: the load thread raised, and the server went on to bind its port
 # and log `Starting httpd` anyway.
@@ -148,6 +149,9 @@ class Rig:
         self.results = {}
         self.inventory_calls = 0
         self.api_keys = []
+        self.health = {"ok": True}
+        self.health_calls = 0
+        self.health_urls = []
         self.spawn_seconds = 0.0
         self.spawn_alive = True
         self.term_kills = True
@@ -160,6 +164,7 @@ class Rig:
         monkeypatch.setattr(runtimes, "_sleep", self.clock.advance)
         monkeypatch.setattr(runtimes, "_spawn", self.spawn)
         monkeypatch.setattr(runtimes, "_inventory", self.inventory_response)
+        monkeypatch.setattr(runtimes, "_health", self.health_response)
         monkeypatch.setattr(runtimes, "_port_is_free", self.port_is_free)
         monkeypatch.setattr(runtimes, "_process_alive", self.process_is_alive)
         monkeypatch.setattr(runtimes, "_signal_tree", self.signal_tree)
@@ -183,6 +188,16 @@ class Rig:
         if isinstance(value, BaseException):
             raise value
         return tuple(value)
+
+    def health_response(self, base_url):
+        """The runtime's own ``/health`` payload, read the way the model list is."""
+        self.health_calls += 1
+        self.health_urls.append(base_url)
+        source = self.health
+        value = source() if callable(source) else source
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
     def port_is_free(self, port):
         """Free, unless a countdown says the port lingers -- `busy_from` skips a probe."""
@@ -280,9 +295,12 @@ def test_runtimes_are_registered_by_name_on_the_ports_the_ticket_pins():
         "omlx": 8100,
         "optiq": 8080,
         "vmlx": 8000,
+        # MTPLX's own default is 8000, which is vMLX's: the two cannot both hold it.
+        "mtplx": 8200,
     }
     assert all(name == runtime.name for name, runtime in RUNTIMES.items())
     assert RUNTIMES["omlx"].base_url == "http://127.0.0.1:8100/v1"
+    assert RUNTIMES["mtplx"].base_url == "http://127.0.0.1:8200/v1"
     ports = [runtime.port for runtime in RUNTIMES.values()]
     assert len(ports) == len(set(ports)), "two runtimes on one port is a run that cannot happen"
 
@@ -522,11 +540,12 @@ def test_no_pinned_command_carries_a_predecessor_placeholder():
 # The cache pin (plan 06-02)
 # --------------------------------------------------------------------------------------
 #
-# The five start commands with no cache pin. Written out rather than recomputed, because the
+# The six start commands with no cache pin. Written out rather than recomputed, because the
 # claim is about bytes -- the way to check a command did not change is to compare it against
 # the command that was recorded, not against the expression that produced it. mlx-lm and OptiQ
-# gained `--prompt-cache-size 0` under Decision 130 (2026-09-28); the other three are what they
-# ran before the pin existed.
+# gained `--prompt-cache-size 0` under Decision 130 (2026-09-28); the other four are what they
+# ran before the pin existed -- MTPLX's is the command the v4.0 integration order pins, whose
+# `--ssd-session-cache off` is the absent pin's own answer (see `Mtplx.start_command`).
 
 TODAY = {
     "mlxlm": (
@@ -551,6 +570,11 @@ TODAY = {
         "--served-model-name", HF_ID, "--stream-interval", "1", "--continuous-batching",
         "--max-num-seqs", "1", "--no-jit", "--disable-native-mtp", "--disable-prefix-cache",
         "--disable-block-disk-cache", "--default-repetition-penalty", "1.0",
+    ),
+    "mtplx": (
+        runtimes.MTPLX_BINARY, "serve", "--model", ARTIFACT, "--host", "127.0.0.1",
+        "--port", "8200", "--model-id", "gemma-4-12B-it-qat-OptiQ-4bit", "--no-stats-footer",
+        "--ssd-session-cache", "off",
     ),
 }
 
@@ -817,7 +841,8 @@ def test_the_runtimes_with_no_way_to_reach_a_codec_refuse_it_rather_than_approxi
     """Each refusal names what was read, because what would have to change is the runtime and
     not this run: mlx-lm's server has no surface for a codec at all, oMLX's codec is TurboQuant
     rather than affine, vMLX's codec is storage-only and inert under this harness's own
-    `--disable-prefix-cache`, and Osaurus's affine route is inert under batched decode."""
+    `--disable-prefix-cache`, Osaurus's affine route is inert under batched decode, and MTPLX's
+    `q8`/`q4` is a different codec that also has no name in `KV_QUANTS`."""
     mlxlm = RUNTIMES["mlxlm"].kv_quant_refusal("affine8")
     assert "make_prompt_cache" in mlxlm and "server.py" in mlxlm
 
@@ -830,7 +855,10 @@ def test_the_runtimes_with_no_way_to_reach_a_codec_refuse_it_rather_than_approxi
     osaurus = RUNTIMES["osaurus"].kv_quant_refusal("affine8")
     assert "batched decode" in osaurus and "TurboQuant" in osaurus
 
-    for name in ("mlxlm", "omlx", "osaurus", "vmlx"):
+    mtplx = RUNTIMES["mtplx"].kv_quant_refusal("affine8")
+    assert "symmetric per-head quantization" in mtplx and "not affine" in mtplx
+
+    for name in ("mlxlm", "omlx", "osaurus", "vmlx", "mtplx"):
         for value in ("affine8", "affine4"):
             reason = RUNTIMES[name].kv_quant_refusal(value)
             assert value in reason, f"{name} names the value it refused"
@@ -914,10 +942,10 @@ def test_the_streaming_values_are_off_and_on_and_nothing_else():
 def test_no_pin_at_all_leaves_every_start_command_byte_identical_to_today():
     """Both new pins are absent here, and an absent pin is not a value: vMLX keeps
     `--disable-native-mtp` and gains nothing, OptiQ keeps `--no-stream-experts`, and the other
-    three commands are the tuples recorded before either pin existed. Reading an absent
+    four commands are the tuples recorded before either pin existed. Reading an absent
     streaming pin as `off` would have been invisible on OptiQ -- its `off` is the same flag --
     but reading an absent depth as `off` on vMLX would have claimed a state nobody asked for,
-    and reading either as a value on the other four would have claimed a state they cannot
+    and reading either as a value on the others would have claimed a state they cannot
     hold."""
     assert set(TODAY) == set(RUNTIMES)
     for name, runtime in RUNTIMES.items():
@@ -927,11 +955,14 @@ def test_no_pin_at_all_leaves_every_start_command_byte_identical_to_today():
         assert runtime.start_command(
             ARTIFACT, HF_ID, mtp_depth=None, stream_experts=None
         ) == TODAY[name]
-        # `off` is the same command on all five for the same reason the absent pin is: it is
-        # either the runtime's own kill switch (vMLX), a default the command already holds
-        # (OptiQ's `--mtp` is off unless passed), or a state the runtime is in because no flag
-        # could take it out of one.
-        assert runtime.start_command(ARTIFACT, HF_ID, mtp_depth="off") == TODAY[name]
+        # `off` is the same command on five of the six for the same reason the absent pin is:
+        # it is either the runtime's own kill switch (vMLX), a default the command already
+        # holds (OptiQ's `--mtp` is off unless passed), or a state the runtime is in because no
+        # flag could take it out of one. MTPLX is the exception and is tested where its own
+        # command is: its `off` is an explicit pair of flags (`--no-mtp --generation-mode ar`),
+        # because the runtime's own absent-pin default is not off.
+        if name != "mtplx":
+            assert runtime.start_command(ARTIFACT, HF_ID, mtp_depth="off") == TODAY[name]
 
 
 def test_vmlx_drops_the_kill_switch_for_a_depth_and_pins_the_fixed_policy_with_it(tmp_path):
@@ -1014,14 +1045,16 @@ def test_optiq_adds_the_mtp_pair_for_a_depth_and_moves_nothing_else(tmp_path):
         assert runtime.mtp_depth_refusal(depth, bundle) is None, "OptiQ drives every depth"
 
 
-def test_only_the_two_mtp_runtimes_have_a_depth_and_the_other_three_refuse_every_value():
+def test_the_runtimes_with_no_depth_at_all_refuse_every_value_and_the_three_that_carry_one_accept_it():
     """Each refusal names its own evidence, because what would have to change is the runtime and
     not this run: mlx-lm's server has no MTP at all -- its model code drops the head's weights
     at load -- oMLX's MTP is a per-model settings field that is adaptive even when set, and
-    Osaurus's depth is host state. Three of the five refuse every depth, so their ``off`` is a
+    Osaurus's depth is host state. Three of the six refuse every depth, so their ``off`` is a
     statement of fact -- Osaurus is the exception and is read from its host instead -- and the
-    two that drive a depth (vMLX, OptiQ) decide it from the artifact rather than from the value,
-    which is why their refusal is tested with a bundle and not here."""
+    three that carry a depth (vMLX, OptiQ, MTPLX) decide it differently: vMLX and OptiQ from the
+    artifact, which is why their refusal is tested with a bundle, and MTPLX from its own
+    responses' receipts, which is why its answer is ``None`` for every value here and the
+    receipt gate is what settles the cell (:func:`runtimes.mtplx_mtp_refusal`)."""
     for name in ("mlxlm", "omlx", "osaurus"):
         runtime = RUNTIMES[name]
         assert runtime.mtp_depth_refusal(None, ARTIFACT) is None, name
@@ -1037,6 +1070,15 @@ def test_only_the_two_mtp_runtimes_have_a_depth_and_the_other_three_refuse_every
     assert "model_settings.py" in RUNTIMES["omlx"].mtp_depth_refusal("3", ARTIFACT)
     assert "adaptive" in RUNTIMES["omlx"].mtp_depth_refusal("3", ARTIFACT)
     assert "mtp.explicitDepth" in RUNTIMES["osaurus"].mtp_depth_refusal("3", ARTIFACT)
+
+    # MTPLX accepts every value, and nothing about the artifact can change that: the files do
+    # not say whether its loader will wire the heads (the JANG_4S probe raises at load, the oQ4e
+    # one loads and serves AR), so the reception the flags got is read from the responses.
+    mtplx = RUNTIMES["mtplx"]
+    assert mtplx.mtp_depth_refusal(None, ARTIFACT) is None
+    assert mtplx.mtp_depth_refusal("off", ARTIFACT) is None
+    for depth in ("1", "2", "3"):
+        assert mtplx.mtp_depth_refusal(depth, ARTIFACT) is None, depth
 
 
 def test_osaurus_accepts_the_off_depth_only_while_the_host_forces_mtp_off(monkeypatch):
@@ -1971,6 +2013,269 @@ def test_the_log_window_the_evidence_reads_is_the_head_not_the_tail(tmp_path):
 
 
 # --------------------------------------------------------------------------------------
+# MTPLX (v4.0 phase 2), the third runtime a depth reaches
+# --------------------------------------------------------------------------------------
+#
+# The load probes of 2026-10-09 are the evidence every claim here rests on
+# (docs/research/2026-10-09-mtplx-load-probes.md). Its four cells split three ways: the two OptiQ
+# packs attach and draft (67 drafted, ~90% accepted, depth 1), uingei/Qwen3.5-4B-oQ4e loads and
+# silently serves AR (`mode` "ar", `draft_head_installed` false, `drafted_tokens` 0), and
+# JANGQ-AI/Qwen3.5-4B-JANG_4S exits 1 at the model-load step before any port binds.
+
+# The id the start command pins: the artifact directory's own name.
+MTPLX_SERVED_ID = "gemma-4-12B-it-qat-OptiQ-4bit"
+
+
+def mtplx_receipt(*, mode="mtpk", installed=True, drafted=67, with_receipt=True, **extra):
+    """One measured response of an MTPLX depth cell, receipt included.
+
+    The three fields the gate reads, with the probe's own values for the drafting case by
+    default; anything else in the object rides through so a test can show the receipt is kept
+    whole. ``with_receipt=False`` is a response that carried none -- a transport failure, or a
+    server that never sent one.
+    """
+    stats = (
+        {"mode": mode, "draft_head_installed": installed, "drafted_tokens": drafted, **extra}
+        if with_receipt
+        else None
+    )
+    return Observation(
+        ok=True,
+        error=None,
+        ttft_s=0.5,
+        last_content_s=2.5,
+        total_s=2.6,
+        prompt_tokens=7,
+        completion_tokens=8,
+        reasoning_tokens=None,
+        content_event_count=8,
+        text="measured",
+        token_source="usage",
+        mtplx_stats=stats,
+    )
+
+
+def test_mtplx_start_command_is_pinned():
+    """The launcher's own command (docs/research/2026-10-06-mtplx-surface.md §2): the binary the
+    app installs, a port that is not vMLX's 8000, the id readiness resolves, no stats footer, and
+    the SSD session cache off. No depth flag and no batch cap: an absent pin is not a value, and
+    nothing in the serve parser caps a batch."""
+    runtime = RUNTIMES["mtplx"]
+    command = runtime.start_command(ARTIFACT, HF_ID)
+
+    assert command == TODAY["mtplx"]
+    assert command[0] == runtimes.MTPLX_BINARY
+    assert command[0].endswith("/.mtplx/bin/mtplx") and "~" not in command[0]
+    assert command[command.index("--port") + 1] == "8200"
+    assert command[command.index("--no-stats-footer") + 1 :] == ("--ssd-session-cache", "off")
+    assert "--no-mtp" not in command and "--depth" not in command
+    assert runtime.start_command(ARTIFACT, HF_ID, concurrency=8) == TODAY["mtplx"]
+
+
+def test_mtplx_asks_for_the_id_the_start_command_pinned():
+    """`--model-id` is passed explicitly, so readiness does not have to re-derive the slug MTPLX
+    would have derived (docs/research/2026-10-06-mtplx-surface.md §6, §11), and the candidate
+    list leads with exactly that string."""
+    candidates = RUNTIMES["mtplx"].model_id_candidates(ARTIFACT, HF_ID)
+    command = RUNTIMES["mtplx"].start_command(ARTIFACT, HF_ID)
+
+    assert runtimes.mtplx_served_name(ARTIFACT) == MTPLX_SERVED_ID
+    assert command[command.index("--model-id") + 1] == MTPLX_SERVED_ID
+    assert candidates[0] == MTPLX_SERVED_ID
+    assert set(name_forms(ARTIFACT)) <= set(candidates)
+
+
+def test_mtplx_moves_the_depth_pair_and_nothing_else(tmp_path):
+    """`off` is MTPLX's own target-only-AR pair on the same loaded runtime and a depth is the
+    pair that drives the head; the absent pin passes neither, because this runtime's own default
+    mode is not `off`. Every value is accepted up front -- the files do not say whether the
+    loader will wire the heads -- and the receipt gate is what settles the cell."""
+    runtime = RUNTIMES["mtplx"]
+
+    off = runtime.start_command(ARTIFACT, HF_ID, mtp_depth="off")
+    assert off == TODAY["mtplx"] + ("--no-mtp", "--generation-mode", "ar")
+
+    for depth in ("1", "2", "3"):
+        command = runtime.start_command(ARTIFACT, HF_ID, mtp_depth=depth)
+        assert command == TODAY["mtplx"] + ("--depth", depth, "--generation-mode", "mtp")
+        assert runtime.mtp_depth_refusal(depth, ARTIFACT) is None, "the receipt answers this"
+
+
+def test_mtplx_refuses_cache_state_off_because_the_ram_bank_has_no_flag():
+    """One of MTPLX's two caches is a start flag. `--ssd-session-cache off` disables the SSD cold
+    tier, and the RAM session bank's budgets are environment-only, so `off` cannot be claimed:
+    whether a zero budget honestly stops warm restore is an open item of the probes doc."""
+    mtplx = RUNTIMES["mtplx"]
+
+    assert mtplx.cache_state_refusal(None) is None
+    assert mtplx.cache_state_refusal("on") is None
+
+    reason = mtplx.cache_state_refusal("off")
+    assert "RAM session bank" in reason
+    assert "MTPLX_SESSION_BANK" in reason
+    assert "N/A" in reason and "off" in reason
+
+
+def test_mtplx_puts_the_ssd_session_cache_in_a_per_run_scratch(rig):
+    """`cache_state='on'` is the SSD tier on, and its directory is the run's own tree: made by
+    `build_command`, handed to the runtime, and removed by the handle's stop. Left in place it
+    would write session banks under the user's `~/.mtplx`, which is not this run's to remove."""
+    rig.inventory = (MTPLX_SERVED_ID,)
+    rig.results[(runtimes.MTPLX_BINARY, "--version")] = _completed(stdout="mtplx 2.12.2\n")
+
+    handle = RUNTIMES["mtplx"].start(ARTIFACT, HF_ID, cache_state="on")
+
+    command = rig.commands[0]
+    cache_dir = Path(command[command.index("--ssd-session-cache-dir") + 1])
+    assert command[command.index("--ssd-session-cache") + 1] == "on"
+    assert cache_dir.is_dir()
+    assert Path.home() not in cache_dir.parents
+    assert handle.scratch == str(cache_dir)
+    assert runtimes.MTPLX_SSD_CACHE_TOKEN not in command
+
+    handle.stop()
+    assert not cache_dir.exists()
+
+
+def test_mtplx_accepts_a_receipt_that_drafted_and_fails_one_that_did_not():
+    """The gate, on the two states the probes record, and the reason names the artifact: a depth
+    cell is only a depth cell if its own final chunk says the head drafted. The silent degrade
+    is an HTTP 200 with coherent text, so nothing but the receipt separates it from an MTP
+    cell."""
+    runtime = RUNTIMES["mtplx"]
+
+    drafted = [mtplx_receipt()]
+    assert runtimes.mtplx_mtp_refusal("1", drafted, ARTIFACT) is None
+    assert (
+        runtime.mtp_depth_missing("1", None, observations=drafted, artifact_dir=ARTIFACT)
+        is None
+    )
+
+    silent = [mtplx_receipt(mode="ar", installed=False, drafted=0)]
+    reason = runtimes.mtplx_mtp_refusal("1", silent, ARTIFACT)
+    assert "mode='ar'" in reason, "the receipt's own values are quoted"
+    assert "draft_head_installed=False" in reason
+    assert "drafted_tokens=0" in reason
+    assert ARTIFACT in reason, "the reason names the artifact"
+    assert "FAIL" in reason
+    # The hook on the runtime is the same answer: it is what `measure._visit` asks.
+    assert (
+        runtime.mtp_depth_missing("1", None, observations=silent, artifact_dir=ARTIFACT)
+        == reason
+    )
+
+
+def test_mtplx_the_receipt_gate_is_all_or_nothing_and_a_missing_receipt_is_not_a_pass():
+    """Per cell, not per request: any observation that failed to show the head installed and
+    drafting fails the visit, and a request with no receipt at all is FAIL rather than a pass --
+    an absent receipt is not evidence that a head drafted. `off` and the absent pin claim no
+    depth, so no receipt is read for them whatever the visit holds."""
+    runtime = RUNTIMES["mtplx"]
+
+    one_of_two = [mtplx_receipt(), mtplx_receipt(drafted=0)]
+    assert "drafted_tokens=0" in runtimes.mtplx_mtp_refusal("2", one_of_two, ARTIFACT)
+
+    no_head = runtimes.mtplx_mtp_refusal("3", [mtplx_receipt(installed=False)], ARTIFACT)
+    assert "draft_head_installed=False" in no_head and "FAIL" in no_head
+
+    missing = runtimes.mtplx_mtp_refusal(
+        "1", [mtplx_receipt(with_receipt=False)], ARTIFACT
+    )
+    assert "carries none" in missing and "FAIL" in missing and ARTIFACT in missing
+
+    # Nothing measured is nothing to read, and it is the same FAIL: `measure._visit` hands over
+    # whatever the visit made, including an empty list.
+    assert ARTIFACT in runtimes.mtplx_mtp_refusal("1", [], ARTIFACT)
+    assert "FAIL" in runtimes.mtplx_mtp_refusal("1", None, ARTIFACT)
+
+    degraded = [mtplx_receipt(mode="ar", installed=False, drafted=0)]
+    assert runtimes.mtplx_mtp_refusal(None, degraded, ARTIFACT) is None
+    assert runtimes.mtplx_mtp_refusal("off", degraded, ARTIFACT) is None
+    assert runtime.mtp_depth_missing("off", None, observations=[], artifact_dir=ARTIFACT) is None
+
+
+def test_mtplx_readiness_is_health_ok_beside_the_model_id(rig):
+    """The base rule is kept -- the id in the model list, with the log read before and after --
+    and `/health` is read with it: the payload is the process's own statement that the load it
+    was asked for is the one it holds. A pass that finds the id but not `ok` keeps polling."""
+    rig.inventory = (MTPLX_SERVED_ID,)
+    rig.health = _sequence([ConnectionRefusedError("refused"), {"ok": False}, {"ok": True}])
+    rig.results[(runtimes.MTPLX_BINARY, "--version")] = _completed(stdout="mtplx 2.12.2\n")
+
+    handle = RUNTIMES["mtplx"].start(ARTIFACT, HF_ID)
+
+    assert handle.model_id == MTPLX_SERVED_ID
+    assert handle.version == "2.12.2"
+    assert handle.port == 8200
+    assert rig.health_urls == ["http://127.0.0.1:8200/v1"] * 3
+    assert rig.inventory_calls == 3
+
+
+def test_mtplx_never_becomes_ready_when_health_never_says_ok(rig):
+    """A server that lists its model and never answers `ok` is a start that failed, and the
+    complaint the loop was carrying is what the message says it waited on."""
+    rig.inventory = (MTPLX_SERVED_ID,)
+    rig.health = {"ok": False}
+
+    with pytest.raises(RuntimeStartError) as raised:
+        RUNTIMES["mtplx"].start(ARTIFACT, HF_ID)
+
+    assert "/health does not answer ok" in str(raised.value)
+    assert str(rig.log_file) in str(raised.value)
+
+
+def test_mtplx_a_nonzero_exit_before_the_port_binds_is_a_load_failure(rig):
+    """JANGQ-AI/Qwen3.5-4B-JANG_4S: a ValueError at the model-load step and exit 1, before any
+    port binds, so there is no server to poll and the log's own line is the failure
+    (docs/research/2026-10-09-mtplx-load-probes.md)."""
+    rig.spawn_alive = False
+    rig.log = (
+        "ValueError: Expected shape (248320, 640) but received shape (248320, 320) for "
+        "parameter language_model.model.embed_tokens.weight\n"
+    )
+
+    with pytest.raises(RuntimeStartError) as raised:
+        RUNTIMES["mtplx"].start(ARTIFACT, HF_ID)
+
+    assert "Expected shape (248320, 640)" in str(raised.value)
+    assert str(rig.log_file) in str(raised.value)
+    assert rig.inventory_calls == 0, "the log is read before the model list is polled"
+    # The probe's process exits 1 at that step, before the port bind: there is nothing left to
+    # signal, and the log's own line is what names the failure.
+    assert rig.signals == []
+
+
+def test_mtplx_records_the_version_and_not_the_sentence_around_it(rig):
+    """`mtplx --version` answers `mtplx 2.12.2`, not a bare `2.12.2` -- and the join guard
+    compares the recorded string exactly, so the runtime's own phrasing is stripped and what
+    follows it is kept whole. An unrecognised shape is recorded verbatim."""
+    mtplx = RUNTIMES["mtplx"]
+
+    assert mtplx.version_command() == (runtimes.MTPLX_BINARY, "--version")
+    assert mtplx.parse_version("mtplx 2.12.2\n") == "2.12.2"
+    assert mtplx.parse_version("mtplx 2.10.0 (2.10.0rc1)") == "2.10.0 (2.10.0rc1)"
+    assert mtplx.parse_version("2.12.2") == "2.12.2"
+    assert mtplx.parse_version("") == "unknown: empty version output"
+
+    rig.inventory = (MTPLX_SERVED_ID,)
+    rig.results[mtplx.version_command()] = _completed(stdout="mtplx 2.12.2\n")
+    handle = mtplx.start(ARTIFACT, HF_ID)
+    assert handle.version == "2.12.2"
+
+
+def test_mtplx_refuses_expert_streaming_on_through_the_base_default():
+    """No option in the serve parser names experts (docs/research/2026-10-06-mtplx-surface.md
+    §2 is the whole flag table), so the base class's answer is the honest one: `on` is refused
+    as N/A, and `off` and the absent pin reach the runtime."""
+    mtplx = RUNTIMES["mtplx"]
+
+    assert mtplx.stream_experts_refusal(None) is None
+    assert mtplx.stream_experts_refusal("off") is None
+    reason = mtplx.stream_experts_refusal("on")
+    assert "on" in reason and "N/A" in reason
+
+
+# --------------------------------------------------------------------------------------
 # Model-id aliasing
 # --------------------------------------------------------------------------------------
 
@@ -1994,6 +2299,7 @@ def test_each_runtime_asks_for_the_name_it_actually_serves_under():
         f"{ARTIFACT}:no-think"
     )
     assert RUNTIMES["vmlx"].model_id_candidates(ARTIFACT, HF_ID)[0] == HF_ID
+    assert RUNTIMES["mtplx"].model_id_candidates(ARTIFACT, HF_ID)[0] == MTPLX_SERVED_ID
 
 
 def test_osaurus_asks_for_the_name_the_hub_hides_the_repo_behind(hub_artifact):
@@ -2951,12 +3257,12 @@ def test_the_base_seed_policy_sends_nothing_at_temperature_zero():
     """At temperature 0 the decode is greedy, so a seed changes no token -- and a request that
     carries one takes mlx-lm's sequential path (`_is_batchable` is false on `args.seed is not
     None`, server.py:685-686), which is the path a seeded harness would never stop measuring.
-    The rationale is written once, at the method; this is that it holds for the four runtimes
+    The rationale is written once, at the method; this is that it holds for the five runtimes
     that take it."""
     assert runtimes.TEMPERATURE == 0.0
     assert runtimes.SEED == 0
 
-    for name in ("mlxlm", "osaurus", "omlx", "vmlx"):
+    for name in ("mlxlm", "osaurus", "omlx", "vmlx", "mtplx"):
         runtime = RUNTIMES[name]
         assert runtime.request_seed(None) is None
         for mtp_depth in runtimes.MTP_DEPTHS:

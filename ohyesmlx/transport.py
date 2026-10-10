@@ -69,6 +69,14 @@ class Observation:
     # 130). Appended after ``reasoning_text`` for the same reason that one is appended last,
     # and its default lets records written before it existed load unchanged.
     cached_tokens: int | None = None
+    # MTPLX's own receipt, kept verbatim: the final SSE chunk's ``mtplx_stats`` object, whose
+    # ``mode``, ``draft_head_installed`` and ``drafted_tokens`` are the only place its engine
+    # says whether the draft head it was asked for really drafted -- it answers HTTP 200 and
+    # coherent text with ``mode`` "ar" and zero drafted tokens when the artifact has no head it
+    # can wire (docs/research/2026-10-09-mtplx-load-probes.md). The whole object is kept, never
+    # a subset of it, and it is ``None`` for every runtime that sends no such chunk -- which is
+    # every other runtime here. Appended last for the same reason the two above it are.
+    mtplx_stats: dict | None = None
 
 
 def timing_channel(observation) -> str:
@@ -174,6 +182,7 @@ def chat(
     reasoning_tokens: int | None = None
     usage_reasoning_tokens: int | None = None
     cached_tokens: int | None = None
+    mtplx_stats: dict | None = None
     try:
         connection, path = _connection(base_url, timeout_s)
         body: dict[str, object] = {
@@ -359,6 +368,14 @@ def chat(
                         cached_tokens = _usage_count(
                             cached_value, "cached-token accounting is invalid"
                         )
+                # MTPLX's receipt, and kept whole: the object is what the depth pin's own gate
+                # reads (`runtimes.mtplx_mtp_refusal`), and a subset of it would be a second
+                # copy of the fields rather than the server's own chunk. MTPLX stamps it on the
+                # final event, which is the chunk the usage above rides on, so the last one on
+                # the stream wins; a runtime that sends none leaves this `None`.
+                stats = event.get("mtplx_stats")
+                if isinstance(stats, dict):
+                    mtplx_stats = stats
             if stream_done:
                 break
         if not stream_done:
@@ -469,6 +486,7 @@ def chat(
             reasoning_text=reasoning_text,
             token_source=token_source,
             cached_tokens=cached_tokens,
+            mtplx_stats=mtplx_stats,
         )
     except TransportError as error:
         failure_message = str(error)

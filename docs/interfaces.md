@@ -25,6 +25,7 @@ class Observation:
     token_source: str               # "usage" | "local_tokenizer" | "none"
     reasoning_text: str = ""        # reasoning deltas joined; "" when the model emitted none
     cached_tokens: int | None = None  # prompt tokens the server says its prompt cache served; None if unsaid
+    mtplx_stats: dict | None = None   # MTPLX's final-chunk receipt, verbatim; None on every other runtime
 
 def chat(base_url: str, model: str, messages: list[dict], *,
          max_tokens: int, temperature: float = 0.0, seed: int | None = None,
@@ -93,7 +94,7 @@ class TokenCounter:            # ohyesmlx/token_counter.py
 ```python
 @dataclass(frozen=True)
 class Runtime:
-    name: str                      # "mlxlm" | "osaurus" | "omlx" | "optiq" | "vmlx"
+    name: str                      # "mlxlm" | "osaurus" | "omlx" | "optiq" | "vmlx" | "mtplx"
     port: int
     def start(self, artifact_dir: str, model_id: str, *,
               cache_state: str | None = None,
@@ -116,8 +117,13 @@ class Runtime:
     def stream_experts_refusal(self, stream_experts: str | None) -> str | None: ...
     def stream_experts_missing(self, stream_experts: str | None,
                                log_path: str | None) -> str | None: ...
-    def mtp_depth_missing(self, mtp_depth: str | None,
-                          log_path: str | None) -> str | None: ...      # OptiQ and vMLX, 03-06
+    def mtp_depth_missing(self, mtp_depth: str | None, log_path: str | None, *,
+                          observations: list | None = None,
+                          artifact_dir: str | None = None) -> str | None: ...
+                          # OptiQ, vMLX and MTPLX, 03-06 / v4.0. `observations` is the VISIT's
+                          # measured samples and `artifact_dir` the cell's directory; the two
+                          # log-reading overrides ignore both, and MTPLX's receipt gate is the
+                          # one that needs them.
 
 
 @dataclass
@@ -1215,9 +1221,10 @@ third and the 35B does not: its head is prequantized and its routed experts are 
 | oMLX 0.6.4 | accepted, no flag, and structural: the per-run `--base-path` scratch holds no `model_settings.json`, so `mtp_enabled` is `False` (`model_settings.py:303`) | **refused**: `mtp_num_draft_tokens` is a per-model settings field with no flag, and it is adaptive even when set (`model_settings.py:304-308`) |
 | Osaurus 0.25.12 | accepted only when the host's `mtp.mode` is `force_off` — read through the tracked key the drift gate already records | **refused**: the depth is the host setting `mtp.explicitDepth`, which "must be 1, 2, or 3" (docs/runtimes/osaurus.md:344), with no start-command surface |
 
-### `mtp_depth`'s log half, on OptiQ and vMLX
+### `mtp_depth`'s second half, on OptiQ, vMLX and MTPLX
 
-The streaming pin is not the only one whose state is settled by the server's own log. OptiQ
+The streaming pin is not the only one whose state is settled after the start, and on the two
+runtimes below it is settled by the server's own log. OptiQ
 echoes `--mtp --mtp-depth N` at startup, but the engine that echo names is created on the
 **first request** (`optiq/serve.py:443-471`, reached from the patched `stream_generate`), so the
 line that says a draft head is really driving the decode —
@@ -1246,6 +1253,18 @@ moving depth. Its evidence is per request, so its window is the **whole log**
 (`runtimes._read_log_all`): depth N>1 is `FAIL` on any `finish=fallback_to_ar` or
 `start rung D<k>` with k<N, and every depth is `FAIL` without one `accept_by_depth` row whose
 `d<N>` denominator is non-zero. `Vmlx.mtp_depth_missing` holds the source citations.
+
+MTPLX answers it from the responses themselves (v4.0), which is why `Runtime.mtp_depth_missing`
+is handed the visit's measured `observations` and the cell's `artifact_dir`: its depth flags are
+accepted on an artifact whose heads it cannot wire and it answers HTTP 200 with coherent text in
+plain autoregressive decode, so the files decide nothing and the receipt decides everything —
+every measured request of the visit must carry the final chunk's `mtplx_stats` with `mode` not
+`"ar"`, `draft_head_installed` true and a positive `drafted_tokens`, and one that does not is
+`FAIL` with the artifact named (`runtimes.mtplx_mtp_refusal`). A receipt that is absent is that
+same `FAIL` rather than a pass: an absent receipt is not evidence that a head drafted. Measured
+2026-10-09: both OptiQ packs draft 67 tokens at depth 1, `uingei/Qwen3.5-4B-oQ4e` loads and
+answers with `mode` `"ar"` and `drafted_tokens` 0, and `JANGQ-AI/Qwen3.5-4B-JANG_4S` exits 1 at
+the model-load step before any port binds (`docs/research/2026-10-09-mtplx-load-probes.md`).
 
 ### `stream_experts` — experts from SSD, or resident
 

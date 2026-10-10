@@ -501,11 +501,12 @@ def run_cells(
     depth is only MTP if the artifact carries the heads, so its refusal is handed the cell's
     directory (:meth:`runtimes.Runtime.mtp_depth_refusal`), and ``on`` is only streaming if the
     server's own log says so, which is asked after the start and before the first request
-    (:meth:`runtimes.Runtime.stream_experts_missing`). The depth pin has a log half too, later
-    by the visit's measured requests because the evidence both runtimes that answer it read is
-    per request (:meth:`runtimes.Runtime.mtp_depth_missing`). A cell whose log does not show
-    either state is ``FAIL`` with that log quoted, never a number published under a pin it does
-    not hold.
+    (:meth:`runtimes.Runtime.stream_experts_missing`). The depth pin has a second half too, later
+    by the visit's measured requests because the evidence every runtime that answers it reads is
+    per request -- a log line, a log row, or MTPLX's final-chunk receipt
+    (:meth:`runtimes.Runtime.mtp_depth_missing`). A cell whose own evidence does not show either
+    state is ``FAIL`` with that evidence quoted, never a number published under a pin it does not
+    hold.
 
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
@@ -757,13 +758,16 @@ def _visit(
     the log quoted and is not visited again: the answer is a property of the model and the flag,
     so a second start would buy the same log and one more model load.
 
-    ``mtp_depth`` has a log half too, on the two runtimes a depth reaches
+    ``mtp_depth`` has a second half too, on the three runtimes a depth reaches
     (:meth:`Runtime.mtp_depth_missing`), and it is asked after the visit's measured requests for
     a reason each of them states: OptiQ builds its MTP engine on the first request, so the line
-    that says a draft head is running cannot exist before one has been made, and vMLX's evidence
-    is per request -- a start rung, a finish line, an ``accept_by_depth`` row -- so only the log
-    of requests already made can settle it. It is the same verdict -- ``FAIL`` with the log
-    quoted, not visited again -- read from each runtime's own evidence.
+    that says a draft head is running cannot exist before one has been made; vMLX's evidence is
+    per request -- a start rung, a finish line, an ``accept_by_depth`` row -- so only the log of
+    requests already made can settle it; and MTPLX's is the final SSE chunk's own receipt, which
+    is a response and nothing else. So the visit's observations are handed to the check beside
+    the log path and the cell's directory, and the runtime that reads receipts uses them. It is
+    the same verdict -- ``FAIL`` with the evidence quoted, not visited again -- read from each
+    runtime's own evidence.
     """
     runtime = runtimes.RUNTIMES.get(cell.runtime)
     if runtime is None:
@@ -853,6 +857,7 @@ def _visit(
                 result.status, result.reason = "FAIL", missing
             return "skip"
 
+        measured_from = [len(result.observations) for result in results]
         for result, workload in zip(results, workloads):
             memory = _workload_visit(handle, result, workload, warmup=warmup, quota=quota,
                                      concurrency=concurrency, counter=counter, seed=seed)
@@ -860,13 +865,25 @@ def _visit(
 
         # The second half of the depth pin, asked once the visit's measured requests have
         # answered -- and not beside the streaming check above, where no request has been made
-        # yet. The evidence is per request on both runtimes that answer it: OptiQ builds its MTP
+        # yet. The evidence is per request on every runtime that answers it: OptiQ builds its MTP
         # engine on the first request (optiq/serve.py:443-471), so its own MTP-ready line cannot
-        # exist before one has been made, and vMLX's is the requests' own account of the depth
-        # each of them ran at, which only the whole log can settle. The verdict is FAIL with the
-        # log quoted whether or not the rest of the visit would have measured something: what
-        # failed is the claim the header makes about the cell.
-        missing_depth = runtime.mtp_depth_missing(mtp_depth, handle.log_path)
+        # exist before one has been made, vMLX's is the requests' own account of the depth each
+        # of them ran at, and MTPLX's is the final chunk's receipt, which is a response and
+        # nothing else. The verdict is FAIL with the evidence quoted whether or not the rest of
+        # the visit would have measured something: what failed is the claim the header makes
+        # about the cell. The visit's own observations are handed in beside the log path and the
+        # cell's directory -- only the receipt-reading runtime uses them, and it is the one whose
+        # evidence is not a file to open later.
+        missing_depth = runtime.mtp_depth_missing(
+            mtp_depth,
+            handle.log_path,
+            observations=[
+                observation
+                for result, start in zip(results, measured_from)
+                for observation in result.observations[start:]
+            ],
+            artifact_dir=cell.artifact_dir,
+        )
         if missing_depth is not None:
             for row in results:
                 row.status, row.reason = "FAIL", missing_depth
