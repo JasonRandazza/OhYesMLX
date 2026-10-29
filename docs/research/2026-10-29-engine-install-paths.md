@@ -653,3 +653,16 @@ port and start command is `runtimes.py:3391-3398` and the per-class `start_comma
 | **OptiQ** | `command` | `pip install mlx-optiq` — `https://pypi.org/project/mlx-optiq/` | 1.8 MB wheel (0.7.8); clean install size **UNKNOWN** (vendor claims ~80 MB; measured env 846 MB includes extras) | no (venv / `uv` / `pipx`) | `shutil.which("optiq")` (here `~/.local/bin/optiq` → `.venv/bin/optiq`); `mlx_optiq-*.dist-info/METADATA` | `optiq --version` → `mlx-optiq, version 0.5.13` (harness strips the prefix) |
 | **mlx-lm** | `command` | `pip install mlx-lm` — `https://pypi.org/project/mlx-lm/` | 0.5 MB wheel (0.32.2); 434 MB installed env here | no (venv) | a Python whose `bin/mlx_lm.server` exists — here `~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin/mlx_lm.server` (no path in `runtimes.py`; convention is `scripts/run_multiturn.sh:21`) | `<that python> -m mlx_lm --version` → `0.31.3`; file-only: `site-packages/mlx_lm/_version.py` |
 | **vMLX** | `guided_download` | `https://github.com/jjang-ai/vmlx/releases/latest` (same DMGs as `jjang-ai/mlxstudio`): `vMLX-<ver>-sequoia-arm64.dmg` / `-tahoe-arm64.dmg`; command alternative `uv tool install vmlx` | 579.0 MB (Sequoia) / 604.5 MB (Tahoe) for 1.6.82; PyPI wheel 3.5 MB, env size **UNKNOWN** | no | `/Applications/vMLX.app`; `~/.local/bin/vmlx` (real wrapper → bundle's `bundled-python/.../vmlx`) | `sed -n 's/^__version__ = "\([^"]*\)".*$/\1/p' /Applications/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine/__init__.py` → `1.6.59`; **`vmlx --version` exits 2** |
+
+---
+
+## 8. Smoke test of the pinned pip plans (2026-10-29, closes §6.7 item 1 for mlx-lm and OptiQ)
+
+The two `command` plans from `engines.install_plan` were run verbatim (venv created by Python 3.14.7, then `pip install --no-input --disable-pip-version-check <pkg>==<tested>`) into a scratch directory, then deleted. Nothing outside the scratch directory was touched. VERIFIED:
+
+| engine | pinned install | wall time | clean venv size on disk | `--version` |
+|---|---|---|---|---|
+| mlx-lm | `mlx-lm==0.31.3` | 177 s | 472 MB | `0.31.3` |
+| OptiQ | `mlx-optiq==0.5.13` | 104 s | 612 MB | `mlx-optiq, version 0.5.13` |
+
+`detect_all` found both in the app-managed venv path with the right versions and `tested: true` (OptiQ's version read from `dist-info/METADATA`, not `__init__`). The 612 MB figure replaces the vendor's "~80 MB" for a clean OptiQ install. Also observed the same day: vMLX self-updated from 1.6.59 to 1.6.82 on this host and now reads `tested: false`.
