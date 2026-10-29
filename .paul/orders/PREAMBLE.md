@@ -49,6 +49,12 @@ memory sampling), `token_counter.py`, `cli.py`. Tests mirror them in `tests/`.
 - A green suite is not acceptance. Say plainly what you did not verify.
 - If the order asks a question, answer it in your report rather than guessing silently.
 
+## Code graph
+
+`graphify-out/graph.json` is a current map of this codebase. Before grepping blind, run
+`graphify query "<question>"`, `graphify path "<A>" "<B>"` or `graphify explain "<concept>"`.
+Do not run `graphify update` yourself; the coordinator refreshes it after every change.
+
 ## The task
 
 Everything below this line is specific to this dispatch.
