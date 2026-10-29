@@ -1,0 +1,245 @@
+I'll locate the installed optiq package and read the doc first.
+I have the doc (1165 lines, written against 0.5.6 with a partial recheck banner). Now let me locate the installed package and confirm the version on PATH.
+The installed package is 0.5.13 at `/Users/jrazz/Dev/tools/mlx-optiq/.venv/lib/python3.12/site-packages/`. Now I need to systematically walk every citation. Let me first map the package layout and write a citation-checker script.
+`optiq/variants.py` doesn't exist — that's one finding already. Let me locate it and build the citation checker.
+Let me build a citation extractor to enumerate every `file:line` reference in the doc.
+
+
+
+
+Now a checker that resolves each citation and prints the actual source line at that location, so I can spot mismatches efficiently.
+
+
+The checker gives me a full pass/fail map: the KV/quoted-block/MTP sections verify, but a large set of cli.py and serve.py citations are stale 0.5.6 numbers. Now I'll resolve the true 0.5.13 locations. Starting with the structural citations in `cli.py`.
+Real handoff is at cli.py:3310-3312, not 3030. Let me read the whole `serve` command region to check every flag and patch claim at once.
+The serve block is at 2498-2656 with four flags the doc doesn't list (`--ngram-draft`, `--ngram-gate`, `--ngram-min`, `--on-generation-death`). Let me read the rest of the serve body.
+Rich findings. Let me finish reading the serve body (2980-3320).
+Now let me read the cleanup module (source of the injected prompt-cache/max-tokens defaults) and locate key serve.py symbols.
+`install_reasoning_token_usage` is a major find — it emits `usage.completion_tokens_details.reasoning_tokens`, which §6.2 currently says never happens. Let me verify it and the streaming-expert/message-shape instals.
+Confirmed: reasoning tokens ARE now reported. Let me sweep the remaining referenced files — settings, gen_config, variants, context_scale, no_think.
+settings.py registry is now 96-204 with four settings the doc doesn't list. Let me check the variants/no_think/context_scale modules.
+Now the shims and no_think, where §6.6's accounting claims need re-checking.
+no_think citations hold; the Anthropic shim's streaming usage now consumes the OpenAI usage chunk — §6.6 is stale. Let me check the Responses shim and the rest of the reasoning-usage patch.
+
+Now the structural facts: entry points, script counts, and the `n`/`user`/rate-field claims.
+`.venv/bin` now holds 72 scripts (18 `mlx_lm.*`, so the "other 17" still holds). Let me chase the remaining cli.py landmarks.
+Let me read mlx_lm's argparse defaults and optiq/serve.py's KV + boost regions.
+mlx-lm's table checks out. Now the remaining serve.py symbols: null logprobs use sites, boost, adapters, generator replacements.
+
+
+
+
+
+
+Two last checks before editing: the `kernels` setting's effect and the venv/config-file facts.
+I have the complete picture. Now I'll apply the corrections, top to bottom.
+
+
+Now §2.2 — the flag table with corrected sources plus the four undocumented flags.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now §6 — the reasoning-token change is the biggest correction.
+
+
+
+Now §7.1 (the streaming heuristic's citations).
+
+Now §7.3 — this one now covers three injections, not one.
+
+
+
+
+
+
+All edits are in. Let me re-run the citation checker to confirm every line number now resolves to the content the doc claims.
+
+
+Let me verify the four mlx_lm citations I haven't opened directly.
+All mlx_lm citations hold. Now let me read back the modified sections to check they're coherent.
+
+`reasoning_content` now appears in more files than §5.1 lists — including `responses_shim.py`. Let me check each new hit.
+`responses_shim` uses it on the request side only, but §5.1's quoted grep is stale. Let me correct that block.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Final verification pass — re-running the citation checker over the whole document.
+
+
+
+Let me scan the final citation list for any optiq citation whose target line doesn't fit its claim.
+
+
+
+
+
+
+
+
+
+One §10 item is statically checkable — whether the served artifacts ship a `generation_config.json`. Let me check the HF cache.
+That answers a §10 open question. Let me record what those files actually recommend.
+That confirms §7.2's injection fires for real. Let me record it.
+
+
+
+
+One last capability claim to tighten — the "~25 monkeypatches" count. Let me count the actual patch installs in `serve_cmd`.
+
+
+
+DONE.
+
+**Changed file:** `docs/runtimes/optiq.md` only (1165 → 1318 lines). §9.2's MTP-gate passages untouched, as ordered. No git, no pytest, no server started.
+
+**How I verified.** I wrote a citation extractor + resolver (scratchpad) that matched all 369 `file:line` citations in the doc against the installed source, then read every cited region by hand. Before: ~60 citations resolved to unrelated lines (e.g. `cli.py:3030` claimed `sys.argv = ["mlx_lm.server"]…` but is `if arg == "--model"`). After: 0 unresolved, 0 out-of-range, every citation re-read against content. Raw evidence: `check.txt` (before) vs `final2.txt` (after) in the scratchpad.
+
+**Every changed claim (old → new)**
+
+*Front matter*
+1. Banner: "written against 0.5.6, only §2.2 KV rows + §7.7 re-read 2026‑09‑24, all other §2.2 lines stale" → one-paragraph re-verification statement dated 2026‑09‑25 covering §1–§8 + non-MTP §9.
+2. Sources table: mlx-optiq "0.5.6 when written" → "every citation re-read 2026‑09‑25". Added a bare-name resolution note (`variants.py` → `optiq/runtime/variants.py`; `mtp_patch.py`/`artifacts.py` → `optiq/runtime/mtp/`).
+3. "~25 monkeypatches" → 33 distinct `install_*` functions in `serve_cmd` + 5 aliased ones.
+
+*§1–2*
+4. Hand-off `cli.py:3030-3032` → `3310-3312`.
+5. `.venv/bin` "68 scripts" → 72 (the "other 17 mlx_lm.*" still holds: 18 incl. `mlx_lm.server`).
+6. `openai.py` defaults `5465-5471` → `5468-5472`; `public.py` cmd `5274-5276` → `5271-5274`.
+7. Command list: omitted **`run`**; citation `cli.py:18-55` (a docstring) → the 15 registration lines; noted no `add_command`.
+8. §2.2 table: 16 stale `Source` citations corrected; **4 undocumented flags added** (`--ngram-draft`, `--ngram-gate`, `--ngram-min`, `--on-generation-death`); the "every other line number is stale" warning deleted (whole block now re-read).
+9. §2.3 unknown-options cite `2571`/`3030` → `2500`/`2768`/`3310`; added the new injected defaults.
+
+*§3*
+10. `OPTIQ_HOME` `198-214` → `213-229` (+232-238); "some have legacy aliases (`285-289`)" → mechanism exists at `:86`/`300-304` but **no setting declares one**.
+11. `SETTINGS` `96-189` → `96-204`; **4 missing settings added**: `kernels` (True), `serve_on_generation_death`, `prefill_step`, `dump_requests`.
+12. `no_think` cite `2640-2642` → `2837-2841`; `anthropic_no_think` → `284-290`; "All of them" → "Almost all of them" (`--on-generation-death` is a serve-flag route); low-bit-search cite `1009` → `956-961`/`1038-1046`.
+13. Cloud Boost `2875-2883`/`1729-1737` → `3114-3127`/`2071-2186` (trigger `2133`); added a 4th hidden surface — `OPTIQ_DUMP_REQUESTS` writes every POST body (`serve.py:1832-1852`, called `:2086`); heading "Three" → "Four".
+14. Adapter route comment `2600-2606` → `2797-2803`; `install_multi_adapter` `2607-2608` → `2804-2805` (def `1203-1402`).
+
+*§4–5*
+15. `adapters` field `serve.py:1008` → `1398`; structured install `2932-2935` → `3176-3177`; "forces `enable_thinking=False`" → **defaults it** (`setdefault`), `322-324` → `322-331`.
+16. `install_thinking_variants` `2691-2692` → `2888-2889`; `install_variants` `2958-2961` → `3202-3203`; all `variants.py` cites fully qualified; added unknown-suffix/advertised-list facts.
+17. `_NullLogprobs` `283-287` → `407-414`; use sites `378,631,770,1011` → `521,996,1160,1174`; `n`/`user` grep claim restated so it is literally true.
+18. Client hedge `optiq/code/engine.py:233-234` → `583-584`.
+19. §5.1's `reasoning_content` grep list: 8 files → 13 — **`responses_shim.py`, `compaction.py`, `code/loop.py`, `code/config.py`, a jinja template added**, each classified; `responses_shim` shown to be request-side only.
+20. Prefill-bucketing cite `2425` → `2614-2615` (+ `moe_stream.py:250-292`); §5.2 channel inventory notes OptiQ's extra usage fields; generator replacements `344-388`/`717-794`/`1024-1148` → `424-537`/`1107-1202`/`1414-1545`; shim separation cites tightened.
+
+*§6 (substantive)*
+21. §6.1 "exactly four fields" → stock four + OptiQ's `completion_tokens_details` and `usage.optiq_boost`.
+22. **§6.2 headline reversed:** reasoning **is** separated now — `install_reasoning_token_usage` (`serve.py:1747-1819`, installed `cli.py:3111-3112`) writes `completion_tokens_details.reasoning_tokens`; the "always `None` / blocker for `interfaces.md`" claim is withdrawn, with the caveat that `completion_tokens` still includes reasoning.
+23. `--context-scale` install `2965-2968` → `3209-3211`.
+24. Rate fields `381`/`766`/`775`/`engine.py:753` → `524`(+`999`)/`1156`/`1165`(+`1179`)/`775`; quote line fixed.
+25. **§6.6 table rewritten:** Anthropic streaming `input_tokens` is no longer hard-coded `0` (usage frame at `447-448`, fallback `408-416`); output counts from the frame else per delta; both shims now request `include_usage` (`anthropic_shim.py:271`, `responses_shim.py:390`) so **neither bypasses `--context-scale`**; the "fabricated word count" is now only a fallback (`responses_shim.py:408-414`); responses cached-tokens added.
+
+*§7*
+26. §7.1: `serve.py` `1222-1305`→`1612-1695`, `1251-1253`→`1641-1643`, `1239-1240`→`1629-1630`; `cli.py` `2856-2857`→`3095-3096`; total-RAM comment `3563-3566`→`3870-3875`.
+27. §7.2: `cli.py:2756-2763`→`2968-2975`; `gen_config.py:103-148`→`124-169` (quoted lines `141-144`→`162-165`); added `_sane`; **verified against the HF cache that all three cached OptiQ quants ship a `generation_config.json`** (values recorded) — so the injection is live, not hypothetical.
+28. **§7.3 rewritten:** `cli.py:2713/2715`→`2912-2924`; `mlx_cleanup.py:81-107`→`85-112`; **`_live_kv_bytes` is subtracted now** (new behaviour); **`--prompt-cache-size` IS injected** (10, or 3 on a non-trimmable hybrid — "not touched" claim deleted); the byte cap is applied to the cache object, not just the flag; **`--max-tokens` is injected at 32768**.
+29. §7.4 `2725-2737`→`2933-2949`; §7.5 `2703-2707`→`2902-2903`, `mlx_cleanup 76-78`→`80-82`, `148-152`→`191-200`.
+30. §7.6 `2980-3024`→`3222-3258`; §7.7 fallback cites → `79-81`/`286-287`/`95-115`; §7.8 `2927-2930`→`3168-3174`.
+31. §7.9 list rebuilt: 11 mis-numbered entries → 17 unconditional + the conditional set, all renumbered (e.g. message shape `1325-1346`→`1698-1744`; `reasoning-token usage` added).
+32. §7.10 verified unchanged.
+
+*§8–9*
+33. §8.2 architecture row: `cli.py:2771` → `2980-2990`/`3041-3048`; noted `diffusion.py:50` lists only `diffusion_gemma`.
+34. §8.4 fall-through `1301-1302`/`1298-1300` → `1691-1692`/`1688-1690`; §8.6 `2663-2684`/`2298-2328`/`2301-2304` → `2860-2881`/`2409-2439`/`2412-2413`.
+35. §9 Add table: rows added for `--prompt-cache-size` and `--max-tokens`; `OPTIQ_*` row extended with `OPTIQ_KERNELS`/`OPTIQ_DUMP_REQUESTS`; final "`--prompt-cache-size` stays at 10" corrected (it depends on the harness pin).
+36. §10 item 6 answered from the HF cache instead of "not checked".
+
+**Not verified / caveats:** every live-behaviour claim stays **NEEDS PROBE** — no server, model, or request. §9.2 left alone per the order. One finding outside my writable file: `ohyesmlx/runtimes.py:1836-1838`'s docstring carries the same stale optiq numbers I just fixed (`cli.py:2571`, `:3030`, `:2332` → should be `2768`, `3310`, `2500`) — flagged for a follow-up order since this one restricted me to the doc.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    114   23542333   23356288   116078   99.2%   0.167622
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M docs/research/2026-09-25-multiturn-runtime-axis.md
+ M docs/runtimes/optiq.md
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M scripts/osaurus-pin.sh
+ M scripts/run_grid_35b.sh
+ M scripts/run_multiturn.sh
+ M scripts/run_sweep_kvquant.sh
+ M scripts/run_sweep_mtp.sh
+ M scripts/run_sweep_streaming.sh
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? docs/runtimes/mlx-lm.md
+ .paul/STATE.md                                     |  16 +-
+ docs/interfaces.md                                 |  36 +-
+ docs/research/2026-09-25-multiturn-runtime-axis.md | 141 ++++++
+ docs/runtimes/optiq.md                             | 533 +++++++++++++--------
+ ohyesmlx/report.py                                 | 138 +++++-
+ ohyesmlx/runtimes.py                               | 311 +++++++++++-
+ scripts/osaurus-pin.sh                             |   8 +-
+ scripts/run_grid_35b.sh                            |  60 +--
+ scripts/run_multiturn.sh                           |  21 +-
+ scripts/run_sweep_kvquant.sh                       |  24 +-
+ scripts/run_sweep_mtp.sh                           |  26 +-
+ scripts/run_sweep_streaming.sh                     |  22 +-
+ tests/test_report.py                               | 180 ++++++-
+ tests/test_runtimes.py                             | 362 ++++++++++++++
+ 14 files changed, 1558 insertions(+), 320 deletions(-)

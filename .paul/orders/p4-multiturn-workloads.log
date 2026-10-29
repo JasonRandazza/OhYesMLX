@@ -1,0 +1,35 @@
+BLOCKED.
+
+**The contradiction:** criterion 3 (add `run --workloads {pinned,multiturn}`) and criterion 5 (suite green, baseline 611) cannot both hold inside the allowlist. `tests/test_report.py::test_cells_is_the_only_cell_selector_the_cli_has` snapshots the exact `run` option-string set at line 1590, so any new `run` flag fails it — commit 3310e33 updated that same set when `--mtp-depth`/`--stream-experts` landed. The difference is exactly `extra: ['--workloads'], missing: []`; the fix is one line adding `"--workloads"` to that set. `tests/test_report.py` is not a file I may touch, and I did not touch it. I need permission for that one assertion, or a decision that the flag lives elsewhere. The report is in `BLOCKED.md` (which I overwrote — the prior dispatch's text is still in git).
+
+**Implemented inside the allowlist** (`ohyesmlx/cli.py`, `tests/test_cli.py`, `docs/interfaces.md`, `README.md`):
+- `DIALOGUE`: the probe's ten `DIALOGUE_TURNS` questions plus nine literal replies (99–111 words each), with the "the probe fed each runtime's own replies back in, so every runtime saw a different history" rationale written once above the constant.
+- `multiturn_workloads(measure)` → ten `Workload`s `turn-01`…`turn-10`, turn N ending on question N, all at `chat`'s 128.
+- `--workloads {pinned,multiturn}` (default `pinned`), in an argparse mutually exclusive group with `--prompt-tokens`; no new header field — the header's workload list carries it.
+- 7 new tests in `test_cli.py`; `docs/interfaces.md` gains a "Phase 4 study 03-04" section and a pointer from the workload table; README gains the third run example and the flag's paragraph.
+
+**Verified:** baseline 611 passed; now 618 collected, 617 passed, 1 failed (the snapshot above). Red-check done — with `cli.py` reverted to HEAD all 7 new tests fail (`no attribute 'DIALOGUE'`, `SystemExit: 2`, the help assertion); restore was sha256-identical and they pass. The ten questions match the probe byte-for-byte (checked once via `ast`), and `measure._workloads` accepts all ten — distinct ids, distinct prompts — so the run path carries them unchanged and no BLOCKED was needed on that count.
+
+**Not verified:** no server started, no model loaded, so the ten-workload set was never measured end-to-end against a live runtime; the probe-question match is checked by hand, not pinned by a test (a test reading `scripts/` would couple the suite to a superseded script), and the suggestion is one sentence shorter than the other replies (101 vs 99–111 words) — all within the brief.
+
+== cc-agent: git status ==
+ M BLOCKED.md
+ M README.md
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M tests/test_cli.py
+?? .gitattributes
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-multiturn-workloads.md
+?? .paul/orders/p4-ttft-mixed-channel.log
+ BLOCKED.md         |   6 +-
+ README.md          |  14 ++++
+ docs/interfaces.md |  48 +++++++++++-
+ ohyesmlx/cli.py    | 211 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ tests/test_cli.py  | 120 ++++++++++++++++++++++++++++++
+ 5 files changed, 392 insertions(+), 7 deletions(-)

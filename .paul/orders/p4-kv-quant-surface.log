@@ -1,0 +1,28 @@
+**Changed:** one new file, `docs/research/2026-09-24-kv-quant-surface.md` (731 lines). Nothing else touched — no source, no config, no server started, no model loaded.
+
+**Verified:** `git status` shows the doc as the only file I created; the suite ran green at **550 passed in 37.33s** (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`). Baseline caveat: the working tree also carried a **concurrent worker's** in-flight edits to `ohyesmlx/report.py` and `tests/test_report.py` (mtime 09:08–09:09, from the `p4-ttft-mixed-channel` order) — those are not mine and I did not touch them, so that 550 is the tree's count, not HEAD's. My change is docs-only and cannot move a test.
+
+**The findings, briefly:**
+
+- **`fp8` is wrong for all five.** Nothing in this set has an FP8 KV codec. OptiQ's `--kv-bits 8`, vMLX's `q8` and mlx-lm's client path are all `mx.quantize(mode='affine')` — signed ints with a per-group scale+bias. Recommended pin values: `off | affine8 | affine4`, with `tq4` kept separate if TurboQuant runtimes are ever driven, because `int4` would put an affine live cache and a codebook cache in one column.
+- **mlx-lm's server has no KV-quant surface** — 23 argparse flags, none for KV; `make_prompt_cache` takes no bits; `server.py` reads no env var. Its `--kv-bits` lives only on `mlx_lm.generate` / `mlx_lm.cache_prompt`.
+- **vMLX's `q4`/`q8` is a storage-only codec** ("During generation: full-precision KVCache") and it is **inert without the prefix cache**, which the harness's own default command disables. That means the `vmlx_fp8`/`vmlx_int4` rows of the 2026-09-20 study are explained by a no-op warning, not by a codec.
+- **`off` is explicitly pinnable on vMLX only**; oMLX is structurally off (empty per-run base path), OptiQ's off is the absence of two flags, Osaurus's is a host state the existing drift gate already refuses.
+- Also recorded: OptiQ 0.5.6→**0.5.13** and Osaurus 0.25.3→**0.25.12** are installed, so `docs/runtimes/optiq.md`'s line numbers are stale, and `vmlx.md` §7.2's loader-TurboQuant auto path is pre-empted by the CLI in 1.6.59.
+
+Unverified and named in §10 of the doc: Osaurus's request-side `kvMode`/`kvBits` bag (string evidence only), oMLX's `model_profiles.py` as a possible auto-route, and any actual tok/s cost of any codec.
+
+== cc-agent: git status ==
+ M AGENTS.md
+ M ohyesmlx/report.py
+ M tests/test_report.py
+?? .gitattributes
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-kv-quant-surface.md
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-ttft-mixed-channel.md
+?? docs/research/2026-09-24-kv-quant-surface.md
+ AGENTS.md            |   7 +-
+ ohyesmlx/report.py   | 129 ++++++++++++++++++++++++++++++++--
+ tests/test_report.py | 191 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 319 insertions(+), 8 deletions(-)

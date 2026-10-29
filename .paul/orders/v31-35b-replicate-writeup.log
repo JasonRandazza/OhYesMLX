@@ -1,0 +1,109 @@
+[32mUpdated 1.65.4 → 1.65.5[39m
+I'll start by reading the reference paper for style and the three data grids named in the order.
+Now let me read the r2 and r3 grids, and check the r3 run directory structure.
+I have all three grids. Now I'll re-derive the coordinator's ratios with a script, and read the r3 runner log and run-dir contents in parallel.
+The coordinator's figures reproduce only when read as per-cell median of `new/old` — I need to redo this cleanly. Let me also hunt for the harness-sha commit, "finding 17", and r3 run conditions.
+The order file lives at `.paul/orders/v31-35b-replicate-writeup.md` and "finding 17" is only in the order — it must live in the vault. Let me read the surrounding project state and search the wiki for it.
+Now let me find "finding 17" in the wiki and inspect the r3 runner script and logs for the evening's conditions.
+That vault search was noisy. Let me target the OhYesMLX wiki pages directly, and check the r3 logs for contention markers.
+The vault search engine is noisy; let me query it more precisely for the 35B finding, and check the OhYesMLX-related wiki page.
+Found it: the wiki's OhYesMLX page numbers findings, and finding 17 is the 35B MoE serving benchmark. Let me read that page's findings section and check whether r3's conditions are recorded anywhere in the vault.
+
+I have what I need on finding 17 (the wiki's finding 17 = the 09-20 35B benchmark). Now let me re-derive every figure from the three grids with one careful script, and check r2's runner conditions in parallel.
+
+All 15 coordinator figures reproduce exactly. Now let me fill the remaining evidence: r2's per-column log, FAIL/N/A counts in the three grids, r3's OptiQ drifts, and the house style of a recent paper.
+The mtp paper shows the house style, and r3's OptiQ drifts are all inside ±2%. Now let me read r2's actual per-column runner log (its outer log is empty), check the FAIL/N/A legend lines, and pull every drift value from the published and r2 leaderboards.
+No FAIL/N/A cells in any of the three 35B grids — those are legend lines only. One more detail matters: r3's Osaurus `prefill` prints `optiq` 70.7 against `stock4bit` 70.7 and the grid ranks optiq first. Let me get full precision from results.jsonl, and pull every drift value from the published and r2 leaderboards.
+All drift values are in hand. Now let me re-render the three grids with the current code as an independent check, and pull the tied Osaurus prefill figures from the run's own rows.
+The r3 re-render is byte-identical to the committed file, and the published grid's numbers reproduce exactly under current code (with `reasoning timed` labels added retroactively). Let me check the r2 diff and the jsonl cell-row shape.
+Both r2 and r3 re-renders are byte-identical to their committed grids. Now let me compute the exact drift distributions and the tied Osaurus prefill value straight from results.jsonl.
+
+
+
+
+
+The drift distributions are exact now. Let me fix the tie extraction (the `cell` field is a dict) and get full precision for all three grids' Osaurus prefill pair.
+
+The observations carry raw fields; `decode_tps` is derived by `report.py`. Let me use the project's own function in-process to get the unrounded pair.
+
+
+
+
+Everything re-derives. Let me confirm every cell's status and measured count across the three grids before writing.
+Let me check the gridspec that defines the cells, then write the paper.
+Now I'll write the new paper.
+Now the two update notes. First the hardening-validation paper.
+Now the update note on the 09-20 paper.
+Both notes are in. Now let me run the project's test suite as the order requires.
+Tests pass (647). Now let me fix two numbers I want exact in the new paper — the format-ordering count and the noise-multiple phrasing — and tighten one §3 bullet.
+
+Let me read back the new paper in full for a final check.
+Let me verify the two appended notes read correctly.
+Two wording fixes: the 09-24 note's ambiguous "table above", and the 09-20 note should name r3's prefill tie precisely.
+One more precision fix on "prints … apart", then a final suite run.
+
+DONE.
+
+**Changed (three files, nothing else):**
+- `docs/research/2026-09-25-35b-third-replicate.md` — new paper: axis/caveat, level table, format-axis and runtime-axis sections, grid differences, what r3 cannot say, conclusion (finding 17's cross-runtime levels superseded, format orderings stand), what it does not claim, follow-ups.
+- `docs/research/2026-09-24-hardening-validation-grids.md` — appended "Update 2026-09-25 (evening)": Follow-up 1 closed.
+- `docs/research/2026-09-20-35b-moe-serving.md` — appended "Update 2026-09-25": cross-runtime levels superseded, format orderings stand. Neither paper's body rewritten.
+
+**Coordinator figures re-derived — no disagreement.** All 15 reproduce exactly as the median over shared cell-workloads of per-cell `new/old`: r2/pub +19.7/+16.8/+10.7/+1.5/−8.1; r3/pub +22.2/+25.6/+16.9/+5.4/+2.7; r3/r2 +2.7/+6.6/+5.6/+3.7/+6.8. (First pass came out inverted — that red-check is how the direction convention was pinned; the corrected script matches to 0.1 pp.)
+
+**Refinements to the brief, all reported in the paper:**
+- The Osaurus `oq4`/`optiq` swap also occurs in r2, on `decode` alone (49.8 vs 48.7, 1.1 tok/s); pub and r3 swap it on all three workloads (0.9–3.7 tok/s).
+- r3's Osaurus `prefill` goes beyond a pair swap: `optiq` 70.7361 vs `stock4bit` 70.7089 — a printed 70.7 tie the ranking resolves upward, the one column where `stock4bit` does not print first.
+
+**How verified:** parsed the three `grid.md` files (38/45 columns hold `stock4bit > oq4 > optiq`; all 7 exceptions Osaurus); re-rendered all three grids with the current tree — r2 and r3 table sections byte-identical, published grid reproduces its figures plus retroactive labels; drifts computed from `results.jsonl` (pub 31+/17−, 11 annotated 9+/2−; r2 22+/26−, 3+/7−; r3 31+/17−, one annotation, max 5.1%); 48/48 PASS × 3 grids; runtime-axis orderings diffed row by row; unrounded Osaurus rates via `report.summarize`. Suite: **647 passed** (project command), docs-only change — no code touched, no runtimes, no git.
+
+**Not verified:** "desktop apps open" during r3 comes from the order/session record, not a file — the paper says so and treats r3 as an uncontrolled condition.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     44    8159151    7873536   119281   96.5%   0.138031
+
+== cc-agent: git status ==
+ M docs/research/2026-09-20-35b-moe-serving.md
+ M docs/research/2026-09-24-hardening-validation-grids.md
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? docs/research/2026-09-25-35b-third-replicate.md
+ docs/research/2026-09-20-35b-moe-serving.md        | 25 ++++++++++++++++++++
+ .../2026-09-24-hardening-validation-grids.md       | 27 ++++++++++++++++++++++
+ 2 files changed, 52 insertions(+)

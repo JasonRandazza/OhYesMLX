@@ -1,0 +1,90 @@
+[32mUpdated 1.65.0 → 1.65.1[39m
+Error loading agent from cc-explain.md: ENOENT: no such file or directory, open '/Users/jrazz/.commandcode/agents/cc-explain.md'
+Error loading agent from cc-implement.md: ENOENT: no such file or directory, open '/Users/jrazz/.commandcode/agents/cc-implement.md'
+Error loading agent from cc-refactor.md: ENOENT: no such file or directory, open '/Users/jrazz/.commandcode/agents/cc-refactor.md'
+Error loading agent from cc-review.md: ENOENT: no such file or directory, open '/Users/jrazz/.commandcode/agents/cc-review.md'
+Error loading agent from cc-test.md: ENOENT: no such file or directory, open '/Users/jrazz/.commandcode/agents/cc-test.md'
+Done. Here is the report.
+
+## What changed
+
+Three files, all under `docs/runtimes/`; no other file touched (`git diff --numstat`: omlx.md +111/-1, osaurus.md +127/-4, vملx.md +83/-0).
+
+- **`omlx.md`** — new **§8.8 Native MTP — a per-model setting in a second settings file**; a pointer in §3.4 to `~/.omlx/model_settings.json` as the third settings file; §12 item 7 extended.
+- **`osaurus.md`** — new **§7.8 Native MTP — one per-model mode, two tuning gates, and a vmlx-swift engine**; §3.2 `mtp.mode` row and §3.3 `mtp` line given citations; §8.4 MTP refusals given offsets; §10 pointer.
+- **`vmlx.md`** — new **§7.4.2 The control surface, the depth ladder, and where the heads have to live**.
+- **`docs/runtimes/mlx-lm.md` does not exist**, so nothing was written for it; that verdict is below.
+
+## Verdicts
+
+**1. oMLX — mostly true, one claim wrong.**
+- `mtp_enabled` per-model, no CLI flag, no per-request field: **confirmed** (`model_settings.py:303`; docstring `:170-175`; case-insensitive grep of `cli.py` and `api/openai_models.py` for `mtp` returns nothing — stated as absence evidence). Read at `utils/model_loading.py:705-764`, `:632-676`, `:845-856`; file is `~/.omlx/model_settings.json` (`:434`); also settable via `PUT /api/models/{model_id}/settings` (`admin/routes.py:2218`, `:2700`, `:2372-2382`).
+- **"No depth knob" is FALSE.** `mtp_num_draft_tokens` exists (`model_settings.py:308`), range 1..8 (`:34`, `admin/routes.py:2372-2382`, clamp `patches/mlx_lm_mtp/__init__.py:75`), default `None` → adaptive controller with family ceilings at load (`utils/model_loading.py:717-747`).
+- "Aligned batches only" is **stale**: multi-row is env-opt-in and default off (`batch_generator.py:429-446`, `:594-597`), and the alignment requirement was removed (#2150, `:598-603`).
+- Family list is wider than its own docstring: `_is_mtp_compatible` (`:1084-1106`) adds nemotron_h, glm_moe_dsa, gemma4*, inkling*, step3p7. Mutual exclusion with dflash: **confirmed** (`model_settings.py:341-351`).
+- Bundle-without-heads detection: config-level (`_has_mtp_heads`, `:945-962`) plus a weight-level check that gates only the VLM and Qwen4-Exp paths (`:1060-1081`, used at `:803`, `:635`); the text path gates on config alone.
+- Bonus finding now documented: `POST /api/models/{id}/import-mtplx` (`admin/routes.py:2183-2206` → `oq.py:1563-1620`) resolves the OptiQ config pointer `mlx_lm_extra_tensors.mtp_file` and merges the head into the index — but fails closed without `mtplx_runtime.json`, which the OptiQ snapshots here do not ship.
+
+**2. Osaurus — confirmed, with the honest limits recorded.**
+- `mtp.mode` live `auto`; literals `force_on` `G:110216294`, `force_off` `:110216303`, `off` `G:100593569`, `speculative` `:573`, `blocked` `:585`; no CLI flag or per-request field found; keys cluster `G:100593410-100593560`. Enum membership is **not provable** from adjacent literals — written that way.
+- `mtp.explicitDepth` 1–3 (`G:110209888`, `:110213968`); `draftTokenLimit` positive (`G:110210128`).
+- Force-on without tuning refused: **confirmed** verbatim (`G:110209472`, `:110209760`, `:110221680/744/808`).
+- `auto` on a bundle with heads: launches only with usable *validated* tuning (`G:108376272`, fields `G:100598064`, `:100598272`, `:100590128`), else `MTP inspection failed; using autoregressive load.` (`G:107852544`); first request is AR cold warmup (`G:111597840`).
+- Engine: **vMLX Swift** `0b85cad0` (`Acknowledgements.json`, `github.com/osaurus-ai/vmlx-swift`), statically linked (`VMLX*` types `G:103371520-616`, `MLXLMCommon/MTPRuntime.swift`, `OsaurusCore/MTPSection.swift`) — same conventions as the Python engine (`vmlx_mtp_tuning.json`, `jang_config.runtime.bundle_has_mtp`, `G:110226320-448`) but a **reimplementation with stricter gates** (tuning precondition; native-MTP family allowlist `G:110224592`), not the same code.
+
+**3. mlx-lm 0.31.3 — confirmed.** `models/qwen3_5.py:307-313`: the `mtp.*`-presence probe at `:308` feeds the norm-shift decision at `:312` and the strip is `:313`. **No MTP decode path exists**: `mtp` occurs only in `models/*.py` (9 files, every mention a sanitize-time removal), and `generate.py` / `server.py` have **zero** occurrences.
+
+**4. vMLX — confirmed with one correction.** Heads are read from `model.safetensors.index.json` *and* top-level `*.safetensors` headers when the index omits a shard (`native_mtp.py:126-212`), so "index only" is too narrow — but the **top-level-only** scope is what matters: `optiq/mtp.safetensors` is invisible, and `mlx_lm_extra_tensors` has zero hits in the shipped source. Live proof: that snapshot's config declares `mtp_num_hidden_layers: 1` and points at `optiq/mtp.safetensors`, while its index has 1,221 keys and **zero** `mtp.*` → vMLX reports `metadata_inconsistent` (`:983-986`).
+
+## Verification
+
+- Baseline before my edits: **1 failed, 617 passed** — `test_only_vmlx_has_a_depth_to_pin_and_the_other_four_refuse_every_value` ("optiq names the value it refused"), from the concurrent `.py` worker's in-flight changes (tree already had `ohyesmlx/*.py` + tests modified; not mine).
+- After my edits: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **627 passed**. I changed no `.py`, so that delta is the other worker's landing, not mine.
+- Every citation was read at the cited line; nothing was inferred from `--help` alone. **No red-check** applies (docs-only; no test code added) and **no live probe was run** — Osaurus remains string-table-only, `auto`-with-tuning firing on this host is unverified, the allowlist contents are unrecoverable, and the text-path behaviour for declared-but-absent heads is stated as unestablished.
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_only_vmlx_has_a_depth_to_pin_and_the_other_four_refuse_every_value
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/runtimes/omlx.md
+ M docs/runtimes/optiq.md
+ M docs/runtimes/osaurus.md
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/runtimes.py
+ M tests/test_measure.py
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-optiq.md
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-runtime-docs.md
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-runner-scripts.md
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? scripts/run_multiturn.sh
+?? scripts/run_phase4_night.sh
+?? scripts/run_sweep_kvquant.sh
+?? scripts/run_sweep_mtp.sh
+?? scripts/run_sweep_streaming.sh
+ docs/interfaces.md       |  84 ++++++++----
+ docs/runtimes/omlx.md    | 112 +++++++++++++++-
+ docs/runtimes/optiq.md   |  76 ++++++++++-
+ docs/runtimes/osaurus.md | 131 ++++++++++++++++++-
+ docs/runtimes/vmlx.md    |  83 ++++++++++++
+ ohyesmlx/cli.py          |  11 +-
+ ohyesmlx/measure.py      |  37 +++++-
+ ohyesmlx/runtimes.py     | 332 +++++++++++++++++++++++++++++++++++++++--------
+ tests/test_measure.py    |  67 +++++++++-
+ tests/test_report.py     |  22 ++++
+ tests/test_runtimes.py   | 166 +++++++++++++++++++++++-
+ 11 files changed, 1013 insertions(+), 108 deletions(-)

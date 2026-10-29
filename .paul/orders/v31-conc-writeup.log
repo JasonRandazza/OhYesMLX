@@ -1,0 +1,98 @@
+I'll start by reading the style reference, STATE.md decisions, and listing the result directories.
+I have the paper style. Now let me read all the join files and the runner logs from both sweeps.
+The joins carry `decode_tps` only. I need per-request decode, aggregate, and TTFT p50 — those live in each run's `leaderboard.md`. Let me list the run directories and read the leaderboards.
+
+Now let me read one leaderboard to understand its structure, plus check STATE.md and the order log.
+The leaderboard summary rows carry everything I need (TTFT p50, decode, drift, aggregate). Let me extract them from both sweeps, and find Decisions 128–129 in STATE.md.
+The joins give me `decode_tps`; I still need TTFT p50, aggregate, and the drift notes. Let me read STATE.md's Decision 128–129 rows, the runtime docs' cap rows, and the 2026-09-16 paper I'll supersede.
+Now the oMLX and vMLX doc cap rows, and the 2026-09-16 paper I need to supersede.
+I have the historical context. Now let me extract the exact leaderboard fields (TTFT p50, decode, drift, aggregate, peak) from all 32 run directories with a small script rather than reading 30+ full leaderboards.
+The REPL is ESM — let me use a dynamic import.
+All 96 rows extracted. Now let me verify a few source details: runner scripts, the workload definitions, the oMLX `prefill_batch_size` note in the doc, Osaurus's config section, and whether any paper already covers this sweep.
+
+Let me find the workload prompt definitions and check the uncapped runner invocation in the order files.
+
+I have all 96 rows. Let me verify my arithmetic for the ratio tables and check the `prefill_tps` definition.
+Ratios check out. Let me confirm the harness hashes are uniform within each sweep across all eight joins.
+Let me verify the uncapped run logs actually show the caps carrying N (stronger than inferring from behaviour).
+Let me check how report.py words the positive-drift note (the rows say "insufficient warmup", while the join's blockquote says otherwise at N>1).
+One quick check that the seedless rows record no request seed (Decision 128's record half), then I'll write the paper.
+
+I have everything I need. Writing the paper now.
+Now the superseded note at the top of the 09-16 paper, body untouched.
+Now a mechanical check: regenerate the six ladder tables and the §3 summary from the leaderboards on disk, and confirm every line matches what I wrote.
+The mismatches are my checker's formatting assumptions (alternating row prefixes, Unicode minus, bold placement), not the paper. Let me re-run it normalised.
+All 144 ladder checks and the §1/§3 tables verify against the leaderboards. Let me read the paper once for prose consistency.
+The paper reads well; I found a few precision issues to fix (a mis-scoped sentence in the summary, "within 1%" should be 1.2%, two cross-reference typos, and the §5 bullets conflating the flagged N=1 baselines with the unflagged decode ratio). Fixing them now.
+
+One inconsistency from my edit: the table still abbreviates some clauses while the intro now claims verbatim quotes. Let me make the table quotes uniformly full.
+That edit ate a newline — fixing it and completing the uniform quotes.
+
+All drift rows are uniform now. Final structural check, then the test suite.
+Structure checks out. Running the project's test command.
+657 passed — matches the count the cap-change order reported (653 baseline → 657 after it; my change is docs-only). Now a red-check of my number-verifier itself: corrupt one figure in memory and confirm the checker catches it.
+Verifier has teeth (0 misses intact, 1 miss with a corrupted figure). One last traceability check — every row's artifact and status across all 32 leaderboards.
+DONE.
+
+**Changed (2 files, nothing else touched):**
+- Created `docs/research/2026-09-27-concurrency-batching.md` (497 lines) — full-detail paper covering all six required items: the capped/uncapped side-by-side for oMLX/OptiQ/vMLX plus the seed half for mlx-lm (§1); the decode batch-gain table, aggregate N=8/N=1 of 1.45×/1.65×/1.65×/1.72× and Osaurus flat as shipped with "not tested whether a setting changes it" (§3); prefill aggregate 17.8–18.5 (oMLX) / 19.8–23.1 (vMLX) with the `prefill_batch_size=1` source reading separated from the inference, and the ~2–3 s vs ~0.15–0.19 s N=1 TTFT as rows-only (§4); all thirteen |drift| > 5% rows quoted with their values, notes and medians, plus what each does and does not touch — including the +118.9% and the vMLX N=4 −32.7% with its 15:28–15:50 timing and no cause claimed (§5); caveats and the reader's take (§6). Per workload × runtime × N decode/aggregate/TTFT tables, conditions, open questions and cannot-claim included.
+- `docs/research/2026-09-16-concurrency-omlx.md`: inserted the dated "Superseded 2026-09-27" note at the top, pointing at the new paper; body untouched (+8 lines, 138 → 146).
+
+**Verified:** every figure traced to a `leaderboard.md`/`results.jsonl` — 144 ladder line-checks and the §1/§3/peak tables reproduced programmatically from the 32 run dirs; all 96 rows are `PASS`, one disk size (3,160,559,814) and one artifact. Red-check of the verifier: corrupting one figure in memory made it report the miss. Suite: **657 passed** (baseline for this checkout — the cap-change order's own closing count; no code was touched).
+
+**Not verified:** nothing live — no server, model or measurement; the oMLX/vMLX source line numbers are as recorded in `.paul/orders/v31-conc-cap.log` (the check the order pointed at), not re-read from the app bundles. The 09-16 comparison figures are that paper's published table, labelled in the new paper as a reading since its seeded directories cannot join these. No figure was left untraceable.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     35    5942215    5682048   100897   95.6%   0.116609
+
+== cc-agent: git status ==
+ M docs/research/2026-09-16-concurrency-omlx.md
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? docs/research/2026-09-27-concurrency-batching.md
+ docs/research/2026-09-16-concurrency-omlx.md | 7 +++++++
+ 1 file changed, 7 insertions(+)

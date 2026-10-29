@@ -1,0 +1,126 @@
+I'll start by looking at the scripts directory and reading the relevant files.
+
+Now let me look at the grid and cache sweep scripts that carry inline Osaurus pin copies.
+
+Now I'll check the CLI to see whether `sweep` and `grid` support `--out` (the joins need to write files).
+
+
+Now let me check the baseline file, host configs, and grep for all inline pin copies.
+Let me examine the baseline and the host's Osaurus configs (read-only) to judge semantic equivalence.
+The picture is clear. Before editing, I'll capture the current DRY=1 output of the four runners (my "before" for the diff), and check for name collisions with my helper.
+
+Everything checks out. Now I'll add the join execution to `run_sweep_kvquant.sh`.
+
+
+Now the MTP runner.
+
+
+Now the streaming runner.
+
+
+Now the multiturn runner.
+
+
+Now `run_grid_35b.sh`: replace its inline pin with the shared one.
+
+
+
+Now I'll fix the `osaurus-pin.sh` header, which claims only `run_grid_35b.sh` carries the copy inline.
+Now let me verify: `sh -n` on every touched script, then the before/after DRY diff.
+
+DRY output is byte-identical for all four runners. Now I'll exercise the non-DRY helper in isolation (with a stubbed `$PY`, no servers, no runner execution) against the real results trees.
+
+The stub needs the `$PY` variable set. Let me fix that.
+Let me check the MTP results tree (the vMLX pairing didn't match) and confirm the match path for a pairing that has runs.
+Now static verification of the `run_grid_35b.sh` change (it has no DRY mode, so it must not be executed).
+Let me review the full diff of my changes.
+Two comments claim subset knobs that don't exist in those runners — let me make them accurate.
+
+Re-verifying after the comment fixes.
+
+Both paths behave correctly. Now the project test suite (the order says pytest isn't needed, but I'll confirm the suite's state since it's cheap to check).
+
+Two failures — I need to confirm they're pre-existing and unrelated (my diff is shell-only).
+
+One last check — a red-check that the DRY guard is load-bearing (fault-inject the extracted helper, no files touched).
+DONE.
+
+**item 1 — the four runners run their joins** (`run_sweep_kvquant.sh`, `run_sweep_mtp.sh`, `run_sweep_streaming.sh`, `run_multiturn.sh`)
+- Each gained an inline `join_sweep` / `join_grid` helper (mirroring the existing per-runner `run_one`/`sweep` duplication — a shared `scripts/join.sh` would be a new module, which needs Jason's yes).
+- Non-DRY: glob-matches-under-`$OUT` is checked first; a match runs `sweep --varying <pin> … --out` / `grid … --out`; no match prints `join skipped: nothing matches …`. Outputs: `$OUT/sweep-p16384.md`, `$OUT/sweep-p32768.md`, `$OUT/sweep-<cell>.md` ×3, `$OUT/sweep.md`, `$OUT/grid.md`.
+- DRY=1: identical output. `diff` of `DRY=1 sh -c "$(git show HEAD:scripts/<s>.sh)"` vs `DRY=1 sh scripts/<s>.sh` is **empty for all four** (only `SWEEPDONE <wall clock>` normalized — it's a timestamp). No join lines added.
+
+**item 2 — Osaurus pin**
+- `run_grid_35b.sh`: inline copy deleted, `. scripts/osaurus-pin.sh` added, call sites now `osaurus_pin` / `osaurus_restore_check`. Semantics identical (same three settings, baseline re-record, both files restored + `cmp`). One behavioural delta, flagged: on `cmp` mismatch the shared check prints `RESTORE FAILED` and continues where the inline one `exit 1`'d.
+- Left alone, because they differ: `run_grid.sh` / `run_grid_moe.sh` pin **idle 900 only** — they never touch the cache keys and never re-record the baseline. The shared pin forces `cache.prefix/blockDisk` off, and the host currently has both `true`, so substituting it would change what those grids measure. `run_sweep_cache*.sh`: the Osaurus cache state **is** the swept pin (`osaurus_state on` = the host's own state), which the shared pin cannot express.
+- `# ponytail:` kept (copies do remain) and re-pointed at what actually holds them, including `run_accuracy_*.sh` / `run_jang_*.sh` / `run_sweep_prompt.sh`, which carry copies too and are outside this order's scope.
+
+**Verified:** `sh -n` on all 25 `scripts/*.sh`; DRY diff as above; the helpers extracted verbatim and exercised with a stubbed `$PY` against the real results trees (match → correct argv and `--out` target; empty → skipped, e.g. `results/sweep-mtp/jang4s__vmlx/` is empty, so its join is correctly skipped); red-check of the DRY guard (guard defeated → the stub fires under `DRY=1`; as written it does not).
+
+**Not verified:** no runner was ever executed without `DRY=1`, so no real join ever wrote a `.md` (this also avoids touching `results/`); `run_grid_35b.sh` has no DRY knob, so it was only parsed and statically inspected. `pytest -q`: **2 failed, 632 passed** — both failures are in `ohyesmlx/report.py` / `tests/test_report.py`, which were modified concurrently at 17:45–17:47 by another writer; this order changed `scripts/*.sh` only.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     46    4200681    4084736    55433   97.2%   0.062906
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/runtimes/optiq.md
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M scripts/osaurus-pin.sh
+ M scripts/run_grid_35b.sh
+ M scripts/run_multiturn.sh
+ M scripts/run_sweep_kvquant.sh
+ M scripts/run_sweep_mtp.sh
+ M scripts/run_sweep_streaming.sh
+ M tests/test_report.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+ .paul/STATE.md                 |  16 +-
+ docs/runtimes/optiq.md         | 402 ++++++++++++++++++++++++++---------------
+ ohyesmlx/report.py             | 139 +++++++++++---
+ ohyesmlx/runtimes.py           | 277 ++++++++++++++++++++++++++--
+ scripts/osaurus-pin.sh         |   8 +-
+ scripts/run_grid_35b.sh        |  60 +-----
+ scripts/run_multiturn.sh       |  21 ++-
+ scripts/run_sweep_kvquant.sh   |  24 ++-
+ scripts/run_sweep_mtp.sh       |  26 ++-
+ scripts/run_sweep_streaming.sh |  22 ++-
+ tests/test_report.py           | 180 ++++++++++++++++--
+ 11 files changed, 904 insertions(+), 271 deletions(-)

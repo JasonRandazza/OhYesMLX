@@ -1,0 +1,111 @@
+I'll start by reading the files this order names, plus the pieces they reference.
+Now let me check the pieces the order references — `runtimes.Omlx.start_command`, Decision 129, and any existing evidence on `memorySafety` sequence caps.
+Let me read the oMLX start command (where Decision 129's rule lives) and check research docs for existing memorySafety evidence.
+Let me read the research doc's open questions on this key, and pull the app's string table on memory safety (read-only).
+Now let me dig into the memory-safety strings near those offsets to answer the §3.2 question with evidence rather than a guess.
+
+
+Strong evidence. Let me pull the full BatchEngine-limit string cluster and check for any resolved-concurrency logging.
+I have what I need on the evidence. Let me confirm the installed version/binary sizes and the acceptance environment.
+Evidence confirmed. Let me verify each offset I'll cite, then make the edits.
+All offsets check out. Now the edit to `osaurus-pin.sh`.
+Now the sweep runner — the per-run set, with the one comment.
+Now the doc: the §3.2 row, then the memory-safety answer as a §3.2 block before §3.3.
+
+Now the acceptance checks. First `sh -n` on all three scripts and a look at what a scratch functional test would need.
+All three pass. Now the DRY acceptance run.
+DRY shows the set per Osaurus run. Now a scratchpad-only functional check of `osaurus_set_seqs` (fake `$HOME`; the real `~/.osaurus` and the repo baseline must stay untouched — I'll hash the baseline before/after).
+
+
+The scratch check wrote the repo's committed baseline (the module resolved to the repo copy because cwd was the repo). I need to restore that file exactly — let me check what I have to restore from.
+I need to repair that file from HEAD — it's the only faithful source (the `.pre-cache-disable` one is a different, older baseline). This is a read of a committed object plus a write of the original bytes, no index or commit operations.
+Restored to the exact pre-incident hash and clean in git. Now let me fix the isolation flaw and re-run the check properly — cwd must be the scratch dir so the copied module is the one imported.
+
+Scratch check is green and the repo baseline hash is byte-identical before and after. Now the remaining acceptance items: a full DRY across all five runtimes (proving nothing changed for the other four) and the `T` default.
+Only Osaurus's block has the set lines, and the `T` default is unchanged. Now the test suite and a final "nothing else touched" audit.
+657 passed. One last red-check: prove the read-back assertion can actually fail (not vacuous).
+
+DONE. Suite: **657 passed** (baseline: no Python was touched, so this is the untouched count).
+
+**Changed (the four named files, nothing else)**
+
+1. `scripts/osaurus-pin.sh` — new `osaurus_set_seqs N`: refuses unless `$CONF_ORIG` exists (i.e. `osaurus_pin` took the byte-exact copy) and unless N is a positive integer; writes `concurrency.maxConcurrentSequences`, verifies the write by reading the value back through `osaurus_settings.capture_osaurus_settings()` (the harness's one definition of that key path), then re-records the baseline exactly as `osaurus_pin` does. The verify raises *before* `write_baseline()`, so a failed set never re-baselines the host. Restore is untouched: existing `cp` + `cmp`.
+2. `scripts/run_sweep_concurrency.sh` — in the N loop, after the sweep and before each run, `if [ "$r" = osaurus ]` → `osaurus_set_seqs "$n"`, or prints `osaurus_set_seqs $n` when `DRY=1`. One comment at that site naming Decision 129 and `runtimes.Omlx.start_command`. Nothing else moved; N=1 rewrites the value the host already holds, so the re-recorded baseline is byte-identical to pin's.
+3. `scripts/run_harden_validation.sh` — `T=${T:-results/harden-2026-09-23}`. No other change.
+4. `docs/runtimes/osaurus.md` — §3.2 row records the runner set/restore; new §3.2 block answers the memory-safety question: **yes, `memorySafety` also caps sequences**, as an upper bound — the Concurrency footer is assembled from `Continuous Batching is off.` (`G:108883746`), ` Memory Safety profile.` (`G:108883808`) and ` explicit Concurrent Sessions override.` (`G:108883844`), one fragment says the explicit value can be **overridden by Memory Safety Max Concurrent Sequences** (`G:108883892`/`G:108883924`), the advanced override is `memorySafety.customMaxConcurrentSequences` — absent here — labelled `Upper bound for concurrent decode slots under this memory mode.` (`G:108890896`), and slider `2` (Safe Auto) is live since only `4 removes automatic Osaurus caps` (`G:108890240`). What number `safe_auto` resolves to is **not recoverable from a string table** (no numeric defaults, §9.1), so pinning N does not prove the effective limit was N.
+
+**Verified**
+
+- `sh -n` OK on all three scripts.
+- DRY output (shown above): `osaurus_set_seqs 1/2/4/8` interleaved before each of the four Osaurus run commands; full five-runtime DRY has set lines only in the Osaurus block (20 runs, 5 joins unchanged, rerun deterministic).
+- `T` line evaluated from the file under `set -u`: unset → `results/harden-2026-09-23`; set → honored.
+- Ad-hoc scratch check (fake `$HOME`, copied module, scratchpad only): refusal before backup (file untouched, exit 1), refusal on `eight`, set at 1 then 8 with the baseline showing 8, copy+cmp restore byte-exact, and a red-check where the read-back assertion fired (exit 1, `reads back '<unreadable>', not 4`).
+- Host untouched: `~/.osaurus/config/*` mtimes still Sep 20/22; no `phase4-orig` left; `/tmp/dry-all` never created (DRY does not mkdir).
+
+**Incomplete things you must judge**
+
+- **I wrote the repo's `config/osaurus-settings-baseline.json` by accident** on my first scratch run (cwd was the repo, so `write_baseline` hit the real tracked file). I restored it with `git show HEAD:config/... > file` — a read of a committed blob plus a write, no index/commit operations — and verified sha1 `8ca88794e30c73622d5ca29abe91c7f91c7f3131` (the pre-incident hash) with `git status` clean for that path. This is the one git command I ran, and it was repair, not workflow.
+- Not verified: the real `osaurus serve` path (no server started, no writes to `~/.osaurus`), and whether the app reads `server-runtime.json` at each server start rather than caching it — my set lands after the sweep and before the run, which is the strongest ordering available to a script. Also unverified: whether `safe_auto`'s resolved bound is ≥ N on this host, so an Osaurus N>1 column may still be capped below N; the app's Server Settings footer shows the resolved number for the coordinator's live check.
+- Doc header still says 0.25.12 while the installed app is 0.25.13 (my cited offsets are from the installed 0.25.13 binary); I left the header alone as out of scope.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     28    2415817    2312448    38183   95.7%   0.045352
+
+== cc-agent: git status ==
+ M docs/runtimes/osaurus.md
+ M scripts/osaurus-pin.sh
+ M scripts/run_harden_validation.sh
+ M scripts/run_sweep_concurrency.sh
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-osaurus-seqs.log
+?? .paul/orders/v31-osaurus-seqs.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+ docs/runtimes/osaurus.md         | 33 ++++++++++++++++++++++++++++++++-
+ scripts/osaurus-pin.sh           | 30 ++++++++++++++++++++++++++++++
+ scripts/run_harden_validation.sh |  2 +-
+ scripts/run_sweep_concurrency.sh |  9 +++++++++
+ 4 files changed, 72 insertions(+), 2 deletions(-)

@@ -1,0 +1,135 @@
+I'll start by reading the three committed Phase 4 writeups to learn the house style and rigour, plus the inputs the order names.
+
+Now let me examine the run directories, runner logs, and the mechanism docs.
+
+
+
+Let me find the void run's logs and read the mechanism docs.
+
+
+
+Now I'll write an extraction script to aggregate the MTP statistics from all fixed and void logs.
+
+The request-ID pattern needs a fix (ids are `chatcmpl-…`, not hex).
+
+The fixed-run aggregates confirm the pinned depth held. Now let me extract the cost side — verify/draft timings and forward counts per depth.
+
+
+
+
+
+Let me check the raw d2/d3 finish lines to get the field semantics exactly right.
+
+
+
+
+
+
+
+
+
+
+Now let me pull the complete leaderboard rows for the fixed and void runs.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me compute clean per-depth cost figures combined over both visits.
+
+
+
+
+
+
+Let me carefully recount the void-run fallback/rung figures, since the docs quote different numbers.
+
+The void logs duplicate each request's lines — that explains the doc's counts. Let me re-derive by unique request id.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have everything I need. Writing the writeup now.
+Now let me verify a few claims I made before finalizing.
+
+
+
+
+
+Let me read the finished document end to end to check it.
+Let me verify the bonus-token relation before I state the prefix rule.
+
+
+
+Now the last fix — the open question about the unreconciled cycle accounting.
+
+
+
+
+
+DONE. Wrote `docs/research/2026-09-25-mtp-depth-sweep.md` (472 lines) — the only file touched (`git status` shows it as the one new untracked file, no tracked file modified; no pytest per the order).
+
+**Coverage of the must-list:** axis + caveat in §1 (one runtime per pairing, one 4B bundle, one walk of the ladder, desktop in use); §2 for why no speedup; §3 the void night and `ac90077`'s two-part fix; §4 the six OptiQ FAILs with both quoted row reasons; §5 reads the design's H1–H5; last section for what it cannot claim (35B untested — verified: `Jundot/Qwen3.6-35B-A3B-oQ4` has 2,010 index keys and 0 `mtp.*`, so the harness gate refuses a depth there, and the `-mtp` bundle is only `refs/main` on this host).
+
+**Coordinator facts re-derived — all hold:** level acceptances 8849/12057 = 0.734, 4592/9273 = 0.495, 2604/8835 = 0.295 (summed over both visits); every cycle at the pinned depth; 0 `start rung`, 0 `finish=fallback_to_ar`, 0 non-zero `margin_truncated` across all eight logs; decode 72.4/74.9/71.1/60.5, chat 74.9/74.7/70.8/60.0, prefill 75.6/79.0/76.1/62.3, all reasoning-timed. One definitional note, not a disagreement: those accepts are the *per-level marginal* rates (the drafted token the depth adds); the columns' overall draft-acceptance is 0.734/0.617/0.487. The doc prints both.
+
+**Findings worth carrying:**
+- The night logs write **two `finish=` lines** for any request that ever fell back, so counts must be per unique request id (108 lines = 49 requests in `…T062816-11233.log`). §7.4.1's counts reproduce only that way; my first line-based pass doubled them.
+- The rerun's `off` cell cold-loads at 8.17 s against 5.16–5.18 s for the other three — it is the session's first start after the working day. Named in Conditions; no cross-cell cold-load reading claimed.
+- The vMLX depth order is **ascending** (`off` → `3`), so the pin is confounded with the clock; §1 argues past it with the flat prefill-phase readings (TTFT 1.718–1.814 s, prefill 724–765 tok/s) and says plainly that is a different phase, not a control.
+- Both OptiQ artifacts still pass `runtimes.optiq_mtp_refusal` (checked by calling the pure function), so the artifact gate is necessary and not sufficient; the 4B's "it says nothing about why" is true of the check's two markers, but the log holds a per-request traceback (`engine.py:760`, `TypeError: 'NoneType' is not subscriptable`) — recorded in §4 and raised as an open question, not fixed.
+
+**Not verified:** no code executed, no server started, no suite run (order says no pytest); every figure traces to a `leaderboard.md`, `results.jsonl`, or `results/logs/*.log` path cited in the document.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     98   15947779   15792640   105597   99.0%   0.134007
+
+== cc-agent: git status ==
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? docs/research/2026-09-25-mtp-depth-sweep.md

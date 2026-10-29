@@ -1,0 +1,221 @@
+I'll start by reading the files this order names, focusing on the regions it points at.
+Now let me read the relevant regions of report.py.
+Now the `_entry`, `_ordering`, and `_uncomparable_across_runtimes` regions.
+Let me map out the rest of report.py's structure to see where tables, ordering and notes live.
+
+Now the sweep renderer and its table.
+I have the shape of the renderers. Now let me read `_held_constant`, `_row`, and check how status "N/A" and concurrency are recorded.
+
+Let me look at the test file's helpers and the most relevant test sections.
+
+
+Let me check `docs/interfaces.md` for what it pins about these renderers, and look at the previous commit that added the grid refusal for precedent.
+
+The commit message confirms the gap this order closes. Let me see the A7 commit and the test helpers for leaderboards.
+
+
+
+
+The A7 test at 2449 asserts the old `—` for N/A - that one will need updating. Let me search for the source of these three deferred fixes, which may pin the intended semantics.
+
+Let me check which ranks the published sweeps/leaderboards actually use, to scope the TTFT caveat correctly.
+
+
+
+
+
+
+
+Now I need to know whether a leaderboard row can see concurrency at all. Let me check `CellResult` and the CLI's leaderboard path.
+Let me check `CellResult`'s fields and how batch spans are recorded — the leaderboard may only be able to learn concurrency from them.
+
+
+
+Now let me look at the parts of `docs/interfaces.md` that document the grid entries and the leaderboard, so I can update the pinned contract.
+
+Let me check for real snapshot tests against published artifacts — these prove the byte-identity claim.
+
+Let me get the baseline test count before touching anything.
+Baseline is 634 passed. Before editing, let me capture a byte-identity baseline by re-rendering real published runs.
+
+
+
+
+
+The stored sweep re-renders identically today (modulo a trailing newline) - it can serve as a before-snapshot. Let me find which stored leaderboards also match a fresh render.
+Let me establish before-snapshots from the stored sweep artifacts themselves.
+
+
+I have my before-snapshots. Now let me implement. Starting with report.py item 1 — the N/A entry state and legend.
+Now `_entry` itself:
+Now the note helpers. First `_readings` and the new `_cross_runtime_note`:
+Now `_ordering` and the two new helpers next to `_uncomparable_across_runtimes`:
+Now `render_markdown` itself:
+Now the `concurrent` row fact and the sentence constant:
+
+Let me fix the awkward wrapped path in that comment:
+
+
+Now the sweep's emission and its docstring paragraph:
+
+Let me smoke-test the new behavior before writing tests:
+
+All three behave. Let me run the suite to see exactly which existing tests encode the old behavior.
+Now the tests. First, the item-1 test (replacing the one that encoded the old state):
+
+Now the `lower_is_better` test (repointed at a rank the refusal doesn't cover) and the two item-2 tests:
+
+Now the item-3 test, next to the drift-sentence tests in the sweep section:
+
+That edit mangled a line — let me fix it and add the new test after it:
+Now let me run the suite:
+637 passed (634 + 3 new). Now the red-checks, one per item. First, item 1 — revert `_entry`'s N/A branch:
+
+
+Now run the item-1 test against the reverted code:
+Item 1's entry half red-checked. Restore it, then red-check the legend half:
+
+
+Restore the legend, then red-check item 2's refusal branch:
+
+
+Restore item 2 and red-check item 3:
+
+
+
+Now prove the sweep half of that test fails too — restore the leaderboard side, keep the sweep disabled:
+
+Both halves red-checked. Restore the sweep condition:
+
+Clean. Now the interfaces doc. Let me update the three places:
+
+Now the `summarize` row-field list in the report.py section:
+Now the byte-identity proof. Let me re-render every real run and compare against the pre-change hashes I captured:
+All 58 real leaderboards byte-identical. Now the sweeps:
+All sweeps changed — I need to see exactly why. Let me diff against the stored artifacts:
+Exactly the intended changes for sweeps. Let me check a grid artifact the same way:
+My script's regex missed that grid's provenance format. Let me redo it:
+That's item 1's exact defect showing in a real grid (Osaurus never started). Let me confirm those rows are N/A, and diff a grid with no N/A rows:
+
+
+Let me review the complete diff for quality:
+Two docstring nits to fix — an awkward clause and an overstated claim:
+
+
+
+
+
+Now the final full-suite run:
+637 passed. The repo's AGENTS.md asks for `graphify update .` after changing a `.py` file — let me check whether that tool is present:
+
+
+Something else is writing to this checkout — those other modified files are not mine. Let me check when they landed:
+Two `cc-agent` processes were dispatched with *this exact order* minutes before my session — there may be a duplicate worker in this same tree. Let me check the state of my files and that dispatch log:
+The log tail is my own output — I am one of those `cc-agent` processes. Let me check whether the other PID is a duplicate worker or just the launcher's shell chain:
+PID 35442 is a child of 35090 — one run, and the other in-flight runs are different orders on other files. But they share this tree, so let me re-run the suite now to report the current, true state:
+Done. Everything I changed is confined to the three named files (`ohyesmlx/report.py`, `tests/test_report.py`, `docs/interfaces.md`), plus the gitignored `graphify-out/` refresh AGENTS.md asks for. Note: the log tail you may see is my own stdout being tee'd by `cc-agent`; other orders are running in this same checkout and touched `runtimes.py`/`scripts/`/`docs/runtimes/` — not me.
+
+**Diff summary**
+
+`ohyesmlx/report.py`
+- `_entry`: `None` → `—`, `status == "N/A"` → `"N/A"`, FAIL unchanged (`—_stays for no row at all`). `ENTRY_LEGEND` gains `| \`N/A\` | a cell that could not be run here; its own run's row carries the reason |` — one constant, so grid and sweep both print it.
+- `render_markdown`: `axis="runtime"` tables whose group `_uncomparable_across_runtimes` refuses now print `_runtime_axis_note(group, rank)` (built from `_cross_runtime_note`, extracted from `_readings`, or the existing `_channel_note` — same text, no restatement) and list rows via new `_unpositioned(rows, "runtime")` — alphabetical, rank column `—` on every row, every value still printed. `_ordering`'s uncomparable branch now calls the same `_unpositioned`. Format axis untouched.
+- New `CONCURRENCY_TTFT_SENTENCE` (beside `CONCURRENCY_DRIFT_SENTENCE`) + `_row` key `"concurrent": bool(result.batch_spans)`. `render_markdown` prints the sentence when the rank is a first-token latency and any row is concurrent; `render_sweep` prints it for the same ranks using its existing `concurrency`-pin condition (the condition is computed once and shared with the drift sentence). Every other rank, and every sequential run, gets nothing.
+
+`tests/test_report.py` — 3 new tests (one per item) + 2 updates:
+- `test_a_cell_that_never_ran_says_na_and_is_not_a_rag` (replaces the old one that asserted `—`, grid + sweep + legend + reason-still-on-the-row).
+- `test_the_single_run_leaderboard_refuses_a_cross_runtime_uncomparable_ordering` and `..._refuses_an_ordering_across_timed_channels` (no positions, values kept, note identity asserted against the grid's own render; format axis and unmixed groups still order).
+- `test_a_ttft_ranked_table_over_concurrent_rows_carries_the_queueing_caveat` (sweep + leaderboard, both ranks, both negatives, sentence written out literally).
+- `test_a_lower_is_better_metric_sorts_ascending`: repointed from `peak_mb` (now refused on that axis) to `itl_s`, so the lower-is-better property stays covered.
+
+`docs/interfaces.md` — entry table now five states (with why `N/A` ≠ `—`), the two leaderboard refusals and the queueing sentence, and `concurrent` in the `summarize` row contract.
+
+**Red-checks (reverted by hand, watched fail, restored — no git used)**
+- Item 1: `_entry` back to the combined branch → `assert '—' == 'N/A'`; legend row removed → `assert '| \`N/A\` | a cell that could not be run here' in grid` fails.
+- Item 2: refusal branch disabled → `assert ['1', '2'] == ['—', '—']`, both tests fail.
+- Item 3: sentence lines disabled → fails on the leaderboard render (`AssertionError: prefill_tps`), then with only the sweep line disabled, fails on the sweep render (`AssertionError: ttft_p50_s`).
+
+**Byte-identity** (no golden-file suite exists, so I rebuilt real artifacts)
+- All 58 real run directories whose `leaderboard.md` renders at the default rank: identical hashes before/after, including the concurrent `sweep-conc8` runs.
+- Rebuilt every stored sweep/grid: the 5 sweeps that matched their stored file before now differ by *exactly one line* — the new legend row. The KV-quant sweeps (`sweep-p16384/32768.md`) additionally turn the 4 refused-codec `—` cells into `N/A` — the item working; `results/multiturn/grid.md` likewise (its Osaurus column is a real `N/A` run: settings drift), and `grid-moe` differs only by the legend line (its other delta is pre-existing reasoning-marker drift).
+
+**Judgment calls you may want to overrule**
+1. Item 3's "TTFT-ranked" = `CHANNEL_DEPENDENT_RANKS` (`ttft_p50_s`, `prefill_tps`) — the family the 2026-09-24 decision named. `ttft_p90_s`/`ttft_p99_s` are percentiles of the same samples and would carry the same wait; they get no sentence (one-word change if you want them in).
+2. The grid is not named by the item ("sweep and leaderboard"), so a TTFT-ranked grid over concurrent runs still gets no queueing sentence.
+3. The metric card still numbers its cards when a table's ordering is refused: `render_cards` takes no axis, and the order said "the table".
+4. Refused tables keep their "ordered by `X`" heading and `rank by X` column header, with the note overriding them — the same shape the grid's runtime-axis section already has. Every existing test that pins those headings still passes untouched.
+
+**Suite:** baseline 634 passed (start of session) → 637 after my change → 647 now, because other in-flight orders in this checkout added tests to `tests/test_runtimes.py` mid-session; `tests/test_report.py` alone is 214 (was 211). All green. Not verified: no server, model or tensor work was run (as required), and I did not re-render the published `.md` artifacts on disk — they are stale by design until the coordinator re-runs the joins.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    116   21597570   21420800   115231   99.2%   0.159916
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M docs/research/2026-09-25-multiturn-runtime-axis.md
+ M docs/runtimes/optiq.md
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M scripts/osaurus-pin.sh
+ M scripts/run_grid_35b.sh
+ M scripts/run_multiturn.sh
+ M scripts/run_sweep_kvquant.sh
+ M scripts/run_sweep_mtp.sh
+ M scripts/run_sweep_streaming.sh
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? docs/runtimes/mlx-lm.md
+ .paul/STATE.md                                     |  16 +-
+ docs/interfaces.md                                 |  36 +-
+ docs/research/2026-09-25-multiturn-runtime-axis.md | 141 ++++++
+ docs/runtimes/optiq.md                             | 533 +++++++++++++--------
+ ohyesmlx/report.py                                 | 138 +++++-
+ ohyesmlx/runtimes.py                               | 311 +++++++++++-
+ scripts/osaurus-pin.sh                             |   8 +-
+ scripts/run_grid_35b.sh                            |  60 +--
+ scripts/run_multiturn.sh                           |  21 +-
+ scripts/run_sweep_kvquant.sh                       |  24 +-
+ scripts/run_sweep_mtp.sh                           |  26 +-
+ scripts/run_sweep_streaming.sh                     |  22 +-
+ tests/test_report.py                               | 180 ++++++-
+ tests/test_runtimes.py                             | 362 ++++++++++++++
+ 14 files changed, 1558 insertions(+), 320 deletions(-)

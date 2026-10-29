@@ -1,0 +1,72 @@
+
+I have the interfaces doc. Now let me look at the existing OptiQ check, the vMLX runtime class, measure.py's ask site, and the real logs.
+The log structure is clear. Now let me read the code — the log-reading helpers, OptiQ's check, the Vmlx class, and measure.py's ask site.
+Now let me look at the constants, the Vmlx class, and find vMLX's installed source.
+
+Found the engine source. Let me examine its MTP depth policy code.
+The generator is a 19,831-line module. Let me read the emitters and the rung logic.
+This confirms the sticky-rung behavior. Let me read the policy gates and the finish-reason call sites.
+`fixed` disables only the economics probe, not the sticky rung. Now let me pin down `fallback_to_ar` and the ladder climb, and check which logs are depth 3.
+The depth-3 logs are identified. Let me look at what they actually show.
+The two depth-3 logs need a careful look — one of them shows some nonzero `d3` lines. Let me analyze precisely.
+The real depth-3 logs draft at D3 for the first four requests, then collapse. I need to know which requests those are — let me find the runner script and the log's request structure.
+Let me check the sweep script and recorded results to map which requests were warmup vs measured.
+
+The sweep structure is clear. Now let me read the harness log for the depth-3 run to map warmup vs measured requests.
+Let me check the runner log for the depth-3 run's visit structure and verify request-to-workload mapping.
+I need to see how the depth-2 evidence is distributed in its log before deciding the window.
+One more nonzero `d3` line hides later in the log — I need its location before deciding anything.
+This is a material premise problem. Before deciding, let me check the repo's BLOCKED convention and any design notes around this check.
+
+
+I have the full picture now — and it contradicts the order's premise. Let me gather the last citations (AR-safety env, the depth ceiling/env, the CLI policy flag) before writing my findings.
+
+
+
+
+I have everything I need, and it changes the picture materially. Let me record the block.
+**BLOCKED** — written to `BLOCKED.md`. The check as specified cannot fail the runs it was ordered for.
+
+## Why
+
+The order's premise is false on its own evidence. `results/logs/vmlx-20260925T063452-16321.log` (configured=D3, visit 1) has 104 `accept_by_depth` lines: 99 read `d3=0/0`, but five do not —
+
+- line 108 `d3=16/53`, lines 120/132 `d3=9/32`, line 145 `d3=8/24`
+- line 1344 `d3=8/24` at byte 254,917 of 289,315 (88% through) — request `chatcmpl-0b2d04eb`, activated `depth=3` (decode shape, 512 cap), 24 cycles at D3 before AR safety took it down
+
+Visit 2 (`...063819-16321.log`) has 4 such lines. So the specified rule — "at least one `accept_by_depth` line with a non-zero denominator at `d<N>`" — returns `None` on both depth-3 runs; both would still publish. Window choice doesn't rescue it: `LOG_HEAD_BYTES` and `LOG_TAIL_BYTES` are both 1 MiB and read these files whole, and no defensible tail window both fails these D3 runs and passes the D2 runs (the D2 logs carry 45 and 43 `d2=0/0` lines themselves). The order's test is satisfiable only with an excerpt that omits those five requests — which yields a "never drafted at all" floor, not the gate the order exists for.
+
+## Step 1 findings (vMLX 1.6.59, `vmlx-engine-source` tree, sha256 `570ff1d7…`, identical to the bundled site-packages copy)
+
+- **What `fixed` does**: it reaches the engine only as `VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH=0` (`cli.py:1679-1682`); its sole effect is `_native_mtp_adaptive_policy()` → False (`mllm_batch_generator.py:6397-6400`), which turns off the depth *economics* probe (`:6403-6418`).
+- **Why it still starts at D1 and probes**: `fixed` does not touch the sticky start rung — `elif depth > 1 and _last_tier in ("AR","D1") and _native_mtp_reentry_enabled(): start_depth = 1` (`:17282-17286`), seeded by `_native_mtp_should_record_last_tier` (`:6421-6431`) — nor the AR-safety valve (`native_mtp_ar_safety.py:114`, default on). So the promotion climb is one rung per judgment window (`:17332-17341` → `native_mtp_ar_safety.py:127-131`), and a 128-token request ends before it regains D3. `cli.py:4319-4320`'s "Both policies start every request at `--native-mtp-depth`" is contradicted by `:17282-17286`; the source wins.
+- **A true pin exists, not added**: `VMLX_NATIVE_MTP_AR_SAFETY=0` (`cli.py:4327-4328`, `native_mtp_ar_safety.py:114`) + `VMLX_NATIVE_MTP_AR_REENTRY=0` (`mllm_batch_generator.py:6345-6348` gating `:17285`). Caveat from vMLX's own docstring (`:6411-6413`): the per-cycle `VMLX_NATIVE_MTP_DRAFT_MARGIN` gate still shortens low-confidence drafts even then.
+- **Field meanings**: the line is emitted per request only when a rung drafted (`:5821-5838`); `dN=a/b` = level N accepted/drafted, `0/0` = rung never exercised; `cycles_by_depth[..]`, `policy=`, `configured=D<n>` ride the finish line (`:5792-5817`). `finish=` is the terminal reason: `stop`/`length` natural, `fallback_to_ar` = AR-safety valve ended MTP (`:18387-18410`), `ar_calibration` = bounded AR re-measure, not a loss (`:6442-6446`), `cancelled`/`error` (`:8841`, `:18448`).
+
+## Need decided
+
+(a) a rule that actually separates the logs (the one that does is "configured rung is the modal rung": D1 108/108, D2 63/108, D3 5/104 — not what the order says); or (b) confirmation the literal rule is the intended floor and these two cells are out of its scope; or (c) the env pin above, which is Jason's call per the order.
+
+No code touched; no tests run (nothing changed to test); the allowlisted files are as I found them.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     28    3046635    2945664    61271   96.7%   0.060745
+
+== cc-agent: git status ==
+ M BLOCKED.md
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+ BLOCKED.md | 34 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)

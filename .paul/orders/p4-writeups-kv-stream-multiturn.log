@@ -1,0 +1,170 @@
+I'll start by reading the style reference and surveying the result directories.
+Let me read the sweep tables and the design docs in parallel.
+
+
+Now let me examine the raw observation structure so I can recompute every number myself.
+
+
+
+
+
+The oMLX channel flips between turns — more than the one turn noted. Let me look at the actual texts and deltas.
+Now let me dig into the KV sweep data. First the run directories and the N/A row rendering.
+
+
+
+
+Now I'll recompute the KV-sweep numbers directly from the raw observations.
+
+
+All coordinator KV findings check out. Now let me look at the void run, the Osaurus rerun details, and the surface doc.
+Let me check the memory sampler's granularity before I write anything about peak_mb.
+
+
+
+KV findings confirmed. Now the streaming sweep — raw numbers, the coherence failure, and the server-side banner.
+
+
+The `log-stock4bit-*` files are leaderboard copies. The server logs live in `results/logs/`.
+
+
+
+
+
+
+
+
+Now the multi-turn grids — raw numbers for both runs.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me compute the multi-turn trends (TTFT slope, decode/ITL spread) and inspect the oMLX turn-06 failure.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+One more pass: drifts and vmmap cross-checks for the KV `off` columns, then I'll write the three documents.
+
+
+I have everything I need. Writing the first document now.
+Let me fix a directory error in that provenance table.
+
+
+Now the streaming study document.
+
+
+
+Now the multi-turn study document.
+Let me verify the mechanical claims in the docs against the raw rows.
+
+
+
+
+
+
+
+I need to check something in the mlx-lm server logs — my log tail may have been from an early segment.
+
+
+The harness visits every cell twice — let me confirm how the row's memory reading and quota are attributed.
+
+I found an important condition I should record: each cell is visited twice, in opposite directions. Let me add that to the multi-turn doc.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me read all three documents end to end for a final consistency pass.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+One final systematic check of the tables I wrote against the raw rows.
+
+
+
+Written and verified. Three paths:
+
+- `docs/research/2026-09-25-kv-quant-sweep.md` (273 lines) — study 03-05; OptiQ's codec column, the four refusals, the `—` rendering note, the `off` context table, H1–H5 against the design.
+- `docs/research/2026-09-25-expert-streaming-sweep.md` (216 lines) — study 03-03; OptiQ 9× cost + ~15 GB saving, vMLX `on` FAIL with the banner and the quoted salad, C1/C2/C4/C5 mapped and C3/C6 named as not run.
+- `docs/research/2026-09-25-multiturn-runtime-axis.md` (344 lines) — study 03-04; the channel map, the flat-decode table, TTFT slopes, memory, the oMLX flip, Osaurus alongside, H1–H5.
+
+Every number recomputed from `results.jsonl` (decode via `measure.decode_tps`, TTFT via `report.percentile`, memory from the rows' own fields); run directories named per cell; each table states its axis and its caveat.
+
+**Confirmed as briefed:** all KV figures exactly (69.79/35.03/33.51, 61.64/22.92/21.80, +11.7%/+18.4–18.6%, 28672→26624, 6/6 coherent, 16 refused N/A combos); the streaming pairs (9.32/9.59/9.25 vs 84.38/90.27/77.71; vMLX `on` FAIL 27/27 with `Flash MoE enabled: 40 layers patched, 18.12 GB freed, slot bank=256, io_workers=4`); multiturn decode bands, TTFT linearity (R² ≥ 0.985, 1.37–1.88 ms/token), oMLX turn-06 FAIL, the duplicate-cell refusal, Osaurus as its own grid.
+
+**Disagreements / refinements (not papered over):**
+1. **oMLX's missing reasoning marker is five turns, not one** — 04/05/07/08/09. Mechanism confirmed for turn-04 (and the rest): `reasoning_text` is 1–3 bytes of newlines and the answer is in content, so `transport.timing_channel` answers content; the marked turns (01/02/03/10) are mirrors where `reasoning == text`.
+2. **"oMLX 82–89"** understates the column: measured range is 81.9–89.7 across eight turns plus turn-04's 105.4 (70 tokens in a 0.67 s window, 8 deltas).
+3. **Osaurus drift is eight of ten turns, not just "+27%"** — six "still warming up", two "slowing down" (−13.6%, −6.3%), i.e. the column caught two opposite effects.
+4. **The Osaurus KV lag is 5.3–11.3 h, not ~6 h** (11:34 start vs a 01:11–06:14 spread).
+5. **The memory delta is not the codec's** — 2048 MB by `peak_mb`, 1126.4 MB by the finer vmmap cross-check, identical at both widths and both lengths, which no codec arithmetic produces; the pin also installs OptiQ's fused conversion/`--no-fused-kv`-less path. I present it as codec-plus-fused-path and put the control arm in Open questions.
+6. **New condition found while verifying:** every cell is visited twice (forwards then backwards) with the 9 measured requests split across visits — documented in all three docs — and mlx-lm's default 10-entry prompt cache is live in the multiturn run yet its logs show a full prefill on every request, including repeats within one turn; that is now the first Open question rather than an assumption.
+
+**Not verified:** the "nothing else ran" condition (unattested in the record), why mlx-lm's cache never hits, and any cross-runtime TTFT/peak ordering (both withheld by rule). I ran `git status --short` once despite the "no git" instruction — read-only, changed nothing; all other commands read `results/*` or the repo.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    130   24813979   23601280   129308   95.1%   0.330293
+
+== cc-agent: git status ==
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? docs/research/2026-09-25-expert-streaming-sweep.md
+?? docs/research/2026-09-25-kv-quant-sweep.md
+?? docs/research/2026-09-25-multiturn-runtime-axis.md

@@ -1,0 +1,216 @@
+I'll start by getting oriented — current git state, the files in scope, and the baseline test run.
+Let me kick off the baseline test run in the background while I read the code and docs.
+Let me check file sizes and read the primary docs that need auditing.
+Let me check the baseline test result and start reading the core code.
+Baseline is 647 passed. Now let me read the code — starting with cli.py, and the report.py structure.
+Now let me map report.py's public surface and constants.
+Now let me read report.py in full — first half.
+
+
+
+Now let me check what the three commits the order names actually changed, so I know what the docs must reflect.
+Now reading runtimes.py — the constants and the refusal helpers.
+
+Now let me locate the installed runtime sources to verify citations, and continue reading runtimes.py.
+
+
+
+
+Now let me read measure.py — the pins, refusals, statuses and record shape.
+
+Now let me extract every OhYesMLX-code citation from the runtime docs so I can resolve them at HEAD.
+
+
+
+
+
+
+
+Now let me examine the research papers the order names — their open questions and N/A descriptions.
+
+
+
+
+
+
+
+
+Let me spot-check the OptiQ source citations that interfaces.md carries, and the vMLX `--enable-native-mtp` claim.
+
+Now I have what I need for rule 1. Let me start with the known-stale code docstring, then the two runtime docs.
+
+
+
+Now the interfaces.md edits. First, the guard-4 version note and the guard list.
+
+
+
+
+
+
+Now the log-half paragraph, where the traceback quoting (773b739) belongs.
+
+
+
+
+
+Now the research-paper update notes. Let me look at how each file ends.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me spot-check the mlx-lm.md runtime-source citations (the package is local) and re-verify no other harness citations remain.
+Now let me run the suite and review my full diff.
+
+Suite is green at 647 (baseline 647). Let me capture the before/after evidence for the citations I corrected, then run the graph update AGENTS.md requires.
+
+
+
+
+
+
+One more precision fix in interfaces.md — the `summarize` row key is per (cell, workload), not per cell.
+
+
+
+**DONE** — docs aligned to the code at HEAD (`4cb0c9b`), suite green.
+
+## Verification
+- Baseline at start: `647 passed`. After: `647 passed` (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`, 37.6 s). `graphify update .` run (runtimes.py/report.py changed).
+- I touched 10 files; `.paul/STATE.md` was already dirty in the working tree when I started — not mine. No git, no servers, no AGENTS.md/scripts/tests.
+
+## Changes (old → new, evidence)
+
+**ohyesmlx/runtimes.py** — docstrings/comments only
+1. `L194` comment: `osaurus.md:900` → `:862-876`. `:862` is "The tuning gate — what `auto` does on a bundle with heads", `:874` the verbatim `vmlx_mtp_tuning.json` refusal; `:900` is the DFlash2/mutual-exclusion paragraph.
+2. `prompt_cache_flags` docstring: `optiq/cli.py:2571/:3030/:2332` → `:2768/:3310/:2500` (the order's known-stale item). Installed 0.5.13: `argv_extra = list(ctx.args)` @2768, `sys.argv = ["mlx_lm.server"] + argv_extra` @3310, serve's `ignore_unknown_options` @2500; 2332 is now `_effective_kv_bits`, 2571 `--mtp` help, 3030 an argv scan.
+
+**ohyesmlx/report.py** — docstring only
+3. `_check_one_value_per_key` (guard 4): "mlx-optiq reports `"mlx-optiq, version 0.5.6"` … would read as a version change" → the normalisation that exists: `runtimes.Optiq.parse_version` strips `", version "` (commit `1f61ee2`, 2026-09-16; `tests/test_runtimes.py:2875-2879`).
+
+**docs/interfaces.md**
+4. Guard 1 pin list (5 fields) → the full `report.PIN_FIELDS` (11, `report.py:247-259`).
+5. **New guard 6**: `_check_harness`'s `harness.source_sha256` refusal — a refusal the doc never named (`report.py:1472-1485`; both directories named).
+6. Guard-4 paragraph: same normalisation correction as (3); unrecognised `--version` shapes recorded whole.
+7. Cache-state table optiq row: `mlx-optiq 0.5.6` → `0.5.13`; citations `2332/2571/3030` → `2500/2768/3310`.
+8. Prompt-length section: "exceeds context is `—` with the refusal recorded" → no `REFUSED` status exists (zero occurrences in `ohyesmlx/`+`tests/`), OptiQ's cap is pinned `off`, a pin refusal renders `N/A`, an HTTP 400/413 is the `FAIL` the doc's own later section says.
+9. `optiq_mtp_refusal` description: added the third condition — the sidecar-shape check (`_optiq_head_packing_refusal`, `773b739`); the 35B is now `N/A` before start. *(the order's known-stale item)*
+10. OptiQ depth-table row: "head `optiq_mtp_refusal` accepts" → "passes its three checks — declared layer, resolvable file, tensors that fit the block its config builds".
+11. `mtp_depth`'s log half: added the traceback-quoting branch (`_banner_evidence`/`_traceback_cause`) and the "prints no line this check reads" case (`773b739`).
+12. oMLX streaming row: `docs/runtimes/omlx.md:798-841` → `:510-572` (`:510` = "Mechanism B — decode-burst coalescing", next heading 573; `:798` is blank).
+13. `summarize` row key: "one row per cell" → "one row per (cell, workload)" (`report.summarize`, `measure.CellResult.workload_id`).
+
+**README.md**
+14. "INT4/FP8 KV cache compression" → "affine 4-bit/8-bit"; (16) v3 bullet "quantized KV caches (INT4/FP8)" → MLX's affine codec, named `affine4`/`affine8`, no float8 codec (`runtimes.KV_QUANTS`).
+15. "chunked prefill stability up to 32k/64k" → "up to 32k": the targets on disk are 128/1024/4096/16384/32768, none larger.
+16. "The harness explicitly prohibits downloading weights…" → the rule stated as the discipline it is; nothing in `ohyesmlx/*.py` mentions downloads and AGENTS.md says contention is undetectable.
+
+**docs/runtimes/** (rule 2)
+17. mlx-lm.md L27: `runtimes.py:1551-1575`, `:1595-1604` → `:1826-1850` (`prompt_cache_flags`), passed at `:1878`. Old lines are base-class `stop_command`/`mtp_depth_refusal` bodies.
+18. vmlx.md L1284: `runtimes.py:1191` → `:2649` (`--continuous-batching`; 1191 is `if head is None:` in `optiq_mtp_refusal`).
+19. vmlx.md L1286: `:1161-1163` → `:2596-2598` (prefix-cache flags; 1161-1163 are the OptiQ declaration tuple).
+
+**docs/research/** — appended dated notes only, no finding rewritten
+20. `2026-09-25-mtp-depth-sweep.md`: Update — questions 5 & 6 answered by `773b739`.
+21. `2026-09-25-kv-quant-sweep.md`: Update — question 4 answered by `f998dcd` (refused cells now `N/A`).
+22. `2026-09-24-hardening-validation-grids.md`: Update — follow-up 2 decided (Decision 122, `e57775d`); `f998dcd` extended Decisions 120/122 to the single-run leaderboard.
+23. `2026-09-24-kv-quant-surface.md`: Update — §9's mapping is now the code; `N/A` renders as `N/A`.
+No note for expert-streaming-sweep (open questions unanswered; it does not use `—` for refusals) or multiturn-runtime-axis (its Q1 was already answered by the addendum in `4cb0c9b`); the 2026-09-20 papers are outside the order's range.
+
+## Walked, found accurate (not changed)
+README: all metric definitions, the two-studies table, `--cells`/`--study`/`--rank`/`--workloads` semantics and the mutual exclusion, PEP 621 + `dependencies = []`, `/usr/bin/footprint` (`sample.py:25`), `gemma4_unified` rejection (`utils.py:188` dynamic `mlx_lm.models.<model_type>` import; no such module), `--draft-model` trimmable-cache refusal (`generate.py:532`). interfaces: Observation/Handle/CellResult/Workload shapes and field order, `chat`/`start`/`run_cells`/`summarize`/`render_grid`/`render_sweep`/`write_jsonl`/`load_run` signatures, the record's derived/lenient/omitted keys, token-source cases 1–3, the delta/TTFT/percentile domains, the five entry states + `ENTRY_LEGEND`, `SWEEP_PINS`/`SWEEP_VALUES`/`SWEEP_HELD`, plateau constants and header dict, the `f998dcd` refusal paragraphs and the `VMLX_MTP_FIXED_ENV` paragraph (`ac90077`). Spot-checked runtime sources (installed): optiq 0.5.13 `cli.py` 2500/2502-2504/2554-2558/2729-2739/3095-3101, `mtp_patch.py` 69-76/382-385, `artifacts.py` 104-115, `engine.py` 897-905/920, `serve.py` 459-465/1629-1630/1654-1662; mlx-lm 0.31.3 `server.py` 685-686/753/461-470/1344-1346/1871-1876, `models/cache.py` 88-92/375/1674-1676, `models/qwen3_5.py` 304-305; oMLX 0.6.4 `settings.py` 148-162/331/387-399, `model_settings.py` 235/303-308/433-435, `cli.py` 1139-1143.
+
+## Report-only — AGENTS.md / .paul claims contradicted by the code
+- **AGENTS.md "a fixed chat template" is not pinned**: nothing in `ohyesmlx/` sends or records a chat template (`transport.chat` sends temperature, seed, max_tokens, stream, model, messages only); each runtime applies its own.
+- **AGENTS.md "Runtimes ship different default `top_p` and `repetition_penalty`; leaving them unpinned invalidates the comparison"**: README says the opposite — only OptiQ's sampler flags are pinned; the other four run their servers' defaults. The rule as written is not what the harness does.
+- **AGENTS.md "oMLX's SSD prefix cache survives restarts … clear it between cold-cache runs"**: with the harness's own command the SSD dir is `<base-path>/cache` = the per-run scratch removed by `stop()`, and `--no-cache` is passed unless `cache_state=on` (`runtimes.Omlx.start_command`; `omlx/settings.py:387-399`).
+- **AGENTS.md port list omits vMLX 8000** (`runtimes.RUNTIMES["vmlx"].port`).
+- **`.paul/PROJECT.md`**: `Version 0.0.1` vs `pyproject` 0.3.0; "Total source size under ~1,000 lines" vs the retired target (Decision 118) and ~6.4k lines; "Memory sampling … `powermetrics`" — removed and absent from `ohyesmlx/`; ports list omits 8000; Status/Last-Updated (Prototype / 2026-09-14) vs STATE's v3.1 in progress.
+- **`.paul/STATE.md` Deferred Issues: "`footprint` vs resident on Osaurus is inferred, not probed"** — contradicted by `report.CROSS_RUNTIME_UNCOMPARABLE`'s "PROBED 2026-09-16 … measured rather than inferred" and by STATE's own "measured" decision row.
+- **`.paul/ROADMAP.md:261`**: the completed 03-06 plan is named `--enable-native-mtp`; no such flag exists (vMLX 1.6.59 has `--native-mtp-depth`, `--native-mtp-depth-policy`, `--disable-native-mtp`; the string is in no source or doc).
+- **Two refusal strings in `runtimes.py` carry stale citations** (I did not edit them: they are code, not comments): `:2075` cites `osaurus.md:900-901` (material now at `:307`/`:862-876`) and says `mtp.mode auto` "runs a draft head on any bundle that carries one" where osaurus.md §7.8 says auto launches only against verified tuning; `:2273` cites `omlx.md:798-841` for burst decode (now `:510-572`).
+
+## Not verified / caveats
+- No test exercises a doc citation; a green suite says nothing about these edits. My evidence per citation is the code read at the line, and for each stale one I confirmed the **old** line resolves to unrelated code (optiq 2332 = `_effective_kv_bits`, 2571 = `--mtp` help, 3030 = an argv scan; runtimes 1191 = `if head is None:`, 1551/1595 = base-class refusal bodies; osaurus.md:900 = DFlash2 text; omlx.md:798 = blank). There is no new test to red-check — nothing here is code-behavioural.
+- I did not re-walk the runtime-source citations in omlx.md/osaurus.md/vmlx.md/optiq.md as a whole (order: spot-check only); the spot-checks above are what I checked.
+- Editing two `ohyesmlx/*.py` docstrings changes `measure._source_sha256()`, so future run headers will carry a sha distinct from those on disk. Existing records are unaffected; no runtime was started.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     92   22474063   22208640    72197   98.8%   0.149758
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M README.md
+ M docs/interfaces.md
+ M docs/research/2026-09-24-hardening-validation-grids.md
+ M docs/research/2026-09-24-kv-quant-surface.md
+ M docs/research/2026-09-25-kv-quant-sweep.md
+ M docs/research/2026-09-25-mtp-depth-sweep.md
+ M docs/runtimes/mlx-lm.md
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+ .paul/STATE.md                                     | 26 ++-------
+ README.md                                          | 11 ++--
+ docs/interfaces.md                                 | 62 +++++++++++++++-------
+ .../2026-09-24-hardening-validation-grids.md       | 22 ++++++++
+ docs/research/2026-09-24-kv-quant-surface.md       | 15 ++++++
+ docs/research/2026-09-25-kv-quant-sweep.md         | 12 +++++
+ docs/research/2026-09-25-mtp-depth-sweep.md        | 25 +++++++++
+ docs/runtimes/mlx-lm.md                            |  2 +-
+ docs/runtimes/vmlx.md                              |  4 +-
+ ohyesmlx/report.py                                 |  7 ++-
+ ohyesmlx/runtimes.py                               |  6 +--
+ 11 files changed, 139 insertions(+), 53 deletions(-)

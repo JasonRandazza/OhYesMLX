@@ -1,0 +1,95 @@
+Everything checks out. Five scripts written; nothing else touched (the `ohyesmlx/*.py` edits in `git status` are the other worker's in-flight OptiQ work, which I never wrote to).
+
+**Files created** (mode 755, matching the sibling runners):
+- `scripts/run_sweep_kvquant.sh` — 5 runtimes × oq4, `--kv-quant off/affine8/affine4`, `--prompt-tokens 16384 32768` → `$OUT/oq4__<runtime>/p<target>/`
+- `scripts/run_sweep_mtp.sh` — 3 pairings (vMLX×JANG_4S, OptiQ×4B-OptiQ-4bit, OptiQ×$OQ) × `--mtp-depth off/1/2/3` → `$OUT/<cell>/`; 4B snapshots resolved the gridspec way
+- `scripts/run_sweep_streaming.sh` — OptiQ, vMLX × stock4bit ($S4) × `--stream-experts off/on` → `$OUT/stock4bit__<runtime>/`
+- `scripts/run_multiturn.sh` — 5 cells on $Q4, `--study runtime --workloads multiturn`
+- `scripts/run_phase4_night.sh` — the four in order, each with its own overridable OUT, start/end times in `results/phase4-night.log`; no 35B replicate
+
+**Verified:** `sh -n` passes on all five (with a negative control: a deliberately broken script makes `sh -n` exit 2, so a green result means something); shellcheck reports exactly the two findings the reference runners also have (SC2164 `cd`, SC1091 source-not-followed) and nothing new; every flag emitted appears in `cli.py`'s `run` parser, and every value is in `runtimes.KV_QUANTS` / `MTP_DEPTHS` / `STREAM_EXPERTS` / `report.AXES` / `WORKLOAD_SETS`. `DRY=1` created no directory and swept no port (checked: `results/sweep-{kvquant,mtp,streaming}`, `results/multiturn`, `results/phase4-night.log` all absent; no "sweeping port" lines). Not run, per the order: the pytest suite and any measurement — so the non-DRY branch (`exec > runner.log`, per-run log redirect, the trap, the sweeps, and the CLI's acceptance of each flag combination live) is **unverified**; it would start servers and kill processes.
+
+**Judgement calls to review:** (1) a sweep varies one header pin, so the kvquant prompt lengths cannot share a join — each pairing gets `p16384/` and `p32768/` leaves, and the `join:` hints (printed at the end of each script) name them; (2) multiturn is one run of five cells with `--study runtime` (no pin varies, so no pairing subdirectory is owed there) — five one-cell runs + `grid` would be the alternative; (3) no `--cache-state` is passed anywhere, so the header records `None` for it; (4) the two OptiQ artifacts take different labels, `optiq4b` (4B) and `optiq` (35B), because a table shows the label and they are different models.
+
+```
+DRY=1: the four studies print their run commands; nothing is started
+=== phase4 kvquant starting 14:07:46 OUT=results/sweep-kvquant
+DRY=1: printing the run commands for results/sweep-kvquant -- nothing is started, no port is swept, no directory is written
+--- mlxlm: kv-quant off affine8 affine4 at prompt-tokens 16384 32768
+…/python -m ohyesmlx.cli run --study format --cells oq4__mlxlm=/Users/jrazz/.cache/huggingface/hub/models--Jundot--Qwen3.6-35B-A3B-oQ4/snapshots/0c710dbaa6cf7cb70a9a0740e2df263effaada9e --kv-quant off --prompt-tokens 16384 --results-dir results/sweep-kvquant/oq4__mlxlm/p16384
+…/python -m ohyesmlx.cli run --study format --cells oq4__mlxlm=<same path> --kv-quant affine8 --prompt-tokens 16384 --results-dir results/sweep-kvquant/oq4__mlxlm/p16384
+…/python -m ohyesmlx.cli run --study format --cells oq4__mlxlm=<same path> --kv-quant affine4 --prompt-tokens 16384 --results-dir results/sweep-kvquant/oq4__mlxlm/p16384
+…/python -m ohyesmlx.cli run --study format --cells oq4__mlxlm=<same path> --kv-quant off --prompt-tokens 32768 --results-dir results/sweep-kvquant/oq4__mlxlm/p32768
+…/python -m ohyesmlx.cli run --study format --cells oq4__mlxlm=<same path> --kv-quant affine8 --prompt-tokens 32768 --results-dir results/sweep-kvquant/oq4__mlxlm/p32768
+…/python -m ohyesmlx.cli run --study format --cells oq4__mlxlm=<same path> --kv-quant affine4 --prompt-tokens 32768 --results-dir results/sweep-kvquant/oq4__mlxlm/p32768
+--- omlx: kv-quant affine4 affine8 off at prompt-tokens 32768 16384
+… 6 commands, omlx, codecs affine4/affine8/off × 32768 then 16384, --results-dir results/sweep-kvquant/oq4__omlx/p{32768,16384}
+--- optiq: kv-quant off affine8 affine4 at prompt-tokens 16384 32768
+… 6 commands, optiq, --results-dir results/sweep-kvquant/oq4__optiq/p{16384,32768}
+--- vmlx: kv-quant affine4 affine8 off at prompt-tokens 32768 16384
+… 6 commands, vmlx, --results-dir results/sweep-kvquant/oq4__vmlx/p{32768,16384}
+--- osaurus: kv-quant off affine8 affine4 at prompt-tokens 16384 32768
+… 6 commands, osaurus, --results-dir results/sweep-kvquant/oq4__osaurus/p{16384,32768}
+join: …/python -m ohyesmlx.cli sweep --varying kv_quant "results/sweep-kvquant"/oq4__*/p16384/*/
+join: …/python -m ohyesmlx.cli sweep --varying kv_quant "results/sweep-kvquant"/oq4__*/p32768/*/
+SWEEPDONE 14:07:46
+=== phase4 mtp starting 14:07:46 OUT=results/sweep-mtp
+--- jang4s__vmlx: mtp-depth off 1 2 3
+…/run --study format --cells jang4s__vmlx=/Users/jrazz/.cache/huggingface/hub/models--JANGQ-AI--Qwen3.5-4B-JANG_4S/snapshots/4567967a46cd9e9bf26d3bb491ddd422ad607775 --mtp-depth {off,1,2,3} --results-dir results/sweep-mtp/jang4s__vmlx   (4 commands)
+--- optiq4b__optiq: mtp-depth 3 2 1 off
+…/run --study format --cells optiq4b__optiq=/Users/jrazz/.cache/huggingface/hub/models--mlx-community--Qwen3.5-4B-OptiQ-4bit/snapshots/6cb5bdfd0bf15f484881fb9f1ab6d7c840fddde9 --mtp-depth {3,2,1,off} --results-dir results/sweep-mtp/optiq4b__optiq   (4 commands)
+--- optiq__optiq: mtp-depth off 1 2 3
+…/run --study format --cells optiq__optiq=/Users/jrazz/.cache/huggingface/hub/models--mlx-community--Qwen3.6-35B-A3B-OptiQ-4bit/snapshots/70a3aa32c7feef511182bf16aa332f37e8d82014 --mtp-depth {off,1,2,3} --results-dir results/sweep-mtp/optiq__optiq   (4 commands)
+join: …/sweep --varying mtp_depth "results/sweep-mtp"/{jang4s__vmlx,optiq4b__optiq,optiq__optiq}/*/
+SWEEPDONE 14:07:46
+=== phase4 streaming starting 14:07:46 OUT=results/sweep-streaming
+--- stock4bit__optiq: stream-experts off on
+…/run --study format --cells stock4bit__optiq=/Users/jrazz/…/models--mlx-community--Qwen3.6-35B-A3B-4bit/snapshots/38740b847e4cb78f352aba30aa41c76e08e6eb46 --stream-experts {off,on} --results-dir results/sweep-streaming/stock4bit__optiq   (2 commands)
+--- stock4bit__vmlx: stream-experts on off
+…/run --study format --cells stock4bit__vmlx=<same path> --stream-experts {on,off} --results-dir results/sweep-streaming/stock4bit__vmlx   (2 commands)
+join: …/sweep --varying stream_experts "results/sweep-streaming"/stock4bit__*/*/
+SWEEPDONE 14:07:46
+=== phase4 multiturn starting 14:07:46 OUT=results/multiturn
+…/run --study runtime --cells oq4__mlxlm=<oq4>,oq4__omlx=<oq4>,oq4__optiq=<oq4>,oq4__vmlx=<oq4>,oq4__osaurus=<oq4> --workloads multiturn --results-dir results/multiturn
+grid: …/python -m ohyesmlx.cli grid "results/multiturn"/*/
+SWEEPDONE 14:07:46
+=== phase4 multiturn exit=0 14:07:46
+PHASE4NIGHTDONE 14:07:46
+```
+
+I abbreviated the four kvquant groups (6 commands each, same shape) and the mtp/streaming groups above to keep this readable — the real output is 47 unrolled command lines, every one with its artifact path, all resolved to the exact snapshot dirs shown (`0c710dba…` for $Q4, `4567967a…` for JANG_4S, `6cb5bdfd…` for 4B-OptiQ, `70a3aa32…` for $OQ, `38740b84…` for $S4). Nothing committed.
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_only_vmlx_has_a_depth_to_pin_and_the_other_four_refuse_every_value
+
+== cc-agent: git status ==
+ M ohyesmlx/cli.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/runtimes.py
+ M tests/test_measure.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-optiq.md
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-runtime-docs.md
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-runner-scripts.md
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? scripts/run_multiturn.sh
+?? scripts/run_phase4_night.sh
+?? scripts/run_sweep_kvquant.sh
+?? scripts/run_sweep_mtp.sh
+?? scripts/run_sweep_streaming.sh
+ ohyesmlx/cli.py        |  11 +-
+ ohyesmlx/measure.py    |  29 ++++-
+ ohyesmlx/runtimes.py   | 309 +++++++++++++++++++++++++++++++++++++++++--------
+ tests/test_measure.py  |  67 ++++++++++-
+ tests/test_runtimes.py | 166 +++++++++++++++++++++++++-
+ 5 files changed, 521 insertions(+), 61 deletions(-)

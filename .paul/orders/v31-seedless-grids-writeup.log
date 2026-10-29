@@ -1,0 +1,185 @@
+NOTE: Mon 08:53 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll start by reading the reference paper I need to match in style, plus the results directories I'll be drawing figures from.
+Now let me look at the structure of both result sets.
+Both sets have matching structure. Let me read the new run's grid summaries and the tonight/runner logs.
+Now let me read the old run's grid summaries, plus the STATE.md context on Decision 127, and one leaderboard to see what figures are available.
+I have Decision 127 and both grids' summary tables. Now let me look at a leaderboard (for TTFT and the FAIL detail) and the old MoE grid for the FAIL comparison.
+The old MoE grid also shows `FAIL` at optiq×osaurus. Let me check the raw row data — both the old FAIL's reason and the JSONL schema.
+Let me inspect a full row's structure so I can extract the fields I need correctly.
+Good — `request_seed: null` confirms seedless rows. Let me see the rest of the cell row keys.
+I have the schema. The leaderboards carry the published figures — let me write a parser that extracts every cell's TTFT p50 and decode tok/s from both runs' leaderboards, then compute the deltas. First, the old MoE FAIL detail and the old provenance blocks.
+Old MoE osaurus leaderboard shows no "FAIL" — let me check how its decode row is recorded.
+Confirmed — the old 09-23 MoE grid carries the same FAIL with the identical reason. Now let me extract all cell figures from both runs programmatically.
+
+Extraction works. Note the old rows predate the `request_seed` field — let me verify that and then compute the per-runtime deltas.
+
+Let me see the rest of the analysis output, especially the dense/MoE per-cell rows, channel changes, and orderings.
+The TTFT collapse on prefill rows for mlx-lm/OptiQ needs explaining before I write anything. Let me inspect the raw observations for one such cell in both runs.
+Same 1332-token prompt: old TTFT 1.00 s, new 0.091 s — that smells like a prompt-cache/path difference. Let me check whether the old rows even carry `request_seed`, and read the mlx-lm server's seed branch.
+The old rows predate `request_seed` entirely (header `seed: 0` is the only record). Let me read the mlx-lm 0.31.3 server source at the seed branch to understand the two paths.
+
+
+
+
+
+
+Let me look at how the harness starts mlx-lm and what `cache_state` does — that's likely behind this prefill TTFT gap.
+
+Interesting. Let me check whether the TTFT gap is a prompt-cache hit or a reasoning-trace difference — compare the observations' reasoning text and per-request TTFTs.
+Both runs have identical output shapes (265-char reasoning, 64 tokens) but an 11× TTFT gap on the 1332-token prompt — consistent with a prompt-cache hit on the new path. Let me see the remaining analysis output.
+Now let me check the published grids' orderings (the project's findings) so I can tell which still hold, and read the new runner logs for conditions.
+Let me pull the published grids' orderings (including the 35B one) so I can compare three-way.
+Now let me read the new run's runner logs for stated conditions, and check for the stray-Osaurus/guard lines.
+
+
+Now let me build the three-way ordering comparison (published / old / new) with values and drift markers.
+
+The JSONL rows don't carry derived metrics — the leaderboard parse does. Let me redo the ordering comparison from extract.json.
+
+
+The material inversions are all in the dense vMLX column. Let me look at those rows in detail before writing.
+Now let me see the published papers whose findings these grids back, so I can say precisely which stand on orderings vs levels.
+
+
+
+Let me check what changed in the harness between the two shas, and look at the README's published figures.
+Let me check the handoff note for the run's dispatch context and confirm what `run_harden_validation.sh` records.
+The handoff mentions a documented mlx-lm prompt-cache answer — let me read it, since it bears directly on the TTFT finding.
+Let me read the concurrency-batching paper — it may already document the N=1 effect of the seedless (batching) path.
+Now let me assemble the exact tables I'll cite, with a few final checks (seedless rows, no `no value` rows, FAIL details, drift listing).
+
+
+
+
+Let me check how the harness computes `source_sha256`, so I state precisely what it covers.
+
+
+
+
+Two final verifications: every new row carries `request_seed: null`, and no old row carries the key at all.
+
+Let me get exact counts of ordering changes for the paper.
+
+
+I have everything I need. Now I'll write the paper, mirroring the counterpart's structure and detail.
+Let me fix several factual slips I introduced (dates, ranges, one gap, drift counts).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me read the full draft to check it end to end.
+The draft is solid; let me fix the remaining precision issues.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the dated update note on the counterpart paper.
+Now the project's test command, per AGENTS.md.
+
+One more accuracy fix in §4 — the MoE "OptiQ last" claim needs to match the rows exactly.
+Let me verify my footprint is exactly the two files, and give the new paper a final read.
+
+
+
+One final suite run after the last edits.
+DONE.
+
+**Changed (two files, nothing else):**
+- New: `docs/research/2026-09-28-seedless-validation-grids.md` — the write-up.
+- Appended: `docs/research/2026-09-24-hardening-validation-grids.md` — a dated "Update 2026-09-28" note pointing at the new paper; body untouched (`git diff` = +26 appended lines only).
+
+**The order's questions, answered from the rows:**
+1. **Status:** 35B 48/48, dense 60/60, MoE 59/60. The one FAIL is `optiq__osaurus` on MoE `decode`, and the 09-23 grid has the identical row — same `token_source='none'` reason string, n=9, no metrics (both leaderboards, line 34).
+2. **Levels (new vs old, medians):** dense/MoE decode fell everywhere (−14.8..−18.9% dense, −6.1..−25.3% MoE); 35B is mixed — oMLX **rose** +3.7%, vMLX flat. mlx-lm/OptiQ are the bottom two on all three grids (−13.5/−17.2, −17.6/−18.9, −25.1/−25.3). Their TTFT medians (−31/−43%) are two regimes: −91% on the long-prompt `prefill` rows and −13..−45% on short prompts; the 35B grid, which pins the cache off in both arms, shows no collapse — the control that says the collapse is the seed path plus the prompt cache, not the night. The coordinator's reading holds on dense/MoE and is qualified on 35B.
+3. **Orderings:** 28 of 45 within-column orderings identical; four changes above the 2.5% tie band (dense vMLX `chat` 12.4% and `prefill` 7.2%, dense OptiQ `prefill` 3.5% restoring the published order, MoE mlx-lm `decode` 3.4%). One published claim does not reproduce: "JANG_2L leads Osaurus's decode column outright (147.1)" — `oq4` 127.6 now leads 125.4.
+4. **Published figures:** all ordering-based findings stand except that one; every quoted *level* is a session figure (this is the third arm for dense/MoE, fourth for 35B), and dense/MoE `ttft_p50`/`prefill_tps` for mlx-lm and OptiQ changed *quantity* across the seed change and must not be compared across it.
+5. Caveats and "what this cannot claim" are their own sections in the paper.
+
+**Verification:**
+- Every figure was derived by parsing the six grid directories' `leaderboard.md`, `results.jsonl` headers and `grid.md` (scratchpad scripts, not committed); raw rows spot-checked (prefill observations, `prompt_tokens`, artifact bytes). Figures from `results/grid*` for the published arm were read from those files.
+- Test command run twice (after the final edits): `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **657 passed**. Baseline: I touched only Markdown, which cannot affect collection; the repo's last recorded count was 634 (2026-09-25) and the tree at HEAD carries 657 (tests added by Decisions 128–129).
+- **Red-check:** not applicable — nothing in code was changed, so there is no fix to revert.
+- **Not verified / flagged:** the seed-path contribution to *decode* is deliberately left as an upper bound (two sessions, no replicate) and the paper says so. One figure is cited from outside the two runs — the concurrency paper's seedless mlx-lm N=1 cell (65.9 tok/s, used as the session-bar precedent; Decision 127's 10–26% is cited per the order) — and the doc labels it as that paper's figure rather than this run's. No git operations, no server, no measurement.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    104   19756285   19455744   124412   98.5%   0.356191
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+ M docs/research/2026-09-24-hardening-validation-grids.md
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-osaurus-addendum.log
+?? .paul/orders/v31-conc-osaurus-addendum.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-osaurus-seqs.log
+?? .paul/orders/v31-osaurus-seqs.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? .paul/orders/v31-seedless-grids-writeup.log
+?? .paul/orders/v31-seedless-grids-writeup.md
+?? docs/research/2026-09-28-seedless-validation-grids.md
+ .../2026-09-24-hardening-validation-grids.md       | 26 ++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)

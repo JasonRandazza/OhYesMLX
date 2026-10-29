@@ -1,0 +1,26 @@
+Done — 550 passed, up from the 543 baseline, red-checked.
+
+**Criterion 1 — the constant.** `CHANNEL_DEPENDENT_RANKS = frozenset({"ttft_p50_s", "prefill_tps"})` in `report.py`, with the rationale written once in the comment above it. `prefill_tps` **is** in it: `measure.prefill_tps` is literally `prompt_tokens / ttft_s`, so it divides a prompt by whichever span the row was timed on. Nothing else in `RANK_METRICS` is — `decode_tps` and `itl_s` read the window between `ttft_s` and `last_content_s`, two timestamps of one output stream; `aggregate_tps` divides by wall-clock spans; the rest are memory, disk and e2e.
+
+**Criterion 2 — the test.** `_row` records `timing_channel` per row from `transport.timing_channel` over the measured samples: `"content"`, `"reasoning"`, or `"mixed"` when the row's own requests answered in both — its own channel, not either of the two. Zero samples → `None`, and `_mixes_channels` skips it, so a cell that never ran cannot put two definitions into an ordering.
+
+**Criteria 3–5 — the refusals.** `_ordering`'s uncomparable branch is now gated by `_uncomparable_across_runtimes` (CROSS_RUNTIME_UNCOMPARABLE as before, or a channel-dependent rank over a group that mixes) → alphabetical values, no positions. `_readings` prints one `>` note per workload naming the rank, the reason and the formats that mixed; `_recommendation` returns the `**Recommendation — none.**` sentence naming the channel reason, and the empty-ranking refusal does not fire. Format-axis readings and unmixed groups are unchanged byte for byte.
+
+**Criterion 6 — tests (7 instances).** Constant membership; mixed group withheld + one note + no recommendation (parametrized over both ranks, runs handed over reversed so the alphabetical listing is proven, not assumed); unmixed intact (content-timed *and* reasoning-timed columns); `decode_tps` over the same mixed rows orders intact with the `reasoning timed` marker in the entry; a partly-reasoning row is its own channel (two share it and order, one against a content row is refused); a never-measured row is no channel. Red-check: with `report.py` stashed, 5 of the 7 failed with the reported symptom (`assert '- \`oq4\`: \`mlxlm\` (1) > \`osaurus\` (2)' == '- \`oq4\`: \`mlxlm\` = 0.400; \`osaurus\` = 0.900'`, `KeyError: 'timing_channel'`, missing constant); the 2 that assert "unchanged" stayed green, then restored (sha256 matches the green copy).
+
+**Did not verify / did not do.** No run, server, model or tensor touched; `docs/interfaces.md` untouched. The single-run leaderboard (`render_markdown`, which orders through `order_rows`, not `_ordering`) still orders TTFT across channels — the order named `_ordering`/`_recommendation` only; I flag it as a surface, not a defect. Sweeps unchanged. `summarize` rows gain a `timing_channel` key that no card, column or record prints. Fixtures are synthetic — I did not go looking for a mixed-channel group in the recorded corpus. `AGENTS.md` and the untracked `.paul/` and `docs/research/` files in `git status` predate this dispatch and are not mine.
+
+== cc-agent: git status ==
+ M AGENTS.md
+ M ohyesmlx/report.py
+ M tests/test_report.py
+?? .gitattributes
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-kv-quant-surface.md
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-ttft-mixed-channel.md
+?? docs/research/2026-09-24-kv-quant-surface.md
+ AGENTS.md            |   7 +-
+ ohyesmlx/report.py   | 129 ++++++++++++++++++++++++++++++++--
+ tests/test_report.py | 191 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 319 insertions(+), 8 deletions(-)

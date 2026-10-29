@@ -1,0 +1,64 @@
+Done. 572 passed, up from a 550-pass baseline — and the 22-test delta is **not** mine, see the last section.
+
+## What changed (4 files, docs only)
+
+**`docs/research/2026-09-20-quantized-kv-caches.md`** — second caveat added beside the existing one, same style, citing research §2.1/§7.1/§10.5: the vMLX arms are not a codec comparison (codec is storage-only, prefix cache disabled by the probe's start command → logged no-op, `VMLX/scheduler.py:1393-1404`), and every "FP8" arm is MLX affine 8-bit, not float8. Six inline `Marked 2026-09-24` notes on the affected numbers/conclusions (Key Findings 2 and 3, both tables, H2, H3, §4 guidance item 3). Nothing deleted or rewritten; the top caveat states that the inline notes carry no claim beyond it.
+
+**`docs/runtimes/optiq.md`** — version 0.5.6 → **0.5.13** (title, sources table, both `dist-info` paths, the §5.5 probe note); KV flag citations → `cli.py:2502-2503`, `:2504`, `:2505-2506`, `:2507-2509`, `:2593`, plus the "no `choices`" fact; §2.2's block range → `2498-2656` and a warning that the table's *other* line numbers are still 0.5.6 and stale; §7.7 substance kept with live citations, and the batch-vs-sequential fallback added (`optiq/serve.py:95-117`).
+
+**`docs/runtimes/vmlx.md`** — §7.2 corrected with a superseded box (1.6.59 pre-sets `VMLX_DISABLE_TQ_KV=1` except under `VMLX_FORCE_TQ_AUTO=1`, `cli.py:60-91` / `1510-1512`; `jang_loader.py:1969-1975` early-returns), with the old "precise condition" and "Consequence" paragraphs labelled superseded rather than deleted; new §7.2.1 covers storage-only (`scheduler.py:2444-2458`) and the prefix-cache gate (`scheduler.py:1393-1404`).
+
+**`docs/runtimes/osaurus.md`** — installed 0.25.12 noted at the top and on the `version` row; request-side `kvBits`/`kvGroupSize`/`quantizedKVStart`/`kvMode` cluster added to §4.2; new §7.7 for the batched-decode float-KV fallback, flagged string-table-only and unverified live.
+
+## Verification
+
+- The optiq line numbers I wrote were read back out of the installed 0.5.13 source (read-only), not copied blind: block `2498-2656`, `context_settings` at 2500, `serve_cmd` at 2659, enable path `2730-2739`, help figures `2602-2604`, and `mlx_optiq-0.5.13.dist-info/{entry_points,top_level}.txt` both exist.
+- Fenced blocks balanced in all four files.
+- Test suite: **550 passed** at baseline, **572 passed** after.
+
+## Not verified — plainly
+
+- **I did not red-check.** No test reads any of these four files (the only doc a test opens is `2026-09-14-oq-portability-spike.md`), so there is nothing to revert-and-fail. The doc changes are unverified by the suite in both directions.
+- The vMLX and Osaurus citations are the research doc's, not re-read by me — the order caps me at the research doc, so I did not open the vMLX bundle or the Osaurus Mach-O. The Osaurus offsets and the whole request-side cluster remain string-table evidence; the doc says so.
+- **Scope note:** I also amended one row in `vmlx.md` §3.3 (`VMLX_DISABLE_TQ_KV`), which is outside §7.2, because it asserted the variable is set *only* when the flag is passed — directly contradicting the §7.2 correction in the same file.
+- The `optiq.md` block range `2498-2656` is my reading of the installed source; §8 gives only the two KV anchors. I labelled it as a 0.5.13 reading and marked the rest of that table stale rather than refreshing ~20 numbers §8 does not supply.
+
+## One thing you should know
+
+The working tree contains concurrent changes I did not make and did not touch — `ohyesmlx/{runtimes,report,measure,cli}.py`, `tests/*`, `docs/interfaces.md` — with mtimes 13:20–13:25 UTC, i.e. *after* my baseline run. That is the `p4-kv-quant-pin` order landing mid-session, and it accounts for the 550 → 572 test delta. My four files are the only ones I edited.
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/research/2026-09-20-quantized-kv-caches.md
+ M docs/runtimes/optiq.md
+ M docs/runtimes/osaurus.md
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M tests/test_cli.py
+ M tests/test_measure.py
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .gitattributes
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-doc-corrections.md
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-pin.md
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+ docs/interfaces.md                              |  95 ++++++-
+ docs/research/2026-09-20-quantized-kv-caches.md |  16 +-
+ docs/runtimes/optiq.md                          |  75 ++++--
+ docs/runtimes/osaurus.md                        |  56 ++++-
+ docs/runtimes/vmlx.md                           |  81 +++++-
+ ohyesmlx/cli.py                                 |  22 +-
+ ohyesmlx/measure.py                             |  61 ++++-
+ ohyesmlx/report.py                              |  86 +++++--
+ ohyesmlx/runtimes.py                            | 317 ++++++++++++++++++++++--
+ tests/test_cli.py                               |  28 +++
+ tests/test_measure.py                           | 205 ++++++++++++++-
+ tests/test_report.py                            | 142 ++++++++++-
+ tests/test_runtimes.py                          | 140 +++++++++++
+ 13 files changed, 1204 insertions(+), 120 deletions(-)

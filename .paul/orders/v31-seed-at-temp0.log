@@ -1,0 +1,222 @@
+I'll start by reading the core files named in the order, plus the taste file referenced in the manifest.
+The read was capped before `runtimes.py`. Let me read it plus the report and tests.
+Let me get the rest of `runtimes.py` and the report module.
+Now let me look at `report.py` for the pin-join guard, and the tests.
+Let me search for the seed/temperature references across the repo before reading tests and docs.
+Now let me look at the relevant tests and docs.
+
+Now let me read the interfaces doc and README sections that need updating.
+
+Let me check item 3's bundle paths in the oMLX and vMLX runtime docs, and the transport seed handling.
+Item 3 needs reading the shipped bundles. Let me confirm they exist and grep them for seed usage.
+
+Now let me read the specific seed-handling sites in both bundles.
+
+
+
+
+Let me verify vMLX's per-request sampler helper, then read the remaining tests I'll need to update.
+Let me check the on-disk run headers for the seed key, and read the remaining test sections.
+
+
+Let me check all CellResult construction sites and the test helpers.
+Let me check the remaining touch points: test_runtimes.py style, the optiq doc lines, and any scripts/CLI coupling to the record.
+
+
+I have the full picture now. Let me look at the end of test_runtimes.py for the insertion point.
+
+Let me check the `assert_refused`/`grid_run` helpers before writing tests.
+Now I'll implement. Starting with `runtimes.py` — the pin constants, the base `request_seed`, and the Optiq override.
+
+
+
+
+Now `measure.py`. First the imports and the constants.
+
+
+
+
+
+
+
+
+
+
+
+Now threading the seed through `_batch`, `_warmup_window`, and `_workload_visit`.
+
+
+
+
+Now the record writer and reader.
+
+
+
+Now the docstrings that document the header and the record.
+
+
+
+
+Now the tests. First `test_measure.py` — the fake runtime and the seed tests.
+
+Now the seed tests in `test_measure.py`.
+
+
+
+
+
+
+Now the `test_runtimes.py` policy tests.
+Now the report join-guard test.
+Let me run the three test modules.
+
+
+
+
+Green: 653 passed. Now the baseline count and the red-checks.
+Baseline is 647. Red-check 1: put the old `SEED` back into the requests.
+
+Red confirmed. Restoring, then red-checking the Optiq half.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Suite is green with all red-checks restored. Now the docs. First README.
+Now `docs/interfaces.md`.
+
+
+
+
+
+
+Now `docs/runtimes/mlx-lm.md`.
+
+
+
+
+
+
+
+
+
+
+
+Let me check for lint/format configuration and run whatever the project uses.
+
+
+One cleanup: `SEED` is imported into `measure` but no longer used there (the loader default is the historical literal 0). Removing the unused re-export.
+
+
+
+Final self-review: check for other callers of the changed helpers and any record-key consumers outside the harness.
+
+One comment in `runtimes.py` is now stale after dropping the re-export; fixing it.
+
+
+One more evidence check for item 3: how oMLX samples at temperature 0.
+All checks pass. Final state review, then the report.
+
+**DONE** — all four items implemented, suite green, red-checks done.
+
+## What changed
+
+**Item 1 — one definition.** `Runtimes.request_seed(mtp_depth)` on the base `Runtime` (`ohyesmlx/runtimes.py:1669`) returns `None` while `TEMPERATURE == 0`, `SEED` otherwise, with the whole rationale (greedy decoding inerts the seed; a seeded request takes `_is_batchable`'s false branch, `mlx_lm/server.py:685-686`) written once at that method. `Optiq.request_seed` (`runtimes.py:2436`) keeps `SEED` for `mtp_depth in MTP_DEPTHS[1:]` because its MTP engine is installed on that same sequential path (`optiq/serve.py:470-471`), and delegates otherwise. `TEMPERATURE`/`SEED` moved to `runtimes.py` (measure imports `TEMPERATURE`; it no longer holds a copy) — runtimes cannot import measure without a cycle. `measure._visit` asks it once per visit (`measure.py:836`) and threads the value to `_request`; `_request` no longer references `SEED`. Note: the ask is in `_visit`, not literally inside `_request` — the handle carries no runtime, and asking once per visit is the same answer the order's phrasing is about. Say the word if you want the call inside `_request` itself (two more threaded params).
+
+**Item 2 — header policy + row key.** Header `seed` is `_header_seed()` → the ordinary-cell answer, `None` at temperature 0. Each record carries `request_seed`: the value stamped on the row, so an OptiQ-at-depth row says `0`. `load_run` reads a pre-key absence as `0` (truthful: all 179 recorded headers say `seed: 0`). `PIN_FIELDS` already held `seed`, so new runs refuse old seed-0 joins — proven by `test_guard_1_refuses_a_new_run_against_an_old_seed_zero_run`. Documented in `docs/interfaces.md` (new section "`seed` is a policy, and `request_seed` is what a row sent", plus the `Runtime`/`CellResult`/record blocks).
+
+**Item 3 — oMLX and vMLX shipped source (report only).**
+- **oMLX** (`$SRC=/Applications/oMLX.app/Contents/Resources/omlx/`): field `request.py:85`; ingest `server.py:3819-3820`/`:6312-6314` (`if request.seed is not None: chat_kwargs["seed"] = …`), `:3457`/`:4542`, `engine/batched.py:890`/`:968`; consumed as guarded global RNG state at `scheduler.py:5372-5373`, `:10640` and `engine/dflash.py:1256-1259`. **Omitting it changes no request path** — there is no seed-keyed branch in server/scheduler/engine; the only refusal is cluster-only (`engine/distributed.py:401-410`, `sampling_rank_only`). At temp 0 the sampler is argmax (`utils/sampling.py:144-148`), so the seed is inert anyway.
+- **vMLX** (`…/vmlx-engine-source/vmlx_engine/`): field `request.py:68`; ingest `server.py:16579-16580`, `17521-17522`, `19823-19824`, `23084-23085`, `mllm_scheduler.py:2723`/`:3148`; consumed at `sampling.py:126-138` (the greedy `temp==0` return happens *before* the seed branch) and `scheduler.py:3898-3923`/`:8966-8968`. **No serving-path change**; the one difference is sampler *construction* in the vision generator — `mllm_batch_generator.py:1620-1653` refuses to share one sampler across a batch containing a seeded request (`:18203-18212`) — inert at temp 0 and under `--max-num-seqs 1`. Osaurus is Swift: **not readable**.
+
+**Item 4 — docs say what is sent now:** README line 73 block; `docs/runtimes/mlx-lm.md` §2, §5, §6 and header; `docs/runtimes/optiq.md` §7.2 and §9.2.
+
+## Verification
+- Baseline: deselecting the six tests this order adds gives **647 passed**; with them, **653 passed** (`verify-venv/bin/python -m pytest -q`, 37 s).
+- Red-checks (each reverted, symptom observed, restored): `seed = SEED` in `_visit` → `assert {0} == {None}`, row `0 is None`; Optiq override disabled → `assert [None,None,None] == [0,0,0]`; header `seed: SEED` → `assert 0 is None`; `request_seed` removed from `_record` → `KeyError: 'request_seed'`; `"seed"` dropped from `PIN_FIELDS` → `DID NOT RAISE ValueError`; loader default `None` → `assert None == 0`. No `RED-CHECK` residue.
+- Absent-pin commands unchanged: `test_no_pin_at_all_leaves_every_start_command_byte_identical_to_today` (and the cache/kv variants) pass; no `start_command` was touched.
+- I did **not** start a server, load a model, or use git. The batching-path claim is source-only, as the order intends.
+
+Two residuals worth your call: `ohyesmlx/cli.py:43`'s comment still says "measure.py pins temperature 0 and a fixed seed" — that file was outside the permitted set, so I left it stale. And I read "result row" as the persisted `results.jsonl` record, so `report.py` was left untouched (its `PIN_FIELDS` already carried `seed`); tell me if you wanted `request_seed` on `summarize`'s row dict instead.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    132   38451381   38008704   116050   98.8%   0.250058
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_every_request_pins_temperature_zero_and_the_fixed_seed
+
+== cc-agent: git status ==
+ M AGENTS.md
+ M README.md
+ M docs/interfaces.md
+ M docs/runtimes/mlx-lm.md
+ M docs/runtimes/optiq.md
+ M ohyesmlx/measure.py
+ M ohyesmlx/runtimes.py
+ M tests/test_measure.py
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+ AGENTS.md               |  10 +++--
+ README.md               |  17 +++++---
+ docs/interfaces.md      |  44 +++++++++++++++++--
+ docs/runtimes/mlx-lm.md |  31 +++++++++----
+ docs/runtimes/optiq.md  |  22 +++++++---
+ ohyesmlx/measure.py     | 113 ++++++++++++++++++++++++++++++++++++++++++------
+ ohyesmlx/runtimes.py    |  47 ++++++++++++++++++++
+ tests/test_measure.py   |  94 ++++++++++++++++++++++++++++++++++++----
+ tests/test_report.py    |  21 +++++++++
+ tests/test_runtimes.py  |  46 ++++++++++++++++++++
+ 10 files changed, 397 insertions(+), 48 deletions(-)

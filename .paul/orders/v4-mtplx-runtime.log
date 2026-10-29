@@ -1,0 +1,239 @@
+I'll start by reading the prior BLOCKED report, the research docs, and the runtime implementation.
+The workspace is restricted to `.paul/orders` and `ohyesmlx`, but I need `tests/` and docs. Let me check what's accessible.
+
+Now let me read the rest of `runtimes.py`, particularly the Optiq and Vmlx classes.
+
+
+The docs live outside the read tool's workspace but the order requires reading them. Let me try via shell.
+
+
+The surface doc was truncated. Let me read its §2 directly plus the interfaces doc.
+
+Now let me read `measure.py` — especially `_visit`, the refusal calls, and the record path.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now I have the full picture. Let me check remaining references to "five" and the runtime roster across the modules I may touch.
+
+The requirements are clear now. Let me start with `transport.py` — the receipt field.
+
+
+
+Transport is done. Now `runtimes.py` — starting with the module docstring's roster and the pin paragraphs.
+
+
+
+
+
+
+
+Now the MTPLX constants:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the MTPLX block — the refusal function, the served-name helper, and the class:
+Now `measure.py` — handing the visit's observations to the depth check:
+
+
+
+
+Now the test updates. Starting with `test_runtimes.py` — the Rig gains a `/health` fake:
+
+
+
+
+Now update the ports test and the `TODAY` table:
+
+
+
+
+
+
+
+
+
+Let me verify exactly where MTPLX puts the receipt in the SSE event, since my transport reads it at the top level:
+
+Confirmed: the receipt sits at the event's top level of the final chunk. Now the transport test:
+Now `test_measure.py` — the fake, the wiring, and the round-trip expectation:
+
+
+Now the round-trip expectation:
+
+
+
+
+
+
+
+
+
+
+All 673 pass (658 baseline + 15 new). Now the required red-check — I'll revert the gate to a no-op and watch the refusal tests fail:
+
+
+Red-check confirmed — with the gate reverted, the silent-degrade cell published PASS. Restoring:
+Now `docs/interfaces.md`, since two shapes changed. Let me check tool access to that path:
+
+
+
+
+
+
+
+
+
+
+
+
+All flags verified against the installed 2.12.2 source. Let me re-run the full suite after the restore and review the diff:
+
+
+One user-facing help string in `cli.py` enumerates which runtimes carry a depth and is now false. Fixing that sentence only:
+
+
+
+
+Let me do a final interactive sanity check of the gate and the command construction against the probe's recorded values:
+DONE.
+
+**Changed** (8 files; all within the order's allowlist — `cli.py` is its conditional clause, one help sentence):
+- `ohyesmlx/runtimes.py` — `Mtplx` class (binary `~/.mtplx/bin/mtplx` expanded, port 8200, `--model/--host/--port/--model-id/--no-stats-footer/--ssd-session-cache off`), `on` → `--ssd-session-cache on --ssd-session-cache-dir <scratch>` via a `build_command` override whose tree `stop()` removes, `off` refused with the RAM-session-bank reason, `mtplx_served_name`, version parse (`mtplx 2.12.2` → `2.12.2`), `kv_quant` refuse-affine, base `stream_experts`, depth pair (`--no-mtp --generation-mode ar` / `--depth N --generation-mode mtp`), `readiness_complaint` + `_health` (`/health ok` beside `/v1/models`), and `mtplx_mtp_refusal` — the receipt gate (every visit observation must show `mode != "ar"`, `draft_head_installed true`, `drafted_tokens > 0`; absent receipt = FAIL, artifact named). `Runtime.mtp_depth_missing` gained keyword-only `observations`/`artifact_dir`; Optiq/Vmlx bodies untouched.
+- `ohyesmlx/transport.py` — `Observation.mtplx_stats: dict | None = None`, the final chunk's object kept verbatim.
+- `ohyesmlx/measure.py` — `_visit` slices the visit's own observations and passes them with the cell's `artifact_dir` to the depth check at the same post-requests point.
+- `docs/interfaces.md` — the two shape changes (Observation field, hook signature) + the depth-half section.
+- `ohyesmlx/cli.py` — one `--mtp-depth` help sentence (`vMLX and OptiQ` → `vMLX, OptiQ and MTPLX`, plus the receipt FAIL clause).
+- Tests: 15 new — command construction, port, served-id/readiness, cache refusal + scratch, depth pair, receipt gate (drafted 67 vs `mode "ar"`/0, all-or-nothing, missing receipt), version parse, load-failure, JANG_4S exit, transport verbatim, measure wiring + end-to-end PASS/FAIL, round-trip expectation for `mtplx_stats`.
+
+**Verified**: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` → **673 passed** (baseline 658, +15, no skips). Red-check: with the gate reverted to `return None`, the measure-level test failed `['PASS'] == ['FAIL']` and the two direct gate tests failed `TypeError: argument of type 'NoneType'…`; restored, green. Flags and the `--model-id` pass-through were re-read in the installed 2.12.2 source (read-only).
+
+**Not verified**: no server started, no model loaded — flag acceptance, `/health` timing and the receipt itself rest on the 2026-10-09 probes and the source, not a live cell here.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    144   42022960   41376128   131190   98.5%   0.299867
+
+== cc-agent: git status ==
+ M ../../docs/interfaces.md
+ M ../../ohyesmlx/cli.py
+ M ../../ohyesmlx/measure.py
+ M ../../ohyesmlx/runtimes.py
+ M ../../ohyesmlx/transport.py
+ M ../../tests/test_measure.py
+ M ../../tests/test_runtimes.py
+ M ../../tests/test_transport.py
+?? mtplx-evidence.log
+?? mtplx-evidence.md
+?? mtplx-source.log
+?? mtplx-source.md
+?? mtplx-surface.log
+?? mtplx-surface.md
+?? p4-kv-doc-corrections.log
+?? p4-kv-quant-pin.log
+?? p4-kv-quant-surface.log
+?? p4-mtp-optiq.log
+?? p4-mtp-runtime-docs.log
+?? p4-mtp-stream-pins-finish.log
+?? p4-mtp-stream-pins.log
+?? p4-multiturn-workloads.log
+?? p4-runner-scripts.log
+?? p4-ttft-mixed-channel.log
+?? p4-vmlx-mtp-depth-delivery.log
+?? p4-vmlx-mtp-depth-delivery.md
+?? p4-vmlx-mtp-fixed-pin.log
+?? p4-vmlx-mtp-fixed-pin.md
+?? p4-writeup-mtp.failed-cc-updating.log
+?? p4-writeup-mtp.log
+?? p4-writeup-mtp.md
+?? p4-writeups-kv-stream-multiturn.log
+?? p4-writeups-kv-stream-multiturn.md
+?? v31-35b-replicate-writeup.log
+?? v31-35b-replicate-writeup.md
+?? v31-conc-cap.log
+?? v31-conc-cap.md
+?? v31-conc-osaurus-addendum.log
+?? v31-conc-osaurus-addendum.md
+?? v31-conc-runner.log
+?? v31-conc-runner.md
+?? v31-conc-writeup.log
+?? v31-conc-writeup.md
+?? v31-docs-alignment.log
+?? v31-docs-alignment.md
+?? v31-mlxlm-cache.failed-cc-update.log
+?? v31-mlxlm-cache.log
+?? v31-mlxlm-cache.md
+?? v31-optiq-doc-reread.failed-cc-update.log
+?? v31-optiq-doc-reread.log
+?? v31-optiq-doc-reread.md
+?? v31-optiq-mtp.failed-cc-update.log
+?? v31-optiq-mtp.log
+?? v31-optiq-mtp.md
+?? v31-osaurus-seqs.log
+?? v31-osaurus-seqs.md
+?? v31-report-guards.failed-cc-update.log
+?? v31-report-guards.log
+?? v31-report-guards.md
+?? v31-runner-joins.failed-cc-update.log
+?? v31-runner-joins.log
+?? v31-runner-joins.md
+?? v31-seed-at-temp0.log
+?? v31-seed-at-temp0.md
+?? v31-seedless-grids-writeup.log
+?? v31-seedless-grids-writeup.md
+?? v4-mtplx-runtime.blocked.md
+?? v4-mtplx-runtime.log
+?? v4-mtplx-runtime.md
+ docs/interfaces.md      |  29 ++-
+ ohyesmlx/cli.py         |   9 +-
+ ohyesmlx/measure.py     |  49 +++--
+ ohyesmlx/runtimes.py    | 526 +++++++++++++++++++++++++++++++++++++++++++-----
+ ohyesmlx/transport.py   |  18 ++
+ tests/test_measure.py   |  95 ++++++++-
+ tests/test_runtimes.py  | 342 +++++++++++++++++++++++++++++--
+ tests/test_transport.py |  47 +++++
+ 8 files changed, 1015 insertions(+), 100 deletions(-)

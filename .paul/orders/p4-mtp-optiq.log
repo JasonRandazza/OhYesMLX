@@ -1,0 +1,71 @@
+[32mUpdated 1.65.0 → 1.65.1[39m
+Done. **627 passed** (baseline 618, +9 new tests). No commit made.
+
+## Step 1 findings (installed source, `/Users/jrazz/Dev/tools/mlx-optiq/.venv/.../optiq/`)
+
+1. **`--model` requirement — satisfied.** `cli.py:3027-3043` scans `argv_extra` for `--model`; the harness already passes `--model <artifact dir>` (`runtimes.py:2021-2022`), and click forwards it (`cli.py:2500` `ignore_unknown_options`). No BLOCKED.
+2. **The depth is fixed — no adaptive change mid-request.** `engine.py:920` takes `cycle_K = depth` once per call; the HuggingFace dynamic-depth adapter was measured 4-17% slower and removed (`engine.py:897-905`). No policy flag needed beside it.
+3. **Requests do reach MTP — but only because the harness sends a seed.** The MTP patch replaces `mlx_lm.server.stream_generate` (`serve.py:470-471`), which only `_serve_single` calls (`mlx_lm/server.py:976`); the `BatchGenerator` path never does. `_is_batchable` is `model_provider.is_batchable and args.seed is None` (`server.py:685-686`), and `measure.SEED = 0` is sent on every request (`measure.py:1048`, read into `args.seed` at `server.py:1191`), so every measured request is sequential and MTP applies. **`--max-concurrent 1` alone does not do this** — it injects `--decode-concurrency 1` (`cli.py:2937-2949`), and a batch of one still goes through `BatchGenerator`. **Reported as the order asked: a harness that stopped sending a seed, or a KV-quant run that relied on `--max-concurrent`, would silently measure AR under an MTP header pin.** This is written up in `optiq.md` §9.2 and pinned by a test comment.
+4. **No head → error, not a silent fallback — but late.** `engine.py:297-304` attaches anyway with one warning, then `serve.py:459-464` raises and `mlx_lm/server.py:1424-1427` answers it as **HTTP 404 with the text in the body, nothing in the log**.
+
+## What changed
+
+- **`runtimes.py`** — `MTP_DEPTHS` rationale rewritten (drivers: vMLX + OptiQ; refusers cited: oMLX `model_settings.py:303`/`:170-171`/`:304-308`, Osaurus `osaurus.md:344`/`:900`, mlx-lm `models/qwen3_5.py:313`); new `OPTIO`→`OPTIQ_MTP_HEAD_RELS` + `optiq_mtp_refusal` (config's `mlx_lm_extra_tensors.mtp_file` first, then four spellings — `mtp/artifacts.py:104-115` — plus the layer declaration, `mtp_patch.py:69-76`/`:382-385`); `Optiq.start_command` adds `--mtp --mtp-depth N` for a depth only; `Optiq.mtp_depth_refusal` now artifact-decided; new `Optiq.mtp_depth_missing`; `_stream_evidence` refactored onto a shared `_banner_evidence` — **verified byte-identical on all three message branches against HEAD**.
+- **`measure.py`** — the depth's log half is asked after the **first workload** has answered, FAILs with the log quoted and stops the visit.
+- **`cli.py`** — the `--mtp-depth` help no longer says vMLX is the only runtime with a depth.
+- **docs** — `interfaces.md` (contract row, both tables, new "`mtp_depth`'s log half, on OptiQ"); `optiq.md` (flag rows updated to 0.5.13 lines, §9.2 "how the pin maps", §8.2/§8.4/§10 notes).
+- **tests** — mapping, artifact gate (accept/absent/named-missing/legacy-root/no-layer), banner FAIL incl. wrong-depth, byte-identity absent **and** `off` for all five, OptiQ depth sweep joins while a grid refuses, loop-level FAIL.
+- Red-checked two: reverting the `--mtp` pair → `ValueError: tuple.index(x): x not in tuple`; reverting the loop call → `['PASS','PASS','PASS'] == ['FAIL','FAIL','FAIL']` (i.e. it would have published numbers). Both restored and green.
+
+## One decision you should look at
+
+The order's "post-start banner check (take the exact string from serve.py:465)" **cannot run where `stream_experts_missing` runs**: `serve.py:465` is printed by `_get_engine`, called only from the patched `stream_generate` (`serve.py:443-471`), i.e. on the first request — a check before the first request would FAIL every OptiQ depth cell forever. I read "post-start" as the order's own premise requires (the line must be able to appear) and asked it one workload in; the site, the reason and the caveat are documented at `Optiq.mtp_depth_missing` and in `measure._visit`. If you want it literally at the streaming check's site instead, say so — but the pin becomes unmeasurable.
+
+Not verified: no OptiQ MTP cell has been run (no server started, no model loaded, no tensors read) — the artifact gate was exercised against the two real snapshots only (both accepted; a stock mlx-lm artifact refused).
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_only_vmlx_has_a_depth_to_pin_and_the_other_four_refuse_every_value
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/runtimes/omlx.md
+ M docs/runtimes/optiq.md
+ M docs/runtimes/osaurus.md
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/runtimes.py
+ M tests/test_measure.py
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-optiq.md
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-runtime-docs.md
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-runner-scripts.md
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? scripts/run_multiturn.sh
+?? scripts/run_phase4_night.sh
+?? scripts/run_sweep_kvquant.sh
+?? scripts/run_sweep_mtp.sh
+?? scripts/run_sweep_streaming.sh
+ docs/interfaces.md       |  84 ++++++++----
+ docs/runtimes/omlx.md    | 112 +++++++++++++++-
+ docs/runtimes/optiq.md   |  76 ++++++++++-
+ docs/runtimes/osaurus.md | 131 ++++++++++++++++++-
+ docs/runtimes/vmlx.md    |  83 ++++++++++++
+ ohyesmlx/cli.py          |  11 +-
+ ohyesmlx/measure.py      |  37 +++++-
+ ohyesmlx/runtimes.py     | 332 +++++++++++++++++++++++++++++++++++++++--------
+ tests/test_measure.py    |  67 +++++++++-
+ tests/test_report.py     |  22 ++++
+ tests/test_runtimes.py   | 166 +++++++++++++++++++++++-
+ 11 files changed, 1013 insertions(+), 108 deletions(-)

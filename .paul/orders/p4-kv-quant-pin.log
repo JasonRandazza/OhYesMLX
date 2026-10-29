@@ -1,0 +1,51 @@
+Done. Report:
+
+**Changed** (only the nine named files; `osaurus_settings.py` untouched — `cache.liveKVCodec` was already in `TRACKED_KEYS`, so nothing to add):
+
+- `runtimes.py` — `KV_QUANT_OFF/AFFINE8/AFFINE4`, `KV_QUANTS` with the rationale written once there (codec-not-width naming; `fp8` retired and why; the group size as a pinned second variable). `Runtime.kv_quant_refusal` default `None` for OptiQ's shape; `start_command`/`build_command`/`start` thread `kv_quant`. OptiQ drives `--kv-bits 8|4 --kv-group-size 64`, `off` = neither flag (said at the method), fused-KV auto path named in one comment (`optiq/cli.py:2729-2739`), left alone. vMLX passes `--kv-cache-quantization none` for `off` only, refuses codecs (`scheduler.py:2444-2458`, `:1393-1404`); its stale class docstring updated per §7.3. mlx-lm/oMLX accept `off` flagless, refuse codecs with the §11 evidence. Osaurus accepts `off` only while `cache.liveKVCodec == engine_selected`, refuses codecs unconditionally.
+- `measure.py` — `kv_quant` kwarg, header field, validation against `KV_QUANTS`, refusal asked as a second block exactly where `cache_state_refusal` is asked, threaded into `runtime.start`.
+- `cli.py` — `--kv-quant {off,affine8,affine4}`, forwarded; sweep description updated.
+- `report.py` — `kv_quant` in `PIN_FIELDS`, `ABSENT_PINS`, `SWEEP_PINS`, `SWEPT_PIN`, `SWEEP_HELD`, `SWEEP_VALUES = ("off","affine8","affine4")`.
+- `docs/interfaces.md` — signatures, header-field list, and a `Phase 4 study 03-05` section next to 06-02 (values table, per-runtime mechanism, refusal semantics, sweep order).
+
+**Verification.** Baseline 550 passed; now **572 passed** (22 new: 8 runtimes, 7 measure, 6 report, 1 CLI). Red-checked by reverting and watching the named test fail, then restoring: absent-read-as-`off` → byte-identity test failed on vMLX's command; `PIN_FIELDS` minus `kv_quant` → join DID NOT RAISE; `SWEEP_VALUES` entry removed → `KeyError`, and without it the columns sorted `affine4, affine8, off`; the `_visit` refusal block disabled → a refused cell measured as `PASS` and the real-Osaurus case tried to start; mlx-lm accepting everything → `NoneType` in the refusal assertions; Osaurus accepting any host value → no refusal; `choices` widened with `fp8` → no `SystemExit`; header written as `kv_quant or "off"` → "an absent pin is the absence, not the 'off' value".
+
+**Scope note (not a blocker).** `scripts/probe_kv_quant.py` and `scripts/probe_expert_streaming_35b.py` subclass the runtime classes and override `start_command` without the new kwarg, so `rt.start(...)` on them now raises `TypeError: start_command() got an unexpected keyword argument 'kv_quant'` (confirmed directly). One signature line per override fixes each; `scripts/` is outside my writable set. Also: `BLOCKED.md` in the repo root is stale (it names a 497-test baseline and a resolved `timing_channel` mismatch) and not mine; and `docs/runtimes/{optiq,osaurus,vmlx}.md` plus `docs/research/2026-09-20-quantized-kv-caches.md` show as modified in the working tree from a concurrent process — not my edits.
+
+**Not verified.** No runtime was started and no model loaded, so the flag tuples are asserted as literals rather than exercised; that OptiQ's `--kv-bits 8` really produces a live quantized cache, and that vMLX's `off` holds under a real start, need a live cell. The Osaurus `off` branch was exercised against a monkeypatched capture, not the host — though the committed baseline records `cache.liveKVCodec: engine_selected`, so a baseline-matching host accepts it.
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/research/2026-09-20-quantized-kv-caches.md
+ M docs/runtimes/optiq.md
+ M docs/runtimes/osaurus.md
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M tests/test_cli.py
+ M tests/test_measure.py
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .gitattributes
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-doc-corrections.md
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-pin.md
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+ docs/interfaces.md                              |  95 ++++++-
+ docs/research/2026-09-20-quantized-kv-caches.md |  16 +-
+ docs/runtimes/optiq.md                          |  75 ++++--
+ docs/runtimes/osaurus.md                        |  56 ++++-
+ docs/runtimes/vmlx.md                           |  81 +++++-
+ ohyesmlx/cli.py                                 |  22 +-
+ ohyesmlx/measure.py                             |  61 ++++-
+ ohyesmlx/report.py                              |  86 +++++--
+ ohyesmlx/runtimes.py                            | 317 ++++++++++++++++++++++--
+ tests/test_cli.py                               |  28 +++
+ tests/test_measure.py                           | 205 ++++++++++++++-
+ tests/test_report.py                            | 142 ++++++++++-
+ tests/test_runtimes.py                          | 140 +++++++++++
+ 13 files changed, 1204 insertions(+), 120 deletions(-)

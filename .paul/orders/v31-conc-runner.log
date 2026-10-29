@@ -1,0 +1,73 @@
+I'll read the model scripts and the specs they depend on before writing anything.
+Now let me check the exact `--concurrency` flag spelling in the CLI and confirm Decision 128 in STATE.
+
+Decision 128 and the `--concurrency` spelling confirmed. Let me check the seeded predecessor results and how concurrency was used before, so the header and layout match reality.
+
+The seeded runs used a flat layout. Let me check whether any sibling script's join helper shows `--out` in DRY, so I match the established convention.
+Convention confirmed: sibling scripts omit `--out` in the DRY join echo, and skip-if-empty lives in the helper. Let me verify `concurrency` is an accepted `--varying` value and check the sweep subcommand's args.
+
+Everything is confirmed: `--concurrency N` on `run`, `concurrency` in `SWEEP_PINS`, run dirs are timestamped children of `--results-dir`, and the sibling convention for the DRY join echo. Writing the script now.
+Two fixes: `levels` must be initialized before the loop (I mirrored the toggle but not the initialization), and the Osaurus pin call should sit after the runtime banner exactly as kvquant has it.
+Now the acceptance checks: syntax, then the full DRY run.
+
+DRY output is 20 run lines and 5 join lines, with per-runtime direction alternating. Let me verify counts mechanically, confirm DRY wrote nothing, check the file mode against its siblings, and red-check the `levels` initialization that I had to fix.
+Red check confirmed: without the `levels=$LEVELS` initialization, `set -u` aborts with `sh: levels: unbound variable` — that is the exact symptom the line prevents, and the fix is in the file. My script also came out non-executable unlike its siblings, so I'll match them and re-verify.
+DONE. Created `scripts/run_sweep_concurrency.sh` (new file, mode 744 to match its siblings); nothing else touched.
+
+What it does, matching the named models:
+- `scripts/gridspec.sh` for `$Q4`; cells `oq4__<r>` over `mlxlm omlx optiq vmlx osaurus` (`RUNTIMES=` override); `--concurrency 1 2 4 8`, order reversed per runtime (1 2 4 8 / 8 4 2 1 alternating); results into `$OUT/oq4__<r>`, default `OUT=results/sweep-conc-seedless`.
+- `DRY=1` guard, exec-owned `runner.log`, port + full-path-Osaurus `sweep()`, trap, `run_one`, and a `join_sweep` tail running `sweep --varying concurrency` per runtime to `$OUT/sweep-oq4__<r>.md` with skip-if-glob-empty.
+- `osaurus-pin.sh` sourced and called `osaurus_pin` / `osaurus_restore_check` around the Osaurus block exactly as `run_sweep_kvquant.sh` does.
+- Header states Decision 128 (no seed at temperature 0 → mlx-lm/OptiQ batching path) and that `results/sweep-conc` and `results/sweep-conc8` are seeded and superseded.
+
+Verified: `sh -n` clean. `DRY=1 sh scripts/run_sweep_concurrency.sh` printed the full output shown above — 20 run lines and 5 join lines by `grep -c`, nothing started, no `results/sweep-conc-seedless` written. Red check: the `levels=$LEVELS` init I initially omitted fails as `sh: levels: unbound variable` under `set -u`; the init is in the file.
+
+Not verified: no pytest, no git, no runtimes, and no join actually executed (per the order). One observation: the DRY join echo omits `--out`, matching the convention in `run_sweep_mtp.sh`/`run_sweep_kvquant.sh`; the live join path does pass `--out "$OUT/sweep-oq4__<r>.md"`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     15     681817     635648    15810   93.2%   0.018318
+
+== cc-agent: git status ==
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? scripts/run_sweep_concurrency.sh

@@ -21,9 +21,9 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 
 | Phase | Name | Status |
 |---|---|---|
-| 0 | Contract (governance, interfaces) | In progress |
-| 1 | Know the Mac (hardware scan) | Planned |
-| 2 | Engines (registry, detect, consented install) | Planned |
+| 0 | Contract (governance, interfaces) | Complete 2026-10-29 |
+| 1 | Know the Mac (hardware scan) | Complete 2026-10-29 |
+| 2 | Engines (registry, detect, consented install) | Planned: 02-01..02-03 written, audit pending |
 | 3 | Models (catalog, recommender, fetch) | Planned |
 | 4 | Server and quickbench | Planned |
 | 5 | SwiftUI app and packaging | Planned |

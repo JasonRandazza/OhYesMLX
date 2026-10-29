@@ -1,0 +1,458 @@
+I'll start by reading the research doc with the open question, the harness start command, and checking the mlx-lm source location.
+I have the harness side and the research doc. Now I need the mlx-lm server source — how it keys and reuses the prompt cache — plus the cache-state-split doc and the actual run logs.
+The venv layout means the package lives under `lib/`. Let me find the actual `mlx_lm` package and the 2026-09-25 mlxlm logs.
+Found the logs. Now let me locate the `mlx_lm` package in that venv and read the key server/cache code.
+Now let me read the mlx-lm server's cache paths and the LRU cache implementation, and check the multiturn model's config for hybrid layers.
+Now let me read the server's cache fetch/insert code paths in full, and the model's config.
+The model is `qwen3_5_moe` — same family as the hybrid. Let me read its `text_config` and the cache implementation in `models/cache.py`.
+The multiturn model is `qwen3_5_moe`, 40 layers with `full_attention_interval: 4` — hybrid, 30 linear + 10 full-attention layers. Now let me read the LRU cache key/reuse logic and how the model builds its cache.
+Let me read the cache implementation sections and check how qwen3_5_moe builds its caches.
+Now I need the request shape (chat messages with roles?) and how `_tokenize` builds segments, plus the logs' cache breakdown lines.
+Let me read `_tokenize` and the multiturn workload definition (`cli.DIALOGUE`).
+\n</...im_end>\n<|im_start|>user\n{question N+1}...assistant\n<think>\n.
+
+So prompt_N[:tail_start_N] = the prompt up to ...<|im_start|>assistant\n (excluding the <think> tag). In prompt_{N+1}, that same prefix occurs at the same position: the history up to the assistant generation prompt of turn N. Then prompt_{N+1} continues with the reply text. So YES — prompt_N[:tail_start_N] is a strict prefix of prompt_{N+1}. 
+
+Hmm, so then at turn N+1 the trie search should find `shorter` = that stored key (the deepest value along the walk, subject to last_index > 0), and serve it! And the search would also walk further: the trie contains the full path prompt_N + gen_N (up to 128 generated tokens). The walk from prompt_{N+1} would follow the path: prompt_N[:tail_start_N] matches; then the next token in prompt_{N+1} is the think token? Wait, careful: the stored assistant entry's key is prompt_N + gen_N where prompt_N includes the think tail prompt. So the trie path after prompt_N[:tail_start_N] continues along prompt_N[tail_start_N:] = "<think>\n" then gen tokens. prompt_{N+1} shares the "<think>\n" tokens (same generation prompt), then diverges when the reply text starts vs the generated trace.
+
+Hold on: the fixed literal reply for turn N is stored in prompt_{N+1} history as the assistant message content, and the generated trace (gen_N) is what the runtime actually produced. The chat template renders the assistant history message as `...assistant\n{reply}</...>` — with no <think> tag around the literal reply presumably (default template). So the tokens after "<think>\n" in prompt_{N+1} would be... wait no. In the history, the assistant message content is "{reply_N}" — rendered as `<|im_start|>assistant\n{reply_N}<|im_end|>\n`. But prompt_N's generation tail was `<|im_start|>assistant\n<think>\n`.
+
+Hmm, so prompt_N = [...history through user N...] + `<|im_start|>assistant\n<think>\n` (generation prompt).
+prompt_{N+1} = [...history through user N...] + `<|im_start|>assistant\n{reply_N}<|im_end|>\n<|im_start|>user\n{question N+1}<|im_end|>\n<|im_start|>assistant\n<think>\n`.
+
+So after the common prefix [...through user N...] `<|im_start|>assistant\n`, prompt_N has `<think>` and prompt_{N+1} has `{reply_N}`. So they diverge right at the token after "assistant\n"!
+
+Unless... hmm. Wait, does the tokenizer's apply_chat_template with add_generation_prompt=True produce `<think>` at the end? Need to check the Qwen3.5/3.6 chat template. Actually mlx-lm's chat template for qwen3 might add the thinking start. Let me check `tokenizer_utils.py`'s `rfind_think_start` and the actual template.
+
+Whatever the exact tail, the important thing: prompt_N and prompt_{N+1} share the entire prefix up to the assistant generation prompt of turn N — i.e., everything up to `<|im_start|>assistant\n` — and the model's *stored* keys (both boundary "user" snapshot at tail_start and assistant entry) extend beyond that point into turn N's generation direction, where prompt_{N+1} instead carries the fixed literal reply for turn N.
+
+So the deepest stored value on the walk of prompt_{N+1} is at... let's see: the walk follows prompt_{N+1}'s tokens. Where does the trie have values? 
+
+1. The "user" boundary entry from turn N: key = prompt_N[:tail_start_N] = prompt up to and including `<|im_start|>assistant\n`. Hmm wait, where exactly is tail_start? If the template emits `<|im_start|>assistant\n<think>\n` and rfind_think_start finds the think token within the last 11 tokens, tail_start = index of the <think> token. So prompt_N[:tail_start_N] = everything up to but not including <think>: `...<|im_start|>assistant\n`.
+
+prompt_{N+1}'s tokens at that same position: `...<|im_start|>assistant\n` then `{reply_N first token}`. So the trie walk of prompt_{N+1} passes through the node carrying this "user" value — last_index = position of the \n token (last token of that boundary key). 
+
+2. Then does the walk continue? The next token of prompt_{N+1} after that boundary is reply_N's first token. In the trie, that node's children are <think> (from turn N's prompt path) — no wait, the boundary entry's key ends at `<|im_start|>assistant\n` (the node at that point has __value__). The path continues in the trie from turn N's *assistant* insert: the assistant entry's key is prompt_N + gen_N, whose tokens after the boundary are <think> etc. So the child of that node is the <think> token only (plus maybe more from other entries). If reply_N's first token ≠ <think>, the walk stops at the boundary. last_index = index of the boundary's last token = tail_start_N - 1... wait:
+
+The walk loop: `while index < len(tokens) and tokens[index] in current: current = current[tokens[index]]; if "__value__" in current: last_index = index; index += 1`.
+
+So index is the position of the last consumed token. If the boundary key has length L (= tail_start_N), then when index = L-1 (the token at the end of the boundary key) is consumed, `__value__` is in the node, so last_index = L-1. Then index increments to L, checks `tokens[L] in current` — the child is <think> (for prompt N's continuation). prompt_{N+1}[L] is reply_N[0]. If not found → loop ends with index = L, common_prefix = L.
+
+`shorter = tokens[:last_index+1]` = prompt_{N+1}[:L] = the boundary key → **shorter is non-None and equals the stored boundary key**.
+
+`longer`: index > 0 → walk the subtree under the node reached (which is the node after consuming tokens[L-1], i.e. the boundary node). The subtree contains the assistant entry's continuation: <think>...gen_N. `longer = tokens[:L] + best` where best is the shortest value in the subtree = the continuation to the assistant entry (since the "user" boundary value is at the node itself? Hmm, careful: the node itself has __value__ (the boundary entry). The stack starts at (current=boundary node, extra=[]). If "__value__" in current → best = [] (len 0). So longer = tokens[:L] + [] = tokens[:L] — that's just the shorter! Hmm interesting. Wait:
+
+```python
+if index > 0:
+    best = None
+    stack = [(current, [])]
+    while stack:
+        current, extra = stack.pop()
+        if "__value__" in current:
+            if best is None or len(extra) < len(best):
+                best = extra
+        elif best is None or len(extra) < len(best):
+            for tok in current:
+                stack.append((current[tok], extra + [tok]))
+    longer = tokens[:index] + best
+```
+
+Hmm — note that when the node has a __value__, it does NOT descend further (the elif). So the boundary node itself has __value__ → best = [] → longer = tokens[:index] = tokens[:L]. So `longer` == the boundary key == same as shorter. That's a quirk.
+
+Then in fetch_nearest_cache:
+- exact is None.
+- `result.longer is not None and result.common_prefix > short_length`: common_prefix = index = L; short_length = len(shorter) = L. NOT > → skip the trim branch. 
+- `short_length > 0` → return (deepcopy of the boundary cache, tokens[L:]). **A HIT!** The prompt would be served from the boundary snapshot and only reply_N + question_{N+1} + assistant\n<think>\n would be prefilled.
+
+But wait — the boundary cache holds the KV state at end of the user segment of prompt_N — that's a hybrid cache (30 ArraysCache + 10 KVCache). It's a deepcopy, and stream_generate continues from rest. For ArraysCache (linear attention state), you cannot continue from an arbitrary prefix... well actually you can: the state is a fixed-size recurrent state; continuing from it is exactly what it's for. The linear attention state is a summary of the entire prefix, so resuming mid-sequence works (it doesn't need to trim). That's the whole point: `shorter` branch doesn't trim; it just resumes.
+
+So theoretically turn N+1 should hit the boundary entry stored at the end of turn N's user segment... IF such an entry was stored and IF the walk found it.
+
+Hmm, but wait: was the boundary entry stored? Looking at the log line per the 06-02 doc: "on | `0 sequences` before request 1, then `1 sequences, 0.19 GB` before every one of the other 29, always `- assistant: 1 / - user: 0 / - system: 0`". For that prefill workload, only assistant. In the multiturn run the doc says cache grows from 1 to 10 sequences. The 10-entry cap exactly matches 10 turns — suggesting one entry per turn, likely all "assistant". Let me check the actual logs for the breakdown!
+
+If the breakdown is `assistant: 10, user: 0`, then the boundary insert never fired, and the entries are keyed by prompt_N + gen_N — each turn's key. Then for turn N+1, is any of those keys a prefix of prompt_{N+1}? prompt_N + gen_N vs prompt_{N+1} = prompt_N + reply_N + ... They share prompt_N, but wait — do they? prompt_N is the full prompt of turn N ending with the generation tail `<|im_start|>assistant\n<think>\n`. gen_N starts right after that. prompt_{N+1} has, after the shared prefix up to `<|im_start|>assistant\n`... hmm, wait. prompt_{N+1} contains the *history* rendering of assistant turn N: `<|im_start|>assistant\n{reply_N}<|im_end|>`. So prompt_{N+1} does NOT contain prompt_N as a prefix! It contains prompt_N minus the trailing `<think>\n` plus `{reply_N}...`.
+
+Right: prompt_N = H_N + `<|im_start|>assistant\n<think>\n` where H_N is history through user N (up to `<|im_start|>assistant\n`). prompt_{N+1} = H_N + `<|im_start|>assistant\n` + reply_N + `<|im_end|>` + ... So they share H_N + `<|im_start|>assistant\n`... wait no. H_N includes up to `<|im_start|>assistant\n`? Let me define: let P = the common prefix [...history tokens through user N..., `<|im_start|>assistant\n`]. prompt_N = P + `<think>\n`. prompt_{N+1} = P + reply_N_tokens + `<|im_end|>\n` + ...
+
+So common prefix = P. The stored assistant key for turn N is P + `<think>\n` + gen_N. It is NOT a prefix of prompt_{N+1} (diverges after P). But there may ALSO be a boundary "user"-type entry keyed at P (the end of the user segment) — that's the thing that would hit.
+
+Hmm, so what is the boundary insert exactly? Let me re-read:
+
+```python
+eos_ids = [
+    r.uid
+    for r in prompt_responses
+    if r.end_of_segment
+    and not r.end_of_prompt
+    and batch_results[r.uid]["segment_types"]
+]
+```
+
+`prompt_responses` are the prefill progress responses. `r.end_of_segment` — need to check the BatchGenerator's Response: does it have end_of_segment/end_of_prompt fields... Hmm, actually let me check the batch generator's progress reports. In mlx-lm 0.31.3's `generate.py` (BatchGenerator), `PromptProgress` maybe has those? Wait, in the multiturn logs we saw `Prompt processing progress: 0/4106` style lines. Let me check what fields exist. Actually the code references `r.end_of_segment` and `r.end_of_prompt` on prompt_responses. Let me grep generate.py.
+
+Also important: `segment_types` is popped when a segment ends. The insert uses `cache_key[:]` where cache_key comes from `batch_generator.extract_cache(eos_ids)` — the cache entry contains (cache, cache_key) pairs; cache_key = the tokens the cache holds.
+
+So if there are 2 segments: user (P + <think>\n... hmm no. Let me recompute where the segments are. segments = [prompt[0:tail_start], prompt[tail_start:]] with types [user, assistant]; then reversed for bookkeeping: segment_types = [assistant, user] (reversed), and `insert_segments(segments=[segments])`.
+
+Hmm wait, careful: `segments` passed to insert_segments is [prompt[:tail_start], prompt[tail_start:]] — in order. `segment_types[::-1]` = [assistant, user] is stored in batch_results for popping when boundaries are reached. The boundary at end of segment 1 (the user segment, ending at tail_start) → pop() gives "user". The final segment (assistant tail) ends at end_of_prompt → excluded.
+
+So the boundary entry would be keyed by prompt[:tail_start] = P (since tail_start = index of <think> token, assuming the template ends with `<|im_start|>assistant\n<think>\n` and the last 11 tokens include it).
+
+Then turn N+1's search: P is a prefix of prompt_{N+1} → shorter hit!! So why does the log show... let me check the actual logs. Maybe the breakdown is "user: N" and it still doesn't hit. Or maybe end_of_segment never fires.
+
+Wait — but hold on. Is `tail_start` actually < len(prompt)? If the template's generation prompt is `<|im_start|>assistant\n` and the think start token is generated by the model rather than in the prompt... For Qwen3 thinking models, the template `add_generation_prompt=True` typically emits `<|im_start|>assistant\n` and then generation starts with the think tag emitted by the model? Actually for Qwen3, apply_chat_template with enable_thinking adds `<|im_start|>assistant\n` and the model generates ` thinking`. Hmm, but mlx-lm's server has `has_thinking`, `rfind_think_start(prompt)`, and the initial_state logic, which suggests the think start token may be in the prompt for some templates (e.g., Qwen3.5's template might include  thinking in generation prompt). 
+
+Also relevant: the timing channel analysis said mlx-lm columns show "reasoning only" — the trace arrived in reasoning_content. That doesn't tell us about the prompt.
+
+OK, I need to go look at the actual logs now. Let me grep the multiturn logs for "Prompt Cache" lines and see the breakdown, and count "Prompt processing progress" lines and their denominators across turns.
+
+Actually, an even better empirical approach: the log has per-request lines. Let me just look at the log.
+
+Let me view a chunk of `mlxlm-20260925T091430-41697.log`.
+
+Also, I should determine what the segmentation template end actually is, via the tokenizer. But I can't run the model; I can, however, run the tokenizer offline! Is that allowed? "Do not start a server, load a model, or analyze tensors. Ever. Those are the coordinator's to run." Running the tokenizer is not starting a server, not loading a model, and not analyzing tensors. Hmm — but it does import mlx_lm.tokenizer_utils which imports mlx... Importing mlx is not loading a model. It's a borderline case. Loading the *tokenizer* from the artifact directory is cheap and doesn't load weights. I think a careful offline tokenizer run is within bounds and extremely valuable for verifying the exact token prefix claims. The order says "No code changes, no git, no server starts." Only the environment. Running the tokenizer would be "a live probe" of sorts. Hmm.
+
+Actually, the safest interpretation: the order permits source reading, harness reading, and logs. Running the tokenizer is neither forbidden strictly nor explicitly allowed. It doesn't start a server, load a model (weights), or analyze tensors. I'd argue reading the tokenizer's chat template file (chat_template.jinja in the artifact) is definitely allowed and enough to determine the exact prompt shape. The artifact has a chat_template file — let me read it. That tells me whether the generation prompt includes the think tag. That's file reading, completely safe.
+
+Let me:
+1. Read the chat template from the artifact.
+2. Grep the logs.
+
+The template for Qwen3.6 might be in tokenizer_config.json (chat_template key) or a separate chat_template.jinja. Let me check.Now I have the segmentation logic. The key question is what the chat template's generation prompt looks like and what the logs recorded. Let me read the artifact's chat template and the actual multiturn logs.
+
+The template ends turn N's prompt with `<|im_start|>assistant\n<think>\n`. That makes the segmentation question decisive. Let me now read the actual mlxlm logs from the multiturn run.
+The log shows `user: 0 sequences` on every line — the segment-boundary entries never exist. Let me find out why: the batch generator's `end_of_segment`/`end_of_prompt` reporting.
+
+Let me trace where the `0/N` progress response comes from and how `insert_segments`/`_make_batch` build the batch.
+
+Let me read `PromptProcessingBatch` — its `prompt()`, `tokens`, and `extract_cache()` — to see what key a boundary snapshot would carry.
+Big realization to check: the harness pins `seed=0`, and `_is_batchable` requires `args.seed is None` — if true, the whole run used the sequential path, which has no segment-boundary inserts at all. Let me verify `is_batchable`, the seed in the payload, and the model's cache construction.
+Confirming paths — `is_batchable` requires `merge` on every cache too. Let me read `ArraysCache` fully and the single-path `stream_generate` progress sequence.
+The progress sequence `0/24 → 23/24 → 24/24` matches the sequential path exactly (`generate.py:429-463`: a `0/N` call, one chunk leaving 1 token, then `N/N` when generation starts). Let me now verify the record: per-turn first prompts and the cache-count growth in both logs, plus what the results file recorded.
+The `0/N` first line is the sequential path's own callback signature, and it appears on every request in both visits. Let me nail down the remaining pieces: the big-turn progress lines, whether the record stores cached_tokens, the cache classes' trimmability, and the model class inheritance.
+The 1393-token prompts show `0/1393 → 1392/1393 → 1393/1393` — one full-prompt chunk, zero stripping. My results.jsonl probe used the wrong key; let me inspect its actual shape.
+The requests are chat messages with roles, confirmed. Let me look at the actual observation rows in results.jsonl (the first row was the run header).
+
+
+Let me verify the remaining source claims: KVCache trimmability/merge, the class owning `make_cache` at qwen3_5.py:304, `has_thinking`, and that the run header's seed pin reached the payload.
+Confirmed the pin. Now the precise class/citation checks: `KVCache` vs `ConcatenateKVCache`, the outer `Model`'s make_cache delegation, and `is_linear`.
+Nearly complete. Let me confirm `make_prompt_cache`, the outer `Model.make_cache` at qwen3_5.py:522, and the `--prompt-cache-size` default.
+
+Let me verify two final empirical details: that repeated requests within a turn produce identical text (so the store replaces one key, not adds), and that temperature 0 selects greedy sampling.
+All evidence is in hand — including byte-identical outputs across a turn's repeats (so stores replace one key, not add). Let me check the version file for the doc, then write both documents.
+` are in the vocab. For this Qwen3.6 artifact, the template emits `<think>\n` and `</think>`, so those are almost certainly special tokens in the vocab (the template uses them as literal text though...). Hmm, actually — the template writes `<think>` as literal TEXT (not a special token). `_infer_thinking` looks in `tokenizer.get_vocab()` — if the vocab contains the *string* "<think>" as a token (even a normal token, not special), it returns single-token mode. Qwen3.6's vocab likely includes `<think>` as a token since it's in the template. This determines `tail_start` (whether the last-11-token window contains `<think>`).
+
+Hmm. But do I need this? For the *addendum* the key claims are:
+1. Only prompt+completion keys stored (no prefix keys) → source + logs.
+2. Trim gate closed → source.
+3. Sequential path → seed gate + log signature.
+
+The prediction "a batchable run would store prefix-keyed snapshots" only needs: segmentation produces ≥2 segments for a chat request ending with a generation prompt (`_tokenize` server.py:605-619: a tail segment from the think start, or the last-token tail from insert_segments:1646-1648). Either way a boundary snapshot keyed by a prompt prefix can be created (its type is "user" when segmentation applies; hmm — if has_thinking is False and there's only one segment from _tokenize, insert_segments splits the last token off; that split segment inherits... let's see: segment_types = ["user"] and the response for the end of the first (long) segment pops "user"... wait, with segments=[[23],[1]] and types=["user"] — hmm, the types list has ONE entry but there are TWO segments now (after insert_segments appended one). The boundary pop would give "user" for the first boundary; then the final segment's end_of_prompt=True → no insert. OK, so still a "user" entry.)
+
+Let me not over-specify the token layout; the claim "the batched path stores a snapshot keyed by the prompt prefix at the end of its first segment" is safe either way, and I'll cite the segment construction lines. I'll phrase the prediction as "would store a prefix-keyed snapshot (types from `_tokenize`'s segments; the last segment is the generation tail)", noting it's not measured.
+
+Hmm, but should I even make this prediction? It's the honest answer to "or request shape" — and the order explicitly invites identifying whether request shape is a factor. Yes, include it, labeled as a prediction with its gates listed.
+
+Wait, actually — I realize I should double check one thing about the batch path: would a *batchable* run even hit? The boundary snapshot is stored keyed by prompt[:tail_start] with type "user". On the next turn, search: walk prompt_N — it passes through that node (prefix), `last_index` = len(key)-1 = tail_start-1 > 0 → shorter non-None. Then fetch: exact None; `longer`? Let's see — longer might also be non-None (the assistant key extends beyond). Condition: `result.longer is not None and result.common_prefix > short_length`. Hmm! What is `common_prefix` here? The walk continues past the boundary node as long as tokens exist in the trie: prompt_N after the boundary continues with reply_{N-1}... vs the trie child at that node is `<think>` (from turn N-1's assistant key path). So the walk stops at common_prefix = tail_start = short_length. Then `common_prefix > short_length` → tail_start > tail_start → FALSE → skip the trim branch → `short_length > 0` → serve the shorter entry! 
+
+So yes — in the batched path the boundary snapshot would serve. (And the trim branch is skipped anyway, so the hybrid cache doesn't matter for that branch.) Nice, that's a clean prediction.
+
+Hmm, hold on: is `result.longer` computed as non-None here? `index > 0` → stack walk from the node after consuming tokens[index-1]... the node = after the boundary key's last token? Let me recompute: `index` counts consumed tokens = tail_start (the walk consumed the whole boundary key, then failed on the next token). `current` = the node for the boundary key. The stack starts at that node; it has __value__ (the boundary entry) → best = [] → longer = tokens[:index] + [] = tokens[:tail_start] = the boundary key. So longer == shorter (len equal) → `common_prefix (tail_start) > short_length (tail_start)` false → skip trim → shorter branch serves. ✓ Consistent with what I said.
+
+So in the batch path, the boundary entry would be served via `shorter` — and the trimmed-`longer` gate never enters the picture. Since the batched path is never taken with seed pinned, the whole thing hinges on (1). And (2) is why even the same-prompt repeats miss in the sequential path.
+
+Interesting: so for THIS run, both factors matter in different places:
+- Cross-turn misses: could have been served IF prefix snapshots existed (they don't, because sequential path) AND the trim branch were needed otherwise (it isn't in the sequential path — there is no other candidate).
+  Hmm, wait. In the sequential path with only prompt+completion keys, for turn N the ONLY candidate is `longer` (trim-gated). If the model were trimmable, turn N WOULD hit at common_prefix. So for cross-turn, both factors are load-bearing in the alternative: with a trimmable model but sequential path → hit via trim; with batch path but hybrid model → hit via shorter; with both (sequential + hybrid) → miss. That's the honest structure.
+- Intra-turn repeats: the exact-repeat case needs the trim branch (the stored key is a strict extension of the query) → immutable gate → miss regardless of path.
+
+Great — that's a precise answer, and it also explains why oMLX/Osaurus hit (different cache designs with boundary snapshots) while mlx-lm/OptiQ/vMLX didn't (the 06-02 story).
+
+Now let me write. First the addendum to docs/research/2026-09-25-multiturn-runtime-axis.md, appended at the end. Since the file ends with "## What this cannot claim", I'll append a new section after it, clearly marked as an addendum answering Open question 1.
+
+Draft (keeping the document's voice — dense, evidence-with-citations, careful about claim strength):
+
+```markdown
+## Addendum (2026-09-25, evening): why mlx-lm's prompt cache never hit — Open question 1, answered from source
+
+Written after the grid closed, against mlx-lm 0.31.3 and the two visit logs of this run. No code
+changed, nothing was started or loaded; every claim is a line citation in the installed package
+(`$PKG` = `~/.local/share/ohyesmlx/mlx-lm-0.31.3/lib/python3.14/site-packages/mlx_lm/`) or a line
+in `results/logs/mlxlm-20260925T091430-41697.log` / `…T101438-…`.
+
+### The answer in two sentences
+
+The run's requests never entered the server's batched path — the pinned `seed` vetoes it
+(`_is_batchable`, server.py:685-686) — so the only thing ever inserted was one entry per turn
+keyed by that turn's prompt **plus its 128 generated tokens** (`_serve_single`, server.py:969,
+1006, 1019-1021); and the one fetch branch that can serve a request from such a longer key
+requires a trimmable cache (`fetch_nearest_cache`, models/cache.py:1681-1688), which this model's
+cache is not — 30 of its 40 layers hold `ArraysCache` state, and `ArraysCache` has no
+`is_trimmable`/`trim` (models/cache.py:594-728, inheriting False from :146-147). Every request
+therefore took `return None, tokens` (models/cache.py:1694) and prefilled whole.
+
+### What the run actually executed
+
+... (evidence: 0/N lines; user/system 0; counts grow one per turn; deterministic output)
+
+### How the server keys and reuses its cache
+
+...
+
+### Why turn N never hits — the three branches walked
+
+...
+
+### What would have changed it (predictions, not measurements)
+
+...
+
+### What this does not establish
+```
+
+I need to be careful about file length — the research doc is 344 lines; the addendum should be thorough (it's a research doc, full detail allowed/expected per my memory instructions: documentation artifacts get full prose). But it should not bloat. Aim ~90-120 lines.
+
+Let me now write the exact text. Key citations to include:
+
+Source (server.py):
+- 373: `is_batchable = is_batchable and all(hasattr(c, "merge") for c in make_prompt_cache(model))` — this model passes (ArraysCache.merge at cache.py:702, KVCache.merge at :397) so the seed is the veto.
+- 685-686: `_is_batchable`: `model_provider.is_batchable and args.seed is None`.
+- 804-815: the branch that decides single vs batch (line 813-815: `if not self._is_batchable(args): self._serve_single(...)`).
+- 922-1021: `_serve_single`.
+  - 965-968: fetch; `ctx.prompt_cache_count = len(prompt) - len(rest)`.
+  - 969: `cache_key = prompt[:]`.
+  - 1006: `cache_key.append(gen.token)`.
+  - 1019-1021: insert with default cache_type "assistant".
+- 864-880: the batched path's segment-boundary insert (only place a prefix-keyed entry is created).
+- 516-624: `_tokenize` segmentation (only used for the batch path's boundaries and the single path's prompt; in single, segments are discarded: `prompt, _, _, initial_state`).
+- 1743: `LRUPromptCache(cli_args.prompt_cache_size)`; 1871-1876: default 10.
+- 461-470: `_log_cache_stats` format ("Prompt Cache: N sequences", per-type lines).
+- 1344-1346: `cached_tokens: prompt_cache_count` — reported in usage; the harness's Observation does not record it (its keys: completion_tokens, content_event_count, error, last_content_s, ok, prompt_tokens, reasoning_text, reasoning_tokens, text, token_source, total_s, ttft_s) — worth noting as an open item for the harness. Hmm, should I mention this? It's a useful observation: the one field that would have made this visible in the record is not recorded. Yes, mention in one line (it's a fact about the record, no code change suggested).
+
+Source (cache.py):
+- 88-92: can_trim_prompt_cache.
+- 146-147: _BaseCache.is_trimmable → False.
+- 594-728: ArraysCache (has merge at 702 but no is_trimmable/trim).
+- 325/375: KVCache.is_trimmable → True (so a pure-attention model would be trimmable).
+- 1578-1620: PromptTrie.search.
+- 1674-1694: fetch_nearest_cache, the three branches.
+- 1696-1737: insert_cache; 1719-1725: prefix pruning only when the inserted cache is trimmable; 1728-1732: max_size eviction.
+
+Source (qwen3_5.py / qwen3_5_moe.py):
+- 304-305: `make_cache` → ArraysCache for linear layers (TextModel); outer Model delegates at :522-523.
+- 212: `is_linear = (layer_idx + 1) % full_attention_interval != 0`.
+- artifact config: `model_type: qwen3_5_moe`, text_config `full_attention_interval: 4`, `layer_types` with 30 linear + 10 full, num_hidden_layers 40.
+- qwen3_5_moe.py: `class Model(Qwen3_5Model)`.
+
+Log evidence:
+- Every request's first progress line is `0/<its full prompt length>` (e.g. `0/1393` for the last turn), then `N-1/N`, `N/N` — this is `stream_generate`'s callback (generate.py:425-463: the `0/N` call at :429, one prefill chunk leaving the final token, then the `N/N` call when generation begins, :463). The batched path never calls it; it forwards `Response.progress` tuples whose first element is always ≥ 1 (generate.py:1834-1835), and would have printed `1391/1393`-style firsts.
+- `Prompt processing progress` denominators = the *stripped* prompt (`stream_generate(prompt=rest)`, server.py:976-980 → total_prompt_tokens = len(rest), generate.py:425-427): a served prefix of P would print `0/(N−P)`. All 154 + 144 requests printed the full length.
+- `- user: 0 sequences` and `- system: 0 sequences` on every one of the 298 `Prompt Cache` lines... wait, 154+144 = 298 = the count of Prompt Cache *total* lines; each has 3 sub-lines. Let me phrase: "every `Prompt Cache` line in both visits reads `user: 0` and `system: 0`".
+- The count grows 1→10, one step per turn: 15/16 requests per turn but one entry per turn, because temperature 0 + the pinned seed reproduce the same completion byte-for-byte (turn-02: 24 warmups + 9 measured, one distinct `reasoning_text`, 128 completion tokens each), and the same-prompt, same-completion key replaces itself (cache.py:1712-1717).
+- Hmm, is the "same key replaces" the right explanation vs "the insert doesn't happen"? The insert happens unconditionally at 1019. OK.
+
+Also worth including: the exact per-turn picture: no request ever found anything: the count of entries at a turn's start = turn-1 (1..10), and the turn-10 requests with 10 entries (the cap; no eviction ever fires because len never exceeds 10 exactly... careful: `if len(self._lru) > self.max_size` → 10 is allowed; 11 would evict. Since one new distinct key per turn and exactly 10 turns, len reaches 10 and never exceeds it. State it as: "the cap (10, server.py:1871-1876) is reached on turn 10 and never exceeded — every insert replaced an existing key or added the turn's own, so no eviction ever fired.")
+
+Wait, is that exactly right? Each turn adds one NEW distinct key (the turn's prompt+completion). Turns 1..10 → 10 keys. Within a turn all requests share the same key. So after turn 10, len = 10 = cap, no pop. ✓ And during turn 11 (doesn't exist) it would evict.
+
+Hmm, but hold on — the *first* visited round and second visit: each visit is a fresh process (two log files = two starts). Within a visit, turns 1..10. ✓.
+
+Now the predictions:
+
+**(a) A batchable run (no seed) would store prefix-keyed snapshots** — `_tokenize`'s segments (server.py:580-624: the prompt minus the generation tail is one "user" segment) + `insert_segments`'s last-token split (generate.py:1646-1648) + the boundary insert (864-880). For this conversation, the boundary key is a strict prefix of the next turn's prompt, so `PromptTrie.search` would return it as `shorter` and `fetch_nearest_cache` would serve it without any trim (cache.py:1690-1692); `common_prefix == short_length` there, so the trim branch is not even consulted. Prediction, not measured.
+
+**(b) On a model whose caches are all trimmable** (no ArraysCache — i.e. a plain-attention model), the same sequential path would serve turn N from turn N−1's key through the trim branch (trim to the common prefix — the history up to the previous generation prompt). Also a prediction; it is the same one held open by `docs/research/2026-09-17-cache-state-split.md` Open question 1, and the 06-02 note that the flag itself is live stays true.
+
+Hmm, one caveat on (b): `trim_prompt_cache(cache, num_to_trim)` → `[c.trim(num_tokens) for c in cache][0]` — for a list of KVCaches each trims by n. Fine. And `prefix = min(len(tokens) - 1, result.common_prefix)`; here common_prefix = len(prompt_{N-1}) - 2 < len-1, so prefix = common_prefix. Fine, but I don't need this precision in the doc.
+
+Also I should note: the *same-turn* repeats would hit under (b) too (trim to len-1, leaving 1 token) — that's the exact-repeat case.
+
+**(c) What the 06-02 doc's reading needs amending:** its "the segment-boundary insert never fired for this prompt" is true for those runs for a stronger reason than the prompt — the seed pin means the batched path (the only home of that insert) was never entered at all; the same is true of this run. Hmm, is it true that the 06-02 cells pinned seed? The 06-02 doc says "Pins every run shares: temperature 0.0, seed 0, ...". So yes, seed 0. And its logs show `0/4106` (a sequential-path signature) — consistent. So the 06-02 sentence "the segment-boundary insert ... never fired for this prompt" should be read as "never had the chance to fire: the seed pin kept the run off the path that performs it". I'll note this as a correction of emphasis in the addendum, not editing the 06-02 doc (I may only touch the two named files). Good catch to report.
+
+Now: does the seed veto matter for OptiQ too? The 06-02 doc says OptiQ's logs carry the same lines (0/4108) → same sequential path (same server code). It'll be a note.
+
+Now, let me also double check the "0/N then N-1/N" claim is universal in the logs: for turn-01 (24 tokens), we saw 0/24, 23/24, 24/24 — yes, exactly 2 progress lines after the 0 one. For 174: 0/174, 173/174, 174/174. For 1393: 0/1393, 1392/1393, 1393/1393. So the pattern holds — prefill_step_size 2048 > prompt length → single chunk leaving the last token. Consistent with server default 2048 (server.py:1865-1870) since the harness passes no `--prefill-step-size`.
+
+Hmm — this is a beautiful independent confirmation: prompts up to 1392 tokens processed in ONE chunk in the loop (1392/1393 printed), so prefill_step_size ≥ 1392 → the 2048 default. If the batched path were used with the 2-segment structure, the first printed progress would have been (segment1 length, total). So the `0/N` signature is decisive.
+
+Now let me write both files. First the addendum — append to the research doc. I'll use edit_file with the last line as anchor, or read the tail and append. The file ends at line 344 with the "Not a context-length study" bullet. I'll append after it.
+
+Let me draft the exact markdown.
+
+---
+
+Also: the task says "Report DONE with the answer". And I must run "the project's test command" and report the count. What is the project's test command? AGENTS.md: `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q` (the repo has no venv with pytest). Baseline: let me run it BEFORE changes (baseline), then after. Since this is docs-only, the suite should be unaffected; still, run both to report the baseline.
+
+Let me run the test suite now (baseline) while I compose the docs. Note: tests may be slow (there are results dirs to scan?). Let me try with a timeout of 600s... Actually the instruction says run it; let me first check how many tests. Just run it in background? Let me run it with a generous timeout in the background and compose the docs meanwhile.
+
+Let me start the baseline test run in the background.All facts verified. Let me start the baseline test run in the background while I write the addendum.
+" in the vocab.
+
+If it turns out `<think>` is NOT a token (e.g. tokenizes as `<`, `think`, `>`), then the prediction (a) is weaker — I'd phrase it as "if the segmentation produces a boundary at the end of the history segment, that entry would be prefix-served; whether it does for this tokenizer depends on the think-token inference". Better to just check.
+
+Let me check now.One dependency for a prediction in the addendum: whether `<think>` is a single token in this artifact's vocab (which decides where the batch path's boundary snapshot would land).
+` as added tokens (tokenizer.json added_tokens, ids 248068/248069), which is what `_infer_thinking` (tokenizer_utils.py:260-273) looks for, so the tail segmentation applies. Good enough, with the caveat "as inferred from the tokenizer's own added-token table".
+
+Hmm, one more check on the segmentation logic: `rfind_think_start(prompt, start=tail_start - 11)` — the call is `tokenizer.rfind_think_start(prompt, start=tail_start - 11)` where tail_start = len(prompt) initially (line 607-611). So it searches in prompt[len-11:]. The template's tail `<|im_start|>assistant\n<think>\n` has the `<think>` token at position len-2 (if `\n` is 1 token). Within the last 11 → found. ✓
+
+So the boundary = prompt[:index of <think>] = H + `<|im_start|>assistant\n` (the tokens before `<think>`). And prompt_N's first tokens are exactly H + `<|im_start|>assistant\n` + reply... Wait, one moment: does the reply's first token maybe equal `<think>`? The replies are plain prose, so no.
+
+Also: is the boundary key equal to a prefix of prompt_N *token-wise*? prompt_{N-1}[:tail_start] and prompt_N[:tail_start] — both are the chat template's rendering of the same history with `add_generation_prompt=True` concatenated... hmm, actually careful: prompt_{N-1} = render(history_{N-1}, add_generation_prompt=True); prompt_N = render(history_N, add_generation_prompt=True) where history_N = history_{N-1} + assistant reply + user question. The rendering of a prefix of messages is token-identical for the shared messages (the template renders each message independently; no state that changes earlier tokens... one caveat: `ns.last_query_index` / `preserve_thinking` logic could alter how earlier assistant messages render! Look at the template: for each assistant message, `{%- if (preserve_thinking is defined and preserve_thinking is true) or (loop.index0 > ns.last_query_index) %}` → `last_query_index` is computed by scanning messages in reverse for the last user message. For history_N, the last user message is question N at index 2N-2; assistant messages at earlier indices are < last_query_index → rendered plain. For history_{N-1}, same for its messages. So the shared messages render identically. ✓ (Their indices shift, but every shared assistant message is before the last user message in both cases → same branch.) Hmm — wait, one exception: in history_{N-1}, the LAST message is the user question N-1, and the last assistant message is at index 2N-4 < last_query_index = 2N-4+... For history_{N-1}: messages = [u1,a1,...,u_{N-1}]; last user index = 2N-4 (0-based: u_{N-1} at index 2(N-1)-2 = 2N-4). Assistant a_{N-1} doesn't exist yet. Assistant messages a_1..a_{N-2} at indices 1,3,...,2N-5 — all < 2N-4 → plain rendering ✓. For history_N: assistant a_{N-1} at index 2N-3, last user index = 2N-2 → a_{N-1} < last_query_index → plain ✓. So all shared assistant messages render the same in both prompts. And the user messages render the same. ✓ So token-level prefix equality holds for the shared portion (given the tokenizer is deterministic, which it is).
+
+Thus the batch-path prediction is solid. Note I should present it as: "source prediction, not measured — the batch path is not what ran."
+
+Now let me write the addendum. I'll append to the research doc.
+
+Also, for the mlx-lm.md doc, structure (short):
+
+```
+# mlx-lm 0.31.3 — runtime capability and configuration reference
+
+Written 2026-09-25 by static inspection of the installed package plus the run logs of the ten-turn
+run; every claim carries its evidence inline... Nothing here was established by starting a server.
+
+**Version.** `_version.py` → 0.31.3, the package the harness measures (`scripts/run_multiturn.sh:24`
+puts ~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin on PATH...). Evidence convention: `$PKG` = ...
+
+## 1. Start command and what it does not carry
+- runtimes.py:MlxLm.start_command → python -m mlx_lm.server --model <dir> --port 8081 + prompt-cache flags...
+- --prompt-cache-size default 10 (server.py:1871-1876)
+- no KV codec, no MTP, no expert streaming: pointers to runtimes.py methods rather than restatement.
+
+## 2. The request-level gate that decides the serving path (the finding)
+- seed → sequential; consequences.
+
+## 3. The prompt cache: keys, branches, and the trim gate
+- table of the three branches; what this model can use.
+- affected model classes.
+
+## 4. What the logs say / how to read them
+- Prompt Cache lines, per-type breakdown is the tell (user: 0)
+- Prompt processing progress: 0/N signature for the sequential path
+- the denominators are the stripped prompt.
+
+## 5. What to measure / what not to conclude
+- TTFT is a full prefill on a hybrid model even with the cache on...
+- prompt-cache flag is live but the model can't use it.
+
+## 6. Not established
+```
+
+Keep to maybe 90 lines. Let me write both now.
+
+Then run the tests (baseline may be done) and report.
+
+Let me write the addendum first.`<think>` is an added token (248068) — so the thinking-tail segmentation applies. Now I'll append the addendum to the research doc.
+Now the short per-runtime capability note.
+Let me verify the two citations I haven't read directly: the concurrency defaults and qwen3_5_moe.py's import/class lines.
+Two citation corrections needed — concurrency defaults are at 1853-1863, and the MoE import/class are at lines 6/21.
+
+637 passed. Let me verify the greedy-sampling claim in `make_sampler` before finalizing, then re-run the suite on the final tree.
+Greedy at temp 0 confirmed (`sample_utils.py:46-47`). Let me add that citation and do a final read-through of both docs.
+The parallel read raced my edit; let me confirm the current file state and fix two wording issues (the evidence-convention path and the trie-key phrasing).
+
+Let me do a final full read of both changed documents to QA them.
+Let me verify the last two empirical claims: that every request in both logs has a `0/N` first line, and that every harness run pins a seed.
+All counts check out (154 and 144 requests, one `0/N` each). Three small wording fixes, then the final test run.
+
+Final verification: repo state and the suite on the frozen tree.
+The suite moved under me (637 → 646 tests) and shows a failure in `test_runtimes.py` — that's not from my docs-only change. Let me check what else is being modified in the tree.
+All those mtimes are during my session — another writer is editing `runtimes.py`/tests concurrently. Let me confirm the failure belongs to their in-flight change, not mine.
+The failing test passes now — the concurrent writer finished their edit mid-run. Let me re-run the full suite for a clean verdict.
+Another writer is mid-edit on `runtimes.py` (mtime seconds old) and their new tests flip between runs. Let me get a stable reading on the modules untouched by them.
+**DONE.** Docs-only; no code, no git, nothing started.
+
+## What changed
+
+- `docs/research/2026-09-25-multiturn-runtime-axis.md` — appended a 141-line addendum answering Open question 1.
+- `docs/runtimes/mlx-lm.md` — new, short capability reference (no mlx-lm doc existed; `docs/runtimes/` had the other four).
+
+## The answer
+
+Two facts; either alone makes every request a full prefill, and together they close every `fetch_nearest_cache` branch:
+
+1. **Nothing was ever stored at a prefix.** Every request carried `seed: 0` (`measure.py:165`, sent at `:1073`), and `_is_batchable` is `model_provider.is_batchable and args.seed is None` (`server.py:685-686`) — so all requests took `_serve_single`, whose only insert is keyed by `prompt + every generated token` (`server.py:969,1006,1019-1021`). The per-segment prefix-keyed inserts exist only in the batched path (`server.py:864-880`) and were never reachable. Logs: every one of the 154 + 144 requests printed `0/<full prompt length>` (the sequential path's own `generate.py:429` signature; a batched request cannot print `0/N`), every `Prompt Cache` line reads `user: 0 / system: 0`, and the total walks 1→10, one key per turn (repeats replace the same key — greedy at temp 0 reproduces the completion byte-for-byte).
+2. **The one branch that could serve from a longer key is dead for this model.** `longer` needs `can_trim_prompt_cache` (`models/cache.py:1683`, `:88-92`); `Qwen3.6-35B-A3B-oQ4` is `qwen3_5_moe` with `full_attention_interval: 4` (30 linear + 10 full layers) and `make_cache` gives `ArraysCache` for linear layers (`qwen3_5.py:304-305`), which has no `is_trimmable`/`trim` and inherits `False` (`cache.py:146-147`). So `longer` is skipped, `shorter` is empty (fact 1), and it returns `None, tokens` — full prefill, every turn.
+
+Also recorded: predictions (a seed-less run would store prefix snapshots the `shorter` branch serves; a trimmable/attention-only model would hit via the trim branch — both unmeasured), and a correction of emphasis to the 06-02 doc: its "the segment-boundary insert never fired for this prompt" is true because a seed pin keeps the run off the batched path entirely. Flagged for the coordinator: the server reports the served prefix as `usage.cached_tokens` (`server.py:1344-1346`) and the harness's `Observation` doesn't record it — the log is the only artifact that holds this.
+
+## Verification
+
+- **Baseline: 637 passed, 0 failed** (17:48 EDT, `verify-venv python -m pytest -q`).
+- Final full-suite runs read **644–646 passed with 1–3 failures in `tests/test_runtimes.py`** — but `ohyesmlx/runtimes.py` and `tests/test_runtimes.py` are being edited by another writer *during* my runs (mtimes moved between runs, the failing assertions target strings introduced in that uncommitted diff). Excluding those two concurrently-edited files: **276 passed, 0 failed**. My change is two docs files and cannot affect tests.
+- Red-check N/A: no code fix, no new test added.
+
+**Not verified:** the two predictions above; and the exact token split of `…assistant\n<think>\n` (read from the template/added-token table, not from a tokenized request).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     54    8743369    8518400    86373   97.4%   0.111124
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M docs/research/2026-09-25-multiturn-runtime-axis.md
+ M docs/runtimes/optiq.md
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M scripts/osaurus-pin.sh
+ M scripts/run_grid_35b.sh
+ M scripts/run_multiturn.sh
+ M scripts/run_sweep_kvquant.sh
+ M scripts/run_sweep_mtp.sh
+ M scripts/run_sweep_streaming.sh
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? docs/runtimes/mlx-lm.md
+ .paul/STATE.md                                     |  16 +-
+ docs/interfaces.md                                 |  36 +-
+ docs/research/2026-09-25-multiturn-runtime-axis.md | 141 +++++
+ docs/runtimes/optiq.md                             | 586 ++++++++++++++-------
+ ohyesmlx/report.py                                 | 138 ++++-
+ ohyesmlx/runtimes.py                               | 311 ++++++++++-
+ scripts/osaurus-pin.sh                             |   8 +-
+ scripts/run_grid_35b.sh                            |  60 +--
+ scripts/run_multiturn.sh                           |  21 +-
+ scripts/run_sweep_kvquant.sh                       |  24 +-
+ scripts/run_sweep_mtp.sh                           |  26 +-
+ scripts/run_sweep_streaming.sh                     |  22 +-
+ tests/test_report.py                               | 180 ++++++-
+ tests/test_runtimes.py                             | 362 +++++++++++++
+ 14 files changed, 1609 insertions(+), 322 deletions(-)

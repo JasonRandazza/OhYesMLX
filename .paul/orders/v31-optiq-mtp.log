@@ -1,0 +1,171 @@
+I'll start by understanding the current state of the relevant code and docs.
+I have the interfaces doc. Now let me read the relevant parts of `runtimes.py` — it's large, so I'll target the MTP sections.
+
+
+Now the research doc's §4 / open questions and the two real logs.
+Now the key part — OptiQ's own source, to derive the expected-shape rule.
+
+
+
+
+Both artifacts are on this host. Let me read their sidecar headers with stdlib only and check configs against OptiQ's contract rules.
+Now the contract source: the key-set constants and how `serve.py` builds the contract.
+Post-checking the rule against the real artifacts. Let me verify mlx's SwitchGLU quantization state and dump full headers.
+
+
+
+
+
+Let me establish the test baseline and confirm the 35B's mismatch line.
+
+
+Now I have everything I need. Let me implement item 1 — the traceback-aware wording in the shared log evidence reader.
+
+Let me check item 1 against the real 4B log right away.
+Now item 2 — the sidecar header reader and the shape gate.
+
+Now wire it into the gate's tail and update the surrounding docstring.
+
+
+
+The 35B refuses and the 4B passes. Let me refine the ordering so the reason names the tensor the runtime's own log names, and handle the packed-fused case honestly.
+
+Now the `Optiq.mtp_depth_missing` docstring — the method item 1 names — and the module header.
+
+
+Two report tests failed — let me check whether something else changed on disk concurrently.
+
+Concurrent workers are editing other files. Let me check the diff scope and re-run the suite.
+Suite is green (637 — another worker added tests). Now the tests. Let me generate faithful tensor literals from the real headers.
+
+
+Now let me write the tests for both items.
+
+
+
+Good — 9 of 10 pass. My window fixture had the traceback inside the head; let me fix it to test the real boundary.
+
+All green. Now the red-checks — first backing up the file so the revert/restore is byte-exact.
+Red-check 1: revert item 1's wording and watch the new assertions fail.
+
+
+
+
+
+Red-check 2: disable the packing gate and watch the item-2 tests fail.
+
+
+
+Red-check 2 confirmed — the 35B passes and four tests fail. Restoring.
+Now item 3 — the doc. Let me re-read §9.2 as it stands after the other worker's edits.
+
+
+Now the log-half wording in the same section.
+
+Suite is green (647). Let me review the final diff and check the project's lint config.
+
+
+
+
+
+
+
+
+
+
+DONE.
+
+## What changed
+
+**`ohyesmlx/runtimes.py`**
+1. **Item 1 — the depth check's wording.** New `_traceback_cause(text)` + `_TRACEBACK_START`/`_TRACEBACK_FRAME` read a traceback's innermost `File …, line N` frame (the *last* one) and the first unindented line after it (the interpreter's final exception line). `_banner_evidence`'s no-fallback branch now quotes those, and says `"prints no line this check reads"` when the window holds no traceback. Window unchanged (`LOG_HEAD_BYTES`, same read).
+2. **Item 2 — the artifact shape gate.** New `_safetensors_shapes` (stdlib: 8-byte LE length + JSON) and `_optiq_head_packing_refusal`, wired in as `optiq_mtp_refusal`'s third condition. Rule, derived from installed `mlx-optiq` **0.5.13** and cited by file:line: the block is quantized iff `mtplx_mtp_quantization` says `prequantized` **and** states a width (`mtp_patch.py:51-66`, `:86-87`, `:444-449`); the policy decides which modules (`:89-113`); a packed weight is `(out, in*bits/32)` against scales `(out, in/group_size)`, so the pair is checkable as `weight[-1]*32 == scales[-1]*group_size*bits` with no model dims; and the fused HF expert layout is refused outright because `_split_fused_experts` (`:116-141`) rewrites the weights but never their scales (`:356-364`).
+
+**`tests/test_runtimes.py`** — 10 tests: 3 for item 1 (real 4B traceback quoted; neither marker nor traceback; traceback beyond/astride the head window), 7 for item 2 (the two real headers as fixtures — 29 and 37 tensors — plus naked-weight, wrong-width, policy-scope, dense-head-not-read, unreadable-header).
+
+**`docs/runtimes/optiq.md` §9.2** — the conditions table gained the third row, a paragraph gives the four derivable facts and the ceilings, and the log half records the traceback wording.
+
+**Real artifacts (run in the shell, not just via fixtures):** `Qwen3.6-35B-A3B-OptiQ-4bit` → N/A, naming `gate_up_proj` `(256, 1024, 2048)` → split `(256, 512, 2048)` vs `(256, 512, 256)`; `Qwen3.5-4B-OptiQ-4bit` → accepted.
+
+## Verification
+- Baseline: **634 passed** (my start). Final: **647 passed** — the extra 13 are 10 mine plus 3 added concurrently by other workers.
+- Red-checks, both reverted-then-restored (sha256 checked against a backup): with the cause lookup disabled **plus** the old wording, all 3 item-1 tests fail (symptom: `AssertionError: the final line is quoted`; the other two on `"prints no line this check reads"`); with `_optiq_head_packing_refusal` short-circuited, the 35B is accepted and 4 item-2 tests fail (`TypeError: argument of type 'NoneType' is not container`).
+- No git operations, no server starts, no model loads.
+
+## Not verified / ceilings
+- The rule is not a re-implementation of `_check_mtp_weight_shapes`: a head prequantized *by its key set* rather than its config, an unparsable header, and an already-packed fused expert are **misses**, caught by the log half — all three are stated as `# ponytail:` ceilings. The fixtures reproduce the real *shapes* (dtypes are not what the check reads); the real artifacts themselves were checked out-of-suite, so an evicted HF cache would not fail the suite.
+- **Widening worth knowing:** `_banner_evidence` is shared with the two `stream_experts` `on` checks, so their no-marker branch gained the same traceback wording. Verdicts unchanged; no existing test asserted the old text (it appears nowhere else in `tests/`), and I left vMLX's own separate depth message at `runtimes.py:2518` alone.
+- **Stale, outside my allowed files:** `docs/interfaces.md` still describes `optiq_mtp_refusal` as declaring-a-layer + head-present, without the shape condition; I did not touch it.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     76   15007083   14735872   108144   98.2%   0.149776
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_a_cell_that_never_ran_is_a_rag_and_not_a_failure
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M docs/research/2026-09-25-multiturn-runtime-axis.md
+ M docs/runtimes/optiq.md
+ M ohyesmlx/report.py
+ M ohyesmlx/runtimes.py
+ M scripts/osaurus-pin.sh
+ M scripts/run_grid_35b.sh
+ M scripts/run_multiturn.sh
+ M scripts/run_sweep_kvquant.sh
+ M scripts/run_sweep_mtp.sh
+ M scripts/run_sweep_streaming.sh
+ M tests/test_report.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? docs/runtimes/mlx-lm.md
+ .paul/STATE.md                                     |  16 +-
+ docs/interfaces.md                                 |  36 +-
+ docs/research/2026-09-25-multiturn-runtime-axis.md | 141 +++++
+ docs/runtimes/optiq.md                             | 586 ++++++++++++++-------
+ ohyesmlx/report.py                                 | 138 ++++-
+ ohyesmlx/runtimes.py                               | 315 ++++++++++-
+ scripts/osaurus-pin.sh                             |   8 +-
+ scripts/run_grid_35b.sh                            |  60 +--
+ scripts/run_multiturn.sh                           |  21 +-
+ scripts/run_sweep_kvquant.sh                       |  24 +-
+ scripts/run_sweep_mtp.sh                           |  26 +-
+ scripts/run_sweep_streaming.sh                     |  22 +-
+ tests/test_report.py                               | 180 ++++++-
+ tests/test_runtimes.py                             | 362 +++++++++++++
+ 14 files changed, 1613 insertions(+), 322 deletions(-)

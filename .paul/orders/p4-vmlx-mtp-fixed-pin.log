@@ -1,0 +1,178 @@
+I'll start by reading the files I'm allowed to touch and the spec's named sources.
+measure.py is read. Now let me look at runtimes.py — it's large, so I'll grep for the relevant pieces first.
+
+Logs found. Now let me examine the Vmlx and Optiq classes in runtimes.py.
+
+
+Now let me read the shared evidence helpers and constants near the top of runtimes.py.
+
+
+Now I understand the helper shapes. Next I need to verify the two env vars in the vMLX source and pull the exact log strings. Let me examine the source first.
+
+`ar_safety_step` returns early when disabled — so `0` disables the valve, read live from `os.environ` per call. Now the reentry flag and the depth mechanics in the batch generator.
+
+
+
+
+
+
+The mechanics are clear. Now let me pull the exact log strings from the two named logs.
+
+I need to see the log-reading helpers fully (there's a tail reader I glimpsed at line ~500).
+The evidence and mechanics are clear. Now let me look at the existing tests for the depth check call point and command mapping.
+
+There's an existing log-window test. Let me read the surrounding tests in full.
+Now the measure.py test around the depth-check call point, plus the harness fixture.
+Let me check `_spawn` (how the command tuple is executed) and the vMLX docs file.
+Now I need to verify the spawned `vmlx` process is the one running the engine (not a handoff). Let me inspect the launcher on PATH.
+
+
+
+Let me confirm the installed package matches the shipped source (the citations must hold for the code that runs).
+Before writing the check I want to understand how discriminating the three conditions are on the real logs.
+
+
+
+
+Now let me read the vMLX docs file's structure to find where the fixed-depth mechanics belong.
+
+
+
+
+Now let me look at the existing vMLX command tests and `write_log` helper.
+
+
+Now let me read the test_measure harness fixture and helpers.
+
+
+
+
+I have everything I need. Let me establish the test baseline before changing anything.
+The probe's default comes from an env var, so let me verify how the `fixed` policy disables it in the CLI.
+Critical check: does the CLI itself set either variable in `os.environ` (which would take precedence over our `VMLX_` spelling)?
+No BLOCKED finding — both vars are read by the spawned engine process and `0` disables them. Let me grab exact verbatim lines from the logs for the test excerpts.
+
+All verified. Now I'll write the runtimes.py changes — first the constant with the rationale.
+Now the whole-log reader next to the other two windows.
+Now the `Vmlx.start_command` env prefix.
+
+Now the core: `Vmlx.mtp_depth_missing`.
+I left a redundant second read; let me fix that and add the regexes.
+
+
+Now update the two docstrings in runtimes.py that describe the old call point and the single override.
+
+Now the measure.py call point.
+
+
+Now let me capture the exact D2 line for the clean-excerpt test.
+
+
+Now the log-half tests for `Vmlx.mtp_depth_missing`, placed after the OptiQ depth test.
+
+Now the measure.py tests — first updating the stale OptiQ test docstring, then the new call-point test.
+
+
+
+Suite green at 634 (627 baseline + 7 new). Now the red-check: I'll temporarily restore the old call point in measure.py and watch the new test fail.
+
+Red-check confirmed — the test fails with `{128} == {64, 128, 512}` (only the first workload's requests before the verdict). Restoring my change.
+Suite restored. Now the documentation: rewriting §7.4.1 of `docs/runtimes/vmlx.md`.
+Let me verify the exact per-request counts before putting numbers in the doc.
+
+
+Let me correct the counts I quoted in the code docstring and test comment to the verified per-request numbers.
+
+
+
+Let me re-read the new §7.4.1 in full to check it for accuracy and contradictions.
+
+
+
+
+
+Two numbers to make precise (rows, not requests) — fixing in both places.
+
+
+
+
+
+
+No index assumptions elsewhere. Final full-suite run.
+634 green. Let me capture the actual command mapping and the diff summary for the report.
+`scripts/run_sweep_mtp.sh` shows in the diff but I never touched it — let me check what's pre-existing versus mine.
+
+One readability fix: the generator shadowing `drafted`.
+Second red-check: temporarily disable the accept-row condition and watch that test fail.
+
+Red-check confirmed. Restoring.
+
+
+Everything is green and restored. Here's the report.
+
+## Diff summary
+
+| file | change |
+|---|---|
+| `ohyesmlx/runtimes.py` | `VMLX_MTP_FIXED_ENV` + `_VMLX_START_RUNG`/`_VMLX_ACCEPT_BY_DEPTH` (rationale once, cited); `_read_log_all()`; `Vmlx.start_command` env prefix; `Vmlx.mtp_depth_missing`; docstring fixes on base `Runtime.mtp_depth_missing` and `Optiq.mtp_depth_missing` |
+| `ohyesmlx/measure.py` | depth check moved out of the workload loop to after the visit's measured requests; `run_cells`/`_visit` docstrings updated |
+| `docs/runtimes/vmlx.md` | §7.4.1 rewritten: three-part pin, what `fixed` does/doesn't disable, the log half, DRAFT_MARGIN caveat |
+| `tests/test_runtimes.py` | +5 tests (+2 constants from the real logs) |
+| `tests/test_measure.py` | +1 test, 1 docstring corrected |
+
+## Step 1 — verified, no BLOCKED
+
+- **The spawned process runs the engine**: `/Users/jrazz/.local/bin/vmlx` `exec`s the bundle console script, which re-execs itself under the bundled python in place and reaches `uvicorn.run` (`cli.py:2943`). `_spawn` (`runtimes.py:351+`) hands the tuple straight to `Popen`, so `env K=V` reaches it.
+- **`0` disables both**: `native_mtp_ar_safety.py:89-93` (`"0"/"false"/"no"/"off"` → False), read at `:113-114`, early return at `:287-288`; `mllm_batch_generator.py:5913-5925` read at `:6345-6348`, gates the sticky rung (`:17285`) and re-entry probes (`:6731`, `:17935`, `:17973`, `:18426`).
+- **Neither `VMLINUX_NATIVE_MTP_AR_SAFETY` nor `…_AR_REENTRY` is ever written into `os.environ`** by the engine, so the `VMLX_` spellings are consulted. The installed package is byte-identical to the cited source (cmp on all three files).
+
+## Step 2 — the check
+
+`Vmlx.mtp_depth_missing`: N>1 fails on `finish=fallback_to_ar` or `start rung D<k>` with k<N; every depth fails when no `accept_by_depth` line has a non-zero denominator at `d<N>`; depth 1 reads only the last. **Window used: the whole log** (`_read_log_all`, defined once, read once per call) — head and tail windows were both rejected because one misses late requests and the other misses early ones; a test proves both directions on a 2.7 MB log. Asked once, after the workload loop (`measure.py:806-821`), for both runtimes that answer it.
+
+## Verification
+
+- Baseline **627 passed**; now **634 passed** (7 new) with `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`, 37s.
+- **Red-check 1** (call point): restored `if position == 0:` → `test_the_depth_check_is_asked_after_every_workloads_measured_requests` failed with `assert {128} == {64, 128, 512}` (only workload 0's requests made before the verdict), plus the double-ask test; restored.
+- **Red-check 2** (accept row): `if False and not any(drafts)` → `test_vmlx_a_depth_nobody_drafted_at_is_fail_on_the_accept_row_alone` failed with `TypeError: argument of type 'NoneType'` (verdict was a pass); restored, `git diff` re-inspected.
+- Depth command now: `env VMLX_NATIVE_MTP_AR_SAFETY=0 VMLX_NATIVE_MTP_AR_REENTRY=0 vmlx serve …`; `off`/absent byte-identical to `TODAY["vmlx"]`.
+- **Not verified**: no server was started and no model loaded, per the order — nothing here confirms live vMLX honours the pin, and the DRAFT_MARGIN caveat is source reading plus `margin_truncated=0` in the named logs, not a measurement.
+
+## Flags for the coordinator (files I may not touch)
+
+- `docs/interfaces.md` is now stale in three places: l.110-111 says `mtp_depth_missing` is "OptiQ only"; l.1108 says the check is asked "after the first workload of the visit has answered"; l.1116-1117 names `LOG_HEAD_BYTES` as the depth evidence window (still true for OptiQ; vMLX's is the whole log).
+- `scripts/run_sweep_mtp.sh` had a pre-existing uncommitted change (the `PAIRS` narrowing); I did not touch it.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    111   20127201   19948160    99692   99.1%   0.146516
+
+== cc-agent: git status ==
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/measure.py
+ M ohyesmlx/runtimes.py
+ M scripts/run_sweep_mtp.sh
+ M tests/test_measure.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+ docs/runtimes/vmlx.md    |  89 +++++++++++++++++++----
+ ohyesmlx/measure.py      |  48 +++++++------
+ ohyesmlx/runtimes.py     | 184 ++++++++++++++++++++++++++++++++++++++++++++---
+ scripts/run_sweep_mtp.sh |   4 ++
+ tests/test_measure.py    |  46 +++++++++++-
+ tests/test_runtimes.py   | 167 ++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 493 insertions(+), 45 deletions(-)

@@ -1,0 +1,132 @@
+NOTE: Mon 08:54 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll start by reading the paper I need to edit and the source data it must draw from.
+Now let me read the source material for the new section.
+Now the four per-run leaderboards, which carry aggregate and TTFT.
+
+
+I have the full data. Before drafting, I need the memory-safety wording from the Osaurus runtime doc, the pin script's `osaurus_set_seqs`, and every cross-reference in the paper that will shift when I renumber.
+
+The runner script confirms the procedure and that it sweeps ports/stale Osaurus apps before and after every cell — so the Conditions claim holds for this sweep too. Let me sanity-check a few raw values against the `results.jsonl`, and get the test command.
+The jsonl lines are long — I'll extract the per-row values with a small Python read so every figure in my draft is checked against the raw record, and run the test baseline in parallel.
+Baseline is 657 passed. My jsonl filter missed — let me inspect the record shape and extract properly.
+
+
+Data and baseline confirmed (657 passed; all figures trace to the four leaderboards). Now I'll make the edits top to bottom, one at a time, starting with the header block.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the new section — the heart of the order.
+
+
+
+
+
+
+
+
+All sections are in. Now let me sweep the file for inconsistencies — stale section refs, old counts, and any surviving "Osaurus does not batch" conclusions.
+
+One residual: §2 claims "every required reading is in these six tables", which is no longer true now that §4 holds the third ladder. Let me fix that lead.
+
+
+Let me tighten one ambiguous clause in the new §4 caveat.
+Now a full proofread of the new section as it stands.
+
+
+
+
+Now let me validate the markdown tables mechanically, confirm the test suite is still green, and check whether any other doc leans on this paper's old Osaurus conclusion (to report, not to edit).
+
+
+One last scope check — confirm only the target file changed (using file mtimes, not git).
+
+Two other cc-agent workers are live on this host — including what looks like a duplicate dispatch of this very order (PIDs 85573 and 85771, same order text, started seconds apart). Let me check the file for any sign of a second writer before I close out.
+One precise check — whether those two identical-argv processes are parent/child (one dispatch) or siblings (a duplicate dispatch).
+**DONE** — `docs/research/2026-09-27-concurrency-batching.md` only; no other file touched, no git, no server starts, no measurement.
+
+Per order item:
+
+1. **New §4, directly after the decode results.** Osaurus `concurrency.maxConcurrentSequences` = N side by side with the seedless (cap 1) rows, three workload tables, each carrying per-request decode / aggregate / TTFT p50 at N=1,2,4,8 plus N=8/N=1, and the sweep's provenance (20:34→21:56 EDT, `osaurus_set_seqs`, `8899b3a`, `osaurus settings restored byte-exact (cmp)`). Headline numbers: decode 63.5→12.3 (−80.6%) / 60.3→95.7 (**1.59×**) / TTFT 0.306→1.439; chat 1.89×; prefill 1.18×.
+2. **Q1 answered** in §4, and the Open-questions list now begins at the oMLX-prefill question (renumbered 1–5). The `safe_auto` note is there as an observation — "did not bind the sequences at N ≤ 8 — as observed, not as a source claim" — supported by the cells' own arithmetic (aggregate ÷ per-request = 0.95/1.93/3.87/7.78 on decode, 0.99/1.75/3.50/6.96 on chat, vs a bound of k < N holding near k).
+3. **Headline, everyday-user, cannot-claim all rewritten** so no sentence concludes Osaurus does not batch; the cap-1 result stays and is labelled the host default in every place it appears (§3 table, §3 memory table, §4 tables, §6 bullet, cannot-claim).
+4. **Drift rows named**: §6's table now has all sixteen |drift|>5% rows in the three sweeps — added seqs chat N=1 **+48.0** (48.2→71.3), seqs prefill N=1 +9.3 (73.9→80.8), seqs chat N=2 +9.3 (35.4→38.7) — each with a "what it touches" reading; the load-bearing-cell sentence updated (eighteen N=1/N=8 decode cells, none flagged; the one flagged decode cell remains vMLX N=4).
+
+Consistency edits the third sweep forced: harness-sha line, runner line, 108 rows, third "What ran" block, pins/row counts, timing-channel line, all Conditions bullets, §2 lead, one §5 sentence, and the §4/§5/§6 cross-reference renumbering.
+
+**Verified:** baseline `verify-venv/bin/python -m pytest -q` = **657 passed**; after the edit = **657 passed** (docs-only, so unchanged by design). All figures read from the four `leaderboard.md` metric cards and the sweep join; every §4 ratio recomputed by hand. A script check found 0 ragged markdown tables. No red-check applies — nothing executable changed, so there was no failing-test symptom to observe, and I did not stage one. The second same-argv cc-agent process is a child of the dispatch (not a second writer); the file shows no duplicated sections.
+
+**Not verified:** the leaderboards' arithmetic from the raw per-request `results.jsonl` (I read the metric cards and join, not recomputed observation-by-observation); the host's `~/.osaurus/config/` state before/after (restore is taken from `runner.log` and `osaurus-pin.sh`, not observed); the `safe_auto` bound from source (explicitly labelled an observation in §4); and the cross-session cap-1 chat discrepancy is recorded (30.8% published, 5.3% on late halves), not resolved.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     55    9047271    8824192   115558   97.5%   0.258538
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+ M docs/research/2026-09-27-concurrency-batching.md
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-osaurus-addendum.log
+?? .paul/orders/v31-conc-osaurus-addendum.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-osaurus-seqs.log
+?? .paul/orders/v31-osaurus-seqs.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? .paul/orders/v31-seedless-grids-writeup.log
+?? .paul/orders/v31-seedless-grids-writeup.md
+?? docs/research/2026-09-28-seedless-validation-grids.md
+ docs/research/2026-09-27-concurrency-batching.md | 317 ++++++++++++++++-------
+ 1 file changed, 223 insertions(+), 94 deletions(-)

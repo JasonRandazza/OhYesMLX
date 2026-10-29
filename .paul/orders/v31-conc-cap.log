@@ -1,0 +1,178 @@
+I'll start by reading the taste file and the core files I need to change.
+Now let me read the rest of runtimes.py and the other key files.
+Now let me look at the tests and measure.py.
+Let me read the rest of test_runtimes.py and find `_visit` in measure.py.
+Let me read the relevant part of measure.py around `_visit`.
+Let me look at the test harness in test_measure.py to understand how fake runtimes are set up.
+
+Now let me check where `runtime.start` is called elsewhere, and look at the runtime docs for the shipped source paths.
+
+Let me find the shipped-source paths for each runtime and read the flag-table sections of the docs.
+Item 3 requires reading the shipped sources. Let me confirm the paths and grep the relevant settings.
+oMLX's `max_concurrent_requests` feeds more than one place. Let me read the surrounding settings and check for other batch limits.
+Let me check oMLX's SchedulerConfig defaults and any other batch-limiting settings.
+
+Now the OptiQ source around the `--max-concurrent` injection, and vMLX's flags.
+
+
+
+
+Let me check oMLX's `_effective_max_num_seqs` and any places it forces batching down.
+
+
+
+
+
+Let me see the other fake `start` definitions in test_measure.py and any other test callers.
+
+The code picture is clear. Now let me read the doc sections I'll edit.
+
+
+I have everything I need. Let me establish the baseline test count before changing anything.
+Baseline is 653 passed. Now I'll make the runtimes.py changes, starting with the base class.
+
+
+
+
+
+Now oMLX's cap — this is where the rationale goes (first cap in the file).
+
+
+
+Let me fix the awkwardly wrapped flag name in that comment.
+
+
+Now the measure.py wiring.
+Now update the test fakes in test_measure.py.
+
+
+
+Let me look at the concurrency test section in test_measure.py to add the wiring test.
+Now add the tests. First in test_runtimes.py, right after the TODAY table.
+
+Let me run the two affected test files.
+318 passed. Now the required red-check: temporarily revert the three caps to `"1"` and confirm the new tests fail.
+
+The caps tests fail as expected. Restoring them, then red-checking the measure wiring test too.
+
+Both red-checks confirmed. Restoring the measure wiring.
+
+Now the docs. First `docs/interfaces.md`.
+
+Now the oMLX doc flag table.
+
+Now the OptiQ doc — flag table plus the places that say the harness passes `1`.
+
+Now the vMLX doc.
+
+Now let me run the full suite with all changes in.
+A test in test_cli.py broke. Let me see why.
+Passes alone — could be ordering flakiness. Let me rerun the full suite to see if it reproduces.
+657 passed now — the earlier failure was flaky. Let me understand that test to make sure my change isn't the cause.
+
+
+
+The failure looks order-dependent. Let me check whether pytest is randomizing test order.
+Let me look at how cli builds the run_cells call, for anything time-dependent.
+
+Let me confirm vMLX's LLM-side admission gate and the DSV4 clamp context for the report.
+Let me verify the sweep directory I referenced exists.
+Let me run a final sanity check on the commands, then the suite again.
+Exactly one literal moves per runtime. Running the full suite again.
+Let me do a final review of all concurrency references in the code.
+DONE. All changes are in the eight allowed files; suite green at **657 passed** (baseline **653**; +4 new tests).
+
+## What changed
+
+**`ohyesmlx/runtimes.py`** — `start_command`, `build_command` and `start` now take `concurrency: int = 1` (base class plus all five `start_command` overrides and oMLX's `build_command` override, which threads it through). The three caps:
+- oMLX `--max-concurrent-requests` → `str(concurrency)` — rationale written once here (Omlx.start_command, ~l.2224)
+- OptiQ `--max-concurrent` → `str(concurrency)`, pointing at that rationale
+- vMLX `--max-num-seqs` → `str(concurrency)`, pointing at that rationale
+- mlx-lm and Osaurus accept and ignore it, with a comment saying why.
+
+**`ohyesmlx/measure.py`** — `_visit` passes `concurrency=concurrency` to `runtime.start`.
+
+**`tests/test_runtimes.py`** — `TODAY` untouched. Added: caps test (N=8 lands in each of the three, restoring the `1` reproduces `TODAY` byte-for-byte, explicit 1 == absent), an ignore test for mlx-lm/Osaurus, and a rig test that oMLX's `start(concurrency=8)` survives the scratch rewrite into the catalog command.
+
+**`tests/test_measure.py`** — fakes take/record `concurrency`; new `started_concurrencies` helper + a test that the run's N reaches every `start`.
+
+**Docs** — interfaces.md gains "The concurrency cap follows the run"; each runtime's flag table records that the cap follows the run (plus the source findings below); the stale "harness passes `--max-concurrent 1`" sentences in optiq.md §7.4/§7.7/§9 are corrected.
+
+## Item 3 (shipped source, read-only)
+
+- **oMLX** (`/Applications/oMLX.app/Contents/Resources/omlx/`): `--max-concurrent-requests` is the only *sequence* cap needing to move — it feeds **both** `SchedulerConfig.max_num_seqs` and `completion_batch_size` (`settings.py:1710-1712`; CLI write at `settings.py:1252-1255`), admission gates on it (`scheduler.py:9979-9982`). Two caveats, neither a second literal: `prefill_batch_size=1` is hardcoded at BatchGenerator construction (`scheduler.py:3088`; prefills are done externally per request, `:9960`), and `_effective_max_num_seqs()` returns 1 for Llama 4 / overflow recovery (`scheduler.py:9391-9396`, `:1759-1762`). No omlx/cli.py flag defaults to 1.
+- **OptiQ** (`/Users/jrazz/Dev/tools/mlx-optiq/.venv/.../optiq/`): confirmed — `--max-concurrent N` injects `--decode-concurrency N` / `--prompt-concurrency max(1, N//4)` unless those flags are passed (`cli.py:2937-2949`), and they land as `BatchGenerator(completion_batch_size=…, prefill_batch_size=…)` (`mlx_lm/server.py:821-827`; defaults 32/8 at `:1853-1864`). Caveat for sweeps: a depth cell keeps the seed → sequential path (`server.py:685-686`), and a KV-quant fallback forces sequential (`serve.py:79-81`, `:95-115`).
+- **vMLX** (`/Applications/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine/`): `--max-num-seqs` (`cli.py:3633`, default 1) is the sequence cap; `--prefill-batch-size`/`--completion-batch-size` are 512 each (`cli.py:3640`, `:3653`; `scheduler.py:590-591`), not limiting at N≤8. But three engine-side guards force serial scheduling for specific models — TurboQuant-without-batch-API (`scheduler.py:899-923`; VLM `mllm_scheduler.py:1736-1766`), single-batch-native families glm5_next/openpangu_v2/zaya (`scheduler.py:945-974`), DSV4-native generator (`scheduler.py:3716-3753`) — so a raised flag does not always buy batching. None of the guards matches the study's Qwen3.5/3.6 JANG bundles by inspection, but that is a source reading, not a measurement.
+- No extra code fix was needed for item 3: in each of the three, the literal item 1 names is the only one.
+
+## Verification
+
+Red-checks (reverted, observed, restored): all three caps reverted to `"1"` → `test_the_three_batch_caps_follow_the_runs_concurrency` failed ("omlx does not put the run's N in --max-concurrent-requests") and the oMLX-start test failed (`'1' == '8'`); removing `concurrency=concurrency` from `_visit` → `test_the_runs_concurrency_is_handed_to_the_start_it_drives` failed (`[1] == [8]`). Confirmed N=1 byte-identity and the single-literal delta per runtime via a direct command dump.
+
+Not verified: no server was started and no real runtime received N=8 (coordinator's to run); the item-3 batching claims are source readings. One pre-existing flake, not mine: `tests/test_cli.py::test_the_multiturn_set_is_a_selector_and_not_a_header_pin` failed once in a full run because `_stamp()` (`cli.py:839-840`, second resolution) can differ between its two calls — it passed on every other run; that file is outside my allowed set.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     83   18079932   17797632    54331   98.4%   0.128336
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/runtimes/omlx.md
+ M docs/runtimes/optiq.md
+ M docs/runtimes/vmlx.md
+ M ohyesmlx/measure.py
+ M ohyesmlx/runtimes.py
+ M tests/test_measure.py
+ M tests/test_runtimes.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+ docs/interfaces.md     | 26 ++++++++++++++++++++++---
+ docs/runtimes/omlx.md  |  2 +-
+ docs/runtimes/optiq.md | 24 +++++++++++++----------
+ docs/runtimes/vmlx.md  |  4 ++--
+ ohyesmlx/measure.py    |  4 ++++
+ ohyesmlx/runtimes.py   | 50 ++++++++++++++++++++++++++++++++++++++++++-----
+ tests/test_measure.py  | 47 +++++++++++++++++++++++++++++++++-----------
+ tests/test_runtimes.py | 53 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 178 insertions(+), 32 deletions(-)

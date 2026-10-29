@@ -1,0 +1,2 @@
+Let me correct the `LOG_HEAD_BYTES` claim with the measured offsets and make the tests use verbatim recorded lines:
+Warning: Reached maximum conversation turns (200). The response may be incomplete. Retry with --max-turns 400 to extend the budget.
