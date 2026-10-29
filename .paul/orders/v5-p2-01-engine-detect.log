@@ -1,0 +1,51 @@
+I'll read the plan, research doc, interfaces, and hardware.py to understand the spec.
+The runtimes file was too big to read whole. Let me pull the constants, RUNTIMES registry, and the interfaces section I need.
+Now let me check the Runtime base class shape, the plan for 02-02 (which fills `install`), and the test style.
+Let me read the rest of the 02-02 plan and the phase PLAN to pin the engines-dir convention.
+
+
+All three plists are XML, so `plistlib.loads(text.encode())` works. Let me verify the package version files exist as the research says.
+The OptiQ venv has changed since the research was written. Let me look closer.
+
+
+Let me check 02-03 and STATE for any pinned engines-dir naming, since the order writes `<name>*`.
+Let me look at how optiq's `__version__` resolves, since that affects the real-machine read.
+The optiq `__version__` is computed at import, so a file-only read yields None for the real 0.7.8 build — worth reporting. Let me get the baseline suite count and the exact interfaces lines.
+The verify venv named in the order doesn't exist at that path. Let me find a usable pytest.
+No verify venv on this machine. The optiq venv carries pytest (and tokenizers), so I'll use it as the verify interpreter.
+
+
+Baseline: **690 passed** (38.58s). Now TDD slice 1 — the AC-1 test first, before `engines.py` exists.
+
+Red confirmed (module missing). Slice 1 implementation — names only.
+
+Slice 2 — the AC-2 presence test (stale Osaurus link must not count).
+
+
+Red confirmed. Slice 2 — presence detection with real-path resolution.
+
+Slice 3 — versions from files, with the AC-3 fixture environment.
+
+
+
+
+Confirmed ExpatError escapes plistlib, so I'll guard both. Implementing slice 3.
+
+Now the detectors return versions.
+
+Slice 4 — the tested-version flag.
+
+Red confirmed. Implementing the flag.
+
+All 6 green. Now the red-checks for guards that the slice progression didn't itself exercise — unreadable files, realpath, and the stale Osaurus link.
+
+
+Next red-check: drop `realpath` from oMLX, and in a separate run let Osaurus see a PATH link.
+
+
+
+
+The stale link makes Osaurus "installed" — the AC's exact failure mode. Restoring.
+Task 2 — amend only the `EngineStatus` name enum and add `tested` in `docs/interfaces.md`.
+Now the real-Mac smoke — file reads only, no binaries launched.
+All five detected; OptiQ's version is `None` — the current 0.7.8 package computes `__version__` at import rather than assigning a literal (more on that in the report). Full suite now.
