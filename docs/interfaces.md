@@ -1357,3 +1357,38 @@ it is the only way a `turn-07` figure across two columns is about one request.
 pin measures its own single sized `prefill` shape and says so in its own header field, so a run
 that named both would be a run that measured one of them with no record of which.
 
+
+## v5.0 — Onboarding shapes (pinned 2026-10-29, T0.2)
+
+Plan and seams: `.paul/phases/v5-onboarding/PLAN.md`. These shapes are the coupling between the Python
+modules, the localhost API and the Swift client; change one here first. All JSON is UTF-8, keys snake_case,
+sizes in bytes, no floats for byte counts.
+
+**`Hardware`** (`hardware.scan(run=...) -> Hardware`; `GET /hardware`)
+`{"supported": bool, "unsupported_reason": str|null, "chip": "Apple M2 Max", "family": "M2", "tier": "base|pro|max|ultra",
+"cpu_cores": int, "gpu_cores": int|null, "ram_bytes": int, "macos": "15.4", "disk_free_bytes": int,
+"volumes": [{"path": str, "free_bytes": int}], "model_budget_bytes": int}`
+`supported` is false off Apple Silicon or under 8 GiB RAM; every other field is still reported. `model_budget_bytes`
+is defined once, in `hardware.py`.
+
+**`EngineStatus`** (`engines.detect_all(env) -> list`; `GET /engines`)
+`{"name": "osaurus|omlx|optiq|mlx-lm|vmlx", "title": str, "blurb": str, "installed": bool, "version": str|null,
+"path": str|null, "install": Plan}`. Names and ports come from `runtimes.py`.
+
+**`Plan`** (`engines.install_plan(name)`; data only, no side effects)
+`{"engine": str, "kind": "guided_download|command", "source_url": str, "size_bytes_estimate": int|null,
+"needs_admin": bool, "steps": [{"id": str, "label": str, "command": [str]|null}]}`.
+`guided_download` (Osaurus, oMLX, vMLX) opens `source_url` and verifies afterwards; `command` runs `steps`.
+
+**`Pick`** (`recommend.pick(...) -> list`; `GET /recommendations`)
+`{"model_id": str, "title": str, "params_b": float, "format": str, "engine": str, "size_bytes": int,
+"fit": "comfortable|tight", "fit_basis": "estimated", "reason": str,
+"measured_here": {"decode_tok_s": float, "ttft_s": float, "peak_mb": int}|null}`.
+`measured_here` is non-null only for a run on this user's Mac (Decision D5); it is never filled from our M2 Max rows.
+
+**Job** (`POST /jobs` body `{"kind": "install|download|quickbench", "args": {...}}` -> `{"job_id": str}`)
+Events on `GET /jobs/{id}/events` (server-sent events), one JSON object per `data:` line:
+`{"seq": int, "type": "progress|log|result|error|done", "message": str, "fraction": float|null, "payload": object|null}`.
+`install` and `download` require `"confirmed": true` in `args`; the server refuses otherwise (the consent gate).
+
+**Errors** are `{"error": {"code": str, "message": str}}` with a 4xx/5xx status. The server binds 127.0.0.1 only.

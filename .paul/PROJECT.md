@@ -19,6 +19,8 @@ Its defining property is that it varies **one thing at a time**. Published MLX
 numbers routinely change the runtime and the quantization together, then credit
 the difference to whichever one the author is promoting.
 
+> **Amended 2026-10-29 (v5.0):** the project now also ships an onboarding app that scans a Mac, guides engine installs, recommends models that fit, and runs a short benchmark. The CLI harness remains the measurement source of truth. Plan: `.paul/phases/v5-onboarding/PLAN.md`.
+
 ## Core Value
 
 A Mac user can point this at their own machine and find out whether their serving
@@ -77,6 +79,8 @@ runtime or their quantization is what's actually costing them speed and memory.
 - Have 16–128 GB of unified memory and care a lot about what fits.
 - Are choosing between Osaurus / oMLX / OptiQ / LM Studio largely on vibes and forum claims.
 - Want to know which lever — runtime or quantization — is the one worth pulling.
+
+**Primary, v5.0:** Mac owners who do not use a terminal and want the best local-AI setup for their own chip, RAM and disk. They get a double-click app, not a CLI.
 
 **Secondary:** The authors of these runtimes and quantization formats, who currently have no neutral third-party numbers to point at.
 

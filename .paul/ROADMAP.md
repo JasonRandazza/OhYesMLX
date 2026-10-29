@@ -15,6 +15,19 @@ perplexity instead of task accuracy. The runtime axis follows, and cites `mlx-Ch
 rather than pretending to be first. The third study is the one our own first spike handed
 us.
 
+## Active Priority: v5.0 — Onboarding App (started 2026-10-29)
+
+Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending sweeps. Plan and tickets: `.paul/phases/v5-onboarding/PLAN.md`.
+
+| Phase | Name | Status |
+|---|---|---|
+| 0 | Contract (governance, interfaces) | In progress |
+| 1 | Know the Mac (hardware scan) | Planned |
+| 2 | Engines (registry, detect, consented install) | Planned |
+| 3 | Models (catalog, recommender, fetch) | Planned |
+| 4 | Server and quickbench | Planned |
+| 5 | SwiftUI app and packaging | Planned |
+
 ## Current Milestone
 
 **v3 — Large-Model Scaling, Context Dynamics & Public Release** (0.3.0)

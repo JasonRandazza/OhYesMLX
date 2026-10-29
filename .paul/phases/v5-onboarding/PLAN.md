@@ -1,0 +1,117 @@
+---
+description: "v5.0 Onboarding App — milestone plan, seams and ticket slices (DRAFT, awaiting seam confirmation)"
+type: Plan
+about: "OhYesMLX"
+---
+
+# v5.0 — Onboarding App
+
+Status: APPROVED 2026-10-29 (seams S1–S8 and decisions D1–D8 confirmed by Jason). Decisions by Jason, this date: SwiftUI shell over a Python backend; guided install
+with consent; curated catalog first (Hugging Face live later); new milestone, ahead of and pausing MTPLX (v4.0).
+
+## Decisions (grilling round 1, all accepted 2026-10-29)
+
+- D1 Apple Silicon only; Intel or <8 GB RAM gets a plain "unsupported" screen, no recommendations.
+- D2 Engines in v5.0: Osaurus, oMLX, OptiQ, mlx-lm, vMLX. MTPLX joins the registry when its branch lands. GUI-app engines (Osaurus, oMLX, vMLX): installer opens the official download and verifies after, no scripting.
+- D3 Quickbench is two stages, one axis each: A = engines with format fixed; B = formats with the winning engine fixed. Each result carries its can't-claim caveat.
+- D4 ~10 min budget; shows time and download size first; starts only on click; one model ≤3B at a time, evict before the next fetch.
+- D5 "Fits" is computed from the user's RAM/disk and labelled estimated; speed shown only from runs on the user's Mac ("measured on your Mac"). M2 Max numbers never predict other machines.
+- D6 Standalone Python (python-build-standalone) bundled in the .app with the ohyesmlx package.
+- D7 First release = unsigned GitHub Releases .app zip (right-click, Open); notarization waits on an Apple Developer account decision. Xcode build is the developer path; the CLI stays.
+- D8 Local only: no telemetry, no upload. Results in ~/Library/Application Support/OhYesMLX/; "Export results" writes a JSON file. Models in the HF cache by default; the user may pick another volume.
+
+## Purpose
+
+OhYesMLX stays a measurement tool, and gains a front door. A Mac owner with no terminal habit opens an app,
+is told in plain language what their machine is (chip, unified memory, free disk), meets the serving engines,
+installs the ones they choose, is handed models that fit, and can run a short benchmark to find which
+engine and quantization is fastest on *their* hardware. The harness remains the single source of
+measurement truth; the app is a client of it.
+
+## Architecture
+
+```
+SwiftUI app (app/)  ──HTTP JSON on 127.0.0.1──>  ohyesmlx/server.py
+                                                   ├─ hardware.py   scan the Mac
+                                                   ├─ engines.py    registry, detect, install plans, installer
+                                                   ├─ catalog.py    config/catalog.json (curated models)
+                                                   ├─ recommend.py  fit rules -> ranked picks with reasons
+                                                   ├─ fetch.py      download/evict models under a disk budget
+                                                   └─ existing harness (measure.py, runtimes.py) for the quick benchmark
+```
+
+Rules carried over: stdlib only; one definition of everything (engine names/ports/versions already live in
+`runtimes.py` — `engines.py` asks it, never copies); the server holds no logic the modules lack; every GUI
+action is reachable as a tested function first. Disk is scarce on the owner's machine: the downloader is
+a first-class concern, not a detail (models are fetched one at a time and evicted on request).
+
+## Seams (to confirm before any test is written)
+
+| # | Seam (public interface) | Catches | Misses |
+|---|---|---|---|
+| S1 | `hardware.scan(run=...) -> Hardware` (injected command runner; fixtures of real `sysctl`/`df` output for M1…M4, Pro/Max/Ultra) | chip/RAM/disk parsing, unknown-chip fallback, tiering | the real machine's quirks (checked by one manual smoke) |
+| S2 | `engines.detect_all(env) -> list[EngineStatus]`, `engines.install_plan(name) -> Plan` (pure data) | what is installed, version, what an install would do/size/source | actually running installers |
+| S3 | `engines.install(plan, confirm, run)` with fake runner | consent gate (no step before `confirm`), order, failure rollback/report, progress events | real brew/pip/dmg behaviour (manual smoke per engine) |
+| S4 | `recommend.pick(hw, catalog, installed, free_disk) -> list[Pick]` | fit-with-headroom math, ≤ disk budget, engine/format compatibility, reason text | model quality (not scored; out of scope) |
+| S5 | `fetch.plan(model, hw)` / `fetch.run(plan, runner)` | disk guard, one-at-a-time, eviction choice, resume | real HF network |
+| S6 | HTTP: `GET /hardware /engines /recommendations`, `POST /jobs`, `GET /jobs/{id}/events` against a started server on an ephemeral port | the contract the Swift app depends on, job lifecycle, error shapes | UI rendering |
+| S7 | Swift: view-model tests with a stub client (XCTest); one UI smoke | screen flow, state mapping, error display | pixel design |
+| S8 | `ohyesmlx quickbench` -> existing results.jsonl | small fixed cell set runs through the harness and joins into a "best for you" summary | thermal/contention (harness rules still apply) |
+
+No test is written at a seam Jason has not confirmed.
+
+## Tickets
+
+Vertical slices; each is one red→green tracer bullet at one seam, dispatched to `cc-agent implement`
+(DeepSeek v4.1 Flash, max thinking, `CC_AGENT_MAX_TURNS=300`) with the preamble. The coordinator verifies
+diff + green suite before closing. `docs/interfaces.md` is pinned (T0.2) before any fan-out.
+
+### Phase 0 — Contract (coordinator, no workers)
+- T0.1 Amend PROJECT.md (target users, scope), ROADMAP.md (v5.0 above v4.0, MTPLX paused), STATE.md, AGENTS.md (approve the modules above in one place).
+- T0.2 Pin `docs/interfaces.md` additions: `Hardware`, `EngineStatus`, `Plan`, `Pick`, job/event JSON shapes.
+- T0.3 Commit the pending MTPLX work first so v4.0 is not mixed into v5.0.
+
+### Phase 1 — Know the Mac (S1)
+- T1.1 `hardware.scan`: chip name, generation, tier, cores, RAM bytes, macOS version. First test: M2 Max/64 GB fixture.
+- T1.2 Disk: free bytes on the model volume (+ external volumes list); low-disk flag.
+- T1.3 `Hardware.model_budget_bytes`: usable RAM for weights after OS/KV headroom (the one place that constant lives).
+
+### Phase 2 — Engines (S2, S3)
+- T2.1 Registry + `detect_all` for the six engines, reusing `runtimes.py` names/ports/version probes.
+- T2.2 `install_plan` per engine (source, size estimate, steps, needs-sudo flag). Parallelizable by engine after T2.1.
+- T2.3 `install` executor: consent gate, progress events, failure report. Fake runner only.
+- T2.4 Per-engine real-install smoke notes in `docs/runtimes/` (manual, Jason's machine).
+
+### Phase 3 — Models (S4, S5)
+- T3.1 `config/catalog.json` schema + loader; seed ≤3B models already measured here (size, formats, engines, measured peak_mb within-runtime).
+- T3.2 `recommend.pick`: fit + headroom + disk, ranked. First test: 16 GB M1 gets only models that fit; 64 GB M2 Max gets a wider list.
+- T3.3 Reason strings ("fits with 6 GB spare; fastest format on oMLX per our runs").
+- T3.4 `fetch.plan/run`: download under a budget, evict-before-fetch, one at a time, `scripts/` repo-id record per AGENTS.md download rule.
+- T3.5 (later, deferred) Hugging Face live source behind the catalog interface.
+
+### Phase 4 — Server (S6, S8)
+- T4.1 `ohyesmlx app` subcommand + server skeleton, `GET /hardware`, `/engines`.
+- T4.2 `GET /recommendations`.
+- T4.3 Jobs: install and download as jobs with an event stream.
+- T4.4 `quickbench`: fixed small cell set (one model, installed engines, `--cells` is still the only selector) -> summary.
+
+### Phase 5 — SwiftUI app (S7)
+- T5.1 Xcode package, backend launcher (spawn + health wait + quit), `APIClient` with stub.
+- T5.2 Welcome + Your Mac screen.
+- T5.3 Engines screen (detect, explain, consented install with progress).
+- T5.4 Models screen (recommendations, disk meter, download).
+- T5.5 Benchmark + Results screen.
+- T5.6 Packaging: signed .app, first-run, Gatekeeper notes.
+
+## Order and parallelism
+
+P0 → P1 → (P2 ∥ P3) → P4 → P5. Within a phase, tickets that touch different files fan out; the
+collateral-deletion guard misfires under fan-out, so verify against `git`. T5.x can start against the stub
+client as soon as T0.2 pins the JSON shapes.
+
+## Risks
+
+- Installing six third-party engines is the least deterministic part; mitigated by consent, plans-as-data and manual smoke.
+- Notarization and distribution of the .app needs an Apple Developer account decision (T5.6).
+- Small-model-only catalog (≤3B, disk) means recommendations are honest only for that range; the catalog says so.
+- Swift adds a second toolchain; the dependency rule is "name what it replaces" — SwiftUI replaces nothing in Python and is a client only.
