@@ -1395,3 +1395,20 @@ Events on `GET /jobs/{id}/events` (server-sent events), one JSON object per `dat
 `install` and `download` require `"confirmed": true` in `args`; the server refuses otherwise (the consent gate).
 
 **Errors** are `{"error": {"code": str, "message": str}}` with a 4xx/5xx status. The server binds 127.0.0.1 only.
+
+**`canary`** (`ohyesmlx canary [--engines a,b] [--record] [--allow-noisy] --yes`; `ohyesmlx/canary.py`,
+plan 025-02) — Decision 135's drift check, a CLI surface rather than a JSON shape. One fixed cell per
+engine, taken from that engine's `canary` block in `ohyesmlx/engines-tested.json`
+(`{"format": str, "repo": str, "workload": "decode", "decode_tok_s": float|null, "ttft_s": float|null,
+"measured": str|null, "version_measured": str|null}`; the four baseline fields are null until a
+`--record` run writes them), measured one engine at a time in manifest order through
+`cli.build_cells` + `measure.run_cells` on the `decode` workload alone. `--cells` stays the only cell
+selector: `canary.cells(engine, spec)` writes that cell as a `--cells` string and nothing else chooses
+one. `canary.verdict(baseline, measured, floor=canary.NOISE_FLOOR)` is the pure comparison — the
+worst-moved of `decode tok/s` / `TTFT` past the ~5% session bar (Decision 131) — and a row that is not
+`PASS` is `FAIL: <reason>` and is never compared. `canary.LOAD_NOISY` (4.0) against the 1-minute load
+average read before and after each cell marks a reading `noisy`, and `--record` refuses a noisy engine
+unless `--allow-noisy` is passed. Without `--yes` the quiet-machine rule and the 10-15 minute estimate
+are printed and nothing starts. `--record` writes the detected version, the date and the baseline only:
+the tested `version` and its `verified` date are never adopted silently.
+

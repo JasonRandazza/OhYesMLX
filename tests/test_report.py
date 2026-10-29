@@ -1601,8 +1601,10 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
     # `run` says which cells to measure with --cells and nothing else. `grid` and `sweep` are
     # not a second way to say that: both join run directories that already exist, start no
     # runtime and measure nothing -- and `sweep`'s `--varying` names a header pin, never a cell
-    # -- so the selector count for a *run* is still one.
-    assert set(subcommands.choices) == {"run", "grid", "sweep"}
+    # -- so the selector count for a *run* is still one. `canary` (approved 2026-10-29, Decision
+    # 135) composes one `--cells` string from the manifest and goes through `build_cells`; its
+    # `--engines` filters the manifest's own cells and selects none.
+    assert set(subcommands.choices) == {"run", "grid", "sweep", "canary"}
 
 
 def test_modules_stay_on_the_standard_library():

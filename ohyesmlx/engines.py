@@ -105,10 +105,39 @@ def load_manifest(path=MANIFEST_PATH) -> dict[str, dict]:
             raise ValueError(
                 f"the engines manifest {path} entry {name} has a non-string 'lab_path'"
             )
-        if entry.get("canary") is not None and not isinstance(entry["canary"], dict):
-            raise ValueError(
-                f"the engines manifest {path} entry {name} has a non-object 'canary'"
-            )
+        canary = entry.get("canary")
+        if canary is not None:
+            if not isinstance(canary, dict):
+                raise ValueError(
+                    f"the engines manifest {path} entry {name} has a non-object 'canary'"
+                )
+            for field in ("format", "repo", "workload"):
+                if not isinstance(canary.get(field), str) or not canary[field]:
+                    raise ValueError(
+                        f"the engines manifest {path} entry {name} canary has no string "
+                        f"'{field}'"
+                    )
+            for field in ("decode_tok_s", "ttft_s", "measured", "version_measured"):
+                if field not in canary:
+                    raise ValueError(
+                        f"the engines manifest {path} entry {name} canary has no '{field}' "
+                        "key; a baseline that has not been recorded yet is null, not absent"
+                    )
+            for field in ("decode_tok_s", "ttft_s"):
+                value = canary[field]
+                if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                ):
+                    raise ValueError(
+                        f"the engines manifest {path} entry {name} canary has a non-numeric "
+                        f"'{field}'"
+                    )
+            for field in ("measured", "version_measured"):
+                if canary[field] is not None and not isinstance(canary[field], str):
+                    raise ValueError(
+                        f"the engines manifest {path} entry {name} canary has a non-string "
+                        f"'{field}'"
+                    )
     return payload
 
 

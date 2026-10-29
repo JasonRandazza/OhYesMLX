@@ -897,6 +897,89 @@ def test_no_engine_version_literal_remains_in_the_module():
         assert version not in source, f"{name}'s {version} is still a literal in engines.py"
 
 
+# --------------------------------------------------------------------------------------
+# The manifest's canary block (plan 025-02)
+# --------------------------------------------------------------------------------------
+#
+# One cell per engine, committed and portable: the format and the HF repo id are pinned, and
+# the baseline is null until a `--record` run on a quiet machine writes it.
+
+
+def shipped_manifest():
+    """A deep copy of the shipped manifest, so a test can break one field of one entry."""
+    return json.loads(json.dumps(engines.MANIFEST))
+
+
+def test_the_shipped_manifest_names_one_canary_cell_per_engine():
+    payload = json.loads(engines.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert {
+        name: (entry["canary"]["format"], entry["canary"]["repo"])
+        for name, entry in payload.items()
+    } == {
+        "mlxlm": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit"),
+        # Osaurus has no stock4bit cell in the grid, so its canary is the oq4 one it has.
+        "osaurus": ("oq4", "RepublicOfKorokke/Qwen3.5-4B-oQ4"),
+        "omlx": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit"),
+        "optiq": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit"),
+        "vmlx": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit"),
+    }
+    assert {entry["canary"]["workload"] for entry in payload.values()} == {"decode"}
+
+
+def test_the_shipped_manifest_records_no_baseline_yet():
+    payload = json.loads(engines.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert [
+        entry["canary"][field]
+        for entry in payload.values()
+        for field in ("decode_tok_s", "ttft_s", "measured", "version_measured")
+    ] == [None] * 20
+
+
+def test_a_canary_spec_missing_a_field_is_refused_naming_the_engine_and_the_field(tmp_path):
+    payload = shipped_manifest()
+    del payload["vmlx"]["canary"]["decode_tok_s"]
+    path = write_manifest(tmp_path, payload)
+
+    with pytest.raises(ValueError) as raised:
+        engines.load_manifest(path)
+
+    assert "vmlx" in str(raised.value)
+    assert "decode_tok_s" in str(raised.value)
+
+
+def test_a_canary_spec_with_a_non_numeric_baseline_is_refused(tmp_path):
+    payload = shipped_manifest()
+    payload["optiq"]["canary"]["ttft_s"] = "0.40"
+    path = write_manifest(tmp_path, payload)
+
+    with pytest.raises(ValueError) as raised:
+        engines.load_manifest(path)
+
+    assert "optiq" in str(raised.value)
+    assert "ttft_s" in str(raised.value)
+
+
+def test_a_canary_spec_with_no_cell_is_refused(tmp_path):
+    payload = shipped_manifest()
+    payload["omlx"]["canary"]["repo"] = None
+    path = write_manifest(tmp_path, payload)
+
+    with pytest.raises(ValueError) as raised:
+        engines.load_manifest(path)
+
+    assert "omlx" in str(raised.value)
+    assert "repo" in str(raised.value)
+
+
+def test_a_canary_spec_that_is_not_an_object_is_refused(tmp_path):
+    payload = shipped_manifest()
+    payload["mlxlm"]["canary"] = "stock4bit"
+    path = write_manifest(tmp_path, payload)
+
+    with pytest.raises(ValueError, match="non-object 'canary'"):
+        engines.load_manifest(path)
+
+
 def test_engine_status_exposes_the_manifests_verified_date():
     """The date belongs to the table, not to the install: an engine that is absent, or
     present at another build, is still tested against the manifest's own record."""

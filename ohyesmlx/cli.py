@@ -18,9 +18,10 @@ import argparse
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
-from ohyesmlx import __version__, report, token_counter
+from ohyesmlx import __version__, canary, engines, report, token_counter
 from ohyesmlx.runtimes import CACHE_STATES, KV_QUANTS, MTP_DEPTHS, STREAM_EXPERTS
 
 STUDIES = report.AXES
@@ -445,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
             "sweep",
             lambda runs: report.render_sweep(runs, varying=args.varying, rank=args.rank),
         )
+    if args.command == "canary":
+        return _canary(args)
     return _run(args)
 
 
@@ -728,6 +731,43 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="also write the sweep here (default: stdout only)",
     )
+
+    canary_cmd = commands.add_parser(
+        "canary",
+        help="check whether an engine version bump moved a published number",
+        description="Measure one fixed cell per engine on the decode workload and compare "
+        "its decode tok/s and TTFT to the baseline the manifest records for it: one verdict "
+        "per engine, `no effect on our tables` or `moved N%: re-run the grids containing "
+        "<engine>`. A cell that fails is `FAIL: <reason>` and no number is compared. Nothing "
+        "is recorded unless --record is passed.",
+    )
+    canary_cmd.add_argument(
+        "--engines",
+        default=None,
+        metavar="A,B",
+        help="comma-separated engines to canary (default: all five, in manifest order). A "
+        "filter over the manifest's own cells, never a second cell selector: each engine's "
+        "format, repo and workload come from `ohyesmlx/engines-tested.json`.",
+    )
+    canary_cmd.add_argument(
+        "--record",
+        action="store_true",
+        help="write each passing engine's baseline, detected version and date into the "
+        "manifest. Without this flag the manifest is read and never written, and a noisy "
+        "engine is refused even with it unless --allow-noisy is passed.",
+    )
+    canary_cmd.add_argument(
+        "--allow-noisy",
+        action="store_true",
+        help="record a baseline even when the 1-minute load average was above the noisy "
+        "threshold while that engine's cell ran.",
+    )
+    canary_cmd.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm the machine is quiet and the run may start. Without it the "
+        "quiet-machine rule and the time estimate are printed, and nothing is started.",
+    )
     return parser
 
 
@@ -764,6 +804,130 @@ def _join(args, name: str, render) -> int:
         Path(args.out).write_text(joined, encoding="utf-8")
         print(f"wrote {args.out}")
     return 0
+
+
+def _canary(args) -> int:
+    """`ohyesmlx canary`: one fixed cell per engine, compared to its recorded baseline.
+
+    One engine at a time, each in its own run directory, through the loop every other run
+    uses: the cells string comes from the manifest's canary block, ``build_cells`` turns it
+    into the selection, and ``run_cells`` applies the same stop-previous-then-start
+    discipline a grid run gets. The decode workload alone, because that is the number the
+    cell was pinned for.
+
+    The quiet-machine rule is not a formality: the harness cannot detect contention, so the
+    1-minute load average is read around each cell and carried on the verdict line, and a
+    baseline recorded over ``canary.LOAD_NOISY`` is refused unless ``--allow-noisy`` says
+    the number is wanted anyway. A row that is not ``PASS`` is a ``FAIL`` line and nothing
+    is recorded from it, whatever its numbers say.
+    """
+    if not args.yes:
+        print(canary.QUIET_MACHINE)
+        print(canary.ESTIMATE)
+        return 2
+
+    try:
+        names = _canary_engines(args.engines)
+    except ValueError as exc:
+        print(f"ohyesmlx canary: {exc}", file=sys.stderr)
+        return 2
+    missing = [name for name in names if engines.MANIFEST[name]["canary"] is None]
+    if missing:
+        print(
+            f"ohyesmlx canary: {', '.join(missing)} has no canary spec in "
+            f"{engines.MANIFEST_PATH}",
+            file=sys.stderr,
+        )
+        return 2
+
+    measure = _load_measure()
+    statuses = {status.name: status for status in engines.detect_all()}
+    code = 0
+    for name in names:
+        spec = engines.MANIFEST[name]["canary"]
+        shapes = [shape for shape in workloads(measure) if shape.id == spec["workload"]]
+        if not shapes:
+            print(
+                f"ohyesmlx canary: {name}: the manifest's canary workload "
+                f"{spec['workload']!r} is not one of the pinned shapes",
+                file=sys.stderr,
+            )
+            code = 2
+            continue
+
+        load_before = canary.load()
+        try:
+            results = measure.run_cells(
+                build_cells(measure.Cell, canary.cells(name, spec)),
+                shapes,
+                results_dir=str(Path("results") / "canary" / f"{_stamp()}-{name}"),
+            )
+        except ValueError as exc:
+            print(f"ohyesmlx canary: {name}: {exc}", file=sys.stderr)
+            code = 2
+            continue
+        load_after = canary.load()
+
+        rows = report.summarize(results)
+        row = next(row for row in rows if row["workload_id"] == spec["workload"])
+        version = statuses[name].version
+        reading = canary.Reading(
+            name,
+            canary.verdict_line(spec, row),
+            spec["version_measured"],
+            version,
+            load_before,
+            load_after,
+        )
+        print(reading.line())
+        if not args.record:
+            continue
+
+        if row["status"] != "PASS":
+            print("    not recorded: the cell did not PASS")
+        elif reading.noisy and not args.allow_noisy:
+            print(
+                "    not recorded: this machine was noisy (1-minute load above "
+                f"{canary.LOAD_NOISY}); --allow-noisy records it anyway"
+            )
+        else:
+            # The version goes in as the engine reported it, not as the manifest expects it:
+            # a baseline under the tested version's label would be a baseline for a build
+            # this run never loaded.
+            canary.record(
+                engines.MANIFEST_PATH,
+                name,
+                decode_tok_s=row["decode_tps"],
+                ttft_s=row["ttft_p50_s"],
+                version_measured=version,
+                measured=date.today().isoformat(),
+            )
+            print(
+                f"    recorded: {row['decode_tps']:.1f} tok/s, {row['ttft_p50_s']:.3f} s "
+                f"TTFT at version {version}"
+            )
+    return code
+
+
+def _canary_engines(spec: str | None) -> list[str]:
+    """The engines to canary, always in manifest order.
+
+    ``--engines`` filters the manifest's engines; it never adds one and never reorders them,
+    so one invocation measures its cells in the order the manifest lists them and no
+    engine's row depends on where it was typed.
+    """
+    if spec is None:
+        return list(engines.ONBOARDING_ENGINES)
+    named = [name.strip() for name in spec.split(",") if name.strip()]
+    if not named:
+        raise ValueError("--engines named no engine")
+    unknown = [name for name in named if name not in engines.ONBOARDING_ENGINES]
+    if unknown:
+        raise ValueError(
+            f"unknown engine(s) {', '.join(unknown)}; expected one of "
+            f"{', '.join(engines.ONBOARDING_ENGINES)}"
+        )
+    return [name for name in engines.ONBOARDING_ENGINES if name in named]
 
 
 def _run(args) -> int:

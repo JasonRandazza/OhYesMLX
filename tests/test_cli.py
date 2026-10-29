@@ -563,12 +563,13 @@ def test_cli_help_flag_prints_usage_and_exits_zero(capsys, monkeypatch):
     assert "run" in out
     assert "grid" in out
     assert "sweep" in out
+    assert "canary" in out
 
 
 def test_cli_subcommand_help_exits_zero(capsys, monkeypatch):
     # Python 3.14 argparse colours help when FORCE_COLOR is set; the assertion is on the text.
     monkeypatch.setenv("NO_COLOR", "1")
-    for subcmd in ("run", "grid", "sweep"):
+    for subcmd in ("run", "grid", "sweep", "canary"):
         with pytest.raises(SystemExit) as exc_info:
             cli.main([subcmd, "--help"])
         assert exc_info.value.code == 0
@@ -603,5 +604,305 @@ def test_package_longtext_resource_exists_and_loads():
     assert len(source) > 10000
     assert "1. Scope. This standard governs" in source
     assert len(cli.LONGTEXT.read_text(encoding="utf-8")) > 100000
+
+
+# --- the canary subcommand --------------------------------------------------------------------
+#
+# No runtime, no model and no HTTP. `measure` is faked at the one seam the CLI has for it and
+# answers each cell with a real `CellResult`, because the row the canary reads is
+# `report.summarize`'s and a hand-built row would test the fake rather than the join. The
+# artifact resolver, the load average and detection are the three other injected seams.
+
+
+def canary_cell_result(cell, *, status="PASS", reason=None, tokens=62, ttft_s=0.40):
+    """One decode row: `tokens` completion tokens over a 1.0 s content window."""
+    from ohyesmlx import measure, transport
+
+    observation = transport.Observation(
+        ok=True,
+        error=None,
+        ttft_s=ttft_s,
+        last_content_s=ttft_s + 1.0,
+        total_s=ttft_s + 1.0,
+        prompt_tokens=32,
+        completion_tokens=tokens,
+        reasoning_tokens=None,
+        content_event_count=2,
+        text="A measured answer.",
+        token_source="usage",
+    )
+    return measure.CellResult(
+        cell=cell,
+        workload_id="decode",
+        status=status,
+        reason=reason,
+        observations=[observation],
+        batch_spans=[],
+        warmup_observations=[],
+        warmup_plateau=True,
+        cold_load_s=1.0,
+        first_request_s=None,
+        first_request_workload_id=None,
+        memory={},
+        runtime_version="0.31.3",
+        disk_bytes=None,
+    )
+
+
+def canary_measure(monkeypatch, **row):
+    """The fake `measure`, answering every cell with `canary_cell_result(**row)`."""
+    fake = FakeMeasure()
+
+    def run_cells(cells, workloads, **kwargs):
+        fake.calls.append({"cells": cells, "workloads": workloads, **kwargs})
+        return [canary_cell_result(cell, **row) for cell in cells]
+
+    monkeypatch.setattr(fake, "run_cells", run_cells)
+    monkeypatch.setattr(cli, "_load_measure", lambda: fake)
+    # The resolver is the third injected seam: this test's cache is a path, not a disk.
+    monkeypatch.setattr(cli.canary, "artifact_dir", lambda repo, root=None: f"/models/{repo}")
+    return fake
+
+
+def canary_runtime(monkeypatch, *, versions=None):
+    from ohyesmlx import engines
+
+    versions = versions or {}
+    monkeypatch.setattr(
+        engines,
+        "detect_all",
+        lambda env=None: [
+            engines.EngineStatus(
+                name=name,
+                title=name,
+                blurb="",
+                installed=True,
+                version=versions.get(name, "0.31.3"),
+                path=f"/bin/{name}",
+                tested=True,
+                verified="2026-10-29",
+                install=None,
+            )
+            for name in engines.ONBOARDING_ENGINES
+        ],
+    )
+
+
+def canary_baseline(monkeypatch, name="mlxlm", decode_tok_s=70.0, ttft_s=0.40):
+    from ohyesmlx import engines
+
+    entry = engines.MANIFEST[name]
+    monkeypatch.setitem(
+        engines.MANIFEST,
+        name,
+        {
+            **entry,
+            "canary": {
+                **entry["canary"],
+                "decode_tok_s": decode_tok_s,
+                "ttft_s": ttft_s,
+                "measured": "2026-10-29",
+                "version_measured": "0.31.3",
+            },
+        },
+    )
+
+
+def canary_manifest(monkeypatch, tmp_path):
+    """Point the manifest the canary writes at a copy, so no test touches the shipped one."""
+    import json
+
+    from ohyesmlx import engines
+
+    path = tmp_path / "engines-tested.json"
+    path.write_text(json.dumps(engines.MANIFEST, indent=2), encoding="utf-8")
+    monkeypatch.setattr(engines, "MANIFEST_PATH", path)
+    return path
+
+
+def canary_main(*flags):
+    return cli.main(["canary", *flags])
+
+
+def test_the_canary_refuses_to_start_without_yes_and_says_why(monkeypatch, capsys):
+    """AC-5, the consent gate: the quiet-machine rule and the estimate, exit 2, and not one
+    step towards a runtime -- `_load_measure` is never even asked for."""
+    monkeypatch.setattr(cli, "_load_measure", lambda: pytest.fail("the canary loaded measure"))
+
+    code = canary_main()
+
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "nothing else may run on this machine" in out
+    assert "10-15 minutes" in out
+    assert "load" in out and "4.0" in out
+
+
+def test_the_canary_measures_one_engine_at_a_time_through_the_one_selector(
+    monkeypatch, capsys
+):
+    """AC-2 and AC-5: five sequential runs, manifest order, one cell each, and every cell is
+    the string `canary.cells` composed for `build_cells` -- there is no second selector."""
+    from ohyesmlx import engines
+
+    fake = canary_measure(monkeypatch)
+    canary_runtime(monkeypatch)
+    monkeypatch.setattr(cli.canary, "load", lambda: 1.0)
+
+    code = canary_main("--yes")
+
+    assert code == 0
+    assert [call["cells"][0].runtime for call in fake.calls] == list(engines.ONBOARDING_ENGINES)
+    assert len(fake.calls) == 5, "one run per engine, never two engines in one run"
+    for call, name in zip(fake.calls, engines.ONBOARDING_ENGINES):
+        spec = engines.MANIFEST[name]["canary"]
+        assert call["cells"] == cli.build_cells(
+            FakeCell, f"{spec['format']}__{name}=/models/{spec['repo']}"
+        )
+        assert [workload.id for workload in call["workloads"]] == ["decode"]
+        assert [workload.max_tokens for workload in call["workloads"]] == [512]
+        assert call["results_dir"].endswith(f"-{name}"), "each engine writes its own run dir"
+
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 5
+    assert all(line.startswith(f"{name}:") for line, name in zip(lines, engines.ONBOARDING_ENGINES))
+
+
+def test_the_canary_says_a_pass_row_against_a_baseline_moved_or_did_not(
+    monkeypatch, capsys
+):
+    """AC-1's numbers, end to end: 62.0 tok/s against a 70.0 baseline is -11.4%, and 70.0
+    against it is no effect. The versions are printed beside it."""
+    fake = canary_measure(monkeypatch)
+    canary_runtime(monkeypatch, versions={"mlxlm": "0.32.2"})
+    canary_baseline(monkeypatch)
+
+    assert canary_main("--yes", "--engines", "mlxlm") == 0
+    out = capsys.readouterr().out
+    assert "mlxlm: moved -11.4%: re-run the grids containing mlxlm" in out
+    assert "version 0.31.3 -> 0.32.2" in out
+
+    fake = canary_measure(monkeypatch, tokens=70)
+    assert canary_main("--yes", "--engines", "mlxlm") == 0
+    out = capsys.readouterr().out
+    assert "mlxlm: no effect on our tables" in out
+    assert fake.calls
+
+
+def test_the_canary_is_a_fail_line_for_a_cell_that_failed_the_gate(monkeypatch, capsys, tmp_path):
+    """AC-3 and AC-4: a failing cell is `FAIL: <reason>` -- its own numbers are never
+    compared, and --record writes nothing for it."""
+    canary_measure(
+        monkeypatch, status="FAIL", reason="incoherent output: replacement characters", tokens=71
+    )
+    canary_runtime(monkeypatch)
+    canary_baseline(monkeypatch)
+    path = canary_manifest(monkeypatch, tmp_path)
+    before = path.read_text(encoding="utf-8")
+
+    code = canary_main("--yes", "--engines", "mlxlm", "--record")
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "mlxlm: FAIL: incoherent output: replacement characters" in out
+    assert "not recorded" in out
+    assert "moved" not in out and "%" not in out
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_the_canary_records_only_under_record_and_writes_the_detected_version(
+    monkeypatch, capsys, tmp_path
+):
+    """AC-4: without --record the manifest is only read; with it the baseline, the version the
+    engine really reported and today's date are written -- and the tested version is not
+    silently adopted."""
+    import json
+    from datetime import date
+
+    canary_measure(monkeypatch)
+    canary_runtime(monkeypatch, versions={"mlxlm": "0.32.2"})
+    canary_baseline(monkeypatch)
+    path = canary_manifest(monkeypatch, tmp_path)
+    before = path.read_text(encoding="utf-8")
+
+    assert canary_main("--yes", "--engines", "mlxlm") == 0
+    assert path.read_text(encoding="utf-8") == before, "a plain canary wrote the manifest"
+
+    assert canary_main("--yes", "--engines", "mlxlm", "--record") == 0
+    written = json.loads(path.read_text(encoding="utf-8"))
+
+    canary_spec = written["mlxlm"]["canary"]
+    assert {key: canary_spec[key] for key in ("format", "repo", "workload", "measured", "version_measured")} == {
+        "format": "stock4bit",
+        "repo": "mlx-community/Qwen3.5-4B-4bit",
+        "workload": "decode",
+        "measured": date.today().isoformat(),
+        "version_measured": "0.32.2",
+    }
+    # The row's own number, never a rounded copy of it: 62 tokens over a 1.0 s window.
+    assert canary_spec["decode_tok_s"] == pytest.approx(62.0)
+    assert canary_spec["ttft_s"] == 0.40
+    assert written["mlxlm"]["version"] == "0.31.3"
+    assert written["osaurus"] == json.loads(before)["osaurus"]
+    assert "recorded" in capsys.readouterr().out
+
+
+def test_the_canary_refuses_to_record_a_noisy_engine_unless_allowed(
+    monkeypatch, capsys, tmp_path
+):
+    """AC-7: the load is read around the cell, the line says the engine was noisy, and a
+    baseline measured on a busy machine is not written unless --allow-noisy asks for it."""
+    import json
+
+    canary_measure(monkeypatch)
+    canary_runtime(monkeypatch)
+    canary_baseline(monkeypatch)
+    path = canary_manifest(monkeypatch, tmp_path)
+    before = path.read_text(encoding="utf-8")
+    monkeypatch.setattr(cli.canary, "load", lambda: 5.25)
+
+    assert canary_main("--yes", "--engines", "mlxlm", "--record") == 0
+    out = capsys.readouterr().out
+    assert "load 5.2 -> 5.2, noisy: above 4.0" in out
+    assert "not recorded" in out
+    assert path.read_text(encoding="utf-8") == before
+
+    assert canary_main("--yes", "--engines", "mlxlm", "--record", "--allow-noisy") == 0
+    recorded = json.loads(path.read_text(encoding="utf-8"))["mlxlm"]["canary"]
+
+    assert recorded["decode_tok_s"] == pytest.approx(62.0)
+
+
+def test_the_canary_engines_flag_filters_in_manifest_order_and_refuses_unknown_names(
+    monkeypatch, capsys
+):
+    """AC-5: a named subset runs in manifest order, so no row depends on how it was typed;
+    a name that is not an engine is refused before anything is measured."""
+    fake = canary_measure(monkeypatch)
+    canary_runtime(monkeypatch)
+
+    assert canary_main("--yes", "--engines", "omlx,mlxlm") == 0
+    assert [call["cells"][0].runtime for call in fake.calls] == ["mlxlm", "omlx"]
+
+    fake.calls.clear()
+    assert canary_main("--yes", "--engines", "mlxlm,mtplx") == 2
+    err = capsys.readouterr().err
+    assert "mtplx" in err
+    assert fake.calls == [], "the refused selection measured a cell"
+
+
+def test_a_manifest_without_a_canary_spec_is_refused_before_anything_is_measured(
+    monkeypatch, capsys
+):
+    from ohyesmlx import engines
+
+    fake = canary_measure(monkeypatch)
+    canary_runtime(monkeypatch)
+    monkeypatch.setitem(engines.MANIFEST, "mlxlm", {**engines.MANIFEST["mlxlm"], "canary": None})
+
+    assert canary_main("--yes", "--engines", "mlxlm") == 2
+    assert "mlxlm" in capsys.readouterr().err
+    assert fake.calls == []
+
 
 

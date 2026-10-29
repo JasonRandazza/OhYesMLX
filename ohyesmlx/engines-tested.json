@@ -3,30 +3,70 @@
     "version": "0.31.3",
     "verified": "2026-10-29",
     "lab_path": null,
-    "canary": null
+    "canary": {
+      "format": "stock4bit",
+      "repo": "mlx-community/Qwen3.5-4B-4bit",
+      "workload": "decode",
+      "decode_tok_s": null,
+      "ttft_s": null,
+      "measured": null,
+      "version_measured": null
+    }
   },
   "osaurus": {
     "version": "0.25.28",
     "verified": "2026-10-29",
     "lab_path": null,
-    "canary": null
+    "canary": {
+      "format": "oq4",
+      "repo": "RepublicOfKorokke/Qwen3.5-4B-oQ4",
+      "workload": "decode",
+      "decode_tok_s": null,
+      "ttft_s": null,
+      "measured": null,
+      "version_measured": null
+    }
   },
   "omlx": {
     "version": "0.7.2",
     "verified": "2026-10-29",
     "lab_path": null,
-    "canary": null
+    "canary": {
+      "format": "stock4bit",
+      "repo": "mlx-community/Qwen3.5-4B-4bit",
+      "workload": "decode",
+      "decode_tok_s": null,
+      "ttft_s": null,
+      "measured": null,
+      "version_measured": null
+    }
   },
   "optiq": {
     "version": "0.5.13",
     "verified": "2026-10-29",
     "lab_path": null,
-    "canary": null
+    "canary": {
+      "format": "stock4bit",
+      "repo": "mlx-community/Qwen3.5-4B-4bit",
+      "workload": "decode",
+      "decode_tok_s": null,
+      "ttft_s": null,
+      "measured": null,
+      "version_measured": null
+    }
   },
   "vmlx": {
     "version": "1.6.59",
     "verified": "2026-10-29",
     "lab_path": null,
-    "canary": null
+    "canary": {
+      "format": "stock4bit",
+      "repo": "mlx-community/Qwen3.5-4B-4bit",
+      "workload": "decode",
+      "decode_tok_s": null,
+      "ttft_s": null,
+      "measured": null,
+      "version_measured": null
+    }
   }
 }

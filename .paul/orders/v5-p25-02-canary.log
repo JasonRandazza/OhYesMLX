@@ -1,0 +1,90 @@
+I'll start by reading the plan and the files the order names.
+Now the CLI, measure, report, and gridspec.
+Now report.py's `summarize`, interfaces.md, and the existing tests.
+Now the two test files and report's `summarize`.
+
+
+
+
+
+
+The plan and seams are clear. I'll write the red tests first.
+
+Red confirmed (module absent). Now the module.
+
+Now the manifest and the `canary` validation in `engines.py`.
+
+
+Now the parser entry and the `_canary` handler.
+
+
+
+The baseline suite is still running; let me check it and the report helpers the fake rows must satisfy.
+
+
+
+The fixture's span wasn't exact in binary floating point; I'll use an exact one.The recorded number is the row's own unrounded float — the tests should say so rather than force a literal.
+
+
+Now the manifest/canary validation tests in `test_engines.py`.
+
+
+
+
+One guard in `tests/test_report.py` — a file the order forbids — hardcodes the subcommand set. I'll finish the rest first, then report. The interfaces subsection:
+Now the red checks — break each behaviour, watch its test fail, restore.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Every behaviour red-checked. One guard test sits outside the order's file list — I'll leave it untouched and record the blocker. First, a small cleanup in the test helper.
+
+
+
+**BLOCKED** — one line of the acceptance cannot be met inside the order's file list (full text in `BLOCKED.md`):
+
+`tests/test_report.py:1605` asserts `set(subcommands.choices) == {"run", "grid", "sweep"}`, so the `canary` subcommand this plan approves (PLAN.md T2.5.3) fails it. That file is not in the order's allowlist and the order says "touch nothing else", so I did not edit it. Needed: permission to change that literal to `{"run", "grid", "sweep", "canary"}`, or a decision to drop the subcommand. The guard's intent (`--cells` is the only cell selector) is unchanged — `--engines` filters the manifest's own cells and the run goes through `build_cells`.
+
+Everything else is built and green: **750 passed → 783 passed, 1 failed** (the guard).
+
+- `ohyesmlx/canary.py` (new): `NOISE_FLOOR = 0.05`, `LOAD_NOISY = 4.0`, `verdict`/`Verdict` (rounded-to-published-percent comparison, exactly 5.0% is no effect), `verdict_line` (non-PASS rows are `FAIL: <reason>`, never compared), `artifact_dir` (newest HF snapshot carrying `config.json`, injected root), `cells` (`<format>__<engine>=<dir>`), `load`, `record` (writes the four baseline fields only — tested `version`/`verified` untouched), `Reading` (carries both loads, `noisy`, and the printed line).
+- `cli.py`: `canary --engines --record --allow-noisy --yes`; `--yes` gate prints the quiet rule + 10-15 min estimate and returns 2 before `_load_measure` is touched; one `run_cells` per engine in manifest order, each in `results/canary/<stamp>-<engine>`, `decode` workload only.
+- `engines.py`: manifest `canary` validation extended (required cell strings, all four baseline keys present, numeric/string types). `engines-tested.json` filled per engine, baselines null.
+- Tests: 20 in `test_canary.py`, 8 canary cases in `test_cli.py`, 6 in `test_engines.py`; `docs/interfaces.md` gained the canary subsection.
+
+Red-checked, each restored: boundary `<=`→`<` (exactly 5.0% printed "moved +5%"), status guard dropped (a failed cell published "moved -11.4%"), `--yes` gate dropped (measure loaded before consent), noisy gate dropped (a baseline recorded at load 5.2), missing-key check dropped (`KeyError` instead of a message naming the field), resolver `max`→`min` (picked the older snapshot).
+
+Not verified: AC-6 (live run — no server, model or HF reads were made; the resolver was only ever driven against a temporary cache); the shipped baselines are still null, so every engine prints "no baseline recorded" until the coordinator's `--record` run. The PLAN's `--artifact-root` instruction is superseded by the order's resolver sentence; I followed the order.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     53    9127165    8920064    64878   97.7%   0.096752
+
+== cc-agent: git status ==
+ M BLOCKED.md
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines-tested.json
+ M ohyesmlx/engines.py
+ M tests/test_cli.py
+ M tests/test_engines.py
+?? .paul/orders/v5-p25-02-canary.log
+?? .paul/orders/v5-p25-02-canary.md
+?? ohyesmlx/canary.py
+?? tests/test_canary.py
+ BLOCKED.md                   |  20 ++-
+ docs/interfaces.md           |  17 +++
+ ohyesmlx/cli.py              | 166 +++++++++++++++++++++++-
+ ohyesmlx/engines-tested.json |  50 ++++++-
+ ohyesmlx/engines.py          |  37 +++++-
+ tests/test_cli.py            | 303 ++++++++++++++++++++++++++++++++++++++++++-
+ tests/test_engines.py        |  83 ++++++++++++
+ 7 files changed, 664 insertions(+), 12 deletions(-)
