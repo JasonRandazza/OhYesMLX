@@ -7,10 +7,10 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": null,
-      "ttft_s": null,
-      "measured": null,
-      "version_measured": null
+      "decode_tok_s": 67.07261391595476,
+      "ttft_s": 0.24614979099715129,
+      "measured": "2026-10-29",
+      "version_measured": "0.31.3"
     }
   },
   "osaurus": {
@@ -35,10 +35,10 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": null,
-      "ttft_s": null,
-      "measured": null,
-      "version_measured": null
+      "decode_tok_s": 85.35882183308946,
+      "ttft_s": 0.17154112498974428,
+      "measured": "2026-10-29",
+      "version_measured": "0.7.2"
     }
   },
   "optiq": {
@@ -49,10 +49,10 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": null,
-      "ttft_s": null,
-      "measured": null,
-      "version_measured": null
+      "decode_tok_s": 76.88047799989513,
+      "ttft_s": 0.16520683400449343,
+      "measured": "2026-10-29",
+      "version_measured": "0.7.8"
     }
   },
   "vmlx": {
@@ -63,10 +63,10 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": null,
-      "ttft_s": null,
-      "measured": null,
-      "version_measured": null
+      "decode_tok_s": 74.52152487760338,
+      "ttft_s": 0.1810105839977041,
+      "measured": "2026-10-29",
+      "version_measured": "1.6.82"
     }
   }
 }
