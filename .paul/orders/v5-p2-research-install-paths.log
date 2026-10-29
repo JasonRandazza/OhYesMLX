@@ -1,0 +1,133 @@
+I'll start by reading the repo's own sources of truth: the onboarding shapes in `docs/interfaces.md`, the runtime docs, and `ohyesmlx/runtimes.py`.
+
+
+
+Now let me look at how `runtimes.py` locates each engine on disk.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now let me measure what's actually installed on this machine and confirm the binary paths.
+
+
+
+Now I'll research the official install routes. Starting with the free self-hosted search.
+
+Now I'll read the primary sources — each project's repo/README.
+The HTML pages are mostly GitHub chrome. Let me pull the raw READMEs.
+Now the install-specific docs and release assets for each project.
+Let me get exact sizes and Python requirements from the package and release APIs.
+Let me verify the remaining local facts: ports, symlinks, version probes, and code signatures.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have all the facts I need. Writing the research document now.
+Let me check where the vMLX start command tuple ends, then fix two structural details in the doc.
+
+Let me read the finished document end-to-end to check consistency.
+
+
+
+
+
+
+
+One more contract detail worth recording: the registry has six entries while the pinned shape names five.
+Running the project's suite after the change, and confirming only the new doc was added.
+**DONE** — `docs/research/2026-10-29-engine-install-paths.md` (655 lines), the only file added. Baseline and final suite: **690 passed** (repo `.venv`, Python 3.13.13, pytest 9.1.1; 39.66s → 38.21s).
+
+What the document establishes, per engine: install route with exact URL/command, download vs installed size (`du`), prerequisites, file-only detection + version probe, what `runtimes.py` has today, and risks — every claim labelled VERIFIED/CLAIMED/INFERRED, ending with the requested table.
+
+Notable findings:
+- All three apps install by drag-and-drop, no sudo, no pkg receipts; Osaurus/oMLX pass `spctl`, **vMLX fails here** (`a sealed resource is missing or invalid`).
+- Sizes: Osaurus 85.9 MB → 208 MB; oMLX 837.8 MB → 1.7 GB; vMLX 579/604.5 MB → 2.0 GB; mlx-lm 0.5 MB wheel → 434 MB env; OptiQ wheel 1.8 MB, clean install size **UNKNOWN** (measured env 846 MB contains undeclared extras).
+- Both pip engines need Python ≥3.11; stock `/usr/bin/python3` here is 3.9.6.
+- Detection gap: `runtimes.py` carries **no mlx-lm path** — the venv convention exists only in `scripts/run_multiturn.sh:21`.
+- `omlx`/`vmlx` live in `~/.omlx/bin` / `~/.local/bin`, so `which` alone can miss an installed engine; `/opt/homebrew/bin/omlx` from the runtime doc no longer exists.
+- oMLX publishes per-OS DMGs and its `/releases/latest` is currently `0.7.3rc1` marked `prerelease: false`; vMLX's app gateway defaults to **8080**, which is OptiQ's harness port.
+
+Two pinned-document conflicts flagged for T2.1, not resolved: `interfaces.md` names the control `mlx-lm` while `runtimes.py` keys it `mlxlm`; `RUNTIMES` holds six entries while `EngineStatus.name` names five. These don't affect the research, so this is DONE rather than BLOCKED.
+
+Not verified: clean-install sizes for OptiQ/PyPI vMLX, the Sequoia vMLX build's exact macOS floor, whether `osaurus doctor` starts a server (so the plist probe was specified instead and `doctor` was not run), why vMLX fails Gatekeeper, or whether oMLX's rc-as-latest is intentional. No red-check applies — no code changed. No installs, downloads, git operations, or server starts were performed; the commands run are listed in §7 of the doc.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     58    7261971    7055872    63401   97.2%   0.090123
+
+== cc-agent: git status ==
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-osaurus-addendum.log
+?? .paul/orders/v31-conc-osaurus-addendum.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-osaurus-seqs.log
+?? .paul/orders/v31-osaurus-seqs.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? .paul/orders/v31-seedless-grids-writeup.log
+?? .paul/orders/v31-seedless-grids-writeup.md
+?? .paul/orders/v4-mtplx-runtime.log
+?? .paul/orders/v5-p2-research-install-paths.log
+?? .paul/orders/v5-p2-research-install-paths.md
+?? docs/research/2026-10-29-engine-install-paths.md
