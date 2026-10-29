@@ -49,3 +49,40 @@ The stale link makes Osaurus "installed" — the AC's exact failure mode. Restor
 Task 2 — amend only the `EngineStatus` name enum and add `tested` in `docs/interfaces.md`.
 Now the real-Mac smoke — file reads only, no binaries launched.
 All five detected; OptiQ's version is `None` — the current 0.7.8 package computes `__version__` at import rather than assigning a literal (more on that in the report). Full suite now.
+696 passed (baseline 690 + 6). Let me review the final module against the repo's style.
+
+The interfaces diff is exactly the two amended lines. Now the project rule to keep the code graph current after `.py` changes.
+Final verification run.
+DONE
+
+**Changed**
+- `ohyesmlx/engines.py` (new): `ONBOARDING_ENGINES` (five, mtplx filtered out of `runtimes.RUNTIMES` iteration), one `TESTED_VERSIONS` dict, frozen `EngineStatus` (+`tested`, `install=None` with a 02-02 pointer), `detect_all(env=DEFAULT_ENV)` with `exists/read_text/realpath/home` injected. Presence from absolute candidates only; versions from `Info.plist` (plistlib), `_version.py`/`__init__.py` (regex), site-packages located via `pyvenv.cfg`. `VMLX_ENGINE_INIT` is imported from `runtimes.py`, not copied.
+- `tests/test_engines.py` (new): 6 tests, literal fixtures.
+- `docs/interfaces.md`: only the `EngineStatus` two lines (`mlx-lm`→`mlxlm`, `"tested": bool`).
+
+**Verification**
+- Baseline: **690 passed** (38.6s). Final: **696 passed** (38.8s).
+- Every test seen red first, per slice: AC-1 `ModuleNotFoundError`; AC-2 `installed False is True`; AC-3 `{'osaurus': None} != {'osaurus': '0.25.28'}` (all five); AC-4 `tested False is True`.
+- Extra red-checks, each reverted and restored: removing the `except` in `_read_or_none` → `PermissionError` in the unreadable-file test; dropping `realpath` → path assertion fails; adding the `/opt/homebrew/bin/osaurus` candidate → stale link makes Osaurus installed and `[only omlx]` fails.
+- Real-Mac smoke, no binary run: all five installed; osaurus 0.25.28, omlx 0.7.2, mlxlm 0.31.3, vmlx 1.6.59 (all `tested=True`); optiq installed, `version=None`, `tested=False`.
+
+**Findings you need**
+1. The order's verify venv `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv` no longer exists (no job dir has one). I ran the suite with `~/Dev/tools/mlx-optiq/.venv/bin/python -m pytest -q`, which carries pytest and tokenizers like the named one.
+2. OptiQ on this machine is now **mlx_optiq 0.7.8** (dist-info written 2026-10-29 12:00), not the research's 0.5.13, and 0.7.8 sets `__version__ = _resolve_version()` — no literal. The only literal is `mlx_optiq-<ver>.dist-info/METADATA`, findable only by listing the directory, which the pinned env seam does not offer. So the smoke reports optiq `version: null` (honest, not guessed). Fixing it needs a decision: extend `env` with `listdir`, or accept null for a computed `__version__`.
+3. The app-managed venv spelling is unpinned: detection probes `…/OhYesMLX/engines/<name>-<TESTED_VERSION>` then `…/engines/<name>`, each with `bin/<script>`. 02-02 must create one of those two or detection misses it.
+4. `EngineStatus` carries no port (the pinned shape has none), so `runtimes.RUNTIMES` is asked for names only.
+5. `.paul/orders/v5-p2-01-engine-detect.log` shows modified in git; that is the launcher's log, not my edit.
+
+**Not verified:** any real install (none run), any binary (never started), the network, and the mlx-lm dev venv beyond the tested-version dir (`mlx-lm-0.31.3`; a `mlx-lm-0.32.x` dir would be invisible without listing). No git operations and no dependencies added.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     56    5320657    5085184    58829   95.6%   0.085874
+
+== cc-agent: git status ==
+ M .paul/orders/v5-p2-01-engine-detect.log
+ M docs/interfaces.md
+?? ohyesmlx/engines.py
+?? tests/test_engines.py
+ .paul/orders/v5-p2-01-engine-detect.log | 34 +++++++++++++++++++++++++++++++++
+ docs/interfaces.md                      |  4 ++--
+ 2 files changed, 36 insertions(+), 2 deletions(-)

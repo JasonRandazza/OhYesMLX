@@ -1372,8 +1372,8 @@ sizes in bytes, no floats for byte counts.
 is defined once, in `hardware.py`.
 
 **`EngineStatus`** (`engines.detect_all(env) -> list`; `GET /engines`)
-`{"name": "osaurus|omlx|optiq|mlx-lm|vmlx", "title": str, "blurb": str, "installed": bool, "version": str|null,
-"path": str|null, "install": Plan}`. Names and ports come from `runtimes.py`.
+`{"name": "osaurus|omlx|optiq|mlxlm|vmlx", "title": str, "blurb": str, "installed": bool, "version": str|null,
+"path": str|null, "tested": bool, "install": Plan}`. Names and ports come from `runtimes.py`.
 
 **`Plan`** (`engines.install_plan(name)`; data only, no side effects)
 `{"engine": str, "kind": "guided_download|command", "source_url": str, "size_bytes_estimate": int|null,
