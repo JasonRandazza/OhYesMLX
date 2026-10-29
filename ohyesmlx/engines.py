@@ -26,13 +26,23 @@ composes the two in Phase 4.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import pathlib
 import plistlib
 import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from xml.parsers.expat import ExpatError
 
+from ohyesmlx.hardware import scan as _scan_hardware
 from ohyesmlx.runtimes import RUNTIMES, VMLX_ENGINE_INIT
 
 # The five engines of Decision D2, in the registry's own order. MTPLX joins when its
@@ -219,13 +229,18 @@ def _first_existing(env, paths: tuple[str, ...]) -> str | None:
     return None
 
 
+# The app's own Application Support directory: plan 02-02's venvs live in `engines/`
+# under it, and plan 02-03's install log sits beside that.
+_APP_SUPPORT = os.path.join("Library", "Application Support", "OhYesMLX")
+
+
 def _app_engine_venvs(env, name: str) -> tuple[str, ...]:
     """The venv roots plan 02-02 creates under the app's engines dir, pin first.
 
     The pinned root is version-suffixed the way the harness's own mlx-lm venv is
     (``mlx-lm-0.31.3``), so a second version never lands on top of a measured one.
     """
-    base = os.path.join(env.home, "Library", "Application Support", "OhYesMLX", "engines")
+    base = os.path.join(env.home, _APP_SUPPORT, "engines")
     return (os.path.join(base, f"{name}-{TESTED_VERSIONS[name]}"), os.path.join(base, name))
 
 
@@ -455,3 +470,363 @@ def install_plan(name: str, macos_major: int) -> Plan:
     if name in _PIP_PACKAGES:
         return _command_plan(name)
     return _guided_plan(name, macos_major)
+
+
+# ---------------------------------------------------------------------------
+# Installing an engine -- plan 02-03
+#
+# ``install`` executes a Plan it derives itself (AC-6), and every side effect it has
+# is a parameter: the runner, the opener, the emitter, detection, the hardware scan,
+# sleep, the lock and the install log. The defaults wrap the real thing; every test
+# injects a fake, so no test starts a process, opens a page or touches the real
+# installs.
+# ---------------------------------------------------------------------------
+
+# Where plan 02-02's venvs live and where every attempt leaves its local record
+# (AC-10). The log is plain append-only JSONL under the app's own Application Support
+# directory and is never uploaded (Decision D8); it is not a governance layer.
+DEFAULT_ENGINES_DIR = os.path.join(DEFAULT_ENV.home, _APP_SUPPORT, "engines")
+DEFAULT_INSTALL_LOG = os.path.join(DEFAULT_ENV.home, _APP_SUPPORT, "install-log.jsonl")
+
+# AC-8 bounds: a step that runs longer than this is killed, and the output an event
+# carries is its last four kilobytes so a chatty pip cannot grow the job stream.
+STEP_TIMEOUT_S = 900
+OUTPUT_TAIL_BYTES = 4096
+
+# AC-11: free disk must cover the download twice -- the download plus what the
+# install unpacks -- and an unknown estimate falls back to this floor.
+LOW_DISK_FLOOR_BYTES = 2 * 1024**3
+
+# AC-9: the only hosts a guided plan may open. The plans name GitHub release pages
+# and PyPI project pages; nothing else has any business being opened by this app.
+ALLOWED_DOWNLOAD_HOSTS = ("github.com", "pypi.org")
+
+# AC-8: guided downloads poll detection until the user has installed the app or this
+# much wall clock has passed. A timeout is a result, never an error.
+POLL_S = 2.0
+POLL_TIMEOUT_S = 600.0
+
+# The status a killed step reports, by coreutils' convention for a timeout.
+TIMEOUT_EXIT_CODE = 124
+
+
+class EngineLocks:
+    """One non-blocking, in-process lock per engine.
+
+    ``install`` asks before it touches disk and releases in a ``finally``, so a
+    second install of the same engine reports ``busy`` instead of running a second
+    venv creation into one directory (AC-11).
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+
+    def acquire(self, engine: str) -> bool:
+        with self._guard:
+            lock = self._locks.setdefault(engine, threading.Lock())
+        return lock.acquire(blocking=False)
+
+    def release(self, engine: str) -> None:
+        with self._guard:
+            lock = self._locks.get(engine)
+        if lock is not None:
+            lock.release()
+
+
+DEFAULT_LOCKS = EngineLocks()
+
+
+def _tail(*streams) -> str:
+    """The last ``OUTPUT_TAIL_BYTES`` of every stream joined, bytes decoded leniently."""
+    parts = []
+    for stream in streams:
+        if stream is None:
+            continue
+        if isinstance(stream, bytes):
+            stream = stream.decode("utf-8", "replace")
+        parts.append(stream)
+    return "".join(parts)[-OUTPUT_TAIL_BYTES:]
+
+
+def _real_run(argv: list[str], timeout_s: float, env: dict[str, str]) -> tuple[int, str]:
+    """Run *argv* -- a list, never a shell string -- and return (code, output tail)."""
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout_s,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as expired:
+        return TIMEOUT_EXIT_CODE, _tail(expired.stdout, expired.stderr)
+    return proc.returncode, _tail(proc.stdout, proc.stderr)
+
+
+def _real_open(url: str) -> None:
+    subprocess.run(["open", url], check=False, stdin=subprocess.DEVNULL)
+
+
+def _print_event(event: dict) -> None:
+    print(json.dumps(event), flush=True)
+
+
+def _hermetic_env() -> dict[str, str]:
+    """The ambient environment minus the two families that change what pip installs.
+
+    ``PYTHONPATH`` can shadow the venv's own packages, and any ``PIP_*`` key (index
+    URL, cache directory, build isolation) makes the same command behave differently
+    per machine, so both are dropped and everything else -- HOME, PATH, TMPDIR --
+    passes through (AC-12).
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key != "PYTHONPATH" and not key.startswith("PIP_")
+    }
+
+
+def _installed(statuses, engine: str) -> bool:
+    return any(status.name == engine and status.installed for status in statuses)
+
+
+def _disk_required(size_bytes_estimate: int | None) -> int:
+    if size_bytes_estimate is None:
+        return LOW_DISK_FLOOR_BYTES
+    return 2 * size_bytes_estimate
+
+
+def _url_allowed(url: str) -> bool:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme == "https" and parts.hostname in ALLOWED_DOWNLOAD_HOSTS
+
+
+def _venv_root(argv: list[str]) -> str | None:
+    """The directory a ``-m venv`` command creates, or None for any other command."""
+    if len(argv) >= 4 and argv[1:3] == ["-m", "venv"]:
+        return argv[3]
+    return None
+
+
+def _plan_engines_dir(plan: Plan) -> str | None:
+    for step in plan.steps:
+        root = _venv_root(step.command or [])
+        if root is not None:
+            return os.path.dirname(root)
+    return None
+
+
+def _relocate(argv: list[str], source_dir: str | None, engines_dir: str) -> list[str]:
+    """Point the plan's paths at the engines dir this call was handed.
+
+    ``install_plan`` names the production directory; ``install`` executes it against
+    the injected one so a scratch-dir smoke -- and every test -- never touches the
+    real installs. With the production directory injected this is the identity.
+    """
+    if source_dir is None:
+        return list(argv)
+    prefix = source_dir.rstrip(os.sep) + os.sep
+    return [
+        os.path.join(engines_dir, token[len(prefix):])
+        if token == source_dir or token.startswith(prefix)
+        else token
+        for token in argv
+    ]
+
+
+def _rollback(created: list[str], engines_dir: str, send) -> None:
+    """Remove the paths this call created, and nothing else.
+
+    A path is removed only when it resolves inside *engines_dir*: a symlink that
+    points out, or a parent directory that does, is refused and reported rather than
+    followed (AC-7).
+    """
+    inside = os.path.realpath(engines_dir)
+    for path in reversed(created):
+        real = os.path.realpath(path)
+        if real == inside or os.path.commonpath([inside, real]) != inside:
+            send(
+                "log",
+                f"rollback refused {path}: it resolves outside {engines_dir}",
+                payload={"path": path},
+            )
+            continue
+        try:
+            if os.path.islink(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+            elif os.path.lexists(path):
+                os.remove(path)
+        except OSError as error:
+            send("log", f"rollback could not remove {path}: {error}", payload={"path": path})
+
+
+def _append_install_log(log_path, *, engine, confirmed, kind, step, exit_code, code) -> None:
+    """Append one JSON line for one event; the file is local and append-only (AC-10)."""
+    line = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "engine": engine,
+        "confirmed": confirmed,
+        "step": step,
+        "exit_code": exit_code,
+        "type": kind,
+        "code": code,
+    }
+    parent = os.path.dirname(log_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line) + "\n")
+
+
+def install(
+    engine: str,
+    confirmed: bool,
+    *,
+    macos_major: int,
+    run=_real_run,
+    open_url=_real_open,
+    emit=_print_event,
+    detect=detect_all,
+    hardware=_scan_hardware,
+    sleep=time.sleep,
+    log_path=DEFAULT_INSTALL_LOG,
+    lock=DEFAULT_LOCKS,
+    python=sys.executable,
+    engines_dir=DEFAULT_ENGINES_DIR,
+    timeout_s: float = STEP_TIMEOUT_S,
+    poll_s: float = POLL_S,
+    poll_timeout_s: float = POLL_TIMEOUT_S,
+) -> bool:
+    """Install *engine*, but only with consent and never over an existing install.
+
+    Deriving the Plan is the name check: an unknown engine raises ``ValueError``
+    before anything else runs, and no caller-supplied command, argv or URL is ever
+    executed (AC-6), so the Phase 4 localhost API cannot become an arbitrary-command
+    endpoint. After that every refusal emits one ``error`` event with a code and
+    appends it to the local install log, in the order consent -> already installed ->
+    busy -> low disk. Steps then run with the injected interpreter and a hermetic
+    environment, progress follows each one, and ``done`` is last. A failed step
+    removes only what this call created (AC-7).
+    """
+    plan = install_plan(engine, macos_major)  # AC-6: an unknown name raises here, first
+
+    seq = 0
+
+    def send(kind, message, *, fraction=None, payload=None, step=None, exit_code=None):
+        nonlocal seq
+        seq += 1
+        event = {
+            "seq": seq,
+            "type": kind,
+            "message": message,
+            "fraction": fraction,
+            "payload": payload,
+        }
+        _append_install_log(
+            log_path,
+            engine=engine,
+            confirmed=confirmed,
+            kind=kind,
+            step=step,
+            exit_code=exit_code,
+            code=(payload or {}).get("code"),
+        )
+        emit(event)
+        return event
+
+    def refuse(code, message):
+        send("error", message, payload={"code": code})
+        return False
+
+    if not confirmed:
+        return refuse("consent_required", "consent was not given; nothing was installed")
+
+    if _installed(detect(), engine):
+        return refuse(
+            "already_installed", f"{engine} is already installed; nothing was overwritten"
+        )
+
+    if not lock.acquire(engine):
+        return refuse("busy", f"another install of {engine} is already running")
+
+    def run_steps() -> bool:
+        created: list[str] = []
+        source_dir = _plan_engines_dir(plan)
+        for position, step in enumerate(plan.steps):
+            if step.command is None:
+                continue
+            argv = _relocate(
+                [python if token == "{python}" else token for token in step.command],
+                source_dir,
+                engines_dir,
+            )
+            root = _venv_root(argv)
+            existed = root is not None and os.path.lexists(root)
+            exit_code, output = run(argv, timeout_s, _hermetic_env())
+            tail = (output or "")[-OUTPUT_TAIL_BYTES:]
+            if root is not None and not existed and os.path.lexists(root):
+                created.append(root)
+            if exit_code != 0:
+                send(
+                    "error",
+                    f"step {step.id} failed with exit code {exit_code}",
+                    payload={"code": "step_failed", "step": step.id, "output_tail": tail},
+                    step=step.id,
+                    exit_code=exit_code,
+                )
+                _rollback(created, engines_dir, send)
+                send("done", "install failed; nothing else was run")
+                return False
+            send(
+                "progress",
+                step.label,
+                fraction=(position + 1) / len(plan.steps),
+                payload={"step": step.id},
+                step=step.id,
+                exit_code=exit_code,
+            )
+        send("done", "install finished")
+        return True
+
+    def run_guided() -> bool:
+        if not _url_allowed(plan.source_url):
+            return refuse(
+                "url_not_allowed",
+                f"refusing to open {plan.source_url}: only https URLs on "
+                f"{', '.join(ALLOWED_DOWNLOAD_HOSTS)} are allowed",
+            )
+        open_url(plan.source_url)
+        attempts = max(1, math.ceil(poll_timeout_s / poll_s))
+        installed = False
+        for _ in range(attempts):
+            installed = _installed(detect(), engine)
+            if installed:
+                break
+            sleep(poll_s)
+        send(
+            "result",
+            "installation complete" if installed else "not detected before the timeout",
+            payload={"installed": installed},
+        )
+        send("done", "install finished" if installed else "install gave up waiting")
+        return installed
+
+    try:
+        needed = _disk_required(plan.size_bytes_estimate)
+        free = hardware().disk_free_bytes
+        if free < needed:
+            return refuse(
+                "low_disk",
+                f"{free} bytes free is less than the {needed} bytes this install needs",
+            )
+
+        if plan.kind == "guided_download":
+            return run_guided()
+
+        return run_steps()
+    finally:
+        lock.release(engine)

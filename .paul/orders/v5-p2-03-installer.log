@@ -1,0 +1,50 @@
+I'll read the plan, audit, and current engines module.
+Now let me read the interfaces doc and hardware module for the shapes I must compose with.
+Let me check the rest of the v5 modules and project conventions before designing the installer.
+
+The suite takes longer than 30s. Let me get the baseline with a longer timeout.
+Baseline: 708 passed. I have the shapes. Now I'll write the command-path tests first (consent, name check, already-installed, lock, disk, hermetic env, ordered steps, failure/rollback, log) and watch them fail.
+
+Now I'll append the install tests for the command path.
+
+
+Running the new tests now — they must fail before I implement.
+Red confirmed. Now I'll implement the installer's command path and guards in `engines.py`.
+
+
+
+The nested functions are defined after their call site — that's a NameError at runtime. Let me reorder them above the try block.
+
+The command path is green. Now the guided-download tests (AC-4, AC-8 timeout, AC-9 allowlist).
+Now I'll watch the guided slice fail by temporarily removing its branch, then restore.
+
+All 41 green. Now the full suite.
+731 passed (baseline 708 + 23). Now the guard red-checks: each guard removed, its test watched failing, restored.
+
+
+All 12 guards red-checked, file restored byte-identically. Full suite now.
+Let me review the final installer once for correctness and tidy the test imports.
+
+
+
+DONE — 731 passed (baseline 708 + 23 new). Files touched: `ohyesmlx/engines.py`, `tests/test_engines.py` only.
+
+**What landed**
+- `install(engine, confirmed, *, macos_major, run, open_url, emit, detect, hardware, sleep, log_path, lock, python, engines_dir, timeout_s=900, poll_s=2.0, poll_timeout_s=600.0)` — plan derived internally (unknown name raises `ValueError` first), refusals in order consent → already_installed → busy → low_disk, hermetic step env, argv-only step execution, progress after each step, `done` last, guided open+poll ending in `result`, per-event JSONL log. `EngineLocks` supplies the real per-engine lock; defaults wrap real subprocess/`open`/stdout emit/hardware scan.
+- Two interpretation calls: (1) the name check runs before consent — the order says "before anything else", and the listed consent-first order holds for every valid name; (2) `engines_dir` relocates the plan's venv root off the production path so a scratch smoke and all tests stay out of the real installs — identity when the production dir is passed. I also lifted `_APP_SUPPORT` as the one definition of the Application Support path that `_app_engine_venvs` now shares.
+
+**Guards red-checked** (each removed, its test watched failing, file restored byte-identical): consent, name check, already_installed, lock, low_disk, poll timeout, URL allowlist, rollback scope, rollback created-only, hermetic env, output-tail cap, step timeout.
+
+**Not verified:** the real pip install end-to-end (your smoke), the real `open` call, and the real subprocess-kill path in `_real_run`'s `TimeoutExpired` branch. I did not run `graphify update .` — it writes outside the two files this order allows; the code graph is stale for `engines.py` until the coordinator runs it.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     30    3296004    3189760    61569   96.8%   0.062447
+
+== cc-agent: git status ==
+ M ohyesmlx/engines.py
+ M tests/test_engines.py
+?? .paul/orders/v5-p2-03-installer.log
+?? .paul/orders/v5-p2-03-installer.md
+ ohyesmlx/engines.py   | 377 ++++++++++++++++++++++++++++++++++++++-
+ tests/test_engines.py | 477 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 852 insertions(+), 2 deletions(-)

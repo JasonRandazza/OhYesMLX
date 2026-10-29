@@ -9,12 +9,18 @@ test.
 
 from __future__ import annotations
 
+import inspect
+import json
 import os
+import sys
 from dataclasses import FrozenInstanceError, fields
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
-from ohyesmlx.engines import Plan, Step, detect_all, install_plan
+from ohyesmlx import engines
+from ohyesmlx.engines import EngineLocks, Plan, Step, detect_all, install, install_plan
 from ohyesmlx.runtimes import RUNTIMES
 
 HOME = "/Users/test"
@@ -312,3 +318,472 @@ def test_omlx_guided_step_tells_the_user_to_skip_release_candidates():
     plan = install_plan("omlx", 15)
     assert "not a release candidate" in plan.steps[0].label
     assert "release candidate" not in install_plan("osaurus", 15).steps[0].label
+
+
+# ---------------------------------------------------------------------------
+# engines.install -- the consent-gated installer (plan 02-03)
+#
+# Every side effect is a fake: run replays literal (code, output) pairs, detect
+# answers from a script, hardware reports a literal free disk, and the lock, opener,
+# emitter and sleep only record what they were handed.
+# ---------------------------------------------------------------------------
+
+
+class FakeRun:
+    """The subprocess seam: records each call and replays the given results."""
+
+    def __init__(self, results=None, on_call=None):
+        self.calls = []
+        self.results = list(results or [])
+        self.on_call = on_call
+
+    def __call__(self, argv, timeout, env):
+        self.calls.append({"argv": list(argv), "timeout": timeout, "env": dict(env)})
+        if self.on_call is not None:
+            self.on_call(argv)
+        return self.results.pop(0) if self.results else (0, "")
+
+
+class FakeDetect:
+    """Detection answers from a script; polling past the allowance is a test failure.
+
+    The allowance is what a buggy poll loop (one without its timeout) trips over.
+    """
+
+    def __init__(self, engine, answers=(False,), limit=50):
+        self.engine = engine
+        self.answers = list(answers)
+        self.last = self.answers[-1] if self.answers else False
+        self.limit = limit
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls > self.limit:
+            raise AssertionError("detect was polled past the timeout allowance")
+        if self.answers:
+            self.last = self.answers.pop(0)
+        return [SimpleNamespace(name=self.engine, installed=self.last)]
+
+
+class FakeLock:
+    """The lock seam: records acquire/release and answers availability as given."""
+
+    def __init__(self, available=True):
+        self.available = available
+        self.acquired = []
+        self.released = []
+
+    def acquire(self, engine):
+        self.acquired.append(engine)
+        return self.available
+
+    def release(self, engine):
+        self.released.append(engine)
+
+
+def log_lines(path):
+    with open(path, encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def do_install(tmp_path, engine="mlxlm", confirmed=True, *, run=None, detect=None,
+               open_url=None, free_bytes=500 * 1024**3, lock=None, **overrides):
+    """Call install with every side effect faked; return what the fakes observed."""
+    events = []
+    opened = []
+    sleeps = []
+    kwargs = dict(
+        macos_major=15,
+        run=run if run is not None else FakeRun(),
+        open_url=open_url if open_url is not None else opened.append,
+        emit=events.append,
+        detect=detect if detect is not None else FakeDetect(engine),
+        hardware=lambda: SimpleNamespace(disk_free_bytes=free_bytes),
+        sleep=sleeps.append,
+        log_path=str(tmp_path / "install-log.jsonl"),
+        lock=lock if lock is not None else FakeLock(),
+        python="/fake/python",
+        engines_dir=str(tmp_path / "engines"),
+        timeout_s=900,
+    )
+    kwargs.update(overrides)
+    ok = install(engine, confirmed, **kwargs)
+    return ok, events, opened, sleeps
+
+
+def command_plan(root, steps):
+    return Plan(
+        engine="mlxlm",
+        kind="command",
+        source_url="https://pypi.org/project/mlx-lm/",
+        size_bytes_estimate=None,
+        needs_admin=False,
+        steps=steps,
+    )
+
+
+def test_install_without_consent_runs_nothing_and_emits_only_the_refusal(tmp_path):
+    def never(*args, **kwargs):
+        raise AssertionError("no side effect may run without consent")
+
+    ok, events, opened, sleeps = do_install(
+        tmp_path, confirmed=False, run=never, detect=never, open_url=never,
+        hardware=never, lock=never,
+    )
+    assert ok is False
+    assert events == [
+        {
+            "seq": 1,
+            "type": "error",
+            "message": events[0]["message"],
+            "fraction": None,
+            "payload": {"code": "consent_required"},
+        }
+    ]
+    lines = log_lines(tmp_path / "install-log.jsonl")
+    assert [line["type"] for line in lines] == ["error"]
+    assert lines[0]["code"] == "consent_required"
+    assert lines[0]["engine"] == "mlxlm"
+    assert lines[0]["confirmed"] is False
+
+
+def test_install_of_a_name_outside_the_five_raises_before_anything_runs(tmp_path):
+    events = []
+
+    def never(*args, **kwargs):
+        raise AssertionError("nothing may run for an unknown engine")
+
+    with pytest.raises(ValueError, match="mtplx"):
+        install(
+            "mtplx", True, macos_major=15, run=never, detect=never, open_url=never,
+            hardware=never, sleep=never, emit=events.append,
+            log_path=str(tmp_path / "install-log.jsonl"), lock=never,
+            python="/fake/python", engines_dir=str(tmp_path / "engines"),
+        )
+    assert events == []
+    assert not (tmp_path / "install-log.jsonl").exists()
+
+
+def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path):
+    venv = f"{tmp_path}/engines/mlxlm-0.31.3"
+    run = FakeRun([(0, "venv made"), (0, "installed")])
+    ok, events, opened, sleeps = do_install(tmp_path, run=run)
+    assert ok is True
+    assert [call["argv"] for call in run.calls] == [
+        ["/fake/python", "-m", "venv", venv],
+        [
+            f"{venv}/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "--no-input",
+            "--disable-pip-version-check",
+            "mlx-lm==0.31.3",
+        ],
+    ]
+    assert [event["type"] for event in events] == ["progress", "progress", "done"]
+    assert [event["fraction"] for event in events[:2]] == [0.5, 1.0]
+    assert [event["payload"]["step"] for event in events[:2]] == [
+        "create-venv",
+        "install",
+    ]
+    assert events[-1]["seq"] == 3
+
+
+def test_each_step_is_bounded_by_the_injected_timeout(tmp_path):
+    run = FakeRun()
+    do_install(tmp_path, run=run)
+    assert [call["timeout"] for call in run.calls] == [900, 900]
+
+    run = FakeRun()
+    do_install(tmp_path / "second", run=run, timeout_s=12.5)
+    assert [call["timeout"] for call in run.calls] == [12.5, 12.5]
+
+
+def test_steps_run_with_a_hermetic_env_that_drops_pythonpath_and_pip(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/ambient/site-packages")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://ambient.example/simple")
+    monkeypatch.setenv("PIP_NO_BUILD_ISOLATION", "1")
+    monkeypatch.setenv("OHYESMLX_KEPT", "kept")
+    run = FakeRun()
+    do_install(tmp_path, run=run)
+    assert len(run.calls) == 2
+    for call in run.calls:
+        assert "PYTHONPATH" not in call["env"]
+        assert [key for key in call["env"] if key.startswith("PIP_")] == []
+        assert call["env"]["OHYESMLX_KEPT"] == "kept"
+
+
+def test_the_bundled_python_is_the_one_the_plan_creates_the_venv_with(tmp_path):
+    run = FakeRun()
+    do_install(tmp_path, run=run, python="/bundle/OhYesMLX/bin/python3")
+    assert run.calls[0]["argv"] == [
+        "/bundle/OhYesMLX/bin/python3",
+        "-m",
+        "venv",
+        f"{tmp_path}/engines/mlxlm-0.31.3",
+    ]
+    default = inspect.signature(install).parameters["python"].default
+    assert default == sys.executable
+
+
+def test_an_already_installed_engine_is_refused_before_the_lock_or_a_step(tmp_path):
+    run = FakeRun()
+    lock = FakeLock()
+    ok, events, opened, sleeps = do_install(
+        tmp_path, detect=FakeDetect("mlxlm", [True]), run=run, lock=lock
+    )
+    assert ok is False
+    assert run.calls == []
+    assert lock.acquired == []
+    assert [event["type"] for event in events] == ["error"]
+    assert events[0]["payload"]["code"] == "already_installed"
+    assert log_lines(tmp_path / "install-log.jsonl")[0]["code"] == "already_installed"
+
+
+def test_a_held_lock_refuses_the_second_install_as_busy(tmp_path):
+    run = FakeRun()
+    lock = FakeLock(available=False)
+    ok, events, opened, sleeps = do_install(tmp_path, run=run, lock=lock)
+    assert ok is False
+    assert run.calls == []
+    assert lock.acquired == ["mlxlm"]
+    assert lock.released == []
+    assert [event["payload"]["code"] for event in events] == ["busy"]
+
+
+def test_a_running_install_releases_its_lock_at_the_end(tmp_path):
+    lock = FakeLock()
+    do_install(tmp_path, lock=lock)
+    assert lock.acquired == ["mlxlm"]
+    assert lock.released == ["mlxlm"]
+
+
+def test_engine_locks_are_one_per_engine_and_release_returns_it():
+    locks = EngineLocks()
+    assert locks.acquire("mlxlm") is True
+    assert locks.acquire("mlxlm") is False
+    assert locks.acquire("optiq") is True
+    locks.release("mlxlm")
+    assert locks.acquire("mlxlm") is True
+
+
+def test_a_known_size_needs_twice_its_estimate_free(tmp_path):
+    run = FakeRun()
+    ok, events, opened, sleeps = do_install(
+        tmp_path, engine="osaurus",
+        detect=FakeDetect("osaurus"),
+        run=run,
+        free_bytes=2 * 85_900_000 - 1,
+    )
+    assert ok is False
+    assert opened == []
+    assert [event["payload"]["code"] for event in events] == ["low_disk"]
+
+    ok, events, opened, sleeps = do_install(
+        tmp_path / "enough", engine="osaurus",
+        detect=FakeDetect("osaurus", [False, True]),
+        free_bytes=2 * 85_900_000,
+        poll_s=1.0, poll_timeout_s=10.0,
+    )
+    assert ok is True
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/latest"]
+
+
+def test_an_unknown_size_falls_back_to_a_two_gib_floor(tmp_path):
+    ok, events, opened, sleeps = do_install(
+        tmp_path, free_bytes=2 * 1024**3 - 1
+    )
+    assert ok is False
+    assert [event["payload"]["code"] for event in events] == ["low_disk"]
+
+    run = FakeRun()
+    ok, events, opened, sleeps = do_install(tmp_path / "exactly", run=run,
+                                            free_bytes=2 * 1024**3)
+    assert ok is True
+    assert len(run.calls) == 2
+
+
+def test_a_failing_step_stops_before_the_next_rolls_back_and_reports_the_tail(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlxlm-0.31.3"
+    plan = command_plan(
+        str(venv),
+        [
+            Step("create-venv", "make the venv", ["{python}", "-m", "venv", str(venv)]),
+            Step("install", "install the wheel",
+                 [f"{venv}/bin/python", "-m", "pip", "install", "mlx-lm==0.31.3"]),
+            Step("verify", "check the server", [f"{venv}/bin/mlx_lm.server", "--help"]),
+        ],
+    )
+    monkeypatch.setattr(engines, "install_plan", lambda name, major: plan)
+
+    def create_venv(argv):
+        if argv[1:3] == ["-m", "venv"]:
+            (venv / "bin").mkdir(parents=True)
+            (venv / "pyvenv.cfg").write_text("version = 3.12.13\n", encoding="utf-8")
+
+    run = FakeRun([(0, ""), (1, "ERROR: no matching distribution")], on_call=create_venv)
+    ok, events, opened, sleeps = do_install(tmp_path, run=run)
+
+    assert ok is False
+    assert [call["argv"][0] for call in run.calls] == ["/fake/python", f"{venv}/bin/python"]
+    assert not venv.exists()
+    assert (tmp_path / "engines").exists()
+    assert [event["type"] for event in events] == ["progress", "error", "done"]
+    failure = events[1]
+    assert failure["payload"]["code"] == "step_failed"
+    assert failure["payload"]["step"] == "install"
+    assert failure["payload"]["output_tail"] == "ERROR: no matching distribution"
+    assert events[-1]["type"] == "done"
+    assert log_lines(tmp_path / "install-log.jsonl")[1]["step"] == "install"
+    assert log_lines(tmp_path / "install-log.jsonl")[1]["exit_code"] == 1
+
+
+def test_a_venv_that_existed_before_the_call_is_never_removed(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlxlm-0.31.3"
+    venv.mkdir(parents=True)
+    (venv / "keep.txt").write_text("pre-existing", encoding="utf-8")
+    plan = command_plan(
+        str(venv),
+        [
+            Step("create-venv", "make the venv", ["{python}", "-m", "venv", str(venv)]),
+            Step("install", "install the wheel",
+                 [f"{venv}/bin/python", "-m", "pip", "install", "mlx-lm==0.31.3"]),
+        ],
+    )
+    monkeypatch.setattr(engines, "install_plan", lambda name, major: plan)
+    run = FakeRun([(0, ""), (1, "boom")])
+    ok, events, opened, sleeps = do_install(tmp_path, run=run)
+    assert ok is False
+    assert (venv / "keep.txt").read_text(encoding="utf-8") == "pre-existing"
+
+
+def test_rollback_refuses_a_path_that_resolves_outside_the_engines_dir(tmp_path, monkeypatch):
+    engines_dir = tmp_path / "engines"
+    venv = engines_dir / "mlxlm-0.31.3"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("do not delete", encoding="utf-8")
+    plan = command_plan(
+        str(venv),
+        [
+            Step("create-venv", "make the venv", ["{python}", "-m", "venv", str(venv)]),
+            Step("install", "install the wheel",
+                 [f"{venv}/bin/python", "-m", "pip", "install", "mlx-lm==0.31.3"]),
+        ],
+    )
+    monkeypatch.setattr(engines, "install_plan", lambda name, major: plan)
+
+    def link_out(argv):
+        if argv[1:3] == ["-m", "venv"]:
+            engines_dir.mkdir(parents=True, exist_ok=True)
+            os.symlink(outside, venv)
+
+    run = FakeRun([(0, ""), (1, "boom")], on_call=link_out)
+    ok, events, opened, sleeps = do_install(tmp_path, run=run)
+    assert ok is False
+    assert (outside / "precious.txt").read_text(encoding="utf-8") == "do not delete"
+    assert venv.is_symlink()
+    refusals = [event for event in events if event["type"] == "log"]
+    assert len(refusals) == 1
+    assert "outside" in refusals[0]["message"]
+
+
+def test_captured_output_is_capped_to_the_last_four_kilobytes(tmp_path):
+    long_output = "x" * 5000 + "TAIL"
+    run = FakeRun([(1, long_output)])
+    ok, events, opened, sleeps = do_install(tmp_path, run=run)
+    assert ok is False
+    failure = [event for event in events if event["type"] == "error"][0]
+    assert failure["payload"]["output_tail"] == long_output[-4096:]
+    assert len(failure["payload"]["output_tail"]) == 4096
+
+
+def test_every_event_appends_one_json_line_with_the_recorded_fields(tmp_path):
+    do_install(tmp_path, run=FakeRun())
+    do_install(tmp_path, confirmed=False)
+
+    lines = log_lines(tmp_path / "install-log.jsonl")
+    assert [line["type"] for line in lines] == ["progress", "progress", "done", "error"]
+    for line in lines:
+        assert set(line) >= {"engine", "ts", "confirmed", "step", "exit_code", "type"}
+        assert datetime.fromisoformat(line["ts"]).utcoffset().total_seconds() == 0
+    assert [line["step"] for line in lines[:2]] == ["create-venv", "install"]
+    assert [line["exit_code"] for line in lines[:2]] == [0, 0]
+    assert lines[2]["step"] is None
+    assert lines[2]["exit_code"] is None
+    assert lines[3]["code"] == "consent_required"
+    assert [line["confirmed"] for line in lines] == [True, True, True, False]
+
+
+def test_the_install_log_is_created_under_a_new_parent_directory(tmp_path):
+    log_path = tmp_path / "nested" / "deeper" / "install-log.jsonl"
+    do_install(tmp_path, confirmed=False, log_path=str(log_path))
+    assert [line["type"] for line in log_lines(log_path)] == ["error"]
+
+
+def test_no_plan_step_is_a_shell_string_and_none_uses_sudo():
+    for name in ("mlxlm", "osaurus", "omlx", "optiq", "vmlx"):
+        for step in install_plan(name, 15).steps:
+            if step.command is None:
+                continue
+            assert isinstance(step.command, list)
+            assert all(isinstance(token, str) for token in step.command)
+            assert "sudo" not in step.command
+
+
+def test_a_guided_plan_opens_the_https_page_then_polls_detect_until_installed(tmp_path):
+    detect = FakeDetect("osaurus", [False, False, True])
+    sleeps = []
+    ok, events, opened, _ = do_install(
+        tmp_path, engine="osaurus", detect=detect, sleep=sleeps.append,
+        poll_s=1.0, poll_timeout_s=10.0,
+    )
+    assert ok is True
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/latest"]
+    assert detect.calls == 3
+    assert sleeps == [1.0]
+    assert [event["type"] for event in events] == ["result", "done"]
+    assert events[0]["payload"] == {"installed": True}
+
+
+def test_guided_polling_that_times_out_is_a_result_not_an_error(tmp_path):
+    detect = FakeDetect("osaurus", [False], limit=10)
+    sleeps = []
+    ok, events, opened, _ = do_install(
+        tmp_path, engine="osaurus", detect=detect, sleep=sleeps.append,
+        poll_s=1.0, poll_timeout_s=3.0,
+    )
+    assert ok is False
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/latest"]
+    assert detect.calls == 4  # the pre-check plus three one-second polls
+    assert sleeps == [1.0, 1.0, 1.0]
+    assert [event["type"] for event in events] == ["result", "done"]
+    assert events[0]["payload"] == {"installed": False}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/osaurus.dmg",
+        "http://github.com/osaurus-ai/osaurus/releases/latest",
+    ],
+)
+def test_a_url_outside_the_https_allowlist_is_refused_before_the_opener(tmp_path, monkeypatch, url):
+    plan = Plan(
+        engine="osaurus",
+        kind="guided_download",
+        source_url=url,
+        size_bytes_estimate=1,
+        needs_admin=False,
+        steps=[Step("open-page", "open", None), Step("verify-install", "verify", None)],
+    )
+    monkeypatch.setattr(engines, "install_plan", lambda name, major: plan)
+    ok, events, opened, sleeps = do_install(
+        tmp_path, engine="osaurus", detect=FakeDetect("osaurus")
+    )
+    assert ok is False
+    assert opened == []
+    assert [event["type"] for event in events] == ["error"]
+    assert events[0]["payload"]["code"] == "url_not_allowed"
