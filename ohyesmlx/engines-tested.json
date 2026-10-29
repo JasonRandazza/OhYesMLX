@@ -21,10 +21,10 @@
       "format": "oq4",
       "repo": "RepublicOfKorokke/Qwen3.5-4B-oQ4",
       "workload": "decode",
-      "decode_tok_s": null,
-      "ttft_s": null,
-      "measured": null,
-      "version_measured": null
+      "decode_tok_s": 61.973633270409046,
+      "ttft_s": 0.304980417015031,
+      "measured": "2026-10-29",
+      "version_measured": "0.25.28"
     }
   },
   "omlx": {

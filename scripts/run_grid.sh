@@ -12,7 +12,7 @@ cd /Users/jrazz/Dev/active/OhYesMLX
 . "$(dirname "$0")/gridspec.sh"
 OUT=${OUT:-results/grid}
 mkdir -p "$OUT"
-PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
+PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 CONF="$HOME/.osaurus/config/server-runtime.json"
 SERVER="$HOME/.osaurus/config/server.json"

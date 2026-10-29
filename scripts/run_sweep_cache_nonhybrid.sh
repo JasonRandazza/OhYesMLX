@@ -18,7 +18,7 @@ set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
 H=$HOME/.cache/huggingface/hub
 Q4_NONHYBRID="$H/models--brainworkup--Llama-3.1-8B-oQ4/snapshots/a041336af01fe59ffe17c762d4c970564dcabc53"
-PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
+PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 OUT=results/sweep-cache-nonhybrid
 mkdir -p "$OUT"

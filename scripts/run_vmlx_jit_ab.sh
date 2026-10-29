@@ -25,7 +25,7 @@
 # Every step's status is captured instead and the runner exits non-zero after the flow ends.
 set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
-PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
+PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 H=$HOME/.cache/huggingface/hub
 JG="$H/models--JANGQ-AI--Qwen3.5-4B-JANG_4S/snapshots/4567967a46cd9e9bf26d3bb491ddd422ad607775"

@@ -10,7 +10,7 @@
 # Zero repository dependencies added; evaluates via isolated uv run lm-eval.
 set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
-PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
+PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 
 H=$HOME/.cache/huggingface/hub

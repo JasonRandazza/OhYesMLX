@@ -9,7 +9,7 @@
 #   sh scripts/run_harden_validation.sh > results/harden-2026-09-23/runner.log 2>&1 &
 set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
-PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
+PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 T=${T:-results/harden-2026-09-23}
 GRIDS=${GRIDS:-35b dense moe}
 mkdir -p "$T"

@@ -17,7 +17,7 @@
 set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
 . "$(dirname "$0")/gridspec.sh"
-PY=/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python
+PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
 OUT=results/sweep-cache
 mkdir -p "$OUT"
