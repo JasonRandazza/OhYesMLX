@@ -1,13 +1,17 @@
 """Checks for ohyesmlx.hardware.
 
-Every check drives ``scan`` through its one side effect: ``run`` is a fake that maps the
-exact argv this module issues to the literal text the real command returns. No subprocess
-is started, and no expected value is computed from the code under test.
+Every check drives ``scan`` through its side effects: ``run`` is a fake that maps the exact
+argv this module issues to the literal text the real command returns, ``disk_usage`` answers
+a literal ``.free`` per path, and ``volume_paths`` names the volumes to inspect. No
+subprocess is started, no disk is read, and no expected value is computed from the code
+under test.
 """
 
 from __future__ import annotations
 
-from ohyesmlx.hardware import scan
+from collections import namedtuple
+
+from ohyesmlx.hardware import _volume_paths, model_budget, scan
 
 
 def fake_run(answers):
@@ -19,6 +23,31 @@ def fake_run(answers):
     return run
 
 
+Usage = namedtuple("Usage", "total used free")
+
+
+def fake_disk_usage(frees):
+    """A ``disk_usage`` reporting ``frees[path]`` as ``.free``; an exception value raises it."""
+
+    def disk_usage(path):
+        free = frees[path]
+        if isinstance(free, Exception):
+            raise free
+        return Usage(total=0, used=0, free=free)
+
+    return disk_usage
+
+
+def no_volumes():
+    """A ``volume_paths`` that names no volume, so a chip check sees no disk."""
+    return []
+
+
+def scan_hw(answers):
+    """``scan`` driven by the chip answers alone, with no volume inspected."""
+    return scan(run=fake_run(answers), volume_paths=no_volumes)
+
+
 M2_MAX_64 = {
     ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M2 Max",
     ("sysctl", "-n", "hw.memsize"): "68719476736",
@@ -28,7 +57,7 @@ M2_MAX_64 = {
 
 
 def test_m2_max_64_gib_is_a_supported_max_chip():
-    hw = scan(run=fake_run(M2_MAX_64))
+    hw = scan_hw(M2_MAX_64)
     assert hw.chip == "Apple M2 Max"
     assert hw.family == "M2"
     assert hw.tier == "max"
@@ -40,7 +69,7 @@ def test_m2_max_64_gib_is_a_supported_max_chip():
     assert hw.gpu_cores is None
     assert hw.disk_free_bytes == 0
     assert hw.volumes == []
-    assert hw.model_budget_bytes == 0
+    assert hw.model_budget_bytes == 49392123904
 
 
 M1_16 = {
@@ -52,7 +81,7 @@ M1_16 = {
 
 
 def test_m1_base_is_base_tier():
-    hw = scan(run=fake_run(M1_16))
+    hw = scan_hw(M1_16)
     assert hw.chip == "Apple M1"
     assert hw.family == "M1"
     assert hw.tier == "base"
@@ -71,7 +100,7 @@ M3_PRO_36 = {
 
 
 def test_m3_pro_is_pro_tier():
-    hw = scan(run=fake_run(M3_PRO_36))
+    hw = scan_hw(M3_PRO_36)
     assert hw.chip == "Apple M3 Pro"
     assert hw.family == "M3"
     assert hw.tier == "pro"
@@ -89,7 +118,7 @@ M4_ULTRA_128 = {
 
 
 def test_m4_ultra_is_ultra_tier():
-    hw = scan(run=fake_run(M4_ULTRA_128))
+    hw = scan_hw(M4_ULTRA_128)
     assert hw.chip == "Apple M4 Ultra"
     assert hw.family == "M4"
     assert hw.tier == "ultra"
@@ -106,7 +135,7 @@ INTEL_16 = {
 
 
 def test_intel_is_unsupported_and_says_why():
-    hw = scan(run=fake_run(INTEL_16))
+    hw = scan_hw(INTEL_16)
     assert hw.chip == "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz"
     assert hw.ram_bytes == 17179869184
     assert hw.cpu_cores == 12
@@ -124,7 +153,7 @@ M2_4 = {
 
 
 def test_apple_silicon_under_8_gib_is_unsupported():
-    hw = scan(run=fake_run(M2_4))
+    hw = scan_hw(M2_4)
     assert hw.chip == "Apple M2"
     assert hw.family == "M2"
     assert hw.tier == "base"
@@ -143,7 +172,7 @@ M7_32 = {
 
 
 def test_an_unknown_future_apple_chip_stays_supported_at_base_tier():
-    hw = scan(run=fake_run(M7_32))
+    hw = scan_hw(M7_32)
     assert hw.chip == "Apple M7"
     assert hw.family == "M7"
     assert hw.tier == "base"
@@ -152,3 +181,93 @@ def test_an_unknown_future_apple_chip_stays_supported_at_base_tier():
     assert hw.macos == "27.0"
     assert hw.supported is True
     assert hw.unsupported_reason is None
+
+
+def test_disk_free_bytes_is_the_root_volumes_free_space():
+    hw = scan(
+        run=fake_run(M2_MAX_64),
+        disk_usage=fake_disk_usage({"/": 123456789012}),
+        volume_paths=lambda: ["/"],
+    )
+    assert hw.disk_free_bytes == 123456789012
+
+
+def test_volumes_are_reported_in_volume_path_order():
+    hw = scan(
+        run=fake_run(M2_MAX_64),
+        disk_usage=fake_disk_usage({"/": 123456789012, "/Volumes/Ext": 987654321}),
+        volume_paths=lambda: ["/", "/Volumes/Ext"],
+    )
+    assert hw.volumes == [
+        {"path": "/", "free_bytes": 123456789012},
+        {"path": "/Volumes/Ext", "free_bytes": 987654321},
+    ]
+    assert hw.disk_free_bytes == 123456789012
+
+
+def test_an_unreadable_volume_is_skipped_and_the_rest_remain():
+    hw = scan(
+        run=fake_run(M2_MAX_64),
+        disk_usage=fake_disk_usage(
+            {
+                "/": 123456789012,
+                "/Volumes/Gone": OSError("no such volume"),
+                "/Volumes/Ext": 987654321,
+            }
+        ),
+        volume_paths=lambda: ["/", "/Volumes/Gone", "/Volumes/Ext"],
+    )
+    assert hw.volumes == [
+        {"path": "/", "free_bytes": 123456789012},
+        {"path": "/Volumes/Ext", "free_bytes": 987654321},
+    ]
+    assert hw.disk_free_bytes == 123456789012
+
+
+def test_an_unreadable_root_reports_zero_free_and_leaves_the_other_volumes():
+    hw = scan(
+        run=fake_run(M2_MAX_64),
+        disk_usage=fake_disk_usage(
+            {"/": OSError("no such volume"), "/Volumes/Ext": 987654321}
+        ),
+        volume_paths=lambda: ["/", "/Volumes/Ext"],
+    )
+    assert hw.disk_free_bytes == 0
+    assert hw.volumes == [{"path": "/Volumes/Ext", "free_bytes": 987654321}]
+
+
+def test_model_budget_takes_two_thirds_of_ram_under_36_gib_less_two_gib():
+    assert model_budget(17179869184) == 9305762474
+    assert model_budget(8589934592) == 3579139413
+
+
+def test_model_budget_takes_three_quarters_of_ram_from_36_gib_less_two_gib():
+    assert model_budget(68719476736) == 49392123904
+
+
+def test_scan_reports_the_model_budget_for_an_m2_max_with_64_gib():
+    hw = scan_hw(M2_MAX_64)
+    assert hw.model_budget_bytes == 49392123904
+
+
+def test_volume_paths_lists_root_then_real_volumes_skipping_the_startup_alias(tmp_path):
+    (tmp_path / "Ext").mkdir()
+    (tmp_path / "Other").mkdir()
+    (tmp_path / "not-a-volume").write_text("")
+    (tmp_path / "Macintosh HD").symlink_to("/")
+    assert _volume_paths(root=str(tmp_path)) == [
+        "/",
+        str(tmp_path / "Ext"),
+        str(tmp_path / "Other"),
+    ]
+
+
+def test_volume_paths_tolerates_a_missing_volumes_root(tmp_path):
+    assert _volume_paths(root=str(tmp_path / "missing")) == ["/"]
+
+
+def test_volume_paths_skips_hidden_and_recovery_system_volumes(tmp_path):
+    (tmp_path / ".timemachine").mkdir()
+    (tmp_path / "Recovery").mkdir()
+    (tmp_path / "Ext").mkdir()
+    assert _volume_paths(root=str(tmp_path)) == ["/", str(tmp_path / "Ext")]

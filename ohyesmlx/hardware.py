@@ -1,18 +1,18 @@
 """What Mac this is.
 
 Onboarding's first question is answered here and nowhere else: the chip, its family and
-tier, the core count, unified memory, and the macOS version. ``scan`` takes its only side
-effect as a parameter -- every command it runs goes through ``run(argv)`` -- so the parsing
-is checked against captured text and the real machine is one default away.
-
-Disk fields (``disk_free_bytes``, ``volumes``) and ``model_budget_bytes`` belong to T1.2
-and T1.3; they are reported as ``0`` / ``[]`` / ``0`` here so the pinned ``Hardware`` shape
-is complete and a caller never has to invent them. ``gpu_cores`` is ``None``: no command
-this slice runs reports it, and a guessed number would be worse than an honest absence.
+tier, the core count, unified memory, free disk, and the macOS version. ``scan`` takes its
+side effects as parameters -- commands go through ``run(argv)``, volumes come from
+``volume_paths()``, and each volume's space from ``disk_usage(path)`` -- so the parsing is
+checked against captured text and the real machine is one default away. ``gpu_cores`` is
+``None``: no command this slice runs reports it, and a guessed number would be worse than
+an honest absence.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 
@@ -69,14 +69,56 @@ def _support(chip: str, ram_bytes: int) -> tuple[bool, str | None]:
     return True, None
 
 
-def scan(run=_run) -> Hardware:
-    """Describe this Mac through *run*, the one command seam."""
+def model_budget(ram_bytes: int) -> int:
+    """Bytes of model weights this Mac may hold resident, integer arithmetic only.
+
+    Apple's default GPU wired-memory ceiling is three quarters of unified memory on a
+    36 GiB machine and above, two thirds below it; 2 GiB is then reserved for the KV cache
+    and runtime overhead.
+    """
+    ceiling = ram_bytes * 3 // 4 if ram_bytes >= 36 * 1024**3 else ram_bytes * 2 // 3
+    return max(0, ceiling - 2 * 1024**3)
+
+
+def _volume_paths(root: str = "/Volumes") -> list[str]:
+    """``"/"`` then each directory directly under *root*.
+
+    The startup disk appears under ``/Volumes`` as a symlink to ``/``, so only entries that
+    are directories in their own right are volumes; a missing *root* is one disk.
+    """
+    paths = ["/"]
+    try:
+        with os.scandir(root) as entries:
+            found = sorted(entries, key=lambda entry: entry.name)
+    except OSError:
+        return paths
+    for entry in found:
+        # ponytail: name list, not an APFS role query; `diskutil` role lookup if system volumes multiply
+        if entry.name.startswith(".") or entry.name == "Recovery":
+            continue
+        if entry.is_dir(follow_symlinks=False):
+            paths.append(entry.path)
+    return paths
+
+
+def scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths) -> Hardware:
+    """Describe this Mac through *run* and its volumes through *disk_usage*."""
     chip = run(["sysctl", "-n", "machdep.cpu.brand_string"])
     ram_bytes = int(run(["sysctl", "-n", "hw.memsize"]))
     cpu_cores = int(run(["sysctl", "-n", "hw.ncpu"]))
     macos = run(["sw_vers", "-productVersion"])
     family, tier = _chip_identity(chip)
     supported, reason = _support(chip, ram_bytes)
+    disk_free_bytes = 0
+    volumes: list[dict] = []
+    for path in volume_paths():
+        try:
+            free_bytes = disk_usage(path).free
+        except OSError:
+            continue
+        if path == "/":
+            disk_free_bytes = free_bytes
+        volumes.append({"path": path, "free_bytes": free_bytes})
     return Hardware(
         supported=supported,
         unsupported_reason=reason,
@@ -87,7 +129,7 @@ def scan(run=_run) -> Hardware:
         gpu_cores=None,
         ram_bytes=ram_bytes,
         macos=macos,
-        disk_free_bytes=0,
-        volumes=[],
-        model_budget_bytes=0,
+        disk_free_bytes=disk_free_bytes,
+        volumes=volumes,
+        model_budget_bytes=model_budget(ram_bytes),
     )

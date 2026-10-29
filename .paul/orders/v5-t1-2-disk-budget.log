@@ -1,0 +1,105 @@
+I'll start by reading the current state of the two files I'm allowed to touch, plus the pinned interface shape.
+
+
+Baseline is 680 passed. Let me check repo test conventions for default-implementation checks before writing the red tests.
+I'll write the red tests first — new helpers, the four disk sweeps, `model_budget` literals, the scan-level budget, and the default `_volume_paths` check. Then I'll run them and watch each fail.
+
+Red confirmed: the module has neither `model_budget` nor `_volume_paths`. I'll implement those two definitions first, leaving `scan` untouched, so the disk slices keep failing on their own symptom.
+
+
+The four now-green checks are the two `model_budget` literals and the two `_volume_paths` defaults; the 12 red ones all fail on `scan()` not accepting the seams. I'll wire `scan` now.
+
+
+
+Full suite is green at 689 (baseline 680 + 9 new checks). Two cleanups before the red-checks: `os.scandir` should be closed via its context manager.
+Now the red-checks. I'll back up `hardware.py`, break each behaviour, watch the specific test fail, and restore.
+
+
+Both failure-path tests die with the escaping `OSError`, as intended. Restoring, then breaking the budget arithmetic.
+
+
+
+
+All four budget checks fail on the wrong literal. Restoring and red-checking the symlink skip.
+
+
+
+The alias leaks into the list when symlinks are followed. Restoring for the final run.
+
+DONE.
+
+**Changed** — `ohyesmlx/hardware.py`, `tests/test_hardware.py` only.
+
+- `model_budget(ram_bytes)` — 3/4 ceiling at ≥36 GiB, 2/3 below, minus 2 GiB, `max(0, …)`, integer only; the rationale lives in its docstring and nowhere else.
+- `_volume_paths(root="/Volumes")` — `"/"` then sorted real directories via `scandir`; `follow_symlinks=False` drops the startup-disk alias (a symlink to `/`); a missing root returns `["/"]`. `root` is a default-only parameter so the tmp-dir check is possible; every caller uses the no-arg form.
+- `scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths)` — `disk_free_bytes` from `"/"`, `volumes` in `volume_paths` order, per-volume `OSError` skipped, root failure leaves 0; `model_budget_bytes=model_budget(ram_bytes)`.
+- Tests: 9 new checks (root free literal, volume order, non-root failure skipped, root failure → 0, two budget literals covering all three pinned values, scan-level budget on M2 Max/64 GiB, default `_volume_paths` against a tmp dir with a real symlink alias and a missing root). The T1.1 M2 Max fixture's `model_budget_bytes == 0` became `49392123904`; all chip fixtures now go through a `scan_hw` helper injecting `volume_paths=lambda: []`, so no chip test touches the real disk.
+
+**Verified**: baseline 680 passed → 689 passed with `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`. Red-checks done by breaking and restoring (`shasum` confirmed byte-identical restore): removing the `OSError` skip failed both failure-path tests with a raised `OSError`; `ram//2` failed all four budget tests on the wrong literal; `is_dir()` (following symlinks) failed the alias test by listing `Macintosh HD`.
+
+**Not verified**: the default `_volume_paths()` against the real `/Volumes` and real `shutil.disk_usage` free bytes — that is the real-Mac smoke, not run here. `gpu_cores` remains `None` as T1.1 left it.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     29    1450075    1395328    17487   96.2%   0.022890
+
+== cc-agent: git status ==
+ M ohyesmlx/hardware.py
+ M tests/test_hardware.py
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-osaurus-addendum.log
+?? .paul/orders/v31-conc-osaurus-addendum.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-osaurus-seqs.log
+?? .paul/orders/v31-osaurus-seqs.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? .paul/orders/v31-seedless-grids-writeup.log
+?? .paul/orders/v31-seedless-grids-writeup.md
+?? .paul/orders/v4-mtplx-runtime.log
+?? .paul/orders/v5-t1-2-disk-budget.log
+?? .paul/orders/v5-t1-2-disk-budget.md
+ ohyesmlx/hardware.py   |  65 ++++++++++++++++++-----
+ tests/test_hardware.py | 136 ++++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 176 insertions(+), 25 deletions(-)
