@@ -1,0 +1,45 @@
+I'll start by reading the plan, the research doc, the interface spec, and the current engines module.
+The interfaces doc was truncated before the v5.0 section, which I got from the second file. Now let me read the current engines module and its tests.
+I have the spec. Let me check the order file in the repo and get the test baseline.
+The suite takes longer than the default timeout. Let me run it with a longer limit.
+Baseline: 697 passed. Let me check test style for exception assertions before writing the red tests.
+Now I'll write the red tests for AC-1 through AC-4, the ValueError, and the frozen shapes.
+
+I left a typo in a test name. Fixing it, then running the new tests to watch them fail.
+
+Red confirmed (import fails: no `Plan`). Now the implementation.
+
+
+
+All 17 green. Now the red-check: I'll snapshot the green module, inject one fault per AC, watch each named test fail, then restore.
+
+
+
+That mutation accidentally duplicated a keyword. Let me fix it to a clean single-fault mutation, and add the missing-guard fault.
+
+Each fault produced its own named failure. Let me confirm the unknown-name symptom, then restore the green module.
+Restored green. Now a shape check on the serialised plans plus the full suite.
+
+Full suite: 707 passed (697 baseline + 10 new). Let me check the added lines against the repo's line-length style and clean up the scratch snapshot.
+
+DONE
+
+**Changed** (only the two named files):
+- `ohyesmlx/engines.py`: added frozen `Step{id,label,command}` / `Plan{engine,kind,source_url,size_bytes_estimate,needs_admin,steps}`, and `install_plan(name, macos_major) -> Plan`. App engines: `guided_download`, research release URLs, two `command=None` steps (open page → verify by detection). Pip engines: `command` — `["{python}","-m","venv", <root>]` then `<root>/bin/python -m pip install --no-input --disable-pip-version-check mlx-lm==0.31.3` / `mlx-optiq==0.5.13`, with `<root>` taken from the existing `_app_engine_venvs(DEFAULT_ENV, name)[0]` and the version from `TESTED_VERSIONS`. Sizes are literal bytes (Osaurus 85,900,000; oMLX 837,800,000/875,200,000; vMLX 579,000,000/604,500,000), chosen by `macos_major < 26`, asset pattern in step 1's label; pip sizes `None`; `needs_admin` False. `EngineStatus.install` stays `None` in `detect_all` (annotation tightened to `Plan | None`).
+- `tests/test_engines.py`: 10 new tests pinning exact argv lists, asset/size per macOS (15/25 vs 26/27), `None` sizes, `ValueError` on `mtplx`/`nonsense`, False admin, frozen field lists.
+
+**Verified:** baseline 697 passed → 707 passed (`test-venv/bin/python -m pytest -q`, 38.8s). Red-checked by five injected faults (Tahoe size, missing `--no-input`, guessed pip size, `needs_admin=True`, removed name guard): each named test failed with its own symptom (`875000000 != 875200000`, missing token, `1 is None`, `True is False`, `KeyError: 'mtplx'`), then restored and re-ran green. Also checked all ten plans round-trip `dataclasses.asdict` to the pinned Plan/Step keys.
+
+**Interpretation to flag:** the asset hint uses the literal `<ver>` token (`oMLX-<ver>-macos15-sequoia.dmg`), since pinning the tested version there would name an asset the release page does not offer and resolving "latest" is forbidden. Not verified: nothing was installed, launched, or fetched; macOS selection is tested only as the int comparison. I did not write `02-02-SUMMARY.md` — the order limits me to the two files.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     25    2258958    2157952    24358   95.5%   0.036240
+
+== cc-agent: git status ==
+ M ohyesmlx/engines.py
+ M tests/test_engines.py
+?? .paul/orders/v5-p2-02-install-plans.log
+?? .paul/orders/v5-p2-02-install-plans.md
+ ohyesmlx/engines.py   | 152 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ tests/test_engines.py | 126 ++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 274 insertions(+), 4 deletions(-)

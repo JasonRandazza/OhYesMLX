@@ -18,7 +18,10 @@ Two rules shape every probe below, both paid for in
   ``/opt/homebrew/bin/osaurus`` outlives the app it pointed at, so a ``which`` hit is
   not an install.
 
-``install`` is filled by plan 02-02 (``install_plan``); detection leaves it ``None``.
+``install_plan(name, macos_major)`` answers the screen's second question -- what installing
+an engine would do -- as data, so the user can see the source, the size and every step
+before anything runs. Detection leaves ``EngineStatus.install`` ``None``; the server
+composes the two in Phase 4.
 """
 
 from __future__ import annotations
@@ -65,6 +68,27 @@ _BLURBS = {
 
 
 @dataclass(frozen=True)
+class Step:
+    """One thing an install plan asks for; a human performs the ones with no command."""
+
+    id: str
+    label: str
+    command: list[str] | None  # argv to run, or None for a step the user takes
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What installing one engine would do, as data the consent screen renders."""
+
+    engine: str
+    kind: str  # "guided_download" | "command"
+    source_url: str
+    size_bytes_estimate: int | None  # the DOWNLOAD, and None where the research says UNKNOWN
+    needs_admin: bool
+    steps: list[Step]
+
+
+@dataclass(frozen=True)
 class EngineStatus:
     name: str
     title: str
@@ -73,7 +97,7 @@ class EngineStatus:
     version: str | None
     path: str | None
     tested: bool
-    install: object | None  # the Plan from plan 02-02; None until it exists
+    install: Plan | None  # install_plan's answer; the server composes them in Phase 4
 
 
 class _Filesystem:
@@ -304,7 +328,130 @@ def detect_all(env=DEFAULT_ENV) -> list[EngineStatus]:
                 version=version,
                 path=path,
                 tested=version == TESTED_VERSIONS[name],
-                install=None,  # plan 02-02 fills this with install_plan(name)
+                install=None,  # the server composes install_plan(name, macos) in Phase 4
             )
         )
     return statuses
+
+
+# The guided routes open the release page: neither oMLX nor vMLX has a fixed asset URL,
+# so the plan names the asset and never resolves "latest" over the wire (research §2.1,
+# §5.1). Osaurus's README points at `Osaurus.dmg` on the same page (§1.1).
+_GUIDED_SOURCES = {
+    "osaurus": "https://github.com/osaurus-ai/osaurus/releases/latest",
+    "omlx": "https://github.com/jundot/omlx/releases",
+    "vmlx": "https://github.com/jjang-ai/vmlx/releases/latest",
+}
+
+_OSAURUS_ASSET = "Osaurus.dmg (the standard build, not the ~3.6 GB -full one)"
+_OSAURUS_SIZE = 85_900_000
+
+# (macOS < 26, macOS >= 26). "<ver>" stays a pattern rather than a guessed release:
+# the plan is data, and the release page is where the current version is read.
+_GUIDED_ASSETS = {
+    "osaurus": (_OSAURUS_ASSET, _OSAURUS_ASSET),
+    "omlx": ("oMLX-<ver>-macos15-sequoia.dmg", "oMLX-<ver>-macos26-27.dmg"),
+    "vmlx": ("vMLX-<ver>-sequoia-arm64.dmg", "vMLX-<ver>-tahoe-arm64.dmg"),
+}
+
+# Download sizes in bytes (MB = 1_000_000), from the research table. The installed and
+# after-use figures are not estimates of this, so they are not folded in (§6.5).
+_GUIDED_SIZES = {
+    "osaurus": (_OSAURUS_SIZE, _OSAURUS_SIZE),
+    "omlx": (837_800_000, 875_200_000),
+    "vmlx": (579_000_000, 604_500_000),
+}
+
+_PIP_SOURCES = {
+    "mlxlm": "https://pypi.org/project/mlx-lm/",
+    "optiq": "https://pypi.org/project/mlx-optiq/",
+}
+
+# The distribution name each engine installs, pinned to TESTED_VERSIONS rather than to
+# PyPI's latest: every start command and refusal is written against that build (§6.3).
+_PIP_PACKAGES = {"mlxlm": "mlx-lm", "optiq": "mlx-optiq"}
+
+
+def _guided_plan(name: str, macos_major: int) -> Plan:
+    generation = 0 if macos_major < 26 else 1
+    return Plan(
+        engine=name,
+        kind="guided_download",
+        source_url=_GUIDED_SOURCES[name],
+        size_bytes_estimate=_GUIDED_SIZES[name][generation],
+        needs_admin=False,
+        steps=[
+            Step(
+                id="open-page",
+                label=(
+                    f"Download {_GUIDED_ASSETS[name][generation]} from the release page "
+                    f"and drag {_TITLES[name]} to Applications."
+                    + (" Pick the latest stable release, not a release candidate." if name == "omlx" else "")
+                ),
+                command=None,
+            ),
+            Step(
+                id="verify-install",
+                label=(
+                    f"Reopen this screen: {_TITLES[name]} is detected once its app bundle "
+                    f"is in {_APPLICATIONS}."
+                ),
+                command=None,
+            ),
+        ],
+    )
+
+
+def _command_plan(name: str) -> Plan:
+    version = TESTED_VERSIONS[name]
+    package = _PIP_PACKAGES[name]
+    root = _app_engine_venvs(DEFAULT_ENV, name)[0]
+    return Plan(
+        engine=name,
+        kind="command",
+        source_url=_PIP_SOURCES[name],
+        # The research knows the wheel size but not a clean install's footprint, and a
+        # wheel is not what this step leaves on disk (§3.2, §5.2).
+        size_bytes_estimate=None,
+        needs_admin=False,
+        steps=[
+            Step(
+                id="create-venv",
+                label=f"Create a Python 3.11+ virtual environment at {root}.",
+                command=["{python}", "-m", "venv", root],
+            ),
+            Step(
+                id="install",
+                label=f"Install {package} {version}, the version this harness measured.",
+                command=[
+                    os.path.join(root, "bin", "python"),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-input",
+                    "--disable-pip-version-check",
+                    f"{package}=={version}",
+                ],
+            ),
+        ],
+    )
+
+
+def install_plan(name: str, macos_major: int) -> Plan:
+    """What installing *name* on macOS *macos_major* would do, and nothing else.
+
+    Pure data: no network, no subprocess, no filesystem write. The two kinds are the
+    research's own split -- the three app engines are guided downloads that open the
+    release page, and the two Python packages are commands that create the venv under
+    the app's engines dir and install into it (Decision D2).
+
+    ``{python}`` in the first command is a placeholder: 02-03 substitutes the
+    interpreter it picked, so the plan does not choose one here.
+    """
+    if name not in ONBOARDING_ENGINES:
+        raise ValueError(
+            f"unknown engine {name!r}; expected one of {', '.join(ONBOARDING_ENGINES)}"
+        )
+    if name in _PIP_PACKAGES:
+        return _command_plan(name)
+    return _guided_plan(name, macos_major)

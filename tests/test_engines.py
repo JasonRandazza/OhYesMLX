@@ -9,10 +9,18 @@ test.
 
 from __future__ import annotations
 
-from ohyesmlx.engines import detect_all
+import os
+from dataclasses import FrozenInstanceError, fields
+
+import pytest
+
+from ohyesmlx.engines import Plan, Step, detect_all, install_plan
 from ohyesmlx.runtimes import RUNTIMES
 
 HOME = "/Users/test"
+
+# install_plan takes no env: the venv it names is under the real user's home.
+ENGINES_DIR = os.path.expanduser("~/Library/Application Support/OhYesMLX/engines")
 
 OSAURUS_BUNDLE = "/Applications/osaurus.app"
 OMLX_BUNDLE = "/Applications/oMLX.app"
@@ -182,3 +190,125 @@ def test_a_wheel_installed_optiq_reads_its_version_from_dist_info_metadata():
     assert optiq.installed is True
     assert optiq.version == "0.7.8"
     assert optiq.tested is False
+
+
+def test_app_engines_are_guided_downloads_with_a_page_then_a_verify_step():
+    sources = {
+        "osaurus": "https://github.com/osaurus-ai/osaurus/releases/latest",
+        "omlx": "https://github.com/jundot/omlx/releases",
+        "vmlx": "https://github.com/jjang-ai/vmlx/releases/latest",
+    }
+    for name, source_url in sources.items():
+        plan = install_plan(name, 15)
+        assert plan.engine == name
+        assert plan.kind == "guided_download"
+        assert plan.source_url == source_url
+        assert [step.id for step in plan.steps] == ["open-page", "verify-install"]
+        assert [step.command for step in plan.steps] == [None, None]
+        assert "detected" in plan.steps[1].label
+
+
+def test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version():
+    venv = f"{ENGINES_DIR}/mlxlm-0.31.3"
+    plan = install_plan("mlxlm", 15)
+    assert plan.engine == "mlxlm"
+    assert plan.kind == "command"
+    assert plan.source_url == "https://pypi.org/project/mlx-lm/"
+    assert [step.command for step in plan.steps] == [
+        ["{python}", "-m", "venv", venv],
+        [
+            f"{venv}/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "--no-input",
+            "--disable-pip-version-check",
+            "mlx-lm==0.31.3",
+        ],
+    ]
+
+
+def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
+    venv = f"{ENGINES_DIR}/optiq-0.5.13"
+    plan = install_plan("optiq", 15)
+    assert plan.engine == "optiq"
+    assert plan.kind == "command"
+    assert plan.source_url == "https://pypi.org/project/mlx-optiq/"
+    assert [step.command for step in plan.steps] == [
+        ["{python}", "-m", "venv", venv],
+        [
+            f"{venv}/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "--no-input",
+            "--disable-pip-version-check",
+            "mlx-optiq==0.5.13",
+        ],
+    ]
+
+
+def test_omlx_asset_and_size_follow_the_macos_generation():
+    assert install_plan("omlx", 15).size_bytes_estimate == 837_800_000
+    assert "oMLX-<ver>-macos15-sequoia.dmg" in install_plan("omlx", 15).steps[0].label
+    assert install_plan("omlx", 25).size_bytes_estimate == 837_800_000
+    assert install_plan("omlx", 26).size_bytes_estimate == 875_200_000
+    assert "oMLX-<ver>-macos26-27.dmg" in install_plan("omlx", 26).steps[0].label
+    assert install_plan("omlx", 27).size_bytes_estimate == 875_200_000
+
+
+def test_vmlx_asset_and_size_follow_the_macos_generation():
+    assert install_plan("vmlx", 15).size_bytes_estimate == 579_000_000
+    assert "vMLX-<ver>-sequoia-arm64.dmg" in install_plan("vmlx", 15).steps[0].label
+    assert install_plan("vmlx", 26).size_bytes_estimate == 604_500_000
+    assert "vMLX-<ver>-tahoe-arm64.dmg" in install_plan("vmlx", 26).steps[0].label
+
+
+def test_osaurus_has_one_asset_and_one_size_on_every_macos():
+    for macos_major in (15, 26):
+        plan = install_plan("osaurus", macos_major)
+        assert plan.size_bytes_estimate == 85_900_000
+        assert "Osaurus.dmg" in plan.steps[0].label
+
+
+def test_unknown_clean_install_sizes_are_none_not_a_guess():
+    assert install_plan("mlxlm", 15).size_bytes_estimate is None
+    assert install_plan("optiq", 15).size_bytes_estimate is None
+    assert install_plan("mlxlm", 26).size_bytes_estimate is None
+    assert install_plan("optiq", 26).size_bytes_estimate is None
+
+
+def test_no_install_route_needs_an_admin_password():
+    for name in ("mlxlm", "osaurus", "omlx", "optiq", "vmlx"):
+        for macos_major in (15, 26):
+            assert install_plan(name, macos_major).needs_admin is False
+
+
+def test_an_engine_outside_the_onboarding_five_raises_value_error():
+    with pytest.raises(ValueError, match="mtplx"):
+        install_plan("mtplx", 15)
+    with pytest.raises(ValueError, match="nonsense"):
+        install_plan("nonsense", 26)
+
+
+def test_plan_and_step_carry_the_pinned_frozen_fields():
+    assert [field.name for field in fields(Plan)] == [
+        "engine",
+        "kind",
+        "source_url",
+        "size_bytes_estimate",
+        "needs_admin",
+        "steps",
+    ]
+    assert [field.name for field in fields(Step)] == ["id", "label", "command"]
+    plan = install_plan("osaurus", 15)
+    with pytest.raises(FrozenInstanceError):
+        plan.kind = "command"
+    with pytest.raises(FrozenInstanceError):
+        plan.steps[0].label = "other"
+
+
+def test_omlx_guided_step_tells_the_user_to_skip_release_candidates():
+    plan = install_plan("omlx", 15)
+    assert "not a release candidate" in plan.steps[0].label
+    assert "release candidate" not in install_plan("osaurus", 15).steps[0].label
