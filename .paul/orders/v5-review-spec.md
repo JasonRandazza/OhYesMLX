@@ -1,0 +1,4 @@
+# Order: code review, SPEC axis (read-only; report in your final message, no files)
+Diff: `git diff 8285497...HEAD -- ohyesmlx tests docs/interfaces.md`.
+Spec: .paul/phases/v5-onboarding/PLAN.md (decisions D1-D8, seams S1-S3), .paul/phases/v5-onboarding/02-01-PLAN.md, 02-02-PLAN.md, 02-03-PLAN.md (AC-1..AC-12 after audit), 02-03-AUDIT.md, T1.1-T1.3 as described in PLAN.md and docs/interfaces.md section "v5.0 -- Onboarding shapes".
+Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that was not asked for (scope creep); (c) requirements that look implemented but the implementation looks wrong (read the code, quote the spec line, trace the real flow, e.g. rollback scope, consent order, hermetic env, allowlist, disk check). Also check hardware.py and engines.py against the pinned JSON shapes field by field. Under 400 words. Do not edit anything.

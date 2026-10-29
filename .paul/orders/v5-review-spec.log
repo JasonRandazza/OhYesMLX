@@ -1,0 +1,36 @@
+I'll review the diff against the spec. Let me start by gathering the diff and the spec files.
+Shell is blocked in plan mode, so I can't run `git diff` directly. Let me work read-only with the file tools. I'll start by reading the spec documents.
+Let me read the core spec documents.
+Now the interfaces doc and the sub-plans.
+Let me read the pinned v5.0 shapes section and the audit.
+Now the implementation. Let me read hardware.py and engines.py.
+Now the main review target — engines.py, plus the 02-01/02-02 plans for the plan/detect shapes.
+Now let me look at the tests to verify AC coverage and catch behavioral gaps.
+Let me focus on the install tests in test_engines.py.
+Let me read the install test harness and the trickier tests to confirm behavior.
+Let me read the rollback, hermetic, and log-field tests — the trickiest behaviors.
+Read-only review complete — I changed nothing and wrote no files.
+
+**Method caveat:** shell/git is blocked in this plan-mode session, so I could not execute `git diff 8285497...HEAD`. I compared the current contents of `ohyesmlx/hardware.py`, `ohyesmlx/engines.py` (detect + install) against the spec instead (PLAN.md, 02-03-PLAN.md AC-1..AC-12, 02-03-AUDIT.md, docs/interfaces.md "v5.0 — Onboarding shapes").
+
+**(c) Implemented-wrong — `EngineStatus.install` field mismatch**
+- Pin `docs/interfaces.md:1375` declares `install: Plan` (non-null) for `detect_all(env) -> list`.
+- `ohyesmlx/engines.py:346` sets `install=None` (`:110` types it `Plan | None`).
+- Concrete state: `detect_all()` returns `install == None` for every engine, violating the pinned non-null `install: Plan`. Phase 4 composes it for `GET /engines`, but `detect_all` — the pin's named producer — does not match its own pinned shape. Reconcile the pin to `install: Plan|null`, or populate it.
+
+**(a) Missing/partial**
+- `PLAN.md:76` (T1.2) requires a "low-disk flag"; the pinned `Hardware` shape (`interfaces.md:1368-1370`) and `hardware.py:27-40` carry no `low_disk` field. The low-disk decision exists only at `engines.py:819-825` (AC-11). PLAN T1.2 and the pin disagree, so the flag is undelivered as a Hardware field.
+- `02-03-PLAN.md` AC-10 wants a log line for "any install attempt (allowed, refused, failed or done)". An unknown engine name raises at `engines.py:715` before any logging, so it leaves no line (`tests/test_engines.py:465` codifies the absence). Whether a ValueError refusal is an "attempt" under AC-10 is unspecified — needs a decision.
+
+**(b) Scope creep:** none found in the reviewed files; every install element (locks, hermetic env, install-log, `_relocate`, URL check, disk check) maps to an AC.
+
+**Traced correct (not assumed):** rollback scope (AC-3/7 — `_rollback` `engines.py:639` deletes only call-created paths, inside `engines_dir`, refuses symlink escape); consent order (AC-1 — consent→already_installed→busy→low_disk, consent first at `:745`); hermetic env (AC-12 — `_hermetic_env` `:576` drops PYTHONPATH/PIP_*); allowlist (AC-9 — `_url_allowed` `:601`, https + github.com/pypi.org); disk check (AC-11 — 2× or 2 GiB floor before steps). Hardware's 12 fields and Plan/Step/event fields match the pin; `model_budget` matches its tests.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro      8     330781     301312    23461   91.1%   0.034315
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-spec.log
+?? .paul/orders/v5-review-spec.md
+?? .paul/orders/v5-review-standards.log
+?? .paul/orders/v5-review-standards.md

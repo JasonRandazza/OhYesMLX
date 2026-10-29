@@ -1373,7 +1373,8 @@ is defined once, in `hardware.py`.
 
 **`EngineStatus`** (`engines.detect_all(env) -> list`; `GET /engines`)
 `{"name": "osaurus|omlx|optiq|mlxlm|vmlx", "title": str, "blurb": str, "installed": bool, "version": str|null,
-"path": str|null, "tested": bool, "install": Plan}`. Names and ports come from `runtimes.py`.
+"path": str|null, "tested": bool, "install": Plan|null}`. Names and ports come from `runtimes.py`.
+`detect_all` returns `install: null`; the server composes `install_plan(name, macos)` into `GET /engines` (Phase 4).
 
 **`Plan`** (`engines.install_plan(name)`; data only, no side effects)
 `{"engine": str, "kind": "guided_download|command", "source_url": str, "size_bytes_estimate": int|null,

@@ -462,7 +462,11 @@ def test_install_of_a_name_outside_the_five_raises_before_anything_runs(tmp_path
             python="/fake/python", engines_dir=str(tmp_path / "engines"),
         )
     assert events == []
-    assert not (tmp_path / "install-log.jsonl").exists()
+    lines = log_lines(tmp_path / "install-log.jsonl")
+    assert len(lines) == 1
+    assert lines[0]["engine"] == "mtplx"
+    assert lines[0]["code"] == "unknown_engine"
+    assert lines[0]["confirmed"] is True
 
 
 def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path):
@@ -787,3 +791,26 @@ def test_a_url_outside_the_https_allowlist_is_refused_before_the_opener(tmp_path
     assert opened == []
     assert [event["type"] for event in events] == ["error"]
     assert events[0]["payload"]["code"] == "url_not_allowed"
+
+
+def test_the_output_cap_is_four_kilobytes_of_bytes_not_four_thousand_characters(tmp_path):
+    run = FakeRun([(1, "\u2713" * 5000)])
+    ok, events, opened, sleeps = do_install(tmp_path, run=run)
+    failure = [event for event in events if event["type"] == "error"][0]
+    tail = failure["payload"]["output_tail"]
+    assert len(tail.encode("utf-8")) <= 4096
+    assert tail.endswith("\u2713")
+
+
+def test_a_stray_pyproject_above_a_non_venv_script_does_not_set_optiq_version():
+    site = f"{HOME}/.local/lib/python3.12/site-packages"
+    env = FakeEnv(
+        files={
+            f"{HOME}/.local/bin/optiq": "#!/bin/sh\n",
+            f"{HOME}/.local/pyvenv.cfg": "version = 3.12.13\n",
+            f"{site}/mlx_optiq-0.7.8.dist-info/METADATA": "Name: mlx-optiq\nVersion: 0.7.8\n",
+            f"{HOME}/pyproject.toml": '[project]\nversion = "1.2.3"\n',
+        },
+    )
+    optiq = {status.name: status for status in detect_all(env)}["optiq"]
+    assert optiq.version == "0.7.8"

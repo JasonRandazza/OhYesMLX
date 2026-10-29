@@ -1,0 +1,5 @@
+# Order: code review, STANDARDS axis (read-only; report in your final message, no files)
+Diff: `git diff 8285497...HEAD -- ohyesmlx tests` (Phase 1-2 of v5.0: ohyesmlx/hardware.py, ohyesmlx/engines.py, tests/test_hardware.py, tests/test_engines.py).
+Documented standards: AGENTS.md sections "Style", "Hard boundaries" (one definition of everything; each rationale written once; prefer deleting to adding; stdlib only; '# ponytail:' comments for known-ceiling shortcuts; non-trivial logic leaves a runnable check), and the style of the surrounding modules (runtimes.py, measure.py).
+Baseline smells (judgement calls, never hard violations; a documented repo rule overrides): Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains, Middle Man, Refused Bequest.
+Report per file/hunk: (a) places the diff violates a documented standard (cite file + rule; hard if documented), (b) baseline smells with the quoted hunk. Skip what tooling enforces. Under 400 words. Do not edit anything.

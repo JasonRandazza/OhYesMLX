@@ -73,7 +73,7 @@ diff + green suite before closing. `docs/interfaces.md` is pinned (T0.2) before 
 
 ### Phase 1 — Know the Mac (S1)
 - T1.1 `hardware.scan`: chip name, generation, tier, cores, RAM bytes, macOS version. First test: M2 Max/64 GB fixture.
-- T1.2 Disk: free bytes on the model volume (+ external volumes list); low-disk flag.
+- T1.2 Disk: free bytes on the model volume (+ external volumes list). The low-disk decision lives in the installer (02-03 AC-11), not on `Hardware`.
 - T1.3 `Hardware.model_budget_bytes`: usable RAM for weights after OS/KV headroom (the one place that constant lives).
 
 ### Phase 2 — Engines (S2, S3)

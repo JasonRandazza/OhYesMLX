@@ -200,7 +200,11 @@ def _optiq_version(env, script: str) -> str | None:
     ``mlx_optiq-<version>.dist-info/METADATA``.
     """
     root = os.path.dirname(os.path.dirname(env.realpath(script)))
-    pyproject = _read_or_none(env, os.path.join(os.path.dirname(root), "pyproject.toml"))
+    # ponytail: a checkout is recognised by the venv being named `.venv`; a differently
+    # named editable venv falls through to dist-info metadata. Add a pyproject-name check if one appears.
+    pyproject = None
+    if os.path.basename(root) == ".venv":
+        pyproject = _read_or_none(env, os.path.join(os.path.dirname(root), "pyproject.toml"))
     if pyproject is not None:
         match = _PYPROJECT_VERSION.search(pyproject)
         if match:
@@ -234,13 +238,18 @@ def _first_existing(env, paths: tuple[str, ...]) -> str | None:
 _APP_SUPPORT = os.path.join("Library", "Application Support", "OhYesMLX")
 
 
+def _engines_dir(home: str) -> str:
+    """The one place the app-managed engines directory is derived (detect and install share it)."""
+    return os.path.join(home, _APP_SUPPORT, "engines")
+
+
 def _app_engine_venvs(env, name: str) -> tuple[str, ...]:
     """The venv roots plan 02-02 creates under the app's engines dir, pin first.
 
     The pinned root is version-suffixed the way the harness's own mlx-lm venv is
     (``mlx-lm-0.31.3``), so a second version never lands on top of a measured one.
     """
-    base = os.path.join(env.home, _APP_SUPPORT, "engines")
+    base = _engines_dir(env.home)
     return (os.path.join(base, f"{name}-{TESTED_VERSIONS[name]}"), os.path.join(base, name))
 
 
@@ -485,7 +494,7 @@ def install_plan(name: str, macos_major: int) -> Plan:
 # Where plan 02-02's venvs live and where every attempt leaves its local record
 # (AC-10). The log is plain append-only JSONL under the app's own Application Support
 # directory and is never uploaded (Decision D8); it is not a governance layer.
-DEFAULT_ENGINES_DIR = os.path.join(DEFAULT_ENV.home, _APP_SUPPORT, "engines")
+DEFAULT_ENGINES_DIR = _engines_dir(DEFAULT_ENV.home)
 DEFAULT_INSTALL_LOG = os.path.join(DEFAULT_ENV.home, _APP_SUPPORT, "install-log.jsonl")
 
 # AC-8 bounds: a step that runs longer than this is killed, and the output an event
@@ -537,6 +546,11 @@ class EngineLocks:
 DEFAULT_LOCKS = EngineLocks()
 
 
+def _cap(text: str) -> str:
+    """The last ``OUTPUT_TAIL_BYTES`` bytes of *text*: the one definition of the output cap."""
+    return text.encode("utf-8")[-OUTPUT_TAIL_BYTES:].decode("utf-8", "ignore")
+
+
 def _tail(*streams) -> str:
     """The last ``OUTPUT_TAIL_BYTES`` of every stream joined, bytes decoded leniently."""
     parts = []
@@ -546,7 +560,7 @@ def _tail(*streams) -> str:
         if isinstance(stream, bytes):
             stream = stream.decode("utf-8", "replace")
         parts.append(stream)
-    return "".join(parts)[-OUTPUT_TAIL_BYTES:]
+    return _cap("".join(parts))
 
 
 def _real_run(argv: list[str], timeout_s: float, env: dict[str, str]) -> tuple[int, str]:
@@ -712,7 +726,15 @@ def install(
     environment, progress follows each one, and ``done`` is last. A failed step
     removes only what this call created (AC-7).
     """
-    plan = install_plan(engine, macos_major)  # AC-6: an unknown name raises here, first
+    try:
+        plan = install_plan(engine, macos_major)  # AC-6: an unknown name raises here, first
+    except ValueError:
+        # AC-10: a refused attempt is still an attempt, so it leaves a line before it raises.
+        _append_install_log(
+            log_path, engine=engine, confirmed=confirmed, kind="error", step=None,
+            exit_code=None, code="unknown_engine",
+        )
+        raise
 
     seq = 0
 
@@ -767,7 +789,7 @@ def install(
             root = _venv_root(argv)
             existed = root is not None and os.path.lexists(root)
             exit_code, output = run(argv, timeout_s, _hermetic_env())
-            tail = (output or "")[-OUTPUT_TAIL_BYTES:]
+            tail = _cap(output or "")
             if root is not None and not existed and os.path.lexists(root):
                 created.append(root)
             if exit_code != 0:

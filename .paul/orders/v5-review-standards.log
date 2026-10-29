@@ -1,0 +1,37 @@
+
+Shell is blocked in this review mode, so I'll read the named files directly and review them against the documented standards. Let me pull in the target files and reference material.
+
+Now the tests and the surrounding-module style references.
+
+Let me check cross-module duplication candidates and the pinned interfaces doc.
+
+
+
+Let me verify the VMLX_ENGINE_INIT literal and check whether cli.py participates in the diff scope, plus glance at surrounding-module style.
+Review complete — read-only; I changed nothing. Shell/git are blocked in this review mode, so I reviewed the four named files at HEAD in full (they are new in this range) rather than the literal `git diff` hunks; any hunk the range carries in other files was invisible to me. Suite not run.
+
+**(a) Documented-standard violations**
+
+1. `ohyesmlx/engines.py:110,346` — `install: Plan | None`, always `None` from detection. `docs/interfaces.md:1375` pins `"install": Plan` (no `|null`, unlike every other nullable field there). Rule: "docs/interfaces.md pins the shapes modules compose on... change one here first." Breaks: `GET /engines` serves `"install": null`; a client decoding the pinned non-optional `Plan` fails.
+
+2. `ohyesmlx/engines.py:202-207` (`_optiq_version`) — the pyproject branch runs before any venv check and reads `dirname(root)/pyproject.toml` for any script, not just a checkout's `.venv`. Concrete state: a real console script at `~/.local/bin/optiq` (root becomes `~/.local`) plus `~/pyproject.toml` containing `version = "1.2.3"` → optiq's version is reported 1.2.3 and `tested` flips on it; the dist-info truth below is never reached. The known ceiling ("only beside a checkout's `.venv`") carries no `# ponytail:` (Style rule).
+
+3. `ohyesmlx/engines.py:540-549` and `:770` — the output cap is written twice ("One definition of everything"), and both copies slice *characters* while `OUTPUT_TAIL_BYTES`/`:493` promise "its last four kilobytes" (AC-8). Concrete input: step output `"\u2713" * 5000` → a 4096-char/12,288-byte tail; `tests/test_engines.py:693` only checks ASCII.
+
+**(b) Baseline smells (judgement)**
+
+- `engines.py:404` — `+ (" Pick the latest stable release, not a release candidate." if name == "omlx" else "")`: oMLX-specific policy embedded in generic `_guided_plan` (Repeated Switches / Feature Envy).
+- `engines.py:243` vs `:488` — the engines dir derived twice (`os.path.join(env.home, _APP_SUPPORT, "engines")` vs `DEFAULT_ENGINES_DIR`); edit one and detection probes a different directory than `install` creates (Duplicated Code).
+- `tests/test_engines.py:35-39` — retypes `runtimes.VMLX_ENGINE_INIT` (defined `runtimes.py:380`) and the `mlx-lm-0.31.3` venv path; `tests/test_runtimes.py:3187` asks the constant instead (Duplicated Code).
+- `tests/test_hardware.py:72` and `:250` — the same `model_budget_bytes == 49392123904` assertion twice (Duplicated Code).
+
+Not verified: whether the diff range touches files beyond the four named, and runtime behavior of any code path.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro      8     336329     302720    17452   90.0%   0.030893
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-spec.log
+?? .paul/orders/v5-review-spec.md
+?? .paul/orders/v5-review-standards.log
+?? .paul/orders/v5-review-standards.md
