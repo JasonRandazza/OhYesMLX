@@ -168,7 +168,7 @@ def test_tested_is_false_when_an_installed_version_differs():
 
 
 def test_a_wheel_installed_optiq_reads_its_version_from_dist_info_metadata():
-    base = f"{HOME}/Library/Application Support/OhYesMLX/engines/optiq-0.7.8"
+    base = f"{HOME}/Library/Application Support/OhYesMLX/engines/optiq"
     env = FakeEnv(
         files={
             f"{base}/bin/optiq": "#!/bin/sh\n",

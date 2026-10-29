@@ -111,7 +111,7 @@ A worker dispatch always carries: the plan's acceptance criteria, the exact file
 touch, and "touch nothing else."
 
 A ticket closes only when the coordinator has **personally observed** the diff and a
-green test run — `/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`
+green test run — `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`
 (the repo has no venv with pytest; that one carries `pytest` and `tokenizers`).
 **A worker's report is not evidence**, and neither is a worker's *justification* just because
 its tests pass: a drift worker's code and tests were right while its stated reason for the
