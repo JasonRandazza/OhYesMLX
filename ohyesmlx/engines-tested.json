@@ -1,0 +1,32 @@
+{
+  "mlxlm": {
+    "version": "0.31.3",
+    "verified": "2026-10-29",
+    "lab_path": null,
+    "canary": null
+  },
+  "osaurus": {
+    "version": "0.25.28",
+    "verified": "2026-10-29",
+    "lab_path": null,
+    "canary": null
+  },
+  "omlx": {
+    "version": "0.7.2",
+    "verified": "2026-10-29",
+    "lab_path": null,
+    "canary": null
+  },
+  "optiq": {
+    "version": "0.5.13",
+    "verified": "2026-10-29",
+    "lab_path": null,
+    "canary": null
+  },
+  "vmlx": {
+    "version": "1.6.59",
+    "verified": "2026-10-29",
+    "lab_path": null,
+    "canary": null
+  }
+}

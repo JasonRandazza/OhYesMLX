@@ -1,0 +1,82 @@
+I'll read the plan, the modules named, and the interface spec first.
+The plan and engines.py came back but the rest were skipped by the size cap. Let me read them individually.
+Let me read the rest of runtimes.py and the test files.
+
+
+
+
+
+
+
+I have the full picture. Let me get the baseline test count before touching anything.
+Baseline: **733 passed**. Now the graph query the order asks for, and a check for hatchling availability.
+No hatchling locally, so the wheel build can't be verified here — I'll note that. Let me look at the tail of test_engines.py to place the new tests.
+Now slice 1: AC-2, the loader's validation. Writing the red tests first.
+
+
+All four red. Creating the manifest and the loader.
+
+
+Slice 2: AC-1. Adding its tests.
+
+
+
+
+
+
+Slice 3: AC-5, `verified` on `EngineStatus`. Tests first.
+
+
+
+
+Docs update for the pinned shape.
+Slice 4: AC-3, the PATH prefix in `runtimes.py`. Red tests first.
+
+
+
+
+
+pyproject: ship the manifest in both builds.
+
+Full suite green at 748 (baseline 733, +15). Now the seam red-check: remove the `env=` wiring and watch those two tests fail for the right reason.
+
+
+
+Right symptom (`KeyError: 'env'`). Restoring.
+
+Now the real-Mac verification from the plan, a check that `TODAY` and the start commands are untouched, and the final full run.
+
+DONE.
+
+**Changed**
+- `config/engines-tested.json` (new): the five engines at osaurus 0.25.28, omlx 0.7.2, optiq 0.5.13, mlxlm 0.31.3, vmlx 1.6.59; `verified` 2026-10-29; `canary` null; `lab_path` null except mlxlm = the 0.31.3 bin dir.
+- `ohyesmlx/engines.py`: `load_manifest(path=MANIFEST_PATH)` validates the file (missing/unknown engine, non-string `version`, bad `verified`/`lab_path`/`canary`) and raises `ValueError` naming file and entry. `MANIFEST = load_manifest()` at import; `TESTED_VERSIONS` derives from it; no version literal remains (also de-literalised a `mlx-lm-0.31.3` docstring). `EngineStatus.verified` added and populated.
+- `ohyesmlx/runtimes.py`: `_engine_env()` — the single PATH-prefix definition — prefixes each existing `lab_path` to PATH, adds nothing for nulls, refuses a nonexistent one with `RuntimeStartError` naming the engine; used only by `_spawn` (`env=`) and `_run` (`env=`). Diff is +50/−0, so no command changed.
+- `tests/test_engines.py` (+8 tests), `tests/test_runtimes.py` (+5, TODAY table untouched: +84/−0), `docs/interfaces.md` (`"verified": str|null` on `EngineStatus`), `pyproject.toml` (wheel `force-include` + sdist `include`).
+
+**Loader placement / cycle**: `load_manifest` lives in `engines.py`; `runtimes._engine_env` imports it function-locally, since `engines` imports `RUNTIMES` from `runtimes` at module scope — the call-time import is where the cycle stops.
+
+**Verified**: baseline 733 passed → **748 passed** (`.local/share/ohyesmlx/test-venv`). Every new test was watched failing first (AC-2/AC-3 `AttributeError: load_manifest`/`_engine_env`, AC-1 `AttributeError: MANIFEST` and the literal-scan assertion, AC-5 `'EngineStatus' object has no attribute 'verified'`). I additionally re-checked the seam: with `env=_engine_env()` removed from `_spawn`/`_run`, both tests failed `KeyError: 'env'`, then restored. Real-Mac check printed the five versions and `_engine_env()["PATH"]` starting with `~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin`.
+
+**Not verified**: no wheel/sdist was built — hatchling isn't installed anywhere local and installs/network were out of scope; the `force-include` destination (`site-packages/config/engines-tested.json`, which `parents[1]` resolves to) is therefore reasoned, not observed. No process was spawned, so the lab PATH reaching a real runtime is untested beyond the fakes. Also note `_engine_env()` now refuses on every `_run` caller if the manifest's lab dir disappears — intended, but it means lsof/stop calls fail loudly in that state. I did not write `025-01-SUMMARY.md`: it is outside the order's file list.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     49    5555269    5421440    37110   97.6%   0.058605
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M pyproject.toml
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+?? .paul/orders/v5-p25-01-manifest.log
+?? .paul/orders/v5-p25-01-manifest.md
+?? config/engines-tested.json
+ docs/interfaces.md     |  4 ++-
+ ohyesmlx/engines.py    | 82 ++++++++++++++++++++++++++++++++++++------
+ ohyesmlx/runtimes.py   | 50 ++++++++++++++++++++++++++
+ pyproject.toml         |  8 ++++-
+ tests/test_engines.py  | 96 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_runtimes.py | 84 +++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 311 insertions(+), 13 deletions(-)

@@ -15,6 +15,7 @@ import os
 import sys
 from dataclasses import FrozenInstanceError, fields
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -814,3 +815,98 @@ def test_a_stray_pyproject_above_a_non_venv_script_does_not_set_optiq_version():
     )
     optiq = {status.name: status for status in detect_all(env)}["optiq"]
     assert optiq.version == "0.7.8"
+
+
+# --------------------------------------------------------------------------------------
+# The tested-versions manifest (plan 025-01)
+# --------------------------------------------------------------------------------------
+#
+# `ohyesmlx/engines-tested.json` is the one place an engine's tested version is written. The
+# loader takes a path, so every shape error is driven here without touching the shipped
+# file; every expectation below is a literal, never computed from the code under test.
+
+MANIFEST = {
+    "mlxlm": {"version": "0.31.3", "verified": "2026-10-29", "lab_path": None, "canary": None},
+    "osaurus": {"version": "0.25.28", "verified": "2026-10-29", "lab_path": None, "canary": None},
+    "omlx": {"version": "0.7.2", "verified": "2026-10-29", "lab_path": None, "canary": None},
+    "optiq": {"version": "0.5.13", "verified": "2026-10-29", "lab_path": None, "canary": None},
+    "vmlx": {"version": "1.6.59", "verified": "2026-10-29", "lab_path": None, "canary": None},
+}
+
+
+def write_manifest(tmp_path, payload):
+    path = tmp_path / "engines-tested.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_a_manifest_missing_an_engine_is_refused_naming_the_engine_and_the_file(tmp_path):
+    payload = {name: dict(entry) for name, entry in MANIFEST.items()}
+    del payload["omlx"]
+    path = write_manifest(tmp_path, payload)
+    with pytest.raises(ValueError) as raised:
+        engines.load_manifest(path)
+    assert "omlx" in str(raised.value)
+    assert str(path) in str(raised.value)
+
+
+def test_a_manifest_with_an_unknown_engine_is_refused_naming_it(tmp_path):
+    payload = {name: dict(entry) for name, entry in MANIFEST.items()}
+    payload["mtplx"] = {"version": "3.1.0", "verified": "2026-10-29", "lab_path": None, "canary": None}
+    path = write_manifest(tmp_path, payload)
+    with pytest.raises(ValueError, match="mtplx"):
+        engines.load_manifest(path)
+
+
+def test_a_non_string_version_is_refused_naming_the_engine_and_the_field(tmp_path):
+    payload = {name: dict(entry) for name, entry in MANIFEST.items()}
+    payload["optiq"]["version"] = 0.5
+    path = write_manifest(tmp_path, payload)
+    with pytest.raises(ValueError) as raised:
+        engines.load_manifest(path)
+    assert "optiq" in str(raised.value)
+    assert "version" in str(raised.value)
+
+
+def test_a_missing_manifest_is_refused_naming_the_file(tmp_path):
+    path = tmp_path / "absent.json"
+    with pytest.raises(ValueError) as raised:
+        engines.load_manifest(path)
+    assert str(path) in str(raised.value)
+
+
+def test_tested_versions_are_the_manifest_literals():
+    assert engines.TESTED_VERSIONS == VERSIONS
+
+
+def test_tested_versions_are_derived_from_the_loaded_manifest():
+    assert {
+        name: entry["version"] for name, entry in engines.MANIFEST.items()
+    } == engines.TESTED_VERSIONS
+
+
+def test_the_shipped_manifest_carries_the_versions_the_tests_expect():
+    payload = json.loads(engines.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert {name: entry["version"] for name, entry in payload.items()} == VERSIONS
+    assert {entry["verified"] for entry in payload.values()} == {"2026-10-29"}
+
+
+def test_no_engine_version_literal_remains_in_the_module():
+    source = Path(engines.__file__).read_text(encoding="utf-8")
+    for name, version in VERSIONS.items():
+        assert version not in source, f"{name}'s {version} is still a literal in engines.py"
+
+
+def test_engine_status_exposes_the_manifests_verified_date():
+    """The date belongs to the table, not to the install: an engine that is absent, or
+    present at another build, is still tested against the manifest's own record."""
+    for env in (FakeEnv(), installed_env()):
+        assert {status.verified for status in detect_all(env)} == {"2026-10-29"}
+
+
+def test_a_drifted_version_is_untested_and_still_carries_the_verified_date():
+    versions = {**VERSIONS, "vmlx": "1.6.82"}
+    statuses = {status.name: status for status in detect_all(installed_env(versions))}
+    assert statuses["vmlx"].version == "1.6.82"
+    assert statuses["vmlx"].tested is False
+    assert statuses["vmlx"].verified == "2026-10-29"

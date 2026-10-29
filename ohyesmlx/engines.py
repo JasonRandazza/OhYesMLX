@@ -49,16 +49,74 @@ from ohyesmlx.runtimes import RUNTIMES, VMLX_ENGINE_INIT
 # branch lands; until then its registry entry is filtered out rather than probed.
 ONBOARDING_ENGINES = ("mlxlm", "osaurus", "omlx", "optiq", "vmlx")
 
-# What this harness has measured against, and the one place those literals live
-# (research §6.3): a different installed version is reported untested, never assumed
-# equivalent, because every start command and refusal is written against these builds.
-TESTED_VERSIONS = {
-    "mlxlm": "0.31.3",
-    "osaurus": "0.25.28",
-    "omlx": "0.7.2",
-    "optiq": "0.5.13",
-    "vmlx": "1.6.59",
-}
+# The manifest, and the one place an engine's tested version is written (Decision 135):
+# a different installed version is reported untested, never assumed equivalent, because
+# every start command and refusal is written against the builds it names. It lives beside
+# the package rather than inside it so a checkout and an installed wheel read the same
+# file; pyproject ships `ohyesmlx/engines-tested.json` in both builds.
+MANIFEST_PATH = pathlib.Path(__file__).resolve().parent / "engines-tested.json"
+
+
+def load_manifest(path=MANIFEST_PATH) -> dict[str, dict]:
+    """Read and validate the tested-versions manifest at *path*.
+
+    One entry per engine in :data:`ONBOARDING_ENGINES`, and nothing besides: ``version``
+    is the build the harness is written against, ``verified`` the ISO date it was
+    confirmed, ``lab_path`` an optional bin directory a pinned copy lives in, and
+    ``canary`` the canary routine's record (plan 025-02). A missing, unreadable or
+    ill-shaped file raises ``ValueError`` naming the file and the entry at fault: a table
+    half-read would report an installed build as tested against a version nobody checked.
+    """
+    path = pathlib.Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"cannot read the engines manifest {path}: {error}") from error
+    try:
+        payload = json.loads(text)
+    except ValueError as error:
+        raise ValueError(f"the engines manifest {path} is not JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"the engines manifest {path} must be a JSON object keyed by engine")
+    missing = [name for name in ONBOARDING_ENGINES if name not in payload]
+    if missing:
+        raise ValueError(
+            f"the engines manifest {path} is missing engine(s): {', '.join(missing)}"
+        )
+    unknown = [name for name in payload if name not in ONBOARDING_ENGINES]
+    if unknown:
+        raise ValueError(
+            f"the engines manifest {path} names unknown engine(s) "
+            f"{', '.join(sorted(unknown))}; expected one of {', '.join(ONBOARDING_ENGINES)}"
+        )
+    for name in ONBOARDING_ENGINES:
+        entry = payload[name]
+        if not isinstance(entry, dict):
+            raise ValueError(f"the engines manifest {path} entry {name} must be an object")
+        if not isinstance(entry.get("version"), str):
+            raise ValueError(
+                f"the engines manifest {path} entry {name} has no string 'version'"
+            )
+        if entry.get("verified") is not None and not isinstance(entry["verified"], str):
+            raise ValueError(
+                f"the engines manifest {path} entry {name} has a non-string 'verified'"
+            )
+        if entry.get("lab_path") is not None and not isinstance(entry["lab_path"], str):
+            raise ValueError(
+                f"the engines manifest {path} entry {name} has a non-string 'lab_path'"
+            )
+        if entry.get("canary") is not None and not isinstance(entry["canary"], dict):
+            raise ValueError(
+                f"the engines manifest {path} entry {name} has a non-object 'canary'"
+            )
+    return payload
+
+
+# Loaded once, at import: a manifest that is absent or ill-shaped stops this module with
+# the file's name, because every answer below -- tested, install pin, detections -- would
+# otherwise be a comparison against nothing.
+MANIFEST = load_manifest()
+TESTED_VERSIONS = {name: MANIFEST[name]["version"] for name in ONBOARDING_ENGINES}
 
 _TITLES = {
     "mlxlm": "mlx-lm",
@@ -107,6 +165,7 @@ class EngineStatus:
     version: str | None
     path: str | None
     tested: bool
+    verified: str | None  # the manifest's ISO date for the build `tested` is against
     install: Plan | None  # install_plan's answer; the server composes them in Phase 4
 
 
@@ -247,7 +306,7 @@ def _app_engine_venvs(env, name: str) -> tuple[str, ...]:
     """The venv roots plan 02-02 creates under the app's engines dir, pin first.
 
     The pinned root is version-suffixed the way the harness's own mlx-lm venv is
-    (``mlx-lm-0.31.3``), so a second version never lands on top of a measured one.
+    (``mlx-lm-<version>``), so a second version never lands on top of a measured one.
     """
     base = _engines_dir(env.home)
     return (os.path.join(base, f"{name}-{TESTED_VERSIONS[name]}"), os.path.join(base, name))
@@ -352,6 +411,7 @@ def detect_all(env=DEFAULT_ENV) -> list[EngineStatus]:
                 version=version,
                 path=path,
                 tested=version == TESTED_VERSIONS[name],
+                verified=MANIFEST[name]["verified"],
                 install=None,  # the server composes install_plan(name, macos) in Phase 4
             )
         )

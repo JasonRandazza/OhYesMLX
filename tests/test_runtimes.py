@@ -3292,3 +3292,105 @@ def test_the_other_four_runtimes_inherit_the_policy_rather_than_restating_it():
     ]
 
     assert overridden == ["optiq"]
+
+
+# --------------------------------------------------------------------------------------
+# The one PATH-prefix definition (plan 025-01)
+# --------------------------------------------------------------------------------------
+#
+# `ohyesmlx/engines-tested.json` is the only thing that names a lab copy of an engine, and
+# `_engine_env` is the only place that name becomes a PATH prefix. `_spawn` and `_run` are
+# its two callers: five of the six start commands begin with a bare name (`mlx_lm.server`,
+# `optiq`, `vmlx`), so both the spawned server and every helper command run for it -- the
+# version probe, the stop command, `lsof` -- must resolve inside the pinned tree.
+
+
+def write_lab_manifest(tmp_path, lab_path):
+    """A manifest whose only lab copy is mlx-lm's, as the shipped one carries it.
+
+    The versions are dummies: prefixing PATH reads `lab_path` alone, and a third copy of
+    the version table here would be a second definition for no check.
+    """
+    payload = {
+        name: {
+            "version": "0.0.0",
+            "verified": "2026-10-29",
+            "lab_path": lab_path if name == "mlxlm" else None,
+            "canary": None,
+        }
+        for name in ("mlxlm", "osaurus", "omlx", "optiq", "vmlx")
+    }
+    path = tmp_path / "engines-tested.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_a_lab_path_is_prefixed_to_path_and_the_rest_of_the_environment_passes_through(
+    tmp_path, monkeypatch
+):
+    lab = tmp_path / "mlx-lm-0.31.3" / "bin"
+    lab.mkdir(parents=True)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    env = runtimes._engine_env(write_lab_manifest(tmp_path, str(lab)))
+    assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
+    for key, value in os.environ.items():
+        if key != "PATH":
+            assert env[key] == value
+
+
+def test_a_manifest_with_no_lab_paths_adds_nothing_to_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert runtimes._engine_env(write_lab_manifest(tmp_path, None))["PATH"] == "/usr/bin:/bin"
+
+
+def test_a_lab_path_that_does_not_exist_is_refused_naming_the_engine(tmp_path):
+    missing = str(tmp_path / "gone" / "bin")
+    with pytest.raises(RuntimeStartError, match="mlxlm"):
+        runtimes._engine_env(write_lab_manifest(tmp_path, missing))
+
+
+def test_spawn_hands_the_engine_env_to_the_process(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+            self.pid = 4321
+
+    env = {"PATH": "/lab/bin"}
+    monkeypatch.setattr(runtimes.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(runtimes, "_engine_env", lambda: env)
+    assert runtimes._spawn(("true",), tmp_path / "runtime.log") == 4321
+    assert captured["env"] is env
+
+
+def test_run_hands_the_engine_env_to_the_process(monkeypatch):
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return _completed()
+
+    env = {"PATH": "/lab/bin"}
+    monkeypatch.setattr(runtimes.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtimes, "_engine_env", lambda: env)
+    assert runtimes._run(("lsof",), 1.0).returncode == 0
+    assert captured["env"] is env
+
+
+def test_a_helper_command_is_not_run_when_the_lab_copy_is_missing_and_does_not_crash(monkeypatch):
+    # The refusal belongs to starting an engine; a stop sweep or an lsof probe that hits a
+    # missing lab copy must answer "could not run", the way it does for any other failure.
+    def refuse():
+        raise runtimes.RuntimeStartError("mlxlm: no lab copy")
+
+    monkeypatch.setattr(runtimes, "_engine_env", refuse)
+    assert runtimes._run(("lsof",), 1.0) is None
+
+
+def test_the_shipped_manifest_names_no_machine_specific_lab_path():
+    from ohyesmlx.engines import load_manifest
+
+    assert {name: entry["lab_path"] for name, entry in load_manifest().items()} == {
+        "mlxlm": None, "osaurus": None, "omlx": None, "optiq": None, "vmlx": None,
+    }

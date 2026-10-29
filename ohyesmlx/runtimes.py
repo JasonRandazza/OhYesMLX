@@ -422,6 +422,54 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
+def _engine_env(manifest_path=None) -> dict[str, str]:
+    """The ambient environment, with each pinned engine's lab bin directory prefixed to PATH.
+
+    The one place a manifest ``lab_path`` becomes something a process sees, and
+    :func:`_spawn` and :func:`_run` are its only two callers. A pinned (lab) copy is how a
+    published table keeps the build it was measured on while the global install drifts
+    (Decision 135): five of the six start commands begin with a bare name
+    (``mlx_lm.server``, ``optiq``, ``vmlx``, ``osaurus``, ``omlx``), and a bare name
+    resolves on PATH -- both in the spawned server and in every helper command
+    :func:`_run` carries out for the same runtime, so the version probe and the stop
+    command reach the same tree the server came from.
+
+    A ``lab_path`` that is not there is refused, naming the engine, rather than skipped:
+    the manifest says this build lives here, and falling back to the global install would
+    measure a build nothing vouched for and record it under the pinned version. Entries
+    with ``lab_path: null`` add nothing, so the shipped manifest's four non-lab engines
+    leave every command byte-identical to the one recorded before the manifest existed.
+
+    *manifest_path* is the loader's own parameter, present so a test can drive this with a
+    scratch manifest; the two callers take the shipped file.
+
+    The import below is local because the dependency runs the other way at module level:
+    ``engines`` imports ``RUNTIMES`` from this module, and only this function needs the
+    manifest, so a function-scoped import is where the cycle stops.
+    """
+    from .engines import load_manifest
+
+    manifest = load_manifest() if manifest_path is None else load_manifest(manifest_path)
+    prefixes = []
+    for name, entry in manifest.items():
+        lab_path = entry["lab_path"]
+        if lab_path is None:
+            continue
+        resolved = os.path.expanduser(lab_path)
+        if not os.path.exists(resolved):
+            raise RuntimeStartError(
+                f"{name}: the tested-versions manifest names {lab_path!r} as this engine's "
+                f"lab copy, and there is nothing at {resolved}. Refusing to start {name} "
+                "from whatever the global install is instead."
+            )
+        prefixes.append(resolved)
+    env = dict(os.environ)
+    if prefixes:
+        ambient = env.get("PATH")
+        env["PATH"] = os.pathsep.join(prefixes + ([ambient] if ambient else []))
+    return env
+
+
 def _run(command: tuple[str, ...], timeout_s: float):
     """Run a short-lived helper command. ``None`` if it could not be run at all."""
     try:
@@ -432,8 +480,11 @@ def _run(command: tuple[str, ...], timeout_s: float):
             timeout=timeout_s,
             stdin=subprocess.DEVNULL,
             check=False,
+            env=_engine_env(),
         )
-    except (OSError, subprocess.SubprocessError):
+    # A missing lab copy refuses the START (see _engine_env), not a helper probe: a stop
+    # sweep that raised here would leave a server running.
+    except (OSError, subprocess.SubprocessError, RuntimeStartError):
         return None
 
 
@@ -452,6 +503,7 @@ def _spawn(command: tuple[str, ...], log_path: Path) -> int:
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                env=_engine_env(),
                 start_new_session=True,
             )
         except OSError as error:

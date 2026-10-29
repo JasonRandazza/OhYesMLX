@@ -1373,7 +1373,9 @@ is defined once, in `hardware.py`.
 
 **`EngineStatus`** (`engines.detect_all(env) -> list`; `GET /engines`)
 `{"name": "osaurus|omlx|optiq|mlxlm|vmlx", "title": str, "blurb": str, "installed": bool, "version": str|null,
-"path": str|null, "tested": bool, "install": Plan|null}`. Names and ports come from `runtimes.py`.
+"path": str|null, "tested": bool, "verified": str|null, "install": Plan|null}`. Names and ports come from `runtimes.py`.
+`tested` is the installed version against `ohyesmlx/engines-tested.json`, and `verified` is that manifest's ISO date
+for the build (present whether or not the engine is installed; added 2026-10-29, plan 025-01).
 `detect_all` returns `install: null`; the server composes `install_plan(name, macos)` into `GET /engines` (Phase 4).
 
 **`Plan`** (`engines.install_plan(name)`; data only, no side effects)

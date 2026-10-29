@@ -85,11 +85,11 @@ diff + green suite before closing. `docs/interfaces.md` is pinned (T0.2) before 
 ### Phase 2.5 — Version stability [INSERTED 2026-10-29, Jason]
 Why: every engine upgrades under us (OptiQ went 0.5.13 to 0.7.8 on 2026-10-29) and each upgrade can void published tables. Answer, not a hope:
 frozen lab copies, a canary that says whether a bump moved the numbers, and one tested-versions manifest. After 02-01 (needs `engines.py`), before Phase 4.
-- T2.5.1 `config/engines-tested.json`: the ONE tested-versions manifest (engine, version, verified date, optional `lab_path`). `engines.TESTED_VERSIONS` becomes a loader of it; nothing else restates a version.
+- T2.5.1 `ohyesmlx/engines-tested.json`: the ONE tested-versions manifest (engine, version, verified date, optional `lab_path`). `engines.TESTED_VERSIONS` becomes a loader of it; nothing else restates a version.
 - T2.5.2 Lab copies: pip engines get a version-pinned venv per tested version; the harness resolves the engine from the manifest's `lab_path` when set. App engines: archived tested DMG + lab install outside /Applications with auto-update off. Doc `docs/runtimes/lab-copies.md`; a `wizard` script for the manual steps only Jason can do.
 - T2.5.3 `ohyesmlx canary`: fixed ~6-cell set (via `--cells`, no second selector), compared to a stored baseline for the pinned version within the noise floor (5%). Verdict per engine: "no effect on our tables" or "moved N%: re-run <grids>". A measured run: confirm with Jason before launch, machine quiet.
 - T2.5.4 Version-bump checklist in `docs/runtimes/lab-copies.md`: how a bump is recorded (manifest + STATE row + canary result).
-Surfaces approved by Jason 2026-10-29: `config/engines-tested.json`, subcommand `canary`.
+Surfaces approved by Jason 2026-10-29: `ohyesmlx/engines-tested.json`, subcommand `canary`.
 
 ### Phase 3 — Models (S4, S5)
 - T3.1 `config/catalog.json` schema + loader; seed ≤3B models already measured here (size, formats, engines, measured peak_mb within-runtime).
