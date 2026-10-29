@@ -103,6 +103,14 @@ diff + green suite before closing. `docs/interfaces.md` is pinned (T0.2) before 
 - T5.5 Benchmark + Results screen.
 - T5.6 Packaging: signed .app, first-run, Gatekeeper notes.
 
+## Process gates (agreed 2026-10-29)
+
+PAUL runs the per-phase loop; this file is the overview. Before a phase starts: `/paul:plan` writes that phase's
+PLAN.md (tickets + acceptance criteria). `/paul:research-phase` before Phase 2 (engine install facts, from primary
+sources). `/paul:audit` on the Phase 2 and Phase 4 plans. `prototype` before Phase 5 (screen flows). After each
+phase: `/paul:unify`, `code-review`, and `/paul:verify` for the manual smoke steps. Phase 1 needs none of this;
+T1.1-T1.3 are fully specified by their orders.
+
 ## Order and parallelism
 
 P0 → P1 → (P2 ∥ P3) → P4 → P5. Within a phase, tickets that touch different files fan out; the

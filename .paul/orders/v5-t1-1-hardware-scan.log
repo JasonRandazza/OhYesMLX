@@ -1,0 +1,117 @@
+
+
+
+Baseline: 673 passed. Now let me check the test conventions and pyproject.
+
+
+
+Red for slice 1 is the missing module. Now the minimal slice-1 implementation.
+
+Slice 1 green. Now slice 2 (M1 base, 16 GiB) before touching code.
+
+It passed without new code — the slice-1 parser already generalises. Red-checking it by temporarily removing the base fallback.
+
+
+Slice 2 restored. Now slice 3 — M3 Pro and M4 Ultra.
+
+
+
+
+
+Slice 3 restored. Now slice 4 — an Intel brand.
+
+Green on arrival again. Red-checking by reverting `_support` to accept every chip.
+
+
+Slice 4 restored. Now slice 5 — a 4 GiB Apple chip, which should genuinely red.
+
+Red for the right reason. Adding the RAM floor.
+
+Slice 6 — a future chip.
+
+Green on arrival. Red-checking with a temporary known-family allowlist.
+
+
+All six slices done and each saw a red. Running the full suite.
+
+Tidying constant placement to match the other modules' layout.
+
+That edit was wrong — let me read the region and remove the duplicated constants properly.
+
+
+
+
+PLAN.md shows modified — I never wrote to it. Checking whether that predates me.
+Neither file change is mine — that PLAN.md edit appeared from outside this session; I've left it alone. One manual smoke of the real commands, as S1 asks for.
+DONE.
+
+**Changed:** new `ohyesmlx/hardware.py` (pinned `Hardware` frozen dataclass; `_run(argv) -> str` wrapping `subprocess` with stripped stdout; `scan(run=_run)` issuing the four named commands; family/tier from the brand string; `supported` false for non-Apple or RAM < 8 GiB with plain reasons; disk/volumes/model_budget at 0/[]/0, `gpu_cores` None) and new `tests/test_hardware.py` (7 tests covering the six slices; slice 3 got one test each for M3 Pro and M4 Ultra). Nothing else touched — the `PLAN.md` modification in `git status` predates my order and I left it alone.
+
+**Verified:** baseline 673 passed → now **680 passed** (`/Users/jrazz/.claude/jobs/1704c764/tmp/verify-venv/bin/python -m pytest -q`, 38.9s). Red-first: slice 1 failed as `ModuleNotFoundError`, slice 5 failed on `supported is True` before the RAM floor existed. Slices 2, 3, 4 and 6 went green on arrival because slice 1's generic parser and Apple check already covered them, so each was red-checked by reverting its specific behaviour — base fallback → `REDCHECK` (tier `base` vs `REDCHECK`), suffix map narrowed to `max` only (tier `base` vs `pro`/`ultra`), `_support` returning always-True (`True is False`), known-family allowlist (`'' == 'M7'`) — then restored. Manual smoke on this Mac reads Apple M2 Max / M2 / max / 12 cores / 68719476736 bytes / macOS 27.2, supported.
+
+**Not verified:** `disk_free_bytes`, `volumes`, `model_budget_bytes` and `gpu_cores` are the pinned placeholders until T1.2/T1.3; no test exercises `_run` against a command that fails (it raises, which is untested behaviour).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     46    3575553    3485440    21229   97.5%   0.036711
+
+== cc-agent: git status ==
+ M .paul/phases/v5-onboarding/PLAN.md
+?? .paul/orders/p4-kv-doc-corrections.log
+?? .paul/orders/p4-kv-quant-pin.log
+?? .paul/orders/p4-kv-quant-surface.log
+?? .paul/orders/p4-mtp-optiq.log
+?? .paul/orders/p4-mtp-runtime-docs.log
+?? .paul/orders/p4-mtp-stream-pins-finish.log
+?? .paul/orders/p4-mtp-stream-pins.log
+?? .paul/orders/p4-multiturn-workloads.log
+?? .paul/orders/p4-runner-scripts.log
+?? .paul/orders/p4-ttft-mixed-channel.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.log
+?? .paul/orders/p4-vmlx-mtp-depth-delivery.md
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.log
+?? .paul/orders/p4-vmlx-mtp-fixed-pin.md
+?? .paul/orders/p4-writeup-mtp.failed-cc-updating.log
+?? .paul/orders/p4-writeup-mtp.log
+?? .paul/orders/p4-writeup-mtp.md
+?? .paul/orders/p4-writeups-kv-stream-multiturn.log
+?? .paul/orders/p4-writeups-kv-stream-multiturn.md
+?? .paul/orders/v31-35b-replicate-writeup.log
+?? .paul/orders/v31-35b-replicate-writeup.md
+?? .paul/orders/v31-conc-cap.log
+?? .paul/orders/v31-conc-cap.md
+?? .paul/orders/v31-conc-osaurus-addendum.log
+?? .paul/orders/v31-conc-osaurus-addendum.md
+?? .paul/orders/v31-conc-runner.log
+?? .paul/orders/v31-conc-runner.md
+?? .paul/orders/v31-conc-writeup.log
+?? .paul/orders/v31-conc-writeup.md
+?? .paul/orders/v31-docs-alignment.log
+?? .paul/orders/v31-docs-alignment.md
+?? .paul/orders/v31-mlxlm-cache.failed-cc-update.log
+?? .paul/orders/v31-mlxlm-cache.log
+?? .paul/orders/v31-mlxlm-cache.md
+?? .paul/orders/v31-optiq-doc-reread.failed-cc-update.log
+?? .paul/orders/v31-optiq-doc-reread.log
+?? .paul/orders/v31-optiq-doc-reread.md
+?? .paul/orders/v31-optiq-mtp.failed-cc-update.log
+?? .paul/orders/v31-optiq-mtp.log
+?? .paul/orders/v31-optiq-mtp.md
+?? .paul/orders/v31-osaurus-seqs.log
+?? .paul/orders/v31-osaurus-seqs.md
+?? .paul/orders/v31-report-guards.failed-cc-update.log
+?? .paul/orders/v31-report-guards.log
+?? .paul/orders/v31-report-guards.md
+?? .paul/orders/v31-runner-joins.failed-cc-update.log
+?? .paul/orders/v31-runner-joins.log
+?? .paul/orders/v31-runner-joins.md
+?? .paul/orders/v31-seed-at-temp0.log
+?? .paul/orders/v31-seed-at-temp0.md
+?? .paul/orders/v31-seedless-grids-writeup.log
+?? .paul/orders/v31-seedless-grids-writeup.md
+?? .paul/orders/v4-mtplx-runtime.log
+?? .paul/orders/v5-t1-1-hardware-scan.log
+?? .paul/orders/v5-t1-1-hardware-scan.md
+?? ohyesmlx/hardware.py
+?? tests/test_hardware.py
+ .paul/phases/v5-onboarding/PLAN.md | 8 ++++++++
+ 1 file changed, 8 insertions(+)
