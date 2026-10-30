@@ -251,6 +251,9 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--no-input",
             "--disable-pip-version-check",
             "mlx-optiq==0.5.13",
+            # OptiQ serves through mlx_lm.server and does not pin it: unpinned, pip resolved
+            # mlx-lm 0.32.2 and every chat request answered HTTP 404 (2026-10-30 lab copy).
+            "mlx-lm==0.31.3",
         ],
     ]
 

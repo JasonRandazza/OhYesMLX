@@ -586,6 +586,13 @@ _PIP_SOURCES = {
 # PyPI's latest: every start command and refusal is written against that build (§6.3).
 _PIP_PACKAGES = {"mlxlm": "mlx-lm", "optiq": "mlx-optiq"}
 
+# A package that serves through another engine's server but does not pin it: OptiQ runs
+# `mlx_lm.server` and leaves mlx-lm unpinned, so pip takes the newest and every chat request
+# answers HTTP 404 (found 2026-10-30 building the OptiQ lab copy). (requirement, whose tested
+# version it is pinned to.) ponytail: only mlx-lm is pinned; a full per-venv `pip freeze`
+# constraints file is the upgrade if a transitive dependency (mlx, transformers) drifts.
+_PIP_COPINS = {"optiq": (("mlx-lm", "mlxlm"),)}
+
 
 def _guided_plan(name: str, macos_major: int) -> Plan:
     generation = 0 if macos_major < 26 else 1
@@ -646,6 +653,7 @@ def _command_plan(name: str) -> Plan:
                     "--no-input",
                     "--disable-pip-version-check",
                     f"{package}=={version}",
+                    *[f"{dep}=={TESTED_VERSIONS[owner]}" for dep, owner in _PIP_COPINS.get(name, ())],
                 ],
             ),
         ],

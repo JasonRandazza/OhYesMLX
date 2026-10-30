@@ -89,6 +89,7 @@ frozen lab copies, a canary that says whether a bump moved the numbers, and one 
 - T2.5.2 Lab copies: pip engines get a version-pinned venv per tested version; the harness resolves the engine from the manifest's `lab_path` when set. App engines: archived tested DMG + lab install outside /Applications with auto-update off. Doc `docs/runtimes/lab-copies.md`; a `wizard` script for the manual steps only Jason can do.
 - T2.5.3 `ohyesmlx canary`: fixed ~6-cell set (via `--cells`, no second selector), compared to a stored baseline for the pinned version within the noise floor (5%). Verdict per engine: "no effect on our tables" or "moved N%: re-run <grids>". A measured run: confirm with Jason before launch, machine quiet.
 - T2.5.4 Version-bump checklist in `docs/runtimes/lab-copies.md`: how a bump is recorded (manifest + STATE row + canary result).
+- T2.5.5 (found 2026-10-30) Freeze each pip lab venv's full dependency set (a `pip freeze` constraints file recorded beside the venv) so a pinned engine is a pinned build, not just a pinned package.
 Surfaces approved by Jason 2026-10-29: `ohyesmlx/engines-tested.json`, subcommand `canary`.
 
 ### Phase 3 — Models (S4, S5)

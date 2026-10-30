@@ -3331,7 +3331,9 @@ def test_a_lab_path_is_prefixed_to_path_and_the_rest_of_the_environment_passes_t
     lab = tmp_path / "mlx-lm-0.31.3" / "bin"
     lab.mkdir(parents=True)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    env = runtimes._engine_env(write_lab_manifest(tmp_path, str(lab)))
+    env = runtimes._engine_env(
+        write_lab_manifest(tmp_path, str(lab)), tmp_path / "no-lab-paths.json"
+    )
     assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
     for key, value in os.environ.items():
         if key != "PATH":
@@ -3340,7 +3342,10 @@ def test_a_lab_path_is_prefixed_to_path_and_the_rest_of_the_environment_passes_t
 
 def test_a_manifest_with_no_lab_paths_adds_nothing_to_path(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    assert runtimes._engine_env(write_lab_manifest(tmp_path, None))["PATH"] == "/usr/bin:/bin"
+    assert (
+        runtimes._engine_env(write_lab_manifest(tmp_path, None), tmp_path / "no-lab-paths.json")["PATH"]
+        == "/usr/bin:/bin"
+    )
 
 
 def test_a_lab_path_that_does_not_exist_is_refused_naming_the_engine(tmp_path):
