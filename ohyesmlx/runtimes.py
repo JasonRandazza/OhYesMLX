@@ -422,45 +422,54 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _engine_env(manifest_path=None) -> dict[str, str]:
+def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
     """The ambient environment, with each pinned engine's lab bin directory prefixed to PATH.
 
-    The one place a manifest ``lab_path`` becomes something a process sees, and
-    :func:`_spawn` and :func:`_run` are its only two callers. A pinned (lab) copy is how a
-    published table keeps the build it was measured on while the global install drifts
-    (Decision 135): five of the six start commands begin with a bare name
-    (``mlx_lm.server``, ``optiq``, ``vmlx``, ``osaurus``, ``omlx``), and a bare name
-    resolves on PATH -- both in the spawned server and in every helper command
-    :func:`_run` carries out for the same runtime, so the version probe and the stop
-    command reach the same tree the server came from.
+    The one place a lab path becomes something a process sees, and :func:`_spawn` and
+    :func:`_run` are its only two callers. A pinned (lab) copy is how a published table keeps
+    the build it was measured on while the global install drifts (Decision 135): five of the
+    six start commands begin with a bare name (``mlx_lm.server``, ``optiq``, ``vmlx``,
+    ``osaurus``, ``omlx``), and a bare name resolves on PATH -- both in the spawned server and
+    in every helper command :func:`_run` carries out for the same runtime, so the version
+    probe and the stop command reach the same tree the server came from.
 
-    A ``lab_path`` that is not there is refused, naming the engine, rather than skipped:
-    the manifest says this build lives here, and falling back to the global install would
-    measure a build nothing vouched for and record it under the pinned version. Entries
-    with ``lab_path: null`` add nothing, so the shipped manifest's four non-lab engines
-    leave every command byte-identical to the one recorded before the manifest existed.
+    An engine's lab directory is the machine-local file's entry for it when there is one, and
+    the manifest's ``lab_path`` otherwise: the manifest is committed and therefore ships
+    ``lab_path: null`` everywhere, and the file under the app's Application Support directory
+    is what this Mac actually has (``engines.lab_paths``). The per-engine override is what
+    keeps one machine's frozen copy out of every other machine's manifest.
 
-    *manifest_path* is the loader's own parameter, present so a test can drive this with a
-    scratch manifest; the two callers take the shipped file.
+    A lab path that is not there is refused, naming the engine, rather than skipped: whichever
+    source named it says this build lives here, and falling back to the global install would
+    measure a build nothing vouched for and record it under the pinned version. Engines with
+    no lab path add nothing, so a machine with neither source set leaves every command
+    byte-identical to the one recorded before the manifest existed.
+
+    *manifest_path* and *lab_paths_path* are the two loaders' own parameters, present so a
+    test can drive this with scratch files; the two callers take the shipped ones. A
+    machine-local file that is not JSON, or names an engine it may not, raises out of here
+    as ``ValueError`` rather than becoming "could not run": it is a configuration defect,
+    and swallowing it would take a cell from a build nothing vouched for.
 
     The import below is local because the dependency runs the other way at module level:
     ``engines`` imports ``RUNTIMES`` from this module, and only this function needs the
     manifest, so a function-scoped import is where the cycle stops.
     """
-    from .engines import load_manifest
+    from .engines import lab_paths, load_manifest
 
     manifest = load_manifest() if manifest_path is None else load_manifest(manifest_path)
+    local = lab_paths() if lab_paths_path is None else lab_paths(lab_paths_path)
     prefixes = []
     for name, entry in manifest.items():
-        lab_path = entry["lab_path"]
+        lab_path = local.get(name, entry["lab_path"])
         if lab_path is None:
             continue
         resolved = os.path.expanduser(lab_path)
         if not os.path.exists(resolved):
             raise RuntimeStartError(
-                f"{name}: the tested-versions manifest names {lab_path!r} as this engine's "
-                f"lab copy, and there is nothing at {resolved}. Refusing to start {name} "
-                "from whatever the global install is instead."
+                f"{name}: {lab_path!r} is named as this engine's lab copy, and there is "
+                f"nothing at {resolved}. Refusing to start {name} from whatever the global "
+                "install is instead."
             )
         prefixes.append(resolved)
     env = dict(os.environ)

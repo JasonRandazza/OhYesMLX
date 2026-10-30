@@ -926,13 +926,20 @@ def test_the_shipped_manifest_names_one_canary_cell_per_engine():
     assert {entry["canary"]["workload"] for entry in payload.values()} == {"decode"}
 
 
-def test_the_shipped_manifest_records_no_baseline_yet():
+def test_the_shipped_manifest_pins_each_engines_canary_cell():
+    # The cell is the manifest's contract; the baseline numbers beside it change every time
+    # `canary --record` runs, so they are deliberately not asserted here.
     payload = json.loads(engines.MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert [
-        entry["canary"][field]
-        for entry in payload.values()
-        for field in ("decode_tok_s", "ttft_s", "measured", "version_measured")
-    ] == [None] * 20
+    assert {
+        name: (entry["canary"]["format"], entry["canary"]["repo"], entry["canary"]["workload"])
+        for name, entry in payload.items()
+    } == {
+        "mlxlm": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit", "decode"),
+        "osaurus": ("oq4", "RepublicOfKorokke/Qwen3.5-4B-oQ4", "decode"),
+        "omlx": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit", "decode"),
+        "optiq": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit", "decode"),
+        "vmlx": ("stock4bit", "mlx-community/Qwen3.5-4B-4bit", "decode"),
+    }
 
 
 def test_a_canary_spec_missing_a_field_is_refused_naming_the_engine_and_the_field(tmp_path):
@@ -993,3 +1000,147 @@ def test_a_drifted_version_is_untested_and_still_carries_the_verified_date():
     assert statuses["vmlx"].version == "1.6.82"
     assert statuses["vmlx"].tested is False
     assert statuses["vmlx"].verified == "2026-10-29"
+
+
+# --------------------------------------------------------------------------------------
+# The machine-local lab paths (plan 025-03, Task 2)
+# --------------------------------------------------------------------------------------
+#
+# A lab path is machine-specific, so the committed manifest ships `lab_path: null`
+# everywhere and a real one is written to `~/Library/Application Support/OhYesMLX/`
+# `lab-paths.json` instead. One loader in `engines.py` reads it; the harness's PATH prefix
+# and detection both ask it. Every expectation below is a literal.
+
+LAB_PATHS_FILE = f"{HOME}/Library/Application Support/OhYesMLX/lab-paths.json"
+
+
+def write_lab_paths(tmp_path, payload):
+    path = tmp_path / "lab-paths.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_no_lab_paths_file_means_no_lab_copies(tmp_path):
+    assert engines.lab_paths(tmp_path / "absent.json") == {}
+
+
+def test_a_lab_paths_file_is_the_engine_to_bin_directory_map_it_holds(tmp_path):
+    path = write_lab_paths(
+        tmp_path,
+        {
+            "mlxlm": "/Users/test/lab/mlx-lm-0.31.3/bin",
+            "optiq": "/Users/test/lab/optiq-0.5.13/bin",
+        },
+    )
+    assert engines.lab_paths(path) == {
+        "mlxlm": "/Users/test/lab/mlx-lm-0.31.3/bin",
+        "optiq": "/Users/test/lab/optiq-0.5.13/bin",
+    }
+
+
+def test_a_lab_paths_file_that_is_not_json_is_refused_naming_the_file(tmp_path):
+    path = tmp_path / "lab-paths.json"
+    path.write_text("{not json")
+    with pytest.raises(ValueError) as raised:
+        engines.lab_paths(path)
+    assert str(path) in str(raised.value)
+
+
+def test_a_lab_paths_key_outside_the_five_engines_is_refused_naming_the_key(tmp_path):
+    path = write_lab_paths(tmp_path, {"mtplx": "/Users/test/lab/mtplx/bin"})
+    with pytest.raises(ValueError) as raised:
+        engines.lab_paths(path)
+    assert "mtplx" in str(raised.value)
+    assert str(path) in str(raised.value)
+
+
+@pytest.mark.parametrize("name", ["osaurus", "omlx", "vmlx"])
+def test_a_lab_path_for_an_app_engine_is_refused(tmp_path, name):
+    path = write_lab_paths(tmp_path, {name: "/Users/test/lab/bin"})
+    with pytest.raises(ValueError, match="app engines are archived, not run from a lab path"):
+        engines.lab_paths(path)
+
+
+def test_a_lab_path_that_is_not_a_string_is_refused_naming_the_key(tmp_path):
+    path = write_lab_paths(tmp_path, {"optiq": 5})
+    with pytest.raises(ValueError) as raised:
+        engines.lab_paths(path)
+    assert "optiq" in str(raised.value)
+
+
+# A canary of a lab copy must record the lab copy's version. Detection reads the global
+# install otherwise, so each of these two puts a *different* build at a lab path than the
+# one `installed_env` has globally and checks which one is reported.
+
+LAB_OPTIQ_VENV = f"{HOME}/lab/optiq-0.4.2"
+LAB_MLXLM_VENV = f"{HOME}/lab/mlx-lm-0.30.0"
+
+
+def test_a_lab_path_for_optiq_reports_the_lab_copys_version_and_path():
+    env = installed_env()
+    env.files.update(
+        {
+            LAB_PATHS_FILE: json.dumps({"optiq": f"{LAB_OPTIQ_VENV}/bin"}),
+            f"{LAB_OPTIQ_VENV}/bin/optiq": "#!/bin/sh\n",
+            f"{LAB_OPTIQ_VENV}/pyvenv.cfg": "version_info = 3.12.13\n",
+            f"{LAB_OPTIQ_VENV}/lib/python3.12/site-packages/"
+            "mlx_optiq-0.4.2.dist-info/METADATA": (
+                "Metadata-Version: 2.4\nName: mlx-optiq\nVersion: 0.4.2\n"
+            ),
+        }
+    )
+    optiq = {status.name: status for status in detect_all(env)}["optiq"]
+    assert optiq.installed is True
+    assert optiq.path == f"{LAB_OPTIQ_VENV}/bin/optiq"
+    assert optiq.version == "0.4.2"
+    assert optiq.tested is False
+
+
+def test_a_lab_path_for_mlxlm_reports_the_lab_copys_version_and_path():
+    env = installed_env()
+    env.files.update(
+        {
+            LAB_PATHS_FILE: json.dumps({"mlxlm": f"{LAB_MLXLM_VENV}/bin"}),
+            f"{LAB_MLXLM_VENV}/bin/mlx_lm.server": "#!/bin/sh\n",
+            f"{LAB_MLXLM_VENV}/pyvenv.cfg": "version = 3.14.7\n",
+            f"{LAB_MLXLM_VENV}/lib/python3.14/site-packages/mlx_lm/_version.py": (
+                '__version__ = "0.30.0"\n'
+            ),
+        }
+    )
+    mlxlm = {status.name: status for status in detect_all(env)}["mlxlm"]
+    assert mlxlm.installed is True
+    assert mlxlm.path == f"{LAB_MLXLM_VENV}/bin/mlx_lm.server"
+    assert mlxlm.version == "0.30.0"
+    assert mlxlm.tested is False
+
+
+def test_with_no_lab_paths_file_detection_still_reads_the_global_installs():
+    statuses = {status.name: status for status in detect_all(installed_env())}
+    assert statuses["optiq"].path == f"{OPTIQ_VENV}/bin/optiq"
+    assert statuses["optiq"].version == "0.5.13"
+    assert statuses["mlxlm"].path == f"{MLXLM_VENV}/bin/mlx_lm.server"
+    assert statuses["mlxlm"].version == "0.31.3"
+
+
+def test_a_lab_path_with_nothing_at_it_falls_through_to_the_global_install():
+    env = installed_env()
+    env.files[LAB_PATHS_FILE] = json.dumps({"optiq": f"{HOME}/lab/gone/bin"})
+    optiq = {status.name: status for status in detect_all(env)}["optiq"]
+    assert optiq.path == f"{OPTIQ_VENV}/bin/optiq"
+    assert optiq.version == "0.5.13"
+
+
+def test_detection_refuses_a_lab_path_for_an_app_engine():
+    env = installed_env()
+    env.files[LAB_PATHS_FILE] = json.dumps({"osaurus": f"{HOME}/lab/osaurus.app"})
+    with pytest.raises(ValueError, match="app engines are archived"):
+        detect_all(env)
+
+
+def test_detection_refuses_a_lab_paths_file_that_is_not_json():
+    env = installed_env()
+    env.files[LAB_PATHS_FILE] = "{not json"
+    with pytest.raises(ValueError) as raised:
+        detect_all(env)
+    assert LAB_PATHS_FILE in str(raised.value)

@@ -3394,3 +3394,79 @@ def test_the_shipped_manifest_names_no_machine_specific_lab_path():
     assert {name: entry["lab_path"] for name, entry in load_manifest().items()} == {
         "mlxlm": None, "osaurus": None, "omlx": None, "optiq": None, "vmlx": None,
     }
+
+
+# --------------------------------------------------------------------------------------
+# The machine-local lab paths file (plan 025-03, Task 2)
+# --------------------------------------------------------------------------------------
+#
+# `lab_paths(engine)` comes from `~/Library/Application Support/OhYesMLX/lab-paths.json`, and
+# it overrides the manifest's `lab_path` per engine. The manifest's field is the lower
+# priority default, so a machine that has frozen nothing keeps the behaviour plan 025-01
+# recorded; a machine that has frozen a copy names it in the file and not in the manifest.
+
+
+def write_lab_paths_file(tmp_path, payload):
+    path = tmp_path / "lab-paths.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_the_machine_local_file_overrides_the_manifests_lab_path_for_one_engine(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    manifest_lab = tmp_path / "from-manifest" / "bin"
+    manifest_lab.mkdir(parents=True)
+    local_lab = tmp_path / "from-local-file" / "bin"
+    local_lab.mkdir(parents=True)
+    env = runtimes._engine_env(
+        write_lab_manifest(tmp_path, str(manifest_lab)),
+        write_lab_paths_file(tmp_path, {"mlxlm": str(local_lab)}),
+    )
+    assert env["PATH"] == f"{local_lab}{os.pathsep}/usr/bin:/bin"
+
+
+def test_a_lab_path_only_in_the_machine_local_file_is_prefixed(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    lab = tmp_path / "optiq-0.5.13" / "bin"
+    lab.mkdir(parents=True)
+    env = runtimes._engine_env(
+        write_lab_manifest(tmp_path, None),
+        write_lab_paths_file(tmp_path, {"optiq": str(lab)}),
+    )
+    assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
+
+
+def test_the_manifest_lab_path_still_applies_to_an_engine_the_local_file_omits(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    manifest_lab = tmp_path / "mlx-lm-0.31.3" / "bin"
+    manifest_lab.mkdir(parents=True)
+    local_lab = tmp_path / "optiq-0.5.13" / "bin"
+    local_lab.mkdir(parents=True)
+    env = runtimes._engine_env(
+        write_lab_manifest(tmp_path, str(manifest_lab)),
+        write_lab_paths_file(tmp_path, {"optiq": str(local_lab)}),
+    )
+    # Manifest order, one directory per engine: mlxlm's from the manifest, optiq's from the file.
+    assert env["PATH"] == f"{manifest_lab}{os.pathsep}{local_lab}{os.pathsep}/usr/bin:/bin"
+
+
+def test_a_missing_machine_local_file_leaves_the_manifest_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    lab = tmp_path / "mlx-lm-0.31.3" / "bin"
+    lab.mkdir(parents=True)
+    env = runtimes._engine_env(
+        write_lab_manifest(tmp_path, str(lab)), tmp_path / "absent.json"
+    )
+    assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
+
+
+def test_a_machine_local_lab_path_that_does_not_exist_is_refused_naming_the_engine(tmp_path):
+    with pytest.raises(RuntimeStartError, match="optiq"):
+        runtimes._engine_env(
+            write_lab_manifest(tmp_path, None),
+            write_lab_paths_file(tmp_path, {"optiq": str(tmp_path / "gone" / "bin")}),
+        )

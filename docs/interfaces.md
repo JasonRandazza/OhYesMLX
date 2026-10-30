@@ -1378,6 +1378,14 @@ is defined once, in `hardware.py`.
 for the build (present whether or not the engine is installed; added 2026-10-29, plan 025-01).
 `detect_all` returns `install: null`; the server composes `install_plan(name, macos)` into `GET /engines` (Phase 4).
 
+**Lab paths** (`engines.lab_paths(path=LAB_PATHS_FILE) -> {engine: bin directory}`, machine-local, plan 025-03)
+`~/Library/Application Support/OhYesMLX/lab-paths.json` is the only place a real lab path is written; the committed
+manifest stays `lab_path: null` everywhere. A missing file is `{}` and invalid JSON, an unknown engine key, or any
+app engine (`osaurus|omlx|vmlx`, whose builds are archived rather than run from a lab path) raises `ValueError`
+naming the file and key. Only `mlxlm` and `optiq` may name one. `runtimes._engine_env` prefixes these directories to
+`PATH` (the file overriding the manifest's `lab_path` per engine, and still refusing a directory that is not there),
+and `detect_all` looks in them first, so a canary reports the lab copy's version rather than the global install's.
+
 **`Plan`** (`engines.install_plan(name)`; data only, no side effects)
 `{"engine": str, "kind": "guided_download|command", "source_url": str, "size_bytes_estimate": int|null,
 "needs_admin": bool, "steps": [{"id": str, "label": str, "command": [str]|null}]}`.

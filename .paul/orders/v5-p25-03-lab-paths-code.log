@@ -1,0 +1,67 @@
+I'll start by reading the plan and the files this order names.
+Now let me read the other files individually since the batch was capped.
+Now let me read the tests and the other referenced pieces.
+Let me look at the existing `_engine_env` tests and cli's `_canary`.
+I have the shape of it. Let me check the existing runtime env tests, the canary version lookup, interfaces doc, and whether the real lab-paths file exists on this machine.
+No real `lab-paths.json` exists, so the existing `_engine_env` tests stay deterministic. Now the interfaces doc and the baseline suite.
+Baseline: **783 passed, 1 failed** — the failure is pre-existing (`test_the_shipped_manifest_records_no_baseline_yet` vs the baselines committed in bbbaf57), before I touch anything. Let me look at the v5.0 interfaces section.
+Baseline recorded. Now slice 1 — the loader tests, written before the loader exists.
+
+Now watch them fail.
+Red as expected (`no attribute 'lab_paths'`). Now the loader.
+
+Slice 1 green. Now slice 2 — the `_engine_env` merge/override tests, before changing the function.
+
+Red for the right reason. Now the `_engine_env` change.
+
+Slice 2 green. Now slice 3 — `detect_all` with a lab path.
+
+Red: lab copies are ignored and the refusals never fire. Now the detection change.
+
+
+Both touched modules are green except the pre-existing manifest failure. Now the interfaces note.
+Now the full suite.
+Full suite: **802 passed, 1 failed** — the same pre-existing failure. Let me check whether the coordinator already knows about it.
+No prior note — it went red with bbbaf57. One small readability fix in the loader, then a final run.
+That noqa is noise — reverting to the plain nested default.
+
+All green except the pre-existing failure. A quick read-only real-machine check (no server, no write).
+**DONE** — with one pre-existing red in the suite that is not mine (see the end).
+
+**Baseline before any edit:** 783 passed, 1 failed — `tests/test_engines.py::test_the_shipped_manifest_records_no_baseline_yet`, stale against the baselines committed in bbbaf57. After: **802 passed, 1 failed**, the same test (783 + 19 new).
+
+**What changed**
+
+- `ohyesmlx/engines.py` — `LAB_PATHS_NAME`, `_lab_paths_file(home)`, `LAB_PATHS_FILE`, `LAB_ENGINES = ("mlxlm", "optiq")`, and the one loader `lab_paths(path=LAB_PATHS_FILE, *, read=None)`. Missing file → `{}`; bad JSON / unknown key / any app engine / non-string value → `ValueError` naming file and key ("app engines are archived, not run from a lab path"). `read` is the seam `detect_all` uses to feed its fixture `env`. `_lab_script()` puts `<lab_path>/optiq` and `<lab_path>/mlx_lm.server` ahead of the app venvs and globals in `_detect_optiq`/`_detect_mlxlm`, and the version is read from that venv with the existing `_optiq_version`/`_venv_package_version`. `detect_all` reads the file through `env` and passes the lab path for the two pip engines only — a lab path with nothing at it falls through to the global (start-time refusal stays the only refusal).
+- `ohyesmlx/runtimes.py` — `_engine_env(manifest_path=None, lab_paths_path=None)`; per engine `local.get(name, entry["lab_path"])`, so the machine-local file overrides and the manifest is the lower-priority default. Missing dir still `RuntimeStartError` naming the engine. A malformed file is allowed to raise `ValueError` out of `_run` rather than become "could not run" — it is a config defect and swallowing it would measure an unvouched build.
+- `tests/test_engines.py` (+14), `tests/test_runtimes.py` (+5), `docs/interfaces.md` (one note under v5.0). `cli.py` untouched — `_canary`'s `detect_all()` already carries the lab path.
+
+**Red before green, per slice** — watched each fail first: loader (`AttributeError: no attribute 'lab_paths'`, 8 red); `_engine_env` (`TypeError: takes 0 to 1 positional arguments but 2 were given`, 5 red); detection (lab copy reported the global `0.5.13`/`0.31.3`, refusals `DID NOT RAISE`, 4 red).
+
+**Verified on the real machine (read-only, no server):** `lab_paths() == {}`, `_engine_env()["PATH"] == os.environ["PATH"]`, and `detect_all()` reports the same five versions/paths as before (optiq 0.7.8, vmlx 1.6.82 — the recorded drift).
+
+**Not verified / traps**
+
+- No lab copy exists here, so lab-first detection is only exercised through `FakeEnv`; no engine was started from a lab path and no canary ran.
+- The existing `_engine_env(...)` tests read the machine's real `lab-paths.json`. They pass only because it is absent; **once the wizard writes one they may fail** (`test_a_manifest_with_no_lab_paths_adds_nothing_to_path`). Fixing that means passing a `lab_paths_path` in those tests, which this order forbade.
+- The stale `test_the_shipped_manifest_records_no_baseline_yet` is left untouched: it asserts `[None] * 20` against baselines bbbaf57 recorded, so it belongs to 025-02, not here.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     18    2222003    2079488    18925   93.6%   0.038971
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+?? .paul/orders/v5-p25-03-lab-doc.log
+?? .paul/orders/v5-p25-03-lab-doc.md
+?? .paul/orders/v5-p25-03-lab-paths-code.log
+?? .paul/orders/v5-p25-03-lab-paths-code.md
+ docs/interfaces.md     |   8 +++
+ ohyesmlx/engines.py    | 114 ++++++++++++++++++++++++++++++++++++---
+ ohyesmlx/runtimes.py   |  55 +++++++++++--------
+ tests/test_engines.py  | 144 +++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_runtimes.py |  76 ++++++++++++++++++++++++++
+ 5 files changed, 368 insertions(+), 29 deletions(-)

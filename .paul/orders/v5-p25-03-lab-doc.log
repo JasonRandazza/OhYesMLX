@@ -1,0 +1,83 @@
+I'll read the order's required sources first.
+The batch capped output; I'll read the remaining runtime docs and canary individually.
+
+
+
+
+
+
+
+
+
+
+Before writing, I'll probe the three app bundles read-only for actual auto-update levers rather than guessing.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have everything I need. Writing the document now.
+Let me verify two claims the doc makes about the CLI before finalising.
+
+Now I'll tighten a few claims so no tested version is retyped outside the manifest.
+
+
+
+
+
+
+
+
+
+
+
+
+Now I'll run the project's test command (AGENTS.md names the permanent test venv).
+
+
+
+
+
+
+
+DONE.
+
+**Changed:** one new file, `docs/runtimes/lab-copies.md` (533 lines). No code, no tests, no git, no installs, no downloads.
+
+**What's in it:** both policies with their reason (§1); the manifest as the only version table and the machine-local `lab-paths.json` reader/priority/refusals (§2–3); per-engine sections for all five covering tested-version pointer (`engines-tested.json` key, never retyped as a table), how the tested build is obtained (PyPI pin / tag-pinned release asset), lab-copy location, and an auto-update table with every row labelled VERIFIED / CLAIMED / INFERRED / UNKNOWN-with-probe; the second-copy hazard assessment; the archive procedure (size, `shasum -a 256`, `spctl`, mount-read-verify-version); disk numbers; the ordered bump checklist plus quiet-machine rule and the Osaurus standing-authorisation sentence.
+
+**Evidence I added by probing (read-only, no engine started):** Osaurus's Sparkle keys and Updates pane/channel strings; oMLX's own updater (AppUpdater/UpdateController, `api.github.com/repos/jundot/omlx/releases`, staging + updater launch agent, channels, "automatic update notification toggle") — upgrading research §2.6 from CLAIMED to VERIFIED; vMLX's `app.asar` startup `checkForUpdates` with `VMLX_SKIP_UPDATE_CHECK=1` and its two `latest.json` sources. The decisive fact for archive-not-parallel-install is code: `_resident_osaurus_pids` and the canary sweep match the absolute `/Applications` path, so a second Osaurus is invisible to the one-model-resident guard.
+
+**Tests:** `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` → **802 passed, 1 failed in 38.6 s**. Because I changed no code, that is also the baseline. The failure is pre-existing and not mine: `tests/test_engines.py::test_the_shipped_manifest_records_no_baseline_yet` asserts all 20 canary fields in the shipped manifest are `None`, while `bbbaf57` recorded baselines into it via `canary --record` — so that guard now forbids the very write `--record` performs. I did not touch it (this order is docs-only); it needs an owner in 025-01/025-02. Nothing claimed fixed, so nothing to red-check.
+
+**Not verified:** no DMG was downloaded/mounted, so §6's commands are unexecuted; the Osaurus and oMLX toggle levers and vMLX's prompt-install behaviour remain UNKNOWN with probes in §9; the second-copy question was not tested by installing a parallel copy (out of bounds).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     42    7289058    7085696    50581   97.2%   0.082110
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+?? .paul/orders/v5-p25-03-lab-doc.log
+?? .paul/orders/v5-p25-03-lab-doc.md
+?? .paul/orders/v5-p25-03-lab-paths-code.log
+?? .paul/orders/v5-p25-03-lab-paths-code.md
+?? docs/runtimes/lab-copies.md
+ docs/interfaces.md     |   8 +++
+ ohyesmlx/engines.py    | 114 ++++++++++++++++++++++++++++++++++++---
+ ohyesmlx/runtimes.py   |  55 +++++++++++--------
+ tests/test_engines.py  | 144 +++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_runtimes.py |  76 ++++++++++++++++++++++++++
+ 5 files changed, 368 insertions(+), 29 deletions(-)

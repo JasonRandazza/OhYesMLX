@@ -345,6 +345,81 @@ def _app_engine_scripts(env, name: str, script: str) -> tuple[str, ...]:
     return tuple(os.path.join(root, "bin", script) for root in _app_engine_venvs(env, name))
 
 
+# The machine-local lab copies, and the only place a real lab path is written. A lab path
+# is machine-specific -- a directory that is right on one Mac is a refusal to start on
+# every other one -- so the committed manifest ships ``lab_path: null`` everywhere and the
+# local file beside the app's engines dir carries what this Mac actually has. Plan 025-03's
+# wizard writes it; the harness's PATH prefix and detection below both read it through
+# :func:`lab_paths` and nothing restates the list.
+LAB_PATHS_NAME = "lab-paths.json"
+
+
+def _lab_paths_file(home: str) -> str:
+    """The one place the machine-local lab-paths file is derived (detection and start share it)."""
+    return os.path.join(home, _APP_SUPPORT, LAB_PATHS_NAME)
+
+
+LAB_PATHS_FILE = _lab_paths_file(DEFAULT_ENV.home)
+
+# The engines a lab path may name, and the whole of them: the two pip packages install
+# into a venv this harness can point a start command at. The three app engines are .app
+# bundles and their tested build is archived rather than installed into a bin directory,
+# so a lab path for one names no directory a script could be found in.
+LAB_ENGINES = ("mlxlm", "optiq")
+
+
+def lab_paths(path=LAB_PATHS_FILE, *, read=None) -> dict[str, str]:
+    """The machine-local lab paths at *path*, keyed by engine; ``{}`` when there is no file.
+
+    One reader for one file, because two callers need the same answer and a second copy of
+    the validation would be a second place for the two to disagree: ``runtimes._engine_env``
+    prefixes these directories to PATH, and :func:`detect_all` looks in them first -- so a
+    canary of a lab copy reports that copy's version rather than the global install's.
+
+    A missing file is ``{}``: no lab copies is the ordinary state of a machine that has not
+    frozen anything. Everything else is refused by ``ValueError`` naming the file and the
+    entry at fault, because the alternatives are both worse than stopping -- an unknown key
+    is a path nobody would read, and a file half-understood would measure a global install
+    under a pinned version's label. The three app engines are refused with their own
+    message: their tested builds are archived, not run from a lab path (:data:`LAB_ENGINES`).
+
+    *read* is how the caller supplies text -- ``pathlib`` by default, and the detection below
+    hands in its ``env`` so the same file is checked against a fixture filesystem.
+    """
+    if read is None:
+        def read(path):
+            return pathlib.Path(path).read_text(encoding="utf-8")
+
+    try:
+        text = read(path)
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise ValueError(f"cannot read the lab paths file {path}: {error}") from error
+    try:
+        payload = json.loads(text)
+    except ValueError as error:
+        raise ValueError(f"the lab paths file {path} is not JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"the lab paths file {path} must be a JSON object keyed by engine")
+    for name, value in payload.items():
+        if name not in ONBOARDING_ENGINES:
+            raise ValueError(
+                f"the lab paths file {path} names unknown engine {name!r}; expected one of "
+                f"{', '.join(ONBOARDING_ENGINES)}"
+            )
+        if name not in LAB_ENGINES:
+            raise ValueError(
+                f"the lab paths file {path} names {name!r}, and app engines are archived, "
+                f"not run from a lab path: only {', '.join(LAB_ENGINES)} can name one"
+            )
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"the lab paths file {path} entry {name} is not a non-empty string path"
+            )
+    return dict(payload)
+
+
 def _detect_osaurus(env) -> tuple[str | None, str | None]:
     # Both spellings: the DMG installs `osaurus.app`, the cask artifact is
     # `Osaurus.app`, and on a case-sensitive volume they are two different files.
@@ -368,10 +443,18 @@ def _detect_omlx(env) -> tuple[str | None, str | None]:
     return env.realpath(found), _plist_version(env, f"{_APPLICATIONS}/oMLX.app")
 
 
-def _detect_optiq(env) -> tuple[str | None, str | None]:
+def _lab_script(lab_path: str | None, script: str) -> tuple[str, ...]:
+    """The script a machine-local lab path would hold, or nothing when no lab path is set."""
+    if not lab_path:
+        return ()
+    return (os.path.join(os.path.expanduser(lab_path), script),)
+
+
+def _detect_optiq(env, lab_path=None) -> tuple[str | None, str | None]:
     found = _first_existing(
         env,
-        _app_engine_scripts(env, "optiq", "optiq")
+        _lab_script(lab_path, "optiq")
+        + _app_engine_scripts(env, "optiq", "optiq")
         + (
             os.path.join(env.home, ".local", "bin", "optiq"),
             os.path.join(env.home, "Dev", "tools", "mlx-optiq", ".venv", "bin", "optiq"),
@@ -382,13 +465,14 @@ def _detect_optiq(env) -> tuple[str | None, str | None]:
     return env.realpath(found), _optiq_version(env, found)
 
 
-def _detect_mlxlm(env) -> tuple[str | None, str | None]:
+def _detect_mlxlm(env, lab_path=None) -> tuple[str | None, str | None]:
     # A console script is the only durable evidence: mlx-lm has no app bundle and no
     # global location (`runtimes.py` carries none either), so the harness venv and the
     # app's own venvs are the two known homes.
     found = _first_existing(
         env,
-        _app_engine_scripts(env, "mlxlm", "mlx_lm.server")
+        _lab_script(lab_path, "mlx_lm.server")
+        + _app_engine_scripts(env, "mlxlm", "mlx_lm.server")
         + (
             os.path.join(
                 env.home,
@@ -425,12 +509,30 @@ _DETECTORS = {
 
 
 def detect_all(env=DEFAULT_ENV) -> list[EngineStatus]:
-    """One status per onboarding engine, in registry order."""
+    """One status per onboarding engine, in registry order.
+
+    An engine this machine has frozen a lab copy of is detected *there* first: the lab
+    directory comes ahead of the app's own venvs and of the global installs, and the
+    version is read from the venv the script found in it lives in. That ordering is the
+    point of the lab copy rather than a convenience -- ``canary`` records the version
+    ``detect_all`` reports, so a canary of a pinned build that answered with the global
+    install's version would write the wrong number against the wrong build. The three app
+    engines cannot have a lab path at all (:func:`lab_paths` refuses one), so they are
+    asked without it.
+
+    A lab path with nothing at it is not an error *here*: detection reports what it finds,
+    and the refusal belongs to starting an engine (``runtimes._engine_env``), which is
+    where falling back to the global install would corrupt a measurement.
+    """
+    labs = lab_paths(_lab_paths_file(env.home), read=env.read_text)
     statuses = []
     for name in RUNTIMES:
         if name not in ONBOARDING_ENGINES:
             continue
-        path, version = _DETECTORS[name](env)
+        if name in LAB_ENGINES:
+            path, version = _DETECTORS[name](env, labs.get(name))
+        else:
+            path, version = _DETECTORS[name](env)
         statuses.append(
             EngineStatus(
                 name=name,
