@@ -1,0 +1,96 @@
+I'll start by reading the plan, research section, and the modules this composes on.
+Now the research §4.3 and the interfaces doc's onboarding shapes.
+
+
+
+
+Let me verify the arithmetic and float formatting before writing the literals.
+
+Now I'll write the test file first (TDD red step).
+
+Red as expected. Now the module.
+
+All green. Let me strengthen the disk check to catch a dropped `DISK_MARGIN` at the boundary, then red-check each constant.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the interfaces amendment — the Pick block plus the Phase 4 composition pin the decisions require.
+
+
+
+Suite green: 921 baseline → 945 with the 24 new checks. Now the read-only real-Mac smoke.
+
+
+Smoke is sensible (all 12 fit; M2 Max tops out at the 8B MoE). One small tidy on the formatter's annotation, then a final full run.
+
+
+
+DONE.
+
+**Changed**
+- `ohyesmlx/recommend.py` (new): `Pick` frozen dataclass with exactly the AC-6 fields; `pick(hw, models, engines, free_disk)` pure, no I/O; `exclusion_reason(model, hw, free_disk)` pure companion. `COMFORTABLE_FACTOR = 2.0`, `TIGHT_FACTOR = 1.25` defined once with the §4.3 rationale; disk comes from `catalog.DISK_MARGIN`; 20 GiB starter-disk line and `START_HERE_COUNT = 3`. Reasons are fixed templates in decimal GB (1e9, one decimal), no speed claims; excluded rows get memory-first, then disk, templates. Tie-break by repo id; ranking key is `(fit, tier-under-disk-pressure, -params, repo)`.
+- `tests/test_recommend.py` (new): 24 checks on hand-built `Model`/`Hardware`/`EngineStatus` fixtures, all expectations literal (the coordinator's budgets 3,579,139,413 / 9,305,762,474 / 49,392,123,904 and the research sizes, never values recomputed from the constants).
+- `docs/interfaces.md`: only the `Pick` block replaced (verified by `git diff`: 22+/5−, no other hunk), plus the pinned `GET /recommendations` composition `{"picks", "excluded", "unsupported_reason"}` from these two functions.
+
+**Verification**
+- Baseline: 921 passed (suite with `--ignore=tests/test_recommend.py`). After: **945 passed** with `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`.
+- Red-checks, each reverted and re-greened: `COMFORTABLE_FACTOR` 2.0→3.0 failed 4 AC-1 tests; `TIGHT_FACTOR` 1.25→1.0 failed `test_excluded_past_1_25_times_the_budget`; `DISK_MARGIN` dropped in `pick` failed the disk test (the 1.1 GB case), dropped in `exclusion_reason` failed the same test on the reason text; `STARTER_DISK_PRESSURE_BYTES`→0 failed the tier test; `START_HERE_COUNT`→2 failed the start-here test; `-params`→`+params` failed 3 ordering tests; repo tie-break dropped failed the tie test; unsupported gate removed failed `test_an_unsupported_mac_gets_no_pick`; engine selection collapsed failed all 3 AC-3 tests; reason wording changed failed the AC-5 test; `measured_here` renamed failed both AC-6 tests.
+- Real-Mac smoke (read-only): M2 Max 64 GiB, budget 49,392,123,904, 97.5 GB free, all five engines detected, 12/12 rows fit, 0 excluded. Top three: `LFM2.5-8B-A1B-MLX-4bit` (comfortable, 4.8 GB), `Qwen3.5-4B-4bit` (comfortable, 3.1 GB), `Llama-3.2-3B-Instruct-4bit` (comfortable, 1.8 GB) — both standard rows and every starter row fit, as the plan's check expects.
+
+**The unsupported-Mac question (as asked):** `pick()` returns `[]` and the recommender never returns an explanatory item — per coordinator decision 2, `Hardware.unsupported_reason` already carries the sentence. The "one explanatory item" is the composed payload's `unsupported_reason` field (pinned for Phase 4 in `docs/interfaces.md`), not a `Pick` or an extra return value. Relatedly, `exclusion_reason` does not special-case `hw.supported`: it answers the memory/disk question alone, so on an unsupported Mac with a large budget it can return `None` while `pick()` still returns `[]` — the support gate belongs to `pick()` only, which is what keeps the sentence from being duplicated.
+
+**Not verified:** no run on real 8/16 GiB hardware (those are fixture literals from the coordinator); no server, network, download or engine start; `graphify update` deliberately not run (coordinator's per project rule); SwiftUI consumption does not exist yet, so the `Pick` fields are pinned but unexercised by a client.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     62    6017791    5909504    46783   98.2%   0.062041
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def key
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+?? .paul/orders/v5-p3-02-recommend.log
+?? .paul/orders/v5-p3-02-recommend.md
+?? .paul/orders/v5-p3-03-fetch.log
+?? .paul/orders/v5-p3-03-fetch.md
+?? ohyesmlx/fetch.py
+?? ohyesmlx/recommend.py
+?? tests/test_fetch.py
+?? tests/test_recommend.py
+ docs/interfaces.md | 27 ++++++++++++++++++++++-----
+ 1 file changed, 22 insertions(+), 5 deletions(-)

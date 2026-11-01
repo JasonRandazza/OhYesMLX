@@ -1404,11 +1404,28 @@ tree listing at that commit, so a downloader never asks "what is latest". `engin
 column, and `measured_here` is true only where a `results/**/results.jsonl` row exists for that exact
 artifact. A violation raises `ValueError` naming the file, the repo and the field.
 
-**`Pick`** (`recommend.pick(...) -> list`; `GET /recommendations`)
-`{"model_id": str, "title": str, "params_b": float, "format": str, "engine": str, "size_bytes": int,
-"fit": "comfortable|tight", "fit_basis": "estimated", "reason": str,
-"measured_here": {"decode_tok_s": float, "ttft_s": float, "peak_mb": int}|null}`.
-`measured_here` is non-null only for a run on this user's Mac (Decision D5); it is never filled from our M2 Max rows.
+**`Pick`** (`recommend.pick(hw, models, engines, free_disk) -> list[Pick]`, pure; plan 03-02)
+`{"model_id": str, "title": str, "params_b": float, "format": str, "size_bytes": int,
+"fit": "comfortable|tight", "fit_basis": "estimated", "engines": [str], "install_needed": bool,
+"start_here": bool, "reason": str, "measured_here": object|null}`.
+`model_id` is the catalog row's repo id and `params_b` the **base** count in billions, one decimal.
+`fit` is an estimate from `Hardware.model_budget_bytes` alone -- comfortable when twice `size_bytes`
+fits it, tight when 1.25x does, otherwise the row is left out -- and `fit_basis` is always
+`estimated`, so a fit is never read as a measurement. `engines` lists the installed engines from the
+row's own `engines`; when none is installed it lists the row's catalog engines with
+`install_needed: true` ("install X first"). `start_here` marks the first three after ranking:
+comfortable before tight, then larger `params`, starter tier first only while free disk is under
+20 GiB, ties by repo id. `reason` is a fixed template with numbers in decimal GB (1e9 bytes, one
+decimal) and carries no speed claim. `measured_here` is non-null only for a run on this user's Mac
+(Decision D5); it is null in Phase 3 and is never filled from our M2 Max rows.
+
+`recommend.exclusion_reason(model, hw, free_disk) -> str | None` is the pure companion for the rows
+`pick` leaves out: a fixed-template reason naming the memory or disk shortfall, null for a row that
+clears both budgets. `GET /recommendations` (Phase 4) composes
+`{"picks": [Pick], "excluded": [{"model_id": str, "reason": str}], "unsupported_reason": str|null}`
+from these two functions: `excluded` is the rows `exclusion_reason` answers non-null for, and on an
+unsupported Mac `picks` is empty and `unsupported_reason` carries `Hardware.unsupported_reason` --
+the recommender never copies that sentence into a reason.
 
 **Job** (`POST /jobs` body `{"kind": "install|download|quickbench", "args": {...}}` -> `{"job_id": str}`)
 Events on `GET /jobs/{id}/events` (server-sent events), one JSON object per `data:` line:

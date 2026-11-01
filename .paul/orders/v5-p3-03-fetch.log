@@ -1,0 +1,106 @@
+I'll start by reading the plan, audit, interfaces, and the modules I need to compose with.
+I have the plan and catalog. Now the interfaces pin, engines' install patterns, and the research sections.
+Now the install() implementation in full, plus the research section on endpoints.
+
+Let me look at the test patterns and existing module conventions.
+
+Let me get the current suite baseline and check for existing job-event helpers.
+Baseline: **839 passed**. I have the plan, audit, research, catalog and engines patterns. Let me write `ohyesmlx/fetch.py`.Baseline is 839 passed. The plan, audit, research §3 and `install()`'s patterns are clear. I'll write `ohyesmlx/fetch.py` now.
+I've written the module. Two fixes before tests: a cleaner `make_dirs` binding, and recording `.incomplete` residue in the ledger when a transfer fails so evict can remove it (AC-15).
+
+
+
+
+
+Now the tests — 14 vertical slices with a fake transport, all under `tmp_path`.
+Two cancel tests came out tangled — let me rewrite them cleanly.
+
+
+
+
+
+
+
+
+
+
+All 78 new tests pass; the suite is 917 (839 baseline + 78). Now I'll add three tests that isolate guards the current set does not pin down: the per-file disk recheck, the write cap (single request), and non-LFS size verification.
+
+
+
+
+
+80 pass. Now the red-check pass: I'll mutate `fetch.py` one guard at a time with a script that always restores it, and confirm the named test fails. First, three extra hostile-name cases so the repo-revision-path guards are independently observable.
+
+
+
+
+
+
+Four red-checks came back green, which suggests my assumptions about those tests are wrong. Let me reproduce the 206 case with full output.
+
+The manual run fails — the script's green results were stale bytecode: consecutive mutations reused a `.pyc` whose size and mtime second matched. I'll disable bytecode in the script. Also the 206 test's Content-Range was internally inconsistent (11 bytes claimed, 6 sent), so the length check masked the start-offset guard; I'll make it a consistent, wrong-offset range.
+
+
+Two genuinely weak tests found. The "second file" test made the *first* file corrupt and used a vacuous truthy `Path` assertion; I'll make the second file the corrupt one. The write-cap case needs a look.
+
+Found it: the oversized body is caught by the *next* loop iteration's `have > size` check, so the call count can't isolate the in-chunk cap. I'll assert the cap's exact message instead, and fix the second-file test to actually fail on the second file.
+
+
+
+
+The second file was a git file, verified by size only — same-length bytes pass. The test needs a second LFS file to force an integrity failure.
+
+
+
+
+All 36 guards red-check green-to-red and the file restored byte-identically. Final full-suite run and a review pass.
+
+
+Two production-path refinements: unwrap a `HostNotAllowed` that urllib might wrap in `URLError`, so it refuses instead of retrying.
+
+
+
+
+
+
+
+
+
+
+
+Full suite is stable; the earlier three failures were a parallel worker mid-write on `test_recommend.py`. Let me do a final read of the core download path for defects.
+DONE.
+
+**Changed** (only the two files the order allows):
+- `ohyesmlx/fetch.py` (new, ~1190 lines): `plan` (pure, AC-11 validation), `download` (consent → catalog id → name shapes → lock → ledger → already-present → disk → per-file transfer → links → refs), `evict` (ledger paths only, whole-cache reference scan, fail-closed). Reuses `engines._append_install_log` and `_print_event` rather than copying them; `catalog.DISK_MARGIN` is imported, not restated.
+- `tests/test_fetch.py` (new): 82 tests, fake transport, `tmp_path` cache/ledger/lock/log; no socket, no real sleep, no real HF cache.
+
+**Verified**
+- Baseline: `839 passed`.
+- `tests/test_fetch.py`: `82 passed`.
+- Full suite: `945 passed` — 839 baseline + my 82 + 24 from `tests/test_recommend.py`, which a parallel 03-02 worker added mid-session. (One full run caught that file mid-write and failed 3 of its tests; it passes alone and in combination, three consecutive runs.)
+
+**Red-checked** — 36 mutations, each applied alone, its test observed failing, file restored byte-identically (sha256 checked): consent, unknown repo, bad_name refusal, busy, download ledger fail-closed, disk preflight, per-file disk recheck, sha256 verify, non-LFS size verify, Content-Length bound, in-chunk size cap, 206 start offset, 200 restart, 403 re-resolve, host allowlist, gated-vs-missing, 404 not_found, already_present, blob reuse, 5xx retry, Retry-After ceiling, stale-lock reclaim, lock release, cancel, cancel residue ledgered, links-after-verification, evict reference scan, symlink escape, unlisted repo, missing ledger, evict consent, ledger persistence, repo/revision/sha256/`..` shape rules.
+
+Two of those red-checks exposed weak tests, now fixed: the 206 test's Content-Range was internally inconsistent (masked by the length check), and the "second file fails" test made the *first* file corrupt and used a vacuous truthy `Path`.
+
+**Not verified**: the production transport (`_real_open` / `_GuardedRedirects` actual hop-by-hop behaviour, socket timeout), any live Hugging Face or CDN interaction, `huggingface_hub` itself reading the layout, and the coordinator's real-download smoke. Tests assert the final URL of each fake response against the allowlist and probe the pure `url_allowed`, but no test exercises urllib's redirect machinery.
+
+**One deviation to note**: an unexpected HTTP status after retries, or a 403/410 after the one re-resolve, emits `http_error` — a code outside the order's refusal list, because no listed code truthfully names it. Every listed code is used where specified.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     77   12989783   12786048   127203   98.4%   0.145240
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+?? .paul/orders/v5-p3-02-recommend.log
+?? .paul/orders/v5-p3-02-recommend.md
+?? .paul/orders/v5-p3-03-fetch.log
+?? .paul/orders/v5-p3-03-fetch.md
+?? ohyesmlx/fetch.py
+?? ohyesmlx/recommend.py
+?? tests/test_fetch.py
+?? tests/test_recommend.py
+ docs/interfaces.md | 27 ++++++++++++++++++++++-----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
