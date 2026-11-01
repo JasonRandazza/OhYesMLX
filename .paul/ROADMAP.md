@@ -24,8 +24,8 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 0 | Contract (governance, interfaces) | Complete 2026-10-29 |
 | 1 | Know the Mac (hardware scan) | Complete 2026-10-29 |
 | 2 | Engines (registry, detect, consented install) | Complete 2026-10-29 |
-| 2.5 | Version stability: lab copies, canary, tested manifest [INSERTED] | Planned |
-| 3 | Models (catalog, recommender, fetch) | Planned: 03-01..03-03 written, research done 2026-10-30 |
+| 2.5 | Version stability: lab copies, canary, tested manifest [INSERTED] | Built 2026-10-30 (wizard script and T2.5.5 open) |
+| 3 | Models (catalog, recommender, fetch) | Built 2026-11-01 (review owed) |
 | 4 | Server and quickbench | Planned |
 | 5 | SwiftUI app and packaging | Planned |
 

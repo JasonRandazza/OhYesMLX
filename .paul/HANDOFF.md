@@ -1,50 +1,48 @@
 ---
-description: "OhYesMLX — session handoff, 2026-10-10 (v4.0: MTPLX runtime class landed)"
+description: "OhYesMLX (OYMLX) session handoff, 2026-11-01: v5.0 Onboarding App, Phases 0-3 built"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-10-10
+# Handoff — 2026-11-01
 
-> Read this, then `.paul/STATE.md` (Decision 132), then `AGENTS.md`. STATE wins on conflict.
-> Previous handoff: `.paul/archive/2026-09-25-handoff-evening-phase4-closed.md`.
+> Read this, then `.paul/STATE.md` (Decisions 134-137), `.paul/phases/v5-onboarding/PLAN.md`, then `AGENTS.md`. STATE wins on conflict.
+> Previous handoff (MTPLX class landed, 2026-10-10): `.paul/archive/2026-10-10-handoff-mtplx-class-landed.md`. Jason calls the project **OYMLX** in conversation.
 
 ## Where things stand
 
-MTPLX is the **sixth runtime** (v4.0, Decision 132). The class, port 8200, the depth-pin receipt
-gate and the `mtplx_stats` raw field are committed and pushed (`bcb94e8`; 673 tests). **No MTPLX
-cell has been measured.** Also unfinished from before: the v3.1 → 0.3.1 bump, and Osaurus 0.25.18
-has no measured cell beyond the thinking-on cap-8192 run (`results/accuracy-thinkon-cap8192/`).
+OYMLX is being turned from a CLI benchmark into a guided app for non-technical Mac owners (v5.0, Decision 134; MTPLX v4.0 is parked on branch `mtplx-wip`, commit `925c4a4`, unmerged). Architecture: a stdlib Python backend (headless, test-driven) behind a localhost JSON API, with a SwiftUI shell on top. **Phases 0-3 are built and committed on `main`; 945 tests pass.** Nothing in Phases 4-5 exists yet: no server, no `quickbench`, no Swift.
 
-## What MTPLX is here
+| Phase | Built | Where |
+|---|---|---|
+| 0 contract | governance, decisions D1-D8, pinned shapes | `docs/interfaces.md` "v5.0 -- Onboarding shapes" |
+| 1 hardware | `hardware.scan`: chip, RAM, disk, volumes, `model_budget` | `ohyesmlx/hardware.py` |
+| 2 engines | `detect_all`, `install_plan` (data), consent-gated `install` (12 audited guards) | `ohyesmlx/engines.py` |
+| 2.5 version stability | tested-versions manifest, `canary`, machine-local `lab-paths.json`, lab-copy doc | `ohyesmlx/engines-tested.json`, `canary.py`, `docs/runtimes/lab-copies.md` |
+| 3 models | revision-pinned catalog (12 models), `recommend.pick`, `fetch` (HF-cache layout, resumable, ledger-limited evict) | `catalog.py/.json`, `recommend.py`, `fetch.py` |
 
-A runtime-axis column on artifacts we already own. Never put a `Youssofal/*` pack in a cross-runtime
-column; the pack at `~/.mtplx/models/Youssofal--Qwen3.5-4B-MTPLX-Optimized-Speed` is a **format
-axis cell inside MTPLX** (OptiQ-4bit vs that pack, runtime fixed). No special lane (Jason, 2026-10-10).
-Facts and artifact table: `docs/runtimes/mtplx.md`. Probes: `docs/research/2026-10-09-mtplx-load-probes.md`.
-Plan: `docs/research/2026-10-06-mtplx-integration-plan.md`.
+Plans, audits and per-phase summaries live in `.paul/phases/v5-onboarding/` (`02-0x`, `025-0x`, `03-0x` PLAN/AUDIT, `PHASE-1-2-SUMMARY.md`, `PHASE-2.5-3-SUMMARY.md`).
 
-## Proposed cells (each needs Jason's yes before launch; nothing else on the machine)
+## Do next, in this order
 
-1. **A — runtime axis:** `mlx-community/Qwen3.5-4B-OptiQ-4bit`, runtimes `optiq` and `mtplx`,
-   `--mtp-depth off,1,2,3`, cache off (mtplx refuses `off`; use the absent pin, which passes the SSD tier off — decide
-   whether that is honest for a cross-runtime row before launching), temp 0, seed recorded per row.
-2. **B — depth ladder inside MTPLX** on the same bundle.
-3. **F — format axis inside MTPLX:** OptiQ-4bit vs the MTPLX pack, depth 1 and AR.
-4. **D — AR "vs oMLX":** only if a probe shows oMLX loads the OptiQ 4B bundle. Unprobed.
-5. Closed: vMLX-vs-MTPLX on JANG_4S (does not load).
+1. **Code-review gate for Phases 2.5 and 3** (not yet run; the process gate in PLAN.md requires it). Use `cc-agent review` read-only workers (Standards + Spec), as for Phases 1-2 (`.paul/orders/v5-review-*.md`). Review shell/git is blocked for those workers, so they read files at HEAD.
+2. **Plan Phase 4** (`/paul:plan`, then `/paul:audit` on it; the localhost API is the riskiest surface: CSRF from any web page, so install/download jobs must take engine/repo NAMES only and require `confirmed`): `ohyesmlx app` server, `GET /hardware /engines /recommendations`, jobs with an SSE event stream, `quickbench` (D3 two-stage, D4 10-minute budget, D5 "measured on your Mac"). `recommend` is meant to be composed as `{picks, excluded, unsupported_reason}` (see its `Pick` pin). `quickbench` must prepend engine lab bin dirs to PATH the way `runtimes._engine_env` already does.
+3. **Phase 5**: run the `prototype` skill for the screens first, then SwiftUI tickets (XCTest with a stub client), packaging with bundled standalone Python (D6) and an unsigned right-click-Open zip (D7).
+4. Still owed to Jason's hands: `scripts/lab-copies-wizard.sh` (generate with the `wizard` skill from `docs/runtimes/lab-copies.md`) to archive the tested DMGs of Osaurus, oMLX, vMLX and turn their auto-update off; T2.5.5 (freeze each lab venv's full dependency set).
 
-## Before the first cell
+## Decisions waiting on Jason
 
-- Run the sampler survey into AGENTS.md (Decision 131 pattern): temperature honoured, penalties 0.0,
-  no `generation_config` penalty path; per artifact record the thinking default and resolved profile.
-- First live cell is the real test of flags and readiness; read the receipt, not the exit code.
-- Decide what `cache_state` row to publish given `off` is refused (RAM session bank). Probing whether a zero
-  `MTPLX_SESSION_BANK_MAX_BYTES` really disables warm restore would unblock it.
+- OptiQ's 0.5.13 to 0.7.8 self-update cut TTFT ~30% (Decision 136). Re-run the OptiQ columns of published tables, or label them 0.5.x? Harness here runs the 0.5.13 lab copy.
+- Merge or keep parking `mtplx-wip`; the 0.3.1 version bump; Apple Developer account for notarization (not needed before Phase 5 packaging); README rewrite (deferred since 2026-10-09).
+- Vault: a short decision note for v5.0 (Decisions 134-137) is proposed, not written (needs Jason's yes per the Vault Contract).
 
-## Hazards learned this session
+## Standing rules and traps learned this session
 
-- cc-agent workers touched `BLOCKED.md` and STATE.md outside their list; check `git status` after each.
-- Two research agents died on a transient API error; a dispatch that logs "Unable to connect" is a
-  retry, not a result.
-- Coordinator-run probes use `scripts/probe_mtplx_load.py`; not a harness surface.
+- **Pytest** lives in a permanent venv: `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` (the old temp-job venv in older docs is gone; 20 scripts and AGENTS.md now point here; three `fetch_*.sh` scripts still reference a missing `hf` binary).
+- **Osaurus**: Jason's standing authorisation (2026-10-29) lets any test or canary pin it (idle 900, caches off) if his own settings (idle 30) are restored byte-exact and the report says so. Always go through `scripts/osaurus-pin.sh`; `scripts/run_canary.sh` is the pattern. Verify with `cmp`.
+- **Measuring**: confirm with Jason first; machine quiet. `ohyesmlx canary --yes` (all five ~17 min; one engine ~3-4 min); it reads load average and refuses to `--record` a noisy engine. Time Machine's post-backup thinning is light and was tolerated. First baselines are in `ohyesmlx/engines-tested.json` (OptiQ at 0.7.8 and vMLX at 1.6.82 are untested builds).
+- **Lab copy**: `~/Library/Application Support/OhYesMLX/lab-paths.json` points OptiQ at the pinned 0.5.13 venv; delete it to use the global install. A pinned package is not a pinned build: OptiQ needs `mlx-lm==0.31.3` beside it or it serves HTTP 404.
+- **Workers** (`cc-agent`, DeepSeek v4.1 flash): set `CC_AGENT_MAX_TURNS=300`; they cannot reach the network reliably; `review`/`explain` cannot run shell; a worker may overwrite `BLOCKED.md` (restore with `git checkout BLOCKED.md`); a worker's BLOCKED report is a finding (this session one caught a wrong literal in a coordinator order). If cc-agent says "Not authenticated", Jason runs `! cmd login`. The coordinator reviews every diff and runs the suite and a real-Mac smoke itself: that caught the OptiQ version bug and the machine-specific manifest path, which tests did not.
+- Keep graphify current: a post-commit hook rebuilds it; workers are told to use `graphify query`.
+- oMLX also scans the user's HF cache (AGENTS.md corrected 2026-11-01); the downloader writes the HF cache layout on purpose.
+- Search tools for workers: `searxng` (Omarchy, `http://100.73.137.9:8888`) first, then Tavily, then Exa.

@@ -15,15 +15,11 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v3.1 — Hardening (0.3.1) — IN PROGRESS. v0.3.0 released 2026-09-23.
-Phase: 4 (Re-run v3 script studies through the harness) — COMPLETE 2026-09-25: all four studies swept and written up
-Plan: from the deep review, `.paul/review/2026-09-23/SUMMARY.md` (IDs A1–F below refer to it)
-Status: Phases 1–3 COMPLETE 2026-09-24 (543 tests). Validation grids (35B, dense, MoE) re-run on the hardened harness: `docs/research/2026-09-24-hardening-validation-grids.md`.
-Last activity: 2026-09-25 — Phase 4 sweeps run and written up (634 tests): `docs/research/2026-09-25-kv-quant-sweep.md`, `-expert-streaming-sweep.md`, `-multiturn-runtime-axis.md`, `-mtp-depth-sweep.md`. Headlines: only OptiQ drives a KV codec, and affine8/affine4 halve its decode at 16k–32k; OptiQ expert streaming is ~9× slower and vMLX `--flash-moe` fails coherence; multi-turn decode is flat while TTFT grows with history; vMLX MTP on the 4B JANG_4S buys nothing at depth 1–2 and costs ~18% at depth 3, and every OptiQ MTP depth cell FAILs on its own log. Later 2026-09-25: v3.1 deferred fixes (N/A render, leaderboard guards, OptiQ MTP shape gate, runners run joins), docs aligned to code, and the third 35B replicate (`docs/research/2026-09-25-35b-third-replicate.md`): r2 and r3 agree within 3–7%, so the 09-20 levels for mlx-lm/oMLX/OptiQ are the outlier; finding 17's cross-runtime levels are superseded, its format orderings stand.
-
-Progress:
-- Milestone: [██████████] 100%
-- Phase: [██████████] 100%
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 built on `main` (945 tests); Phases 4 (server, quickbench) and 5 (SwiftUI app, packaging) not started.
+Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
+Status: Phase-end code review owed for 2.5 and 3. Handoff: `.paul/HANDOFF.md`.
+Last activity: 2026-11-01 — Phase 3 closed: catalog, recommender, fetch (real-download smoke PASS). Earlier: canary baselines for all five engines (2026-10-29/30).
+v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
 ## Loop Position
 
@@ -163,12 +159,11 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-10-10 (Claude Sonnet 5.5 coordinator)
-Stopped at: v4.0 MTPLX runtime class landed (`bcb94e8`, pushed); no MTPLX cell has been measured. Handoff: `.paul/HANDOFF.md`.
-oMLX is now **0.7.0** (installed 2026-09-30; every measured oMLX row is 0.6.4; engine bump, Qwen3.5/3.6 GDN numerics corrected, new `gpu_keep_warm_interval` that may shrink the first-request deferral; `--memory-guard off` and sampling defaults unchanged; see `docs/runtimes/omlx.md` banner). No oMLX cell is queued, so nothing is invalidated; the next one is a new build.
-Osaurus is now **0.25.18** (self-updated by 2026-10-05; the thinking-off 2×2 ran on 0.25.16, the bundle-penalty test on 0.25.15, the 09-29 grids on 0.25.14). `docs/runtimes/osaurus.md` carries the build-to-run table and the 0.25.16→0.25.18 reading: the engine no longer ends repeating output early (#545), the MoE gather dtype path changed again, sampling code untouched. No measured cell on 0.25.18 yet; the next one is a new build and joins nothing earlier.
-Next action: (1) bump to 0.3.1; (2) MTPLX cells, each confirmed with Jason before launch — see HANDOFF; (3) record v4.0 here when the first cell lands. Earlier: bump to 0.3.1. The thinking-ON re-run at cap 8192 finished 2026-10-06 (Osaurus 0.25.18, 5.8 h, both cells exit 0, config restored byte-exact; `results/accuracy-thinkon-cap8192/`): MMLU recovered `jang2l` 46.8% [44.0, 49.7] (cap 4096: 46.6%), `stock4bit` 63.1% [60.2, 65.8] (62.5%); empties 74→66 and 71→42. Cap is no longer the limit; 0.25.18 vs 0.25.16 is confounded with it. Thinking-off arm stays closed (Candidate 3).
-Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table.
+Last session: 2026-11-01 (Claude Sonnet 5.5 coordinator)
+Stopped at: Phase 3 committed (`8df8a19`); handoff written.
+Next action: review gate for Phases 2.5-3, then `/paul:plan` Phase 4 (see HANDOFF).
+Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-137).
+Engine builds on this host: Osaurus 0.25.28, oMLX 0.7.2, OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---
 *STATE.md — Updated after every significant action*
