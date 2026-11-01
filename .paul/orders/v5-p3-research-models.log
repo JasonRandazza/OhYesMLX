@@ -1,0 +1,131 @@
+I'll start by reading the taste preferences and the runtime docs, then probe Hugging Face.
+
+
+
+
+
+
+
+
+Now let me probe the Hugging Face API for the candidate landscape. First, connectivity and org inventories.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the measurements and probes I need. Writing the research document now.
+Let me verify a few facts I cited and correct the arithmetic details before finalizing.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now I'll run the project's test suite as required.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+**DONE** — one new file: `docs/research/2026-10-30-phase3-models.md` (708 lines). Nothing else touched; no code, no server, no model load.
+
+What it answers:
+- **§1/model table** — 12 candidates, every row filled (repo, params from the base repo, format, byte-sum from the API tree, license, gated, per-engine support, measured-here). Three findings change the catalog's shape: JANGQ-AI/Jundot/uingei publish nothing ≤3B; no ≤3B MoE has an MLX checkpoint (LFM2.5-8B-A1B is 8.47B total); the "3B" names are 3.08–3.85B and the small Qwen3.5 models are vision-language checkpoints.
+- **§2** — per-engine model locations with file:line evidence, and the answer: the **HF cache layout** is visible to all five (Osaurus auto-import, oMLX auto-append, mlx-lm/OptiQ list it, vMLX by path). Also a finding: oMLX 0.7.2 appends the user's HF cache to the per-run catalog unless `--no-hf-cache` is passed (`server.py:2480-2481`), which contradicts AGENTS.md's "only the cell's model is visible".
+- **§3** — stdlib is enough: tree listing carries `lfs.oid` sha256, resolve 302s to a 3600 s xet CDN URL, `urllib` preserves `Range` (206 verified), CDN `ETag` is the xet hash not the file hash, quotas 500 API / 3,000 resolvers per 300 s, and gated vs missing are both 401 (differ only by `X-Error-Code`).
+- **§4** — measured `peak_mb` is 0.96–1.94× on-disk weights within a runtime (oMLX prefill worst), 4k KV is 32–448 MiB by family, so the fit rule is `size_bytes × 2.0 ≤ model_budget_bytes` with 0.5 GiB/sequence KV headroom.
+
+Verified by HF API probes, shipped-source/string-table reads, and `results/**/results.jsonl`; the only data bytes fetched were two 100-byte `Range` probes (one on a `.safetensors`). **Tests: 803 passed** (`test-venv/bin/python -m pytest -q`); baseline is the same tree since no code changed. Not verified: any live load of `granitemoehybrid`/`gemma4`/`smollm3` on Osaurus, Osaurus importing a hand-written cache entry, a resume across networks, and JANG loading on mlx-lm/OptiQ/oMLX — all named as probes in §6.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    115   27491702   27107456   125604   98.6%   0.214322
+
+== cc-agent: git status ==
+?? .paul/orders/v5-p3-research-models.log
+?? .paul/orders/v5-p3-research-models.md
+?? docs/research/2026-10-30-phase3-models.md
