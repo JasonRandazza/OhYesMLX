@@ -1,2 +1,70 @@
 I'll start by reading the plan and research docs, then look at the engines module to mirror its style.
 I have the plan and research. Now let me look at the interfaces doc, the shipped manifest, an existing test for style, and the taste file.
+I have the spec. Let me check the graph tooling and probe the Hub API to confirm network access and shape before writing anything.
+Let me read the engines tests for style and check the graph.
+Now let me fetch the Hub metadata for all 13 repos into the scratchpad so I can verify the sums against the research table.
+All twelve research-table sums reproduce exactly. The 4B standard row is 873 bytes off the research §4.1 figure — let me look at why.
+
+The local snapshot for that commit exists — let me see what 873 extra bytes the harness's walk counted.
+The 873-byte delta is explained: the local `model.safetensors` is 3,034,301,568 B on disk vs 3,034,300,695 B in the Hub listing — the harness's `disk_bytes` walked the padded local file. Let me inspect every repo's file list before writing the loader.
+Let me confirm the 4B stock artifact's quantisation and vision shape from its `config.json` (a metadata read, not a weight download).
+I have everything I need. Writing the tests first — loader validation (slide 1) and the shipped-file checks (slide 2).
+Red check — the module does not exist yet.
+Now the loader.
+
+
+AC-1 is green (24 passed); the 11 shipped-file tests are red on the missing file. Now the build script.
+
+
+All 35 catalog tests pass. Now the full suite, plus the baseline it started from (everything except the new file).
+The suite runs long — I'll give it more time.
+
+Baseline 803 → 838 passed. Two test refinements before the red-checks: the engine check should assert the research's "all 5" (not just a subset), and the build date should be a real date.
+
+
+Now the `docs/interfaces.md` note, placed with the v5.0 shapes and immediately before the shape that consumes it.
+All green. Now the red-checks: revert each fix, watch the named test fail with its symptom, restore.
+All four fire and restore. Three more red-checks on the AC-2/AC-3 shipped-file checks, plus a data audit.
+
+
+
+
+DONE.
+
+**Changed**
+- `ohyesmlx/catalog.py` (new) — `ModelFile`/`Model` frozen dataclasses and `load(path=CATALOG_PATH)`. Mirrors `engines.load_manifest`: stdlib only, `CATALOG_PATH` beside the module, every refusal a `ValueError` naming the file, the repo and the field. `params` is the base count; `size_bytes` must equal `sum(files[].size)`; a file carries `sha256` (LFS, `lfs.oid`) or `git_oid` (plain blob) — never both, never neither; `engines` is validated against `engines.ONBOARDING_ENGINES` (imported, not copied).
+- `ohyesmlx/catalog.json` (new) — 12 rows, 10 `starter` + 2 `standard`, each pinned to the Hub's commit with every listed file. `built`, `source` and the gated-at-build note sit once at the top.
+- `tests/test_catalog.py` (new) — 35 checks: 24 for AC-1 (tmp-file driven, one field broken per check), 11 for the shipped file (literal repo ids, literal research sizes, 2 GiB bound, gemma absent, engines, hashes, build date, package placement).
+- `scripts/build_catalog.py` (new) — stdlib-only, re-runnable: researched columns are literals, commit/file/size/hash come from `GET /api/models/<repo>` and `/tree/<sha>?recursive=true&expand=true`, following `Link: rel="next"`. No weight bytes fetched.
+- `docs/interfaces.md` — one `Model` block under v5.0, before `Pick`.
+
+**Verified**
+- Baseline 803 passed → now **838 passed** (`.../test-venv/bin/python -m pytest -q`).
+- Red-checks, each restored afterwards (`restored: True` verified): removed the `size_bytes`-vs-files comparison → that test failed; dropped the "neither hash" refusal → failed; `measured_here: true` on a starter row → failed; a starter `size_bytes` off by 1 → failed; a starter row deleted → failed; gemma-4-e2b re-added → failed; one row listing 2 of 5 engines → failed.
+- All twelve research-table `size_bytes` reproduce exactly from the live listing; a second `build_catalog.py` run is byte-identical.
+- The `optiq/` directory entry is excluded; `optiq/mtp.safetensors` is kept.
+
+**Not verified**
+- No file was downloaded, so no listed `sha256` was checked against real bytes (it is the listing's `lfs.oid`, which research §3.4 established is the file hash).
+- No wheel/sdist was built — AC-5 is checked by placement plus "no `force-include`" in pyproject, not by a build.
+- Engine compatibility is the research table's claim, not re-measured.
+
+**Two findings**
+1. The 4B stock row's `size_bytes` is **3,061,130,647**, not the research §4.1 figure of 3,061,131,520. The difference is exactly 873 B, and it is explained: the local snapshot's `model.safetensors` is 3,034,301,568 B on disk against 3,034,300,695 B in the Hub listing, so §4.1's number is the harness's walk of a locally padded file and mine is what a download fetches. The row cites the listing, and the test's comment records why.
+2. Research §5 does not carry the 4B `standard` row, so its `params` (4,659,865,088), `license` (`apache-2.0`) and `modality` (`vision-language`) come from `Qwen/Qwen3.5-4B`'s metadata and the artifact's `config.json`, by the method §1.1 pins. Nothing new was claimed: the config confirms `affine 4-bit gs64` and `vision_config`, and finding §0.4 states the 4B is vision-bearing.
+
+`.paul/orders/v5-p3-01-catalog.log` shows as modified — that is this session's narration being appended by the dispatch harness, not an edit of mine.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     32    4367811    4203904    48413   96.2%   0.066246
+
+== cc-agent: git status ==
+ M .paul/orders/v5-p3-01-catalog.log
+ M docs/interfaces.md
+?? ohyesmlx/catalog.json
+?? ohyesmlx/catalog.py
+?? scripts/build_catalog.py
+?? tests/test_catalog.py
+ .paul/orders/v5-p3-01-catalog.log | 65 +++++++++++++++++++++++++++++++++++++++
+ docs/interfaces.md                | 13 ++++++++
+ 2 files changed, 78 insertions(+)

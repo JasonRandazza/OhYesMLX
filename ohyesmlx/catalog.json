@@ -1,0 +1,1051 @@
+{
+  "built": "2026-11-01",
+  "source": "GET https://huggingface.co/api/models/<repo> for the commit ('sha'), and GET https://huggingface.co/api/models/<repo>/tree/<sha>?recursive=true&expand=true for each file's path, size, lfs.oid (sha256) or git oid; no weight bytes are fetched",
+  "note": "Built by scripts/build_catalog.py: all 12 repos answered 'gated: false' to the anonymous API on this date. size_bytes is the sum of every listed file, README.md and .gitattributes included, which is what the disk pays and how the research table summed it (research 1.1).",
+  "models": [
+    {
+      "repo": "mlx-community/Qwen3-0.6B-4bit",
+      "title": "Qwen3 0.6B 4-bit",
+      "params": 751632384,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "size_bytes": 351386061,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 873,
+          "sha256": null,
+          "git_oid": "347f24b0faf9b91a5f37326cf2c4595522521ec5"
+        },
+        {
+          "path": "added_tokens.json",
+          "size": 707,
+          "sha256": null,
+          "git_oid": "b54f9135e44c1e81047e8d05cb027af8bc039eed"
+        },
+        {
+          "path": "config.json",
+          "size": 937,
+          "sha256": null,
+          "git_oid": "6c974b02334f2f5f68de4cb2796ee4fe80bfc712"
+        },
+        {
+          "path": "merges.txt",
+          "size": 1671853,
+          "sha256": null,
+          "git_oid": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 335450584,
+          "sha256": "392e8d466d56100ada00eb82031fb854297fc9e389b7d303eba3af114e87bce2",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 49731,
+          "sha256": null,
+          "git_oid": "e743a6a7d2ba4fd21b2256d739117cbf31345297"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 613,
+          "sha256": null,
+          "git_oid": "ac23c0aaa2434523c494330aeb79c58395378103"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 11422654,
+          "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 9706,
+          "sha256": null,
+          "git_oid": "7345216a0785dc7086e8c245b2a9d3896ce2b756"
+        },
+        {
+          "path": "vocab.json",
+          "size": 2776833,
+          "sha256": null,
+          "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "The 0.5B slot and the cheapest row by disk: 0.75B parameters, pure text, qwen3 (research 1.2)."
+    },
+    {
+      "repo": "mlx-community/Qwen3.5-0.8B-4bit",
+      "title": "Qwen3.5 0.8B 4-bit",
+      "params": 873438784,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "vision-language",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "da28692b5f139cb0ec58a356b437486b7dac7462",
+      "size_bytes": 652029391,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 678,
+          "sha256": null,
+          "git_oid": "1d5de9efcc5248f9f4c3e443152db2a2753e59a1"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 7755,
+          "sha256": null,
+          "git_oid": "0ef09f214eaa6d9bca297988afc1454b5827b2c7"
+        },
+        {
+          "path": "config.json",
+          "size": 3112,
+          "sha256": null,
+          "git_oid": "f2a232ff3224989be3b1a4db407475dbef3247f6"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 625229487,
+          "sha256": "f5a0d9dd3efa73510542a8023d610ff26be2b4b020d181cfc4bedaa1fcc5dd9e",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 71473,
+          "sha256": null,
+          "git_oid": "e9a7b6207ef38295c02bbdb5e5e98a27161a4a51"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 390,
+          "sha256": null,
+          "git_oid": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+        },
+        {
+          "path": "processor_config.json",
+          "size": 1300,
+          "sha256": null,
+          "git_oid": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 19989343,
+          "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1139,
+          "sha256": null,
+          "git_oid": "a068e2468cff426a9b105006e74e044030a6faf4"
+        },
+        {
+          "path": "video_preprocessor_config.json",
+          "size": 385,
+          "sha256": null,
+          "git_oid": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+        },
+        {
+          "path": "vocab.json",
+          "size": 6722759,
+          "sha256": null,
+          "git_oid": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "The stock 4-bit of the base the OptiQ row below also quantizes; vision-bearing, and the text path loads it (research 0.4, 5)."
+    },
+    {
+      "repo": "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
+      "title": "Qwen3.5 0.8B OptiQ 4-bit",
+      "params": 873438784,
+      "format": "OptiQ-4bit (4/8-bit mixed)",
+      "modality": "vision-language",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "3b1584b230cace57814b529694741fefbd82e530",
+      "size_bytes": 886129146,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 5422,
+          "sha256": null,
+          "git_oid": "a1bf204b0c3c50e313a995adbf36205aa7fb1be3"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 7755,
+          "sha256": null,
+          "git_oid": "0ef09f214eaa6d9bca297988afc1454b5827b2c7"
+        },
+        {
+          "path": "config.json",
+          "size": 42301,
+          "sha256": null,
+          "git_oid": "9790649ca8e6b794c1bfb598604989a5868c59fe"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 148,
+          "sha256": null,
+          "git_oid": "2e9c72f1d20c18e18b56838f5be31c0d87eb8fa8"
+        },
+        {
+          "path": "kv_config.json",
+          "size": 396,
+          "sha256": null,
+          "git_oid": "028c65f83ad512146353be2ce91e77cc2adacd27"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 650257188,
+          "sha256": "9bd244c6ab7154c2bca10f982e1bdcd32cb7b362985284de257f03effe411678",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 69179,
+          "sha256": null,
+          "git_oid": "58817d54fd7eb7696beae2f42b244f08c4c482eb"
+        },
+        {
+          "path": "optiq/mtp.safetensors",
+          "size": 14530491,
+          "sha256": "a336650761924a134ddc7aaffc90858904cbe2b5eb05c007094e6acb728a558a",
+          "git_oid": null
+        },
+        {
+          "path": "optiq_metadata.json",
+          "size": 19711,
+          "sha256": null,
+          "git_oid": "3fb5a73dc3e48e1d4d84c247a00f12088bb6063a"
+        },
+        {
+          "path": "optiq_vision.safetensors",
+          "size": 201202432,
+          "sha256": "d53b77b0c6673925369f5c067550dff8768ff7bb334e5a7a5e5d579660159bd8",
+          "git_oid": null
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 390,
+          "sha256": null,
+          "git_oid": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+        },
+        {
+          "path": "processor_config.json",
+          "size": 1300,
+          "sha256": null,
+          "git_oid": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 19989343,
+          "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1135,
+          "sha256": null,
+          "git_oid": "f57cfc38c7cf688e8241301163edb3d22e1f5248"
+        },
+        {
+          "path": "video_preprocessor_config.json",
+          "size": 385,
+          "sha256": null,
+          "git_oid": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "1.36x the stock 4-bit row, and 201,202,432 B of it is the vision sidecar the text path never reads (research 1.2)."
+    },
+    {
+      "repo": "mlx-community/LFM2.5-1.2B-Instruct-4bit",
+      "title": "LFM2.5 1.2B Instruct 4-bit",
+      "params": 1170340608,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "LFM Open License 1.0 (other)",
+      "tier": "starter",
+      "revision": "dee2f8a2786e6648bb644a7ca40652842490034b",
+      "size_bytes": 663395788,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1519,
+          "sha256": null,
+          "git_oid": "a6344aac8c09253b3b630fb776ae94478aa0275b"
+        },
+        {
+          "path": "README.md",
+          "size": 1017,
+          "sha256": null,
+          "git_oid": "dcb5d5635200c52f781af8a42a90f2d3dec9ce5b"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 1836,
+          "sha256": null,
+          "git_oid": "1566006797091342d7b16fb4fb6f9adeccb48ca4"
+        },
+        {
+          "path": "config.json",
+          "size": 1572,
+          "sha256": null,
+          "git_oid": "78295a39116fde1dd1a1902c79db93fbec7a4471"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 132,
+          "sha256": null,
+          "git_oid": "0ec736a123e9569cb6aef0c86f7ee22523b2640f"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 658540250,
+          "sha256": "d837f243744bbdbe7dd032f90b482a1c45d5b6035b25c1d7804d0f4c74b5c004",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 23414,
+          "sha256": null,
+          "git_oid": "e979035fbe75b3c15f06a64c88f083ee1b0ecaf3"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 434,
+          "sha256": null,
+          "git_oid": "b28c8a1e9ecfa97dfc04bf0a5951183155ccc6d7"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 4733389,
+          "sha256": null,
+          "git_oid": "2e27bba0b0505b2b2124fa9225c9b5dda7531474"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 92225,
+          "sha256": null,
+          "git_oid": "5b071cd2a330a6e5b33ba575fd1e2f6f57f09927"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "Pure-text LFM2.5 at 1.17B (research 5)."
+    },
+    {
+      "repo": "mlx-community/granite-4.0-h-1b-4bit",
+      "title": "Granite 4.0 H 1B 4-bit",
+      "params": 1461538368,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "a5a21e23f01a461f501dcd2b7a34c9efc6fba6a6",
+      "size_bytes": 833197077,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1519,
+          "sha256": null,
+          "git_oid": "a6344aac8c09253b3b630fb776ae94478aa0275b"
+        },
+        {
+          "path": "README.md",
+          "size": 890,
+          "sha256": null,
+          "git_oid": "d679e165ea570d1393f1b387104606cf518b44fc"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 6418,
+          "sha256": null,
+          "git_oid": "82e3ebf57b6de47c0c4e722dde0e33915f73bfe8"
+        },
+        {
+          "path": "config.json",
+          "size": 2283,
+          "sha256": null,
+          "git_oid": "727e8ea6e01f852540dd6b1865fc3ab2d3c9c8a9"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 147,
+          "sha256": null,
+          "git_oid": "2eed7ca2d26ec1a753b8800e0bae20c824e8b015"
+        },
+        {
+          "path": "merges.txt",
+          "size": 916646,
+          "sha256": null,
+          "git_oid": "354558edcdbd64ca7abd407b8be3d5d09d39d781"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 823421976,
+          "sha256": "1dceb7c335a9bdd95231f0d7d0c524fddaaf6e00cebc99d3f672deace5d4b471",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 62835,
+          "sha256": null,
+          "git_oid": "cf418eef9735179e353629aacdcb1ed82af79ada"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 579,
+          "sha256": null,
+          "git_oid": "3f67e7c50d57b16925f4f15469a774e7bf439047"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 7153421,
+          "sha256": null,
+          "git_oid": "d7e1714703eb97dcef3435aa50eb1de1cf241d62"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 17659,
+          "sha256": null,
+          "git_oid": "7a6b382740c0c6587ae8af40aeb4b40f8fb8c431"
+        },
+        {
+          "path": "vocab.json",
+          "size": 1612704,
+          "sha256": null,
+          "git_oid": "4764ec73731a47701c2f49b01bb428342870f498"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "The only hybrid family here: 4 attention layers of 40, so its KV is tiny and its residency is weights (research 1.2)."
+    },
+    {
+      "repo": "mlx-community/Qwen3.5-2B-4bit",
+      "title": "Qwen3.5 2B 4-bit",
+      "params": 2274069824,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "vision-language",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "674aaa7240b91e8012fcad5d791b7dfe5ba90207",
+      "size_bytes": 1749081927,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 666,
+          "sha256": null,
+          "git_oid": "64df3a653e6fc35ea9cfd441e687aa5e136b0ef8"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 7755,
+          "sha256": null,
+          "git_oid": "0ef09f214eaa6d9bca297988afc1454b5827b2c7"
+        },
+        {
+          "path": "config.json",
+          "size": 3113,
+          "sha256": null,
+          "git_oid": "6d901903a287e72c3677c1f8242a9f30c39dd117"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 1722271785,
+          "sha256": "713fe7e5d3c3965f7106b0d0ee17615f7869c23c8d327996df8c1196fbcf07d5",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 81722,
+          "sha256": null,
+          "git_oid": "2d9ef9d4c10685ab801a5d2011821d700b688d5f"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 390,
+          "sha256": null,
+          "git_oid": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+        },
+        {
+          "path": "processor_config.json",
+          "size": 1300,
+          "sha256": null,
+          "git_oid": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 19989343,
+          "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1139,
+          "sha256": null,
+          "git_oid": "a068e2468cff426a9b105006e74e044030a6faf4"
+        },
+        {
+          "path": "video_preprocessor_config.json",
+          "size": 385,
+          "sha256": null,
+          "git_oid": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+        },
+        {
+          "path": "vocab.json",
+          "size": 6722759,
+          "sha256": null,
+          "git_oid": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "The stock 4-bit 2B; vision-bearing, as every Qwen3.5 package is (research 0.4, 5)."
+    },
+    {
+      "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+      "title": "Qwen3.5 2B oQ4",
+      "params": 2274069824,
+      "format": "oQ4 (mixed 4/5/6/8)",
+      "modality": "vision-language",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "bdd552707e9787333a871f0ce43ae2ad41fafd1e",
+      "size_bytes": 1794528789,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 3792,
+          "sha256": null,
+          "git_oid": "72ae63fb25d17cc4f855a8d516f08eb44eb6d7c1"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 7755,
+          "sha256": null,
+          "git_oid": "0ef09f214eaa6d9bca297988afc1454b5827b2c7"
+        },
+        {
+          "path": "config.json",
+          "size": 13362,
+          "sha256": null,
+          "git_oid": "1133a3a3d33b770568544c85eb1961ab5072d0ea"
+        },
+        {
+          "path": "merges.txt",
+          "size": 3353259,
+          "sha256": null,
+          "git_oid": "a494e019ca1502219fd0128658b979e5f05ae8e8"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 1771601211,
+          "sha256": "73c09a2a61e6d16d8b45657a8bbc6f16f2e20cbee2cd293cd8b9de1ec1479bb7",
+          "git_oid": null
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 390,
+          "sha256": null,
+          "git_oid": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 12807982,
+          "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 16709,
+          "sha256": null,
+          "git_oid": "fae3ce993e07c092ad024dde45e592379fde91bb"
+        },
+        {
+          "path": "vocab.json",
+          "size": 6722759,
+          "sha256": null,
+          "git_oid": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "The one oQ artifact under the cap: mixed 4/5/6/8-bit with 41 overrides (research 1.2, 1.4)."
+    },
+    {
+      "repo": "mlx-community/LFM2.5-2.6B-4bit",
+      "title": "LFM2.5 2.6B 4-bit",
+      "params": 2697198592,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "LFM Open License 1.0 (other)",
+      "tier": "starter",
+      "revision": "72a08228cf703cd7dc0187abf4edbbd8e935f864",
+      "size_bytes": 1535593294,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 791,
+          "sha256": null,
+          "git_oid": "a836725d279c17421e9a3cb0a45d6c38adcee10e"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 5496,
+          "sha256": null,
+          "git_oid": "658d67d5032d6c7e63ca783150fcb059585c529e"
+        },
+        {
+          "path": "config.json",
+          "size": 2377,
+          "sha256": null,
+          "git_oid": "bd60c51f9f8418501553b10a40811bd6caaa2042"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 306,
+          "sha256": null,
+          "git_oid": "e44d3e11999e9ce2b0b966ce4625d6f89ebcbd5e"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 1517625850,
+          "sha256": "c60882ad5ae00906e17b6fe14d1a86d6f63d4e2e2782ea0dced24bb97bef9766",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 50943,
+          "sha256": null,
+          "git_oid": "712012f001691cc2dd4952708bd4438ea5d8779a"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17905598,
+          "sha256": "695be7802a0e4b8a81048f0ff5ebb7fc811a0ba5a6be63dbb24deb5a81096f41",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 363,
+          "sha256": null,
+          "git_oid": "e3eefcd570bd438293cf1e1819c016077d5aa842"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "The largest strictly in-cap artifact at 2.697B parameters (research 1.2)."
+    },
+    {
+      "repo": "mlx-community/SmolLM3-3B-4bit",
+      "title": "SmolLM3 3B 4-bit",
+      "params": 3075098624,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "apache-2.0",
+      "tier": "starter",
+      "revision": "d3a7e0594d6642dbcfb7d149bed8b0bdf49f95ce",
+      "size_bytes": 1747380812,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 879,
+          "sha256": null,
+          "git_oid": "b97613f60c23d664c8a3ab3b1b2993d91d606195"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 5499,
+          "sha256": null,
+          "git_oid": "092ffe8b82bce8eed718fdd1232e6da2b0448829"
+        },
+        {
+          "path": "config.json",
+          "size": 2394,
+          "sha256": null,
+          "git_oid": "fbcc41ae9599f3d6d4677bcee91e8d81ced4169e"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 182,
+          "sha256": null,
+          "git_oid": "5339609fb994a8644fe865353cf0f1d3ee0130c8"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 1730051993,
+          "sha256": "d501e6193d7eb84e10d3c377007d1fc4b4b2fa08799dd10fa4f6a75033334a70",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 58800,
+          "sha256": null,
+          "git_oid": "838ccec44dd549a5dc28dd716f1210c4f7a985dd"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 289,
+          "sha256": null,
+          "git_oid": "190d5624dbbc1ad56f2f34c9d58e03fef7e5328b"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17208819,
+          "sha256": "7b6a500b662a34eb3f0374db856ba4ad7de4c81040571d78dc0d357238930005",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 50387,
+          "sha256": null,
+          "git_oid": "61910c2db5cbdc9e6a6f37e14aaf00584cc6ad47"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "Not 3B by parameters: 3.075B, 2.5% over the cap and in the starter tier on disk size (research 1.2)."
+    },
+    {
+      "repo": "mlx-community/Llama-3.2-3B-Instruct-4bit",
+      "title": "Llama 3.2 3B Instruct 4-bit",
+      "params": 3212749824,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "llama3.2",
+      "tier": "starter",
+      "revision": "7f0dc925e0d0afb0322d96f9255cfddf2ba5636e",
+      "size_bytes": 1824825759,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 16295,
+          "sha256": null,
+          "git_oid": "8bb4d3b328b7c552eef164c03a2e3e7759134d00"
+        },
+        {
+          "path": "config.json",
+          "size": 1122,
+          "sha256": null,
+          "git_oid": "b1609c2927636476bf9024d7ec17ad8b8bfc68ab"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 1807496278,
+          "sha256": "d75e1ee0ea653cc5b76191ec934c7c0d568e94d4e47846619f1f4bc715b7b265",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 45720,
+          "sha256": null,
+          "git_oid": "bb46c4eea9ec7e2b114402331be90abca0131bf6"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 296,
+          "sha256": null,
+          "git_oid": "02ee80b6196926a5ad790a004d9efd6ab1ba6542"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17209920,
+          "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 54558,
+          "sha256": null,
+          "git_oid": "6568c91f9cdd35e8ac07b8ff0c201f7e835affc8"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": false,
+      "notes": "Not 3B by parameters either: 3.213B, 7% over; the llama family has live PASS rows on all five engines (research 5, footnote 6)."
+    },
+    {
+      "repo": "mlx-community/Qwen3.5-4B-4bit",
+      "title": "Qwen3.5 4B 4-bit",
+      "params": 4659865088,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "vision-language",
+      "license": "apache-2.0",
+      "tier": "standard",
+      "revision": "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c",
+      "size_bytes": 3061130647,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 7756,
+          "sha256": null,
+          "git_oid": "a585dec894e63da457d9440ec6aa7caa16d20860"
+        },
+        {
+          "path": "config.json",
+          "size": 3366,
+          "sha256": null,
+          "git_oid": "cb3e1a878a5c4a0505e0c9967da45820b2ca6bd3"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 3034300695,
+          "sha256": "5fb9acd0246866381cf8c5c354c6db1019f6498eec4ccb4f5edcc71ffeacb2db",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 101944,
+          "sha256": null,
+          "git_oid": "40196ba58595ef9b3fad25a8a6daf3288b953c19"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 390,
+          "sha256": null,
+          "git_oid": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+        },
+        {
+          "path": "processor_config.json",
+          "size": 1300,
+          "sha256": null,
+          "git_oid": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 19989343,
+          "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1139,
+          "sha256": null,
+          "git_oid": "a068e2468cff426a9b105006e74e044030a6faf4"
+        },
+        {
+          "path": "video_preprocessor_config.json",
+          "size": 385,
+          "sha256": null,
+          "git_oid": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+        },
+        {
+          "path": "vocab.json",
+          "size": 6722759,
+          "sha256": null,
+          "git_oid": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": true,
+      "notes": "This Mac's measured control on stock 4-bit: PASS on mlx-lm, oMLX, OptiQ and vMLX (research 4.1)."
+    },
+    {
+      "repo": "mlx-community/LFM2.5-8B-A1B-MLX-4bit",
+      "title": "LFM2.5 8B A1B MoE 4-bit",
+      "params": 8467856832,
+      "format": "mlx affine 4-bit gs64",
+      "modality": "text",
+      "license": "LFM Open License 1.0 (other)",
+      "tier": "standard",
+      "revision": "146590a491db88581884033023f51f6b49a27b89",
+      "size_bytes": 4782228614,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1570,
+          "sha256": null,
+          "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b"
+        },
+        {
+          "path": "README.md",
+          "size": 1313,
+          "sha256": null,
+          "git_oid": "6655c7170fcd3856cd2b16cfb00470f6774d7169"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 4674,
+          "sha256": null,
+          "git_oid": "b02bcb091b1a8c20d76bf3e59b8f8a8950b6e790"
+        },
+        {
+          "path": "config.json",
+          "size": 6405,
+          "sha256": null,
+          "git_oid": "3cfba9eaa86a795de734b3fe236f949021c20b8f"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 230,
+          "sha256": null,
+          "git_oid": "75f2c3c9cb73aca859fa82693270ee20947257f9"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 4764265165,
+          "sha256": "01b990b43f3589fcf77e00cc6fe0a7d7d0b0056f28642d1c9f546cb09c03788e",
+          "git_oid": null
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 43344,
+          "sha256": null,
+          "git_oid": "27e44bf056d49e0f287b98062fc326d888a7284a"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17905598,
+          "sha256": "695be7802a0e4b8a81048f0ff5ebb7fc811a0ba5a6be63dbb24deb5a81096f41",
+          "git_oid": null
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 315,
+          "sha256": null,
+          "git_oid": "df190b8c97179c7b2fde48758a353b1bcfb18c83"
+        }
+      ],
+      "engines": [
+        "mlxlm",
+        "osaurus",
+        "omlx",
+        "optiq",
+        "vmlx"
+      ],
+      "measured_here": true,
+      "notes": "The only measured MoE: 8.47B total, 1B active, 32 experts top-4, PASS on all five engines (research 5)."
+    }
+  ]
+}

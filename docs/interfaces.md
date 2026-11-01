@@ -1391,6 +1391,19 @@ and `detect_all` looks in them first, so a canary reports the lab copy's version
 "needs_admin": bool, "steps": [{"id": str, "label": str, "command": [str]|null}]}`.
 `guided_download` (Osaurus, oMLX, vMLX) opens `source_url` and verifies afterwards; `command` runs `steps`.
 
+**`Model`** (`catalog.load(path=CATALOG_PATH) -> list[Model]`; the seed is `ohyesmlx/catalog.json`, plan 03-01)
+`{"repo": "org/name", "title": str, "params": int, "format": str, "modality": "text|vision-language",
+"license": str, "tier": "starter|standard", "revision": "40-hex commit", "size_bytes": int,
+"files": [{"path": str, "size": int, "sha256": "64-hex|null", "git_oid": "40-hex|null"}],
+"engines": ["mlxlm|osaurus|omlx|optiq|vmlx"], "measured_here": bool, "notes": str}`.
+`params` is the **base** model's count, never the artifact's `safetensors.total` (research §1.1). `size_bytes`
+is the sum of `files`, which holds every file the tree listing has, so it is what the disk pays. An LFS file
+carries `sha256` (the listing's `lfs.oid`) and a plain git file carries `git_oid`, never both and never
+neither — one of them is what a download verifies. `revision` and every file's size and hash come from one
+tree listing at that commit, so a downloader never asks "what is latest". `engines` is the research table's
+column, and `measured_here` is true only where a `results/**/results.jsonl` row exists for that exact
+artifact. A violation raises `ValueError` naming the file, the repo and the field.
+
 **`Pick`** (`recommend.pick(...) -> list`; `GET /recommendations`)
 `{"model_id": str, "title": str, "params_b": float, "format": str, "engine": str, "size_bytes": int,
 "fit": "comfortable|tight", "fit_basis": "estimated", "reason": str,
