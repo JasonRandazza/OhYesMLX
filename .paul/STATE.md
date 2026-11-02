@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [04-01b loop closed - ready for next PLAN]
+  ✓        ○        ○     [04-02 + 04-02b created; 04-02 awaiting audit]
 ```
 
 ## Performance Metrics
@@ -165,8 +165,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-11-02 (Claude Opus 5.5 coordinator)
 Stopped at: 04-01b unified.
-Next action: plan 04-02 (jobs + SSE, Pick.downloaded, releases/latest links); see the v5 PLAN.md Phase 4 notes.
-Resume file: `.paul/phases/v5-onboarding/04-01b-SUMMARY.md`
+Next action: Jason approves 04-02b (runs first), audit 04-02, then APPLY 04-02.
+Resume file: `.paul/phases/v5-onboarding/04-02-PLAN.md`
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-140).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
