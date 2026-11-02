@@ -822,6 +822,9 @@ def test_the_canary_records_only_under_record_and_writes_the_detected_version(
     canary_measure(monkeypatch)
     canary_runtime(monkeypatch, versions={"mlxlm": "0.32.2"})
     canary_baseline(monkeypatch)
+    # This check is about what --record writes, not about contention: read the load from a
+    # quiet machine so a busy host does not turn the record path into the refusal path.
+    monkeypatch.setattr(cli.canary, "load", lambda: 1.0)
     path = canary_manifest(monkeypatch, tmp_path)
     before = path.read_text(encoding="utf-8")
 
@@ -898,10 +901,13 @@ def test_a_manifest_without_a_canary_spec_is_refused_before_anything_is_measured
 
     fake = canary_measure(monkeypatch)
     canary_runtime(monkeypatch)
-    monkeypatch.setitem(engines.MANIFEST, "mlxlm", {**engines.MANIFEST["mlxlm"], "canary": None})
+    # The key is absent, not null: `load_manifest` permits an entry with no canary block,
+    # and the refusal must reach the message rather than a KeyError.
+    monkeypatch.delitem(engines.MANIFEST["mlxlm"], "canary")
 
     assert canary_main("--yes", "--engines", "mlxlm") == 2
-    assert "mlxlm" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "mlxlm" in err and "has no canary spec" in err
     assert fake.calls == []
 
 

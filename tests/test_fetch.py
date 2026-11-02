@@ -21,9 +21,16 @@ from ohyesmlx.catalog import Model, ModelFile
 
 REPO = "org/name"
 REV = "a" * 40
-GIT = "b" * 40
 WEIGHTS = b"hello world"
 CONFIG = b'{"a":1}'
+
+
+def git_oid(body):
+    """The git blob id of *body*: sha1 over ``"blob <len>\\0" + bytes``."""
+    return hashlib.sha1(b"blob %d\x00" % len(body) + body).hexdigest()
+
+
+GIT = git_oid(CONFIG)
 SHA = hashlib.sha256(WEIGHTS).hexdigest()
 CDN = "https://us.aws.cdn.hf.co/xet-bridge-us/x"
 RESOLVE = f"https://huggingface.co/{REPO}/resolve/{REV}/weights.safetensors"
@@ -113,7 +120,7 @@ def make_model(files, *, repo=REPO, revision=REV):
                 path=path,
                 size=len(body),
                 sha256=hashlib.sha256(body).hexdigest() if kind == "lfs" else None,
-                git_oid=GIT if kind == "git" else None,
+                git_oid=git_oid(body) if kind == "git" else None,
             )
         )
     return Model(
@@ -784,6 +791,22 @@ def test_an_existing_non_lfs_blob_of_the_wrong_size_is_refused(tmp_path):
     assert transport.calls == []
 
 
+def test_an_existing_non_lfs_blob_of_the_right_size_but_wrong_bytes_is_refused(tmp_path):
+    """A non-LFS file is verified by its git blob id, not by its size: same length, other
+    bytes is not the file the catalog pins."""
+    model = make_model(TWO_FILES)
+    transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
+    harness = Harness(tmp_path, [model], transport)
+    harness.blobs.mkdir(parents=True)
+    (harness.blobs / GIT).write_bytes(b'{"a":2}')  # the pinned file's 7 bytes, different text
+
+    assert harness.download() is False
+
+    assert harness.codes() == ["integrity_failed"]
+    assert (harness.blobs / GIT).read_bytes() == b'{"a":2}'
+    assert transport.calls == []
+
+
 # ---------------------------------------------------------------------------
 # 9. Bounded writes
 # ---------------------------------------------------------------------------
@@ -861,7 +884,7 @@ def test_no_request_carries_an_authorization_header(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 11. Busy and the cross-process lock
+# 11. Busy and the one cross-process lock
 # ---------------------------------------------------------------------------
 
 
@@ -869,11 +892,32 @@ def test_a_live_lock_holder_makes_the_download_busy(tmp_path):
     transport = serve({"weights.safetensors": WEIGHTS})
     harness = Harness(tmp_path, [make_model(TWO_FILES)], transport)
     harness.locks.mkdir(parents=True)
-    (harness.locks / "models--org--name.lock").write_text(str(os.getpid()))
+    (harness.locks / fetch.LOCK_NAME).write_text(str(os.getpid()))
 
     assert harness.download() is False
 
     assert harness.codes() == ["busy"]
+    assert harness.events[0]["message"] == "another download is already running"
+    assert transport.calls == []
+    assert not harness.cache.exists()
+
+
+def test_a_second_repo_is_refused_busy_while_a_download_holds_the_lock(tmp_path):
+    """AC-7: one download at a time, across repos. A per-repo lock let two repos download
+    at once; a live holder of the one lock refuses the next download whatever it names."""
+    transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
+    models = [
+        make_model(TWO_FILES),
+        make_model([("other.bin", CONFIG, "lfs")], repo="org/other"),
+    ]
+    harness = Harness(tmp_path, models, transport)
+    harness.locks.mkdir(parents=True)
+    (harness.locks / fetch.LOCK_NAME).write_text(str(os.getpid()))
+
+    assert harness.download(repo="org/other") is False
+
+    assert harness.codes() == ["busy"]
+    assert harness.events[0]["message"] == "another download is already running"
     assert transport.calls == []
     assert not harness.cache.exists()
 
@@ -882,7 +926,7 @@ def test_a_stale_lock_from_a_dead_pid_is_reclaimed(tmp_path):
     transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
     harness = Harness(tmp_path, [make_model(TWO_FILES)], transport)
     harness.locks.mkdir(parents=True)
-    lock = harness.locks / "models--org--name.lock"
+    lock = harness.locks / fetch.LOCK_NAME
     # Above macOS's pid ceiling, so no process can hold it.
     lock.write_text("999999")
 
@@ -899,7 +943,7 @@ def test_the_lock_is_released_after_a_refusal(tmp_path):
     assert harness.download() is False
 
     assert harness.codes() == ["low_disk"]
-    assert not (harness.locks / "models--org--name.lock").exists()
+    assert not (harness.locks / fetch.LOCK_NAME).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +973,7 @@ def test_cancel_keeps_the_partial_links_nothing_and_releases_the_lock(tmp_path):
     assert not harness.ref.exists()
     assert [event["type"] for event in harness.events[-2:]] == ["error", "done"]
     assert harness.events[-2]["payload"]["code"] == "cancelled"
-    assert not (harness.locks / "models--org--name.lock").exists()
+    assert not (harness.locks / fetch.LOCK_NAME).exists()
     logged = [json.loads(line) for line in harness.log.read_text().splitlines()]
     assert logged[-2]["code"] == "cancelled"
 

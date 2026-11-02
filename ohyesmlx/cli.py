@@ -831,7 +831,7 @@ def _canary(args) -> int:
     except ValueError as exc:
         print(f"ohyesmlx canary: {exc}", file=sys.stderr)
         return 2
-    missing = [name for name in names if engines.MANIFEST[name]["canary"] is None]
+    missing = [name for name in names if engines.MANIFEST[name].get("canary") is None]
     if missing:
         print(
             f"ohyesmlx canary: {', '.join(missing)} has no canary spec in "

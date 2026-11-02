@@ -143,6 +143,44 @@ def test_a_pass_row_with_no_baseline_says_so_instead_of_comparing():
         )
 
 
+def test_a_pass_row_with_no_decode_rate_is_undefined_not_an_error():
+    """`report` leaves `decode_tps` None for a stream with fewer than two content deltas
+    (its rate domain), and a PASS row whose rate is undefined is not a comparison."""
+    row = {**PASS_ROW, "decode_tps": None}
+
+    assert canary.verdict_line(BASELINE, row) == (
+        "no verdict: decode_tps is undefined for this row"
+    )
+
+
+def test_a_pass_row_with_no_ttft_is_undefined_not_an_error():
+    row = {**PASS_ROW, "ttft_p50_s": None}
+
+    assert canary.verdict_line(BASELINE, row) == (
+        "no verdict: ttft_p50_s is undefined for this row"
+    )
+
+
+def test_a_zero_baseline_is_read_as_missing_and_is_never_divided_by():
+    """`engines.load_manifest` admits 0, and a percentage change from zero is undefined, so
+    a zero baseline is skipped exactly as an absent one is."""
+    reading = canary.verdict(
+        {"decode_tok_s": 0, "ttft_s": 0.40}, {"decode_tok_s": 62.0, "ttft_s": 0.40}
+    )
+    assert reading.moved_pct is None
+    assert reading.text == "no effect"
+
+    nothing = canary.verdict(
+        {"decode_tok_s": 0, "ttft_s": 0}, {"decode_tok_s": 62.0, "ttft_s": 0.40}
+    )
+    assert nothing.moved_pct is None
+    assert nothing.text == "no baseline recorded: --record writes one"
+
+    assert canary.verdict_line({"decode_tok_s": 0, "ttft_s": 0.40}, PASS_ROW) == (
+        "no baseline recorded: --record writes one"
+    )
+
+
 # --- AC-7: contention rides on the reading --------------------------------------------------
 
 
@@ -205,6 +243,15 @@ def test_a_repo_with_no_snapshot_is_refused_naming_the_repo_and_the_cache(tmp_pa
 
     assert "RepublicOfKorokke/Qwen3.5-4B-oQ4" in str(raised.value)
     assert "models--RepublicOfKorokke--Qwen3.5-4B-oQ4" in str(raised.value)
+
+
+def test_the_resolver_reads_hf_hub_cache_when_no_root_is_injected(tmp_path, monkeypatch):
+    """The default root is `fetch.default_cache_dir()`, so the `HF_HUB_CACHE` the downloader
+    honours is the cache the canary serves from (AC-2) -- not a second hard-coded path."""
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    path = snapshot(tmp_path, 0)
+
+    assert canary.artifact_dir("mlx-community/Qwen3.5-4B-4bit") == str(path)
 
 
 # --- AC-2: the cells string is the one selector ---------------------------------------------

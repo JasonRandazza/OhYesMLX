@@ -38,6 +38,8 @@ import os
 import pathlib
 from dataclasses import dataclass
 
+from ohyesmlx import fetch
+
 # Decision 131's session bar. The vMLX repetition-penalty re-run moved its control formats
 # by 1.4-12.7% with no penalty in them, so nothing below ~5% is separable from the session
 # on this host. A canary exists to say whether a version bump moved a *published* number by
@@ -49,10 +51,6 @@ NOISE_FLOOR = 0.05
 # during one column. Load is read before and after each engine's cell, and this 12-core host
 # is allowed to be busy up to this 1-minute average before the reading counts as noisy.
 LOAD_NOISY = 4.0
-
-# Where a `models--<org>--<name>/snapshots/<sha>` tree lives, unless a caller injects another
-# root. The resolver below is the only thing that reads it.
-HF_HUB = pathlib.Path("~/.cache/huggingface/hub").expanduser()
 
 # Printed, and nothing else started, when the run is not confirmed with `--yes`.
 QUIET_MACHINE = (
@@ -116,14 +114,21 @@ def verdict(baseline, measured, floor=NOISE_FLOOR) -> Verdict:
     compared. The reading is the change in percent, rounded to the one decimal a reader is
     shown, and the metric with the larger absolute change names the verdict.
 
-    A change of exactly *floor* is no effect: ``floor`` is the width of the session, and a
-    number sitting on its edge has not left it.
+    A baseline of ``0`` is read as one that was never recorded: ``engines.load_manifest``
+    admits it, and a percentage change from zero is undefined rather than infinite. A change
+    of exactly *floor* is no effect: ``floor`` is the width of the session, and a number
+    sitting on its edge has not left it.
     """
     worst = None
     for metric in ("decode_tok_s", "ttft_s"):
-        change = round((measured[metric] - baseline[metric]) / baseline[metric] * 100.0, 1)
+        base = baseline[metric]
+        if base is None or base == 0:
+            continue
+        change = round((measured[metric] - base) / base * 100.0, 1)
         if worst is None or abs(change) > abs(worst[1]):
             worst = (metric, change)
+    if worst is None:
+        return Verdict(None, None, "no baseline recorded: --record writes one")
     metric, change = worst
     if abs(change) <= floor * 100.0:
         return Verdict(None, None, "no effect")
@@ -135,15 +140,21 @@ def verdict_line(baseline, row, floor=NOISE_FLOOR) -> str:
 
     A row that is not ``PASS`` never reaches the comparison: its reason is the verdict, in
     the harness's own words, because a cell that failed the coherence gate or never started
-    has no number to compare against anything. A ``PASS`` row with no recorded baseline says
-    so instead of comparing -- the manifest ships null baselines until a run records one.
+    has no number to compare against anything. A ``PASS`` row whose ``decode_tps`` or
+    ``ttft_p50_s`` is ``None`` has no rate to compare either: ``report`` leaves those empty
+    for a stream with fewer than two content deltas, and the line says the rate is undefined
+    rather than raising. A ``PASS`` row with no recorded baseline says so instead of
+    comparing -- the manifest ships null (or zero) baselines until a run records one.
     """
     if row["status"] != "PASS":
         return f"FAIL: {row['reason']}"
-    if (
-        baseline is None
-        or baseline.get("decode_tok_s") is None
-        or baseline.get("ttft_s") is None
+    undefined = [
+        field for field in ("decode_tps", "ttft_p50_s") if row[field] is None
+    ]
+    if undefined:
+        return f"no verdict: {', '.join(undefined)} is undefined for this row"
+    if baseline is None or any(
+        baseline.get(metric) in (None, 0) for metric in ("decode_tok_s", "ttft_s")
     ):
         return "no baseline recorded: --record writes one"
     reading = verdict(
@@ -154,15 +165,17 @@ def verdict_line(baseline, row, floor=NOISE_FLOOR) -> str:
     return f"{reading.text}: re-run the grids containing {row['runtime']}"
 
 
-def artifact_dir(repo: str, root=HF_HUB) -> str:
+def artifact_dir(repo: str, root=None) -> str:
     """The newest Hugging Face cache snapshot of *repo* that carries a ``config.json``.
 
     The cache keeps one directory per repo and one directory per fetched revision under
     ``snapshots/``, so the revision a run should serve is the newest one that holds the
     config -- a half-finished fetch has none. ``root`` is the cache directory (the parent of
-    every ``models--<org>--<name>``), injected so a test reads a tree it made and this
-    machine's cache is one default away.
+    every ``models--<org>--<name>``), injected so a test reads a tree it made; the default
+    is ``fetch.default_cache_dir()``, so the same ``HF_HUB_CACHE`` the downloader honours
+    decides where the canary looks (AC-2).
     """
+    root = fetch.default_cache_dir() if root is None else root
     snapshots = pathlib.Path(root) / f"models--{repo.replace('/', '--')}" / "snapshots"
     found = (
         [path for path in snapshots.iterdir() if (path / "config.json").is_file()]
@@ -177,7 +190,7 @@ def artifact_dir(repo: str, root=HF_HUB) -> str:
     return str(max(found, key=lambda path: path.stat().st_mtime))
 
 
-def cells(engine: str, spec: dict, root=HF_HUB) -> str:
+def cells(engine: str, spec: dict, root=None) -> str:
     """One engine's ``--cells`` string: ``<format>__<engine>=<artifact dir>``.
 
     The canary has no selection of its own: this is the manifest's cell written in the

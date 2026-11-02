@@ -17,7 +17,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 built on `main` (945 tests); Phases 4 (server, quickbench) and 5 (SwiftUI app, packaging) not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase-end code review owed for 2.5 and 3. Handoff: `.paul/HANDOFF.md`.
+Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); next: plan Phase 4. Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-01 — Phase 3 closed: catalog, recommender, fetch (real-download smoke PASS). Earlier: canary baselines for all five engines (2026-10-29/30).
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [v5.0 Phases 2.5-3 unified (PHASE-2.5-3-SUMMARY.md); code-review gate in progress]
+  ○        ○        ◉     [v5.0 Phases 2.5-3 unified and reviewed; Phase 4 not planned]
 ```
 
 ## Performance Metrics
@@ -127,6 +127,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-10-29: Enterprise audit performed on .paul/phases/v5-onboarding/02-03-PLAN.md. Applied 5 must-have, 4 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 Phase 2 | Installer takes an engine name, never a caller-supplied plan |
 | 2026-11-01: Enterprise audit performed on .paul/phases/v5-onboarding/03-03-PLAN.md. Applied 6 must-have, 3 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 Phase 3 | evict removes only ledger-recorded created paths and reference-scans the shared HF cache |
 | Decision 137: Phase 3 catalog is capped by disk size (~2 GB of weights), downloads use the Hugging Face cache layout, and oMLX's HF-cache scan is recorded not changed | v5.0 2026-11-01 | Jason's call. 3B-class models are in (SmolLM3-3B, Llama-3.2-3B); the two measured larger models are a higher tier; no <=3B MoE exists for MLX. `docs/research/2026-10-30-phase3-models.md`. AGENTS.md oMLX hazard corrected (it also scans the user's HF cache; ids still resolve to the cell's entry). |
+| Decision 138: one download at a time, across repos and processes (03-03 AC-7) | v5.0 2026-11-02 | Jason's call at the Phase 2.5-3 review. The per-repo lock let two models download at once, each checking free disk alone, so together they could overrun `DISK_MARGIN`. `fetch` now takes one `download.lock`; refusal stays `busy`. |
 | Decision 136: OptiQ's 0.5.13 to 0.7.8 self-update cut TTFT ~30% (0.24 s to 0.17 s, reproducible); decode within the noise floor | v5.0 2026-10-30 | Canary finding, `docs/research/2026-10-30-optiq-0513-vs-078-canary.md`. Published 0.5.x OptiQ TTFT figures describe the old build; whether to re-run OptiQ columns is Jason's call. A pinned package is not a pinned build: `install_plan("optiq")` now also pins mlx-lm (unpinned it served HTTP 404). The harness on this host runs the 0.5.13 lab copy via `lab-paths.json`. |
 | Decision 135: Upstream drift is handled by lab copies, a canary and one tested-versions manifest | v5.0 2026-10-29 | Jason's call. Phase 2.5 inserted (`.paul/phases/v5-onboarding/PLAN.md`). OptiQ on this host is 0.7.8 (self-updated 2026-10-29), untested: the harness is verified on 0.5.13 and no cell has been measured on 0.7.8; it joins nothing earlier. |
 | Decision 134: v5.0 Onboarding App takes priority over MTPLX | v5.0 2026-10-29 | Jason's call. SwiftUI shell over a stdlib Python localhost API; guided install with consent; curated catalog first, Hugging Face live later; decisions D1–D8 in `.paul/phases/v5-onboarding/PLAN.md`. MTPLX work parked on branch `mtplx-wip`. |
@@ -161,7 +162,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-11-01 (Claude Sonnet 5.5 coordinator)
 Stopped at: Phase 3 committed (`8df8a19`); handoff written.
-Next action: review gate for Phases 2.5-3, then `/paul:plan` Phase 4 (see HANDOFF).
+Next action: `/paul:plan` Phase 4 (see HANDOFF).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-137).
 Engine builds on this host: Osaurus 0.25.28, oMLX 0.7.2, OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 

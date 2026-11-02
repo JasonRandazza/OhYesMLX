@@ -263,6 +263,34 @@ def test_a_file_with_neither_a_sha256_nor_a_git_oid_is_refused(tmp_path):
     assert "sha256" in message and "git_oid" in message
 
 
+def test_a_file_with_both_a_sha256_and_a_git_oid_is_refused(tmp_path):
+    """One file has one verifiable identity; two would leave the downloader choosing which
+    of them the catalog means."""
+    message = refusal(
+        tmp_path,
+        entry(
+            files=[
+                {"path": "config.json", "size": 401, "sha256": SHA256, "git_oid": GIT_OID}
+            ]
+        ),
+    )
+    assert "config.json" in message
+    assert "sha256" in message and "git_oid" in message
+    assert entry()["repo"] in message
+
+
+@pytest.mark.parametrize("path", ["a\\b", "a\x00b", "a//b", ""])
+def test_the_shared_path_guard_refuses_at_load(tmp_path, path):
+    """`catalog.check_path` is the one guard; the loader applies it to every file, so a
+    hostile literal is refused when the catalog is read rather than when a download starts."""
+    message = refusal(
+        tmp_path,
+        entry(files=[{"path": path, "size": 401, "sha256": None, "git_oid": GIT_OID}]),
+    )
+    assert "files" in message
+    assert entry()["repo"] in message
+
+
 def test_a_git_oid_that_is_not_40_hex_is_refused(tmp_path):
     message = refusal(
         tmp_path,
@@ -411,3 +439,10 @@ def test_the_download_disk_margin_is_defined_once_here_and_is_one_point_two():
     # constant; the extra 20% covers a largest-shard `.incomplete` beside the finished files
     # (docs/research/2026-10-30-phase3-models.md section 4.3).
     assert catalog.DISK_MARGIN == 1.2
+
+
+def test_disk_needed_is_the_one_disk_rule_rounded_up():
+    # 10 bytes x 1.2 is exactly 12; 11 x 1.2 is 13.2 and must round up rather than to 13.
+    assert catalog.disk_needed(0) == 0
+    assert catalog.disk_needed(10) == 12
+    assert catalog.disk_needed(11) == 14

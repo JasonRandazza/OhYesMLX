@@ -1,0 +1,54 @@
+I'll review the specified changes against the spec. Let me start by reading the spec documents and the code under review.
+Shell is blocked in this mode. I'll use the read-only file tools instead.
+Reading the spec documents first — the main plan, then phase plans.
+
+
+
+Now the audit, the summary's Deviations section, and the pinned interfaces.
+
+
+Spec is clear. Now the code under review — canary, manifest, catalog first.
+Now the CLI `canary` subcommand and `build_cells`, plus `engines.py` lab-paths and install_plan.
+
+
+Now `runtimes.py` (`_engine_env`, RUNTIMES names) and `report.summarize` row shape.
+
+Let me read `report.summarize` to check what a PASS row with missing metrics looks like.
+Now `catalog.py` and the shipped `catalog.json`.
+
+Catalog checks out on shape and pinning. Now `recommend.py` against the pinned `Pick` shape.
+Now the downloader — `fetch.py`, the file with the audit-mandated guards.
+The downloader traces clean on most guards. Now `engines.py` — manifest loader, `lab_paths`, and the OptiQ co-pin.
+
+
+Let me check `median` handling for empty lists, the canary CLI flags, and test coverage of the audit guards.
+
+Let me verify the known-gap claims — whether the wizard script exists — and spot-check the recommend/canary tests for the AC literals.
+One last verification on the suspected `None` decode crash — checking how tests feed `verdict_line`.
+
+Review complete — read at HEAD, nothing modified. Findings, all traced:
+
+**(c) Implemented but wrong**
+
+1. **canary crashes on a PASS row with no decode rate.** `canary.py:124` does arithmetic on `measured[metric]`; `verdict_line` guards the baseline side for `None` (`canary.py:143-147`) but passes `row["decode_tps"]` unguarded (`canary.py:150`). A PASS row with `decode_tps: None` is a documented state (`report.py:43-47`, `median([])` → None at `report.py:383-388`, `ttft_note` at `report.py:872-875`): a canary request arriving whole in one content delta and passing coherence makes `ohyesmlx canary --yes` abort with TypeError mid-run (`cli.py:876`, only ValueError is caught at `cli.py:865`). No test feeds a None metric (`tests/test_canary.py` uses numeric rows only).
+
+2. **Non-LFS files are verified by size only.** `fetch.py:558` returns True after the length check when `sha256 is None`; the rationale at `fetch.py:549-551` ("a git blob oid … cannot be recomputed from the file") is false — it is `sha1("blob <len>\0"+bytes)`. `docs/interfaces.md:1401-1403` and `catalog.py:16-20` both say the carried hash "is what a download verifies". Concrete: a same-size corrupted file (bit-rot in a resumed `.incomplete`, wrong CDN body) passes `finish` (`fetch.py:822-835`) and is symlinked as verified.
+
+3. **`catalog.py:139-153` accepts a file with both `sha256` and `git_oid`.** `docs/interfaces.md:1401` says "never both and never neither" with ValueError naming repo+field; only "never neither" is enforced. `fetch.py:211-212` rejects it later, differently.
+
+**(b) Scope creep** — `025-02` Task 2 said "if none exists, take `--artifact-root` and report it as a finding rather than adding a resolver": `canary.py:157-177` adds `artifact_dir` (no `--artifact-root` exists, `cli.py:744-770`), and it hardcodes `~/.cache/huggingface/hub` (`canary.py:55`), ignoring `HF_HUB_CACHE` which fetch honours (`fetch.py:127-139`, 03-03 AC-2) — with `HF_HUB_CACHE` set, a fetch-downloaded model raises "fetch it before the canary runs" (`canary.py:172-176`).
+
+**BLOCKED (one AC conflict):** 03-03 AC-7 — "Given a running download, Then a second download is refused `busy`" — vs AC-18 "two app instances cannot download the same repo at once". `fetch.py:643-645` locks per repo only, so concurrent downloads of different repos proceed (and jointly outrun the disk margin). Decide whether AC-7 means any download or the same repo.
+
+Traced clean: evict ledger-only + whole-cache reference scan + fail-closed (`fetch.py:1110-1162`); resume/206/200/416/403 semantics; disk guard missing-bytes × `catalog.DISK_MARGIN` before any request and per file (`fetch.py:746-755`, `1045-1054`); `--record` writes four baseline fields only and refuses noisy (`canary.py:194-215`, `cli.py:888-892`); lab-paths.json machine-local, app engines refused (`engines.py:371-420`), manifest all-null; OptiQ mlx-lm co-pin (`engines.py:594`, `656`); `Pick`/`exclusion_reason` match the pinned shapes field-by-field; 12 catalog rows revision-pinned. Known gaps (already in PHASE-2.5-3-SUMMARY, not re-reported as new): baselines-only `--record`; missing `scripts/lab-copies-wizard.sh` (confirmed absent); T2.5.5 freeze open.
+
+Changed: nothing (read-only). Verified by reading the modules, `tests/test_fetch.py` (guard coverage), `test_canary.py`/`test_cli.py`, and the spec docs against `docs/interfaces.md` §v5.0.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     33    2561258    2424576    40640   94.7%   0.103542
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-25-3-spec.log
+?? .paul/orders/v5-review-25-3-spec.md
+?? .paul/orders/v5-review-25-3-standards.log
+?? .paul/orders/v5-review-25-3-standards.md

@@ -1,0 +1,145 @@
+I'll read the named files and `docs/interfaces.md` first to ground every change.
+The doc read swallowed the whole budget. Let me read the modules individually.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the full picture. Let me get the baseline test count before touching anything.
+
+Now I'll implement. Starting with `catalog.py` (items 4, 5, 6).
+
+
+
+Now the shared path guard and the both-hash refusal in `_files`.
+Now `fetch.py` — docstring, imports, path guard removal, verification, disk margin, and the lock.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now `canary.py` — the resolver default and the verdict guards.
+
+
+
+Now item 1 in `canary.verdict` and `verdict_line`.
+
+Now `recommend.py` — one disk rule, `exclusion_reason` as the single offerability decision, and one copy of the budget rationale.
+
+
+Now the tests. `tests/test_canary.py` first.
+
+
+
+
+
+
+
+
+
+
+
+
+The suite exposed an environment-dependent test: the recording test reads the real load average, which is 4.2 on this machine and refuses the record. Let me make that test deterministic.
+
+All green at 957. Now the red-checks: I'll temporarily revert each fix, run its new test, and restore — scripted so every restoration is verified byte-for-byte.
+
+Red-checks all fail and restore cleanly. Let me capture the actual failure symptoms, not just the test names.
+
+Every red-check reproduces the reported defect and restores byte-exact. Final verification: full suite plus a check that only the permitted files changed.
+
+
+
+All eight fixes are in, verified, and the suite is green.
+
+## Per item
+
+| # | Change (file:line) | Test |
+|---|---|---|
+| 1 | `canary.py:122-131` skips a `None`/`0` baseline in `verdict`; `canary.py:151-158` returns `"no verdict: <field> is undefined for this row"` for a PASS row with `None` metrics; `canary.py:157-159` treats a 0 baseline as missing in `verdict_line` | `test_a_pass_row_with_no_decode_rate_is_undefined_not_an_error`, `..._no_ttft_...`, `test_a_zero_baseline_is_read_as_missing_and_is_never_divided_by` |
+| 2 | `cli.py:834` `.get("canary")` | `test_a_manifest_without_a_canary_spec_is_refused_before_anything_is_measured` (now deletes the key, not sets it null) |
+| 3 | `canary.py:55` `HF_HUB` deleted; `canary.py:178` (and `cells`) default to `fetch.default_cache_dir()` | `test_the_resolver_reads_hf_hub_cache_when_no_root_is_injected` |
+| 4 | `fetch.py:528-553` `_git_blob_sha1` streams `sha1("blob <size>\0" + bytes)` and `_verify` compares it to `git_oid`; `fetch.py:818` failure label is `git_oid`; docstring is the one rationale; `catalog.py:16-19` and `fetch.py:13-16` reduced to pointers | `test_an_existing_non_lfs_blob_of_the_right_size_but_wrong_bytes_is_refused`; test factory now computes real git oids so the happy path verifies |
+| 5 | `catalog.py:173-177` refuses both hashes; `catalog.py:128-147` holds the moved `check_path`, applied at `catalog.py:160`; `fetch.py:193` calls it; `fetch.py` regex copies deleted (uses `catalog._REPO/_SHA256/_COMMIT`) | `test_a_file_with_both_a_sha256_and_a_git_oid_is_refused`, `test_the_shared_path_guard_refuses_at_load[a\\b|a\x00b|a//b|""]` |
+| 6 | `catalog.py:50-56` `disk_needed`; called at `recommend.py:118`, `recommend.py:152` (via `exclusion_reason` only), `fetch.py:741`, `fetch.py:1039` | `test_disk_needed_is_the_one_disk_rule_rounded_up`; existing disk-guard/recommend tests unchanged |
+| 7 | `fetch.py:88` `LOCK_NAME = "download.lock"`, used at `fetch.py:636-638`; message exactly "another download is already running"; stale-pid reclaim unchanged | `test_a_second_repo_is_refused_busy_while_a_download_holds_the_lock`, `test_a_live_lock_holder_makes_the_download_busy` |
+| 8 | `recommend.py:7-13` docstring now points at the constant comments instead of repeating them | none (documentation only) |
+
+## Red-checks
+
+I reverted each fix, ran its test, and restored byte-exact (a script asserted the restore). Symptoms matched the defects: item 1 `TypeError: NoneType - float` and `ZeroDivisionError`; item 2 `KeyError: 'canary'`; item 3 resolver read `~/.cache/huggingface/hub` instead of `HF_HUB_CACHE`; item 4 `assert True is False` (download accepted wrong bytes); item 5a/5b `DID NOT RAISE ValueError`; item 6 `assert 13 == 14`; item 7 the download proceeded instead of `busy` (`KeyError` in the fake transport).
+
+## Notes
+
+- Baseline was **945 passed**; final line is **`957 passed in 38.76s`** (12 new tests).
+- `docs/interfaces.md` contained no "size only" rationale to delete. I removed the only duplicated pointer there (the Model paragraph now points at `fetch._verify`) and pinned the two new catalog functions. Flagging it rather than inventing a deletion.
+- One test outside the eight items needed a fix to be green: `test_the_canary_records_only_under_record_and_writes_the_detected_version` read the host's real load average, which was 4.2 during the run and turned the record path into the noisy refusal. It now injects `canary.load() == 1.0`.
+- Not verified: item 5's regex-copy deletion and item 6's call-site consolidation have no separate behavioural test (their behaviour is covered by existing `plan`/disk/recommend tests); item 8 is prose. I did not re-check the formula against real cached files — the 16-file check was the coordinator's, and the suite exercises it on synthetic bodies only.
+- Nothing committed. Only the ten permitted files are modified.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     84   11417062   11227904    50536   98.3%   0.092379
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def _check_path
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/canary.py
+ M ohyesmlx/catalog.py
+ M ohyesmlx/cli.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/recommend.py
+ M tests/test_canary.py
+ M tests/test_catalog.py
+ M tests/test_cli.py
+ M tests/test_fetch.py
+?? .paul/orders/v5-review-25-3-fixes.log
+?? .paul/orders/v5-review-25-3-fixes.md
+?? .paul/orders/v5-review-25-3-spec.log
+?? .paul/orders/v5-review-25-3-spec.md
+?? .paul/orders/v5-review-25-3-standards.log
+?? .paul/orders/v5-review-25-3-standards.md
+ docs/interfaces.md    |  7 ++++-
+ ohyesmlx/canary.py    | 47 ++++++++++++++++++----------
+ ohyesmlx/catalog.py   | 61 ++++++++++++++++++++++++++----------
+ ohyesmlx/cli.py       |  2 +-
+ ohyesmlx/fetch.py     | 87 +++++++++++++++++++++++----------------------------
+ ohyesmlx/recommend.py | 37 ++++++++--------------
+ tests/test_canary.py  | 47 ++++++++++++++++++++++++++++
+ tests/test_catalog.py | 35 +++++++++++++++++++++
+ tests/test_cli.py     | 10 ++++--
+ tests/test_fetch.py   | 58 +++++++++++++++++++++++++++++-----
+ 10 files changed, 276 insertions(+), 115 deletions(-)

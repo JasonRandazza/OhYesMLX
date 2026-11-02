@@ -13,11 +13,10 @@ Four rules shape the file this reads:
 - **``size_bytes`` is the sum of ``files``**, and every file the listing holds is in
   ``files``. It is what the disk pays -- README and ``.gitattributes`` included -- which is
   also how the research measured the table (its §1.1), so the two numbers agree.
-- **A file's hash is the hash a download can be verified against.** An LFS file carries
-  ``sha256``, the tree listing's ``lfs.oid``; a plain git file carries ``git_oid``, the
-  listing's ``oid``, and no sha256 -- it has none, and the CDN's ``ETag`` is the xet hash
-  rather than the file's (§3.4). A file with neither is refused, because a download with
-  nothing to check it against is the class of defect this project exists to catch.
+- **A file carries exactly one hash, and it is what a download verifies against.** An LFS
+  file carries ``sha256``, the tree listing's ``lfs.oid``, and a plain git file carries
+  ``git_oid``, the listing's ``oid``. A file with both or neither is refused: two answers
+  (or none) cannot verify a download, and how each is checked lives at ``fetch._verify``.
 - **A row no engine can serve is not a row.** ``engines`` is a subset of the five engines
   in ``engines.ONBOARDING_ENGINES``, taken from the research table's own column.
 
@@ -29,6 +28,7 @@ The JSON itself is built by ``scripts/build_catalog.py`` from read-only Hub API 
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import re
 from dataclasses import dataclass
@@ -42,9 +42,19 @@ CATALOG_PATH = pathlib.Path(__file__).resolve().parent / "catalog.json"
 
 # Free disk a download needs, as a multiple of its bytes: the extra covers a largest-shard
 # `.incomplete` sitting beside the finished files (research 2026-10-30 section 4.3). The one
-# definition: `recommend` asks it whether a model can fit, `fetch` asks it whether a download
-# may start.
+# definition: `recommend` asks `disk_needed` whether a model can fit, `fetch` asks it
+# whether a download may start.
 DISK_MARGIN = 1.2
+
+
+def disk_needed(nbytes: int) -> int:
+    """The free disk a download of *nbytes* needs: ``ceil(nbytes * DISK_MARGIN)``.
+
+    The one disk-margin rule, rounded up so a byte-short answer never authorizes a
+    download. The margin's rationale is the constant's comment above.
+    """
+    return math.ceil(nbytes * DISK_MARGIN)
+
 
 # The two tiers, and what they mean. `starter` is the disk-size cap (about 2 GB of
 # weights, so 3B-class artifacts are in); `standard` is the larger artifacts this Mac has
@@ -115,6 +125,28 @@ def _integer(where: str, entry: dict, field: str, *, positive: bool) -> int:
     return value
 
 
+def check_path(where: str, path) -> None:
+    """The one file-path guard: a relative path inside the repo (AC-11).
+
+    No leading ``/``, no ``..`` segment, no backslash, no NUL and no empty segment, so a
+    hostile literal cannot name a file outside the snapshot tree. :func:`_files` applies it
+    to every row at load and ``fetch.plan`` applies it to the row it is handed.
+    """
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"{where}: a file path is {path!r}; expected a non-empty string")
+    if path.startswith("/"):
+        raise ValueError(f"{where}: file path {path!r} is absolute")
+    if "\\" in path:
+        raise ValueError(f"{where}: file path {path!r} contains a backslash")
+    if "\x00" in path:
+        raise ValueError(f"{where}: file path {path!r} contains a NUL")
+    for segment in path.split("/"):
+        if segment == "..":
+            raise ValueError(f"{where}: file path {path!r} walks up with '..'")
+        if not segment:
+            raise ValueError(f"{where}: file path {path!r} has an empty segment")
+
+
 def _files(where: str, entry: dict) -> list[ModelFile]:
     entries = entry.get("files")
     if not isinstance(entries, list) or not entries:
@@ -125,15 +157,7 @@ def _files(where: str, entry: dict) -> list[ModelFile]:
         if not isinstance(item, dict):
             raise ValueError(f"{at} must be an object")
         path = item.get("path")
-        if (
-            not isinstance(path, str)
-            or not path
-            or path.startswith("/")
-            or ".." in path.split("/")
-        ):
-            raise ValueError(
-                f"{at} field 'path' is {path!r}; expected a relative path inside the repo"
-            )
+        check_path(f"{where} field 'files'", path)
         at = f"{where} field 'files' entry {path!r}"
         size = _integer(at, item, "size", positive=False)
         sha256 = item.get("sha256")
@@ -146,6 +170,11 @@ def _files(where: str, entry: dict) -> list[ModelFile]:
             not isinstance(git_oid, str) or not _COMMIT.match(git_oid)
         ):
             raise ValueError(f"{at} field 'git_oid' must be a 40-hex git blob id or null")
+        if sha256 is not None and git_oid is not None:
+            raise ValueError(
+                f"{at} carries both 'sha256' and 'git_oid'; exactly one of them is what a "
+                "download is verified against"
+            )
         if sha256 is None and git_oid is None:
             raise ValueError(
                 f"{at} carries neither 'sha256' nor 'git_oid'; one of them is what a "

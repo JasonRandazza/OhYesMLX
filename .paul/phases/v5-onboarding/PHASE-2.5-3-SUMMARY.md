@@ -31,4 +31,4 @@ Tests 733 -> 945. Real checks by the coordinator: canary live on all five engine
 
 - `canary --record` writes baselines only; adopting a tested version is a separate manifest edit (decided at review).
 - 025-03's wizard script (Jason's manual DMG archiving) is not generated yet.
-- Phase-end code review for 2.5 and 3 is still owed.
+- Phase-end code review for 2.5 and 3: done 2026-11-02, 9 findings fixed (orders `.paul/orders/v5-review-25-3-*`). Kept as-is: `refs/main` is written only when absent (HF itself does not move it for a commit-pinned download).

@@ -1399,10 +1399,15 @@ and `detect_all` looks in them first, so a canary reports the lab copy's version
 `params` is the **base** model's count, never the artifact's `safetensors.total` (research §1.1). `size_bytes`
 is the sum of `files`, which holds every file the tree listing has, so it is what the disk pays. An LFS file
 carries `sha256` (the listing's `lfs.oid`) and a plain git file carries `git_oid`, never both and never
-neither — one of them is what a download verifies. `revision` and every file's size and hash come from one
+neither — one of them is what a download verifies, and `fetch._verify` holds the one definition of how.
+`revision` and every file's size and hash come from one
 tree listing at that commit, so a downloader never asks "what is latest". `engines` is the research table's
 column, and `measured_here` is true only where a `results/**/results.jsonl` row exists for that exact
 artifact. A violation raises `ValueError` naming the file, the repo and the field.
+
+`catalog.check_path(where, path)` is the one file-path guard: `_files` applies it to every row at load and
+`fetch.plan` applies it to the row it is handed. `catalog.disk_needed(nbytes) -> int` is
+`ceil(nbytes * DISK_MARGIN)`, the one disk-margin rule `recommend` and `fetch` both ask.
 
 **`Pick`** (`recommend.pick(hw, models, engines, free_disk) -> list[Pick]`, pure; plan 03-02)
 `{"model_id": str, "title": str, "params_b": float, "format": str, "size_bytes": int,

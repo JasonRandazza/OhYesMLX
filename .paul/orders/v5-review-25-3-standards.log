@@ -1,0 +1,54 @@
+I'll review the named files at HEAD against the documented standards. Reading them now.
+
+fetch.py read. Now the engines/runtimes/cli surfaces and the two JSON manifests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Reviewed `2222413..HEAD` read-only (files read at HEAD; suite not run — no writes/commands permitted). Defects, ranked:
+
+**Hard (documented standards)**
+
+1. **Second definition of the HF cache root** — `canary.py:55` hardcodes `~/.cache/huggingface/hub`; `fetch.py:127-139` (`default_cache_dir`) honours `HF_HUB_CACHE` first. Rule: "One definition of everything." Input: `HF_HUB_CACHE=/x` — `fetch download` writes to /x, `cli.py:861` `canary.cells()` resolves `~/.cache/...` and refuses "fetch it before the canary runs" though it just ran.
+2. **Copied guards** — `fetch.py:79-81` duplicates `catalog.py:61-63`'s `_REPO/_SHA256/_COMMIT` regexes (its own comment names the source). Guards defined twice drift.
+3. **Path guards disagree** — `fetch._check_path` (`fetch.py:161-175`) vs `catalog._files` (`catalog.py:128-136`): catalog accepts `"a\\b"`, `"a\u0000b"`, `"a//b"`; fetch refuses them. Input: catalog row with such a path — `catalog.load()` accepts it, every `download` then hard-refuses `bad_name`.
+4. **Rationale written repeatedly** (rule: once, where defined) — non-LFS verify-by-size rationale 3×: `catalog.py:16-20`, `fetch.py:13-17`, `fetch.py:548-551`. Budget rationale 2× in `recommend.py` (docstring 10-19 vs constant comments 38-48).
+5. **Duplicated decision logic** — `bytes * DISK_MARGIN` + the free-disk comparison spelled 4× (`recommend.py:127,163`, `fetch.py:748,1046`); `pick` (`recommend.py:162-164`) and `exclusion_reason` (`recommend.py:121-133`) independently re-decide the same two budgets.
+
+**Behavioral defects**
+
+6. **`canary.verdict` crashes on the measured side** — `canary.py:124` does arithmetic on `row["decode_tps"]`/`row["ttft_p50_s"]`; `verdict_line` guards only the baseline (`canary.py:143-147`). `report.py:43-44` documents `decode_tps=None` for a PASS row whose stream delivered <2 content deltas (`report.py:383-387` median of empty → None). Input: any PASS cell with one content delta → `TypeError`, no verdict line. Same crash for a recorded baseline of 0.0 (ZeroDivisionError; `engines.py:126-134` allows 0). Also `cli.py:848` accepts any pinned workload id ("chat"/"prefill") though the docstrings say decode-only.
+7. **`cli.py:834` KeyErrors on an absent `canary` key** — `engines.load_manifest` (`engines.py:108-109`) accepts an entry with no `canary` key at all, so the "has no canary spec" path (`cli.py:835-841`) is unreachable for that state; hand-edit the manifest to drop the key → `KeyError: 'canary'`.
+8. **`refs/main` silently stale** — `fetch.py:802-805` writes it only when absent. Input: catalog re-pins `revision`, repo re-downloaded (or the user's own `huggingface_hub` cached it first) → new snapshot linked, `refs/main` still names the old revision, contradicting the module invariant at `fetch.py:5-6`; anything resolving via refs serves the old tree while `canary.artifact_dir` (mtime-based) serves the new one.
+
+**Smells (ranked)**
+
+- `recommend.py:174`: `params_b=round(model.params / _BYTES_PER_GB, 1)` — a bytes-display constant scales a parameter count; its rationale (`recommend.py:59-61`) doesn't cover this use.
+- `fetch.py:514-520` `_inside` (realpath) vs `fetch.py:178-183` `_check_inside` (abspath) — two containment guards, different semantics.
+- `fetch.py:689-1077` `_download`: ~390 lines, seven nested closures — divergent change vs the style of `measure.py`/`runtimes.py`.
+- `fetch.py:450-494` `_status/_header/_integer_header/_close/_response_url` re-implement stdlib response accessors for transport duck-typing.
+- `fetch.py:1136`: `os.path.islink(path) or os.path.lexists(path)` — `islink` is subsumed by `lexists`; dead clause.
+- `fetch.py:676`: `key[len("created_"):]` string surgery; `models--` naming spelled at `canary.py:166`, `fetch.py:202`, `fetch.py:643`.
+- `tests/test_canary.py:186-191` utimes `config.json` while `canary.py:177` sorts on the snapshot *directory* mtime — the assertion holds whichever is used; it distinguishes nothing.
+
+Nothing changed; verified by reading the named files at HEAD. Not verified: the test suite (read-only session), and no runtime behaviour was executed.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     27    1720167    1605504    23282   93.3%   0.075914
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-25-3-spec.log
+?? .paul/orders/v5-review-25-3-spec.md
+?? .paul/orders/v5-review-25-3-standards.log
+?? .paul/orders/v5-review-25-3-standards.md

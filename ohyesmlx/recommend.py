@@ -4,22 +4,13 @@ Seam S4, the third onboarding question after "what Mac is this" (`hardware`) and
 engines do I have" (`engines`): of the models the catalog offers, which can this machine
 hold resident and download today, and which of those should be offered first?
 
-Two separate budgets, because they answer different questions (research 2026-10-30
-section 4.3):
+Two separate budgets, each defined once where it is decided and never restated here:
 
-- **Memory.** A model is *comfortable* when twice its `size_bytes` fits
-  `Hardware.model_budget_bytes`, *tight* when 1.25x does, and left out otherwise. The
-  2.0 is the measured worst case -- within one runtime the peak lands between 0.96x and
-  1.94x the artifact's on-disk bytes at a 1,309-token prompt -- plus the 4k KV delta for a
-  3B artifact, and `model_budget_bytes` already subtracts 2 GiB for KV and runtime
-  overhead (see `hardware.model_budget`), so the two guards overlap deliberately rather
-  than leaving a gap. The 1.25 puts the *excluded* line at weights over 80% of the budget:
-  a row in the tight band still starts (the lightest measured residency is 0.96x), but the
-  reserved KV headroom is no longer implied, so it is offered after every comfortable row
-  and labelled "tight".
-- **Disk.** A model needs free disk of `size_bytes * catalog.DISK_MARGIN`, the margin that
-  covers a largest-shard `.incomplete` beside the finished files. It is defined once in
-  `catalog.py`; this module only asks it.
+- **Memory.** ``_fit`` compares ``size_bytes`` against ``Hardware.model_budget_bytes``
+  through ``COMFORTABLE_FACTOR`` and ``TIGHT_FACTOR``; the constants carry the measured
+  rationale.
+- **Disk.** ``catalog.disk_needed`` is the one definition of the margin; this module asks
+  it rather than computing a second copy.
 
 Both are estimates from RAM and disk, never measurements -- `Pick.fit_basis` says so, and
 `Pick.measured_here` stays ``None`` here: D5 fills it from the user's own runs in Phase 4
@@ -31,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ohyesmlx.catalog import DISK_MARGIN, Model
+from ohyesmlx.catalog import Model, disk_needed
 from ohyesmlx.engines import EngineStatus
 from ohyesmlx.hardware import Hardware
 
@@ -124,7 +115,7 @@ def exclusion_reason(model: Model, hw: Hardware, free_disk: int) -> str | None:
             f"Needs about {_gb(model.size_bytes * COMFORTABLE_FACTOR)} GB of memory at peak; "
             f"this Mac's budget is {_gb(hw.model_budget_bytes)} GB"
         )
-    needed = model.size_bytes * DISK_MARGIN
+    needed = disk_needed(model.size_bytes)
     if free_disk < needed:
         return (
             f"Needs about {_gb(needed)} GB of free disk to download; "
@@ -150,19 +141,17 @@ def pick(
 
     An unsupported Mac is an empty list: `Hardware.unsupported_reason` already carries the
     one sentence the screen shows, so this function neither duplicates it nor builds a
-    pick-shaped stand-in for it. Every other row is offered or left out by the two budgets
-    in this module's docstring alone -- `exclusion_reason` answers the same question for
-    the rows left out.
+    pick-shaped stand-in for it. Every other row is offered or left out by
+    `exclusion_reason` alone, so neither budget is decided a second time here.
     """
     if not hw.supported:
         return []
     installed = {status.name for status in engines if status.installed}
     offerable = []
     for model in models:
-        fit = _fit(model.size_bytes, hw.model_budget_bytes)
-        if fit is None or free_disk < model.size_bytes * DISK_MARGIN:
+        if exclusion_reason(model, hw, free_disk) is not None:
             continue
-        offerable.append((model, fit))
+        offerable.append((model, _fit(model.size_bytes, hw.model_budget_bytes)))
     offerable.sort(key=lambda pair: _rank(pair[0], pair[1], free_disk))
     picks = []
     for position, (model, fit) in enumerate(offerable):

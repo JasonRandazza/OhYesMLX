@@ -11,10 +11,9 @@ The rules this module is built to keep, each from the plan's ACs:
   hands in; a caller never names a URL or a path, and ``plan`` refuses a hostile repo,
   revision, file path or hash before anything opens or is written (AC-1, AC-11).
 - **A file's hash is the one the catalog pins.** An LFS file is verified by sha256 before
-  it leaves ``blobs/<sha256>.incomplete``. A non-LFS file carries only a git blob id,
-  which is a sha1 over ``"blob <len>\\0" + bytes`` rather than over the bytes, and the
-  CDN's ``ETag`` is the xet hash rather than the file's (research §3.4) -- so a non-LFS
-  file is verified **by size only**, and this comment is the record of why (AC-3).
+  it leaves ``blobs/<sha256>.incomplete``; a non-LFS file is verified by the git blob id
+  the catalog carries. Both rules, and why the second is not a sha256, live at ``_verify``
+  (AC-3).
 - **Resume is a Range request.** A ``.incomplete`` of N bytes asks for ``bytes=N-``, a
   206's ``Content-Range`` must start at N, and a 200 means the server ignored the range
   and the file restarts from zero (AC-4). An expired signed URL (403/410) is resolved
@@ -41,7 +40,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import time
@@ -51,7 +49,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from ohyesmlx import catalog, engines
-from ohyesmlx.catalog import DISK_MARGIN, Model
+from ohyesmlx.catalog import Model, disk_needed
 from ohyesmlx.hardware import scan as _scan_hardware
 
 # The one host a request may start at. Every hop after it must still be allowed.
@@ -75,10 +73,7 @@ RETRY_AFTER_CEILING_S = 60.0
 # the default opener is the only place it is used.
 TIMEOUT_S = 60.0
 
-# AC-11's shape rules, the same expressions the catalog validates its seed with.
-_REPO = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+# AC-11's shape rules live in `catalog`; only this module's Content-Range parser is here.
 _CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
 
 # The app's own Application Support directory, asked of engines rather than restated.
@@ -86,6 +81,11 @@ _APP_SUPPORT = os.path.join(engines.DEFAULT_ENV.home, engines._APP_SUPPORT)
 DEFAULT_LEDGER = os.path.join(_APP_SUPPORT, "fetched.json")
 DEFAULT_LOG = os.path.join(_APP_SUPPORT, "fetch-log.jsonl")
 DEFAULT_LOCK_DIR = os.path.join(_APP_SUPPORT, "locks")
+
+# AC-7: one download at a time, across repos and processes. The lock's name is fixed so a
+# second download -- of the same repo or any other -- is refused while one is running; a
+# per-repo name would let five downloads compete for the same disk.
+LOCK_NAME = "download.lock"
 
 
 class HostNotAllowed(Exception):
@@ -158,23 +158,6 @@ def url_allowed(url: str | None) -> bool:
     return parts.scheme == "https" and host_allowed(parts.hostname)
 
 
-def _check_path(repo: str, path) -> None:
-    """AC-11: a relative path with no ``..``, no leading ``/``, no backslash, no NUL."""
-    if not isinstance(path, str) or not path:
-        raise ValueError(f"{repo}: a file path is {path!r}; expected a non-empty string")
-    if path.startswith("/"):
-        raise ValueError(f"{repo}: file path {path!r} is absolute")
-    if "\\" in path:
-        raise ValueError(f"{repo}: file path {path!r} contains a backslash")
-    if "\x00" in path:
-        raise ValueError(f"{repo}: file path {path!r} contains a NUL")
-    for segment in path.split("/"):
-        if segment == "..":
-            raise ValueError(f"{repo}: file path {path!r} walks up with '..'")
-        if not segment:
-            raise ValueError(f"{repo}: file path {path!r} has an empty segment")
-
-
 def _check_inside(repo: str, destination: str, container: str) -> None:
     """Refuse a destination that does not resolve inside the directory it belongs to."""
     root = os.path.abspath(container)
@@ -192,9 +175,9 @@ def plan(model: Model, cache_dir: str | None = None) -> Planned:
     ``ValueError`` here, before any caller can open a socket or write a file.
     """
     repo = model.repo
-    if not isinstance(repo, str) or not _REPO.match(repo):
+    if not isinstance(repo, str) or not catalog._REPO.match(repo):
         raise ValueError(f"repo {repo!r} is not an org/name id")
-    if not isinstance(model.revision, str) or not _COMMIT.match(model.revision):
+    if not isinstance(model.revision, str) or not catalog._COMMIT.match(model.revision):
         raise ValueError(f"{repo}: revision {model.revision!r} is not a 40-hex commit")
 
     root = cache_dir or default_cache_dir()
@@ -207,15 +190,15 @@ def plan(model: Model, cache_dir: str | None = None) -> Planned:
 
     files: list[PlannedFile] = []
     for item in model.files:
-        _check_path(repo, item.path)
+        catalog.check_path(repo, item.path)
         if item.sha256 is not None and item.git_oid is not None:
             raise ValueError(f"{repo}: {item.path!r} carries both a sha256 and a git_oid")
         if item.sha256 is not None:
-            if not _SHA256.match(item.sha256):
+            if not catalog._SHA256.match(item.sha256):
                 raise ValueError(f"{repo}: {item.path!r} sha256 is not 64 lowercase hex")
             key = item.sha256
         elif item.git_oid is not None:
-            if not _COMMIT.match(item.git_oid):
+            if not catalog._COMMIT.match(item.git_oid):
                 raise ValueError(f"{repo}: {item.path!r} git_oid is not 40 lowercase hex")
             key = item.git_oid
         else:
@@ -307,7 +290,7 @@ def _ledger_save(path, payload: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The lock file: one download per repo across processes (AC-18)
+# The lock file: one download at a time, across repos and processes (AC-7, AC-18)
 # ---------------------------------------------------------------------------
 
 
@@ -542,22 +525,32 @@ def _sha256_file(path: str) -> str:
     return digest.hexdigest()
 
 
+def _git_blob_sha1(path: str, size: int) -> str:
+    """The sha1 a git blob id names: ``sha1("blob <size>\\0" + bytes)``, streamed."""
+    digest = hashlib.sha1(b"blob %d\x00" % size)
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _verify(planned_file: PlannedFile, path: str) -> bool:
     """Whether *path* is the file the catalog pins.
 
-    An LFS file is checked by sha256. A non-LFS file is checked **by size only**: its
-    catalog id is a git blob oid, a sha1 over ``"blob <len>\\0" + bytes`` rather than over
-    the bytes, so it cannot be recomputed from the file, and the CDN's ``ETag`` is the
-    xet hash rather than the file's (research 2026-10-30 §3.4).
+    An LFS file is checked by sha256. A non-LFS file's catalog id is a git blob oid -- a
+    sha1 over ``"blob <len>\\0" + bytes`` rather than over the bytes -- so it is checked by
+    recomputing exactly that and comparing it to ``git_oid``. The CDN's ``ETag`` is the xet
+    hash rather than the file's (research 2026-10-30 §3.4). This is the one place the two
+    verification rules and their rationale live.
     """
     try:
         if os.path.getsize(path) != planned_file.size:
             return False
     except OSError:
         return False
-    if planned_file.sha256 is None:
-        return True
-    return _sha256_file(path) == planned_file.sha256
+    if planned_file.sha256 is not None:
+        return _sha256_file(path) == planned_file.sha256
+    return _git_blob_sha1(path, planned_file.size) == planned_file.git_oid
 
 
 def _make_dirs(path: str, created: list[str], stop: str) -> None:
@@ -640,9 +633,9 @@ def download(
     except ValueError as error:
         return _refuse(send, "bad_name", str(error))
 
-    lock_path = os.path.join(lock_dir, f"models--{repo.replace('/', '--')}.lock")
+    lock_path = os.path.join(lock_dir, LOCK_NAME)
     if not _acquire_lock(lock_path):
-        return _refuse(send, "busy", f"another download of {repo} is already running")
+        return _refuse(send, "busy", "another download is already running")
 
     created: dict[str, list[str]] = {"blobs": [], "links": [], "dirs": []}
     try:
@@ -743,9 +736,9 @@ def _download(
             return 0
         return max(0, planned_file.size - _partial_size(planned_file.blob + ".incomplete"))
 
-    # --- AC-6 / AC-16: missing bytes x catalog.DISK_MARGIN, before any request. ---
+    # --- AC-6 / AC-16: missing bytes x the catalog's disk margin, before any request. ---
     missing_bytes = sum(remaining(planned_file) for planned_file in planned.files)
-    needed = math.ceil(missing_bytes * DISK_MARGIN)
+    needed = disk_needed(missing_bytes)
     free = hardware().disk_free_bytes
     if free < needed:
         return _refuse(
@@ -822,7 +815,7 @@ def _download(
     def finish(planned_file: PlannedFile, incomplete: str) -> bool:
         if not _verify(planned_file, incomplete):
             _remove(incomplete)
-            checked = "sha256" if planned_file.sha256 is not None else "size"
+            checked = "sha256" if planned_file.sha256 is not None else "git_oid"
             return _refuse(
                 send,
                 "integrity_failed",
@@ -1043,7 +1036,7 @@ def _download(
             send("log", f"reusing {planned_file.blob} ({planned_file.size} bytes already present)")
             continue
         need = remaining(planned_file)
-        required = math.ceil(need * DISK_MARGIN)
+        required = disk_needed(need)
         free = hardware().disk_free_bytes
         if free < required:
             return _refuse(
@@ -1103,7 +1096,7 @@ def evict(
         return _refuse(
             send, "consent_required", f"consent was not given; nothing of {repo} was removed"
         )
-    if not isinstance(repo, str) or not _REPO.match(repo):
+    if not isinstance(repo, str) or not catalog._REPO.match(repo):
         return _refuse(send, "bad_name", f"repo {repo!r} is not an org/name id")
 
     try:
