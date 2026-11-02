@@ -6,15 +6,17 @@ wave: 1
 depends_on: [] # runs before 04-02 APPLY: both touch server.py and test_server.py
 files_modified: [ohyesmlx/fetch.py, ohyesmlx/recommend.py, ohyesmlx/engines.py, ohyesmlx/server.py, tests/test_fetch.py, tests/test_recommend.py, tests/test_engines.py, tests/test_server.py, docs/interfaces.md]
 autonomous: true
-description: "Picks know what is already downloaded, and guided installs open the tested release, not the latest"
+description: "Picks know what is already downloaded, guided installs open the tested release, and downloads report progress by byte"
 type: Plan
 about: "OhYesMLX"
 ---
 
 <objective>
 ## Goal
-A recommendation for a model already in the Hugging Face cache says so and is never excluded for disk, and the
-Osaurus, oMLX and vMLX install plans open the GitHub release page of the tested version.
+A recommendation for a model already in the Hugging Face cache says so and is never excluded for disk, the
+Osaurus, oMLX and vMLX install plans open the GitHub release page of the tested version, and a download reports
+progress by byte while a file is in flight (Jason, 2026-11-02: per-byte progress gives users confidence the
+download is working; most catalog models are a single multi-GB file, so per-file progress sat at 0% for minutes).
 
 ## Purpose
 Found at the 04-01 checkpoint (2026-11-02). Every pick read "N GB download", including models on this Mac, and
@@ -60,6 +62,18 @@ Then `source_url` is that engine's GitHub release-tag URL for `TESTED_VERSIONS[n
 And a test pins the three URLs for the current manifest, so a version bump changes the URL with no other edit
 ```
 
+## AC-4: Byte-level download progress
+```gherkin
+Given a download of a file larger than one chunk
+When bytes are written to its `.incomplete`
+Then `progress` events are emitted with `fraction` = (bytes of files already finished + bytes written so far of
+ this file) / the model's total bytes, and payload {"path", "bytes_done", "bytes_total"}
+And they are throttled: at most one every 0.5 s on the injected `clock`, and only when `fraction` has advanced by
+ at least 0.005 since the last one, so a 2 GB download emits on the order of a few hundred events, never one per chunk
+And a resumed download starts its fraction from the bytes already on disk, `fraction` never decreases, and the
+ existing per-file completion `progress` event is kept
+```
+
 </acceptance_criteria>
 
 <tasks>
@@ -69,6 +83,13 @@ And a test pins the three URLs for the current manifest, so a version bump chang
   <action>AC-1 and AC-2. The reason text stays one fixed template per case in recommend.py. Pin `downloaded` in the Pick shape in docs/interfaces.md. Tests: a scratch cache tree with complete, partial and wrong-size files; a downloaded pick on a Mac too short of disk is still offered.</action>
   <verify>pytest green; live: `/recommendations` on this Mac marks Qwen3.5-4B-4bit and LFM2.5-8B-A1B-MLX-4bit (both in `~/.cache/huggingface/hub`) downloaded</verify>
   <done>AC-1, AC-2 satisfied</done>
+</task>
+<task type="auto">
+  <name>Task 3: byte-level download progress</name>
+  <files>ohyesmlx/fetch.py, tests/test_fetch.py, docs/interfaces.md</files>
+  <action>AC-4, inside the existing write loop of `_download` (the `while True` that reads `CHUNK_SIZE` and writes to the `.incomplete`); the two throttle constants live once, at module level, with their reason. Use the injected `clock`, never `time.time` directly. Update the existing event-sequence tests to the new sequence rather than loosening them. Tests: a multi-chunk fake body under a fake clock emits throttled, monotonic events; a resume starts at the partial size; tiny files emit only the per-file event. Note the payload in docs/interfaces.md beside the job event shape.</action>
+  <verify>pytest green; red-check: remove the 0.5 s throttle and the event-count test fails</verify>
+  <done>AC-4 satisfied</done>
 </task>
 <task type="auto">
   <name>Task 2: tested-release source URLs</name>
@@ -81,9 +102,9 @@ And a test pins the three URLs for the current manifest, so a version bump chang
 
 <boundaries>
 ## DO NOT CHANGE
-- server.py beyond `_get_recommendations`; the fetch download path; the catalog
+- server.py beyond `_get_recommendations`; the fetch download path except the progress emission in its write loop; the catalog
 ## SCOPE LIMITS
-- No byte-level download progress (noted for 04-02's checkpoint), no hashing on the request path
+- No hashing on the request path; no change to the download's guards, lock, ledger or verification
 </boundaries>
 
 <output>
