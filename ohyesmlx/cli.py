@@ -15,8 +15,11 @@ names its metric and the metric card carries every number behind it.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import signal
 import sys
+import threading
 import time
 from datetime import date
 from pathlib import Path
@@ -448,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "canary":
         return _canary(args)
+    if args.command == "app":
+        return _app(args)
     return _run(args)
 
 
@@ -768,6 +773,22 @@ def _parser() -> argparse.ArgumentParser:
         help="confirm the machine is quiet and the run may start. Without it the "
         "quiet-machine rule and the time estimate are printed, and nothing is started.",
     )
+
+    app = commands.add_parser(
+        "app",
+        help="serve the app's read-only localhost API",
+        description="Serve GET /hardware, /engines and /recommendations on 127.0.0.1 behind "
+        "the per-launch token printed on stdout. Serves until stdin reaches EOF (how the app "
+        "learns its parent has gone) or SIGINT/SIGTERM arrives.",
+    )
+    app.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        metavar="N",
+        help="port to bind on 127.0.0.1 (default: 0, an ephemeral port; the printed line "
+        "names the one the OS chose)",
+    )
     return parser
 
 
@@ -928,6 +949,85 @@ def _canary_engines(spec: str | None) -> list[str]:
             f"{', '.join(engines.ONBOARDING_ENGINES)}"
         )
     return [name for name in engines.ONBOARDING_ENGINES if name in named]
+
+
+def _app(args) -> int:
+    """``ohyesmlx app``: announce the launch line, then serve until the parent or a signal stops it.
+
+    The line goes to stdout and nowhere else: the app spawns this process and holds the pipe,
+    so the token never touches argv, a file or a log, and it is regenerated on every launch.
+    The socket is already listening when the line is printed, so the client can connect the
+    moment it has read it.
+
+    stdin EOF is the parent-death signal -- the app holds the pipe open for exactly as long as
+    it lives -- which is why ``ohyesmlx app </dev/null`` exits at once, by design (documented in
+    ``docs/interfaces.md``). SIGINT and SIGTERM end the same serve loop, and every path leaves
+    through ``server_close()`` with exit 0, so the port is released before the process is gone.
+
+    A port that cannot be bound prints nothing on stdout: the client waits on that line, so an
+    error there is one stderr line and exit 2, which it can tell from a hang.
+    """
+    from ohyesmlx import server
+
+    try:
+        listener = server.make_server(args.port)
+    except OSError as error:
+        print(
+            json.dumps({"error": {"code": "bind_failed", "message": str(error)}}),
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
+    # Installed before the line is printed, so a signal sent in response to that line -- which
+    # is exactly when the client sends one -- lands in the handler rather than in the default
+    # action.
+    signal.signal(signal.SIGTERM, _stop)
+    threading.Thread(target=_stop_at_eof, args=(listener,), daemon=True).start()
+
+    try:
+        print(
+            json.dumps({"port": listener.server_address[1], "token": listener.token}),
+            flush=True,
+        )
+        listener.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        listener.server_close()
+    return 0
+
+
+def _stop(signum, frame) -> None:
+    """SIGTERM ends the serve loop the way SIGINT's own default handler already does.
+
+    ``listener.shutdown()`` cannot be called from a signal handler: handlers run in the main
+    thread, which is the thread inside ``serve_forever()``, and ``shutdown()`` waits for that
+    loop to end. Interrupting it reaches the same place -- the ``finally`` that closes the
+    socket -- without the deadlock.
+    """
+    raise KeyboardInterrupt
+
+
+def _stop_at_eof(listener) -> None:
+    """Read stdin to EOF, then stop the server: the app holds the pipe, so EOF is the app gone.
+
+    Read through the raw file under ``sys.stdin.buffer``, not the buffered object itself: a
+    daemon thread blocked in ``BufferedReader.read`` holds that object's lock, and CPython
+    aborts at interpreter shutdown when it cannot take it -- with a SIGTERM the process would
+    die of SIGABRT instead of exiting 0. The raw layer holds no lock and returns bytes, so a
+    stray byte in the pipe cannot raise through a decoder either. ``shutdown()`` is safe before
+    ``serve_forever()`` has started (a ``</dev/null`` launch): the loop sees the request on its
+    first pass and returns.
+    """
+    stream = getattr(getattr(sys.stdin, "buffer", None), "raw", None)
+    if stream is not None:
+        try:
+            while stream.read(65536):
+                pass
+        except (OSError, ValueError):
+            pass
+    listener.shutdown()
 
 
 def _run(args) -> int:

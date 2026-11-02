@@ -1437,7 +1437,30 @@ Events on `GET /jobs/{id}/events` (server-sent events), one JSON object per `dat
 `{"seq": int, "type": "progress|log|result|error|done", "message": str, "fraction": float|null, "payload": object|null}`.
 `install` and `download` require `"confirmed": true` in `args`; the server refuses otherwise (the consent gate).
 
-**Errors** are `{"error": {"code": str, "message": str}}` with a 4xx/5xx status. The server binds 127.0.0.1 only.
+**Errors** are `{"error": {"code": str, "status": int, "message": str}}` with a 4xx/5xx status; `status` repeats the HTTP status (added 2026-11-02, Jason) so a body read on its own still names it. The server binds 127.0.0.1 only.
+
+**`ohyesmlx app [--port N]`** (`ohyesmlx/server.py`, plan 04-01) is the only thing the Swift client talks to.
+It binds `127.0.0.1` only — never `0.0.0.0` and never `::` — to an ephemeral port unless `--port N` is given, and
+before serving it writes exactly one line to stdout, `{"port": int, "token": str}`, where the token is
+`secrets.token_urlsafe(32)`, fresh per launch and never written to disk, argv or a log (the client holds the pipe).
+Every request passes one guard before the router sees it, in this order: a `Host` that is not exactly
+`127.0.0.1:<port>` or `localhost:<port>` — including an absent one — is `403 bad_host`; any `Origin` header at all is
+`403 origin_refused`; anything but `Authorization: Bearer <token>` is `401 unauthorized`, compared as UTF-8 bytes with
+`hmac.compare_digest` so a non-ASCII header value is a 401 and never a 500. The token is the primary control: a
+cross-site `<img>` or navigation carries no `Origin` and a correct `Host`, and only the token stops it. `GET /hardware`,
+`GET /engines` and `GET /recommendations` answer the shapes above; an authorised request to any other path is
+`404 not_found`, a non-GET on one of the three is `405 method_not_allowed`, a `ValueError` from `engines.install_plan`
+is `500 install_plan_failed` naming the engine, and any other module exception is `500 internal` carrying the
+exception's message and no traceback. Every response is `Content-Type: application/json; charset=utf-8` with
+`Cache-Control: no-store`; no `Access-Control-*` header is ever sent, `OPTIONS` included; the handler stays on
+HTTP/1.0, so one request is one connection, handler threads are daemons, and a connection idle for 10 s is closed.
+Each guard refusal writes one JSON line to stderr, `{"refused": code, "method", "path", "time"}` — never a header value
+or the token, and with the query string dropped — while a served request writes nothing (the access log is silenced),
+so the client can surface a probe without handling a secret. The server dies with its parent: stdin reaching EOF,
+`SIGINT` or `SIGTERM` shuts it down, releases the port and exits 0 — which means `ohyesmlx app </dev/null` exits at
+once by design, because EOF on stdin *is* the parent-death signal. A socket that cannot be bound prints nothing on
+stdout, writes one `{"error": {"code": "bind_failed", "message": str}}` line to stderr and exits 2, so the client can
+tell a refusal from a hang.
 
 **`canary`** (`ohyesmlx canary [--engines a,b] [--record] [--allow-noisy] --yes`; `ohyesmlx/canary.py`,
 plan 025-02) — Decision 135's drift check, a CLI surface rather than a JSON shape. One fixed cell per

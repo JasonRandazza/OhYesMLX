@@ -1,0 +1,162 @@
+I'll start by reading the spec and the surrounding modules.
+Now let me read the modules the server composes and the interfaces doc.
+Now the interfaces doc and existing test style.
+
+Let me check the test style and graph the server-related context.
+
+
+Let me confirm AC-2's exact guard order and check the constraints files the real `install_plan` reads.
+AC-2's order is confirmed (Host → Origin → token), baseline is 959 passed. Now I'll write `ohyesmlx/server.py`.
+Now the `app` subcommand in `cli.py`.
+
+
+
+
+Now the server tests.
+
+
+
+
+
+
+
+The SIGTERM abort is CPython's `_enter_buffered_busy` fatal at shutdown: the daemon watcher holds the stdin *BufferedReader* lock while blocked in `read`. I'll read the raw layer instead, which takes no buffer lock.
+
+
+
+
+
+Now the interfaces doc, beside **Errors** in the v5.0 section.
+Let me tidy the test helper placement and run the full suite.
+
+
+
+One pre-existing test pins the exact subcommand set and lives outside my allowed files. I'll note that, but first do the red-checks. Red-check 1: remove the Host check.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me review the final server module once end to end.
+Two small consistency fixes: derive no duplicate path list, and keep the error table private.
+
+
+
+
+
+
+
+
+
+BLOCKED on one point (an out-of-scope test assertion), with all of Tasks 1–2 implemented and verified. `BLOCKED.md` holds the conflict; the report follows.
+
+## BLOCKED
+
+`tests/test_report.py:1607` pins the entire subcommand set (`assert set(subcommands.choices) == {"run", "grid", "sweep", "canary"}`). Plan 04-01 Task 2 adds `app`, so that assertion fails. `tests/test_report.py` is not in the allowed files, so I did not edit it. Needed: permission to add `"app"` to that one set (the `--cells`-only selector assertion above it is unaffected). Final line: **`1 failed, 990 passed in 53.89s`** — the one failure is this assertion; everything else is green.
+
+## What changed
+
+`ohyesmlx/server.py` (new, 301 lines) · `ohyesmlx/cli.py` (`app` subparser + `_app`/`_stop`/`_stop_at_eof`) · `tests/test_server.py` (new, 27 tests) · `tests/test_cli.py` (+5 tests) · `docs/interfaces.md` (one paragraph after **Errors**) · `BLOCKED.md`. Baseline 959 → 991 collected.
+
+## Per AC
+
+**AC-1** — `server.py:36` (`HOST="127.0.0.1"`), `:270-300` (`make_server`; bind at `:292` is before any output, `:299` `secrets.token_urlsafe(32)`); launch line `cli.py:990`; bind refusal `cli.py:972-980`. Tests: `test_the_server_binds_loopback_only_on_an_ephemeral_port`, `test_each_launch_gets_its_own_token`, `test_the_app_serves_hardware_until_its_stdin_closes`, `test_the_app_started_with_dev_null_exits_at_once_by_design`, `test_the_app_reports_a_bind_failure_on_stderr_and_exits_two`.
+
+**AC-2** — `server.py:137-156` (`_guard`, order Host→Origin→token, exact Host strings, absent Host, bytes compare), `:132-136` (guard before router on all seven `do_*`), `:54-62` fixed messages. Tests: `test_a_foreign_host_is_403_bad_host`, `test_an_absent_host_is_403_bad_host`, `test_both_exact_host_forms_are_accepted`, `test_any_origin_header_is_403_origin_refused`, `test_a_missing_or_wrong_token_is_401_unauthorized`, `test_the_token_is_compared_as_bytes_so_non_ascii_is_401_not_500`, `test_the_guard_runs_before_the_router`, `test_a_refused_request_reaches_no_handler_and_runs_no_module`, `test_no_response_or_log_echoes_the_token_or_a_header_value`, `test_every_response_is_json_uncached_and_has_no_cors_header`.
+
+**AC-3** — `server.py:191-193`. Test: `test_hardware_is_the_scan_as_json_with_integer_byte_counts`.
+
+**AC-4** — `server.py:195-217`. Tests: `test_engines_composes_install_plans_and_leaves_installed_engines_null`, `test_the_install_plan_gets_the_macos_major_and_only_for_missing_engines`, `test_an_install_plan_value_error_is_500_naming_the_engine`.
+
+**AC-5** — `server.py:219-247`. Tests: `test_recommendations_is_the_pinned_composition`, `test_recommendations_uses_the_hardware_scans_free_disk`, `test_an_unsupported_mac_has_empty_lists_and_carries_the_reason`.
+
+**AC-6** — `server.py:169-188` (path before method, `internal`), `:259-268` (one builder: pinned content type, `no-store`, no CORS). Tests: `test_an_unknown_path_is_404_not_found`, `test_a_non_get_on_a_known_path_is_405_method_not_allowed`, `test_head_on_a_known_path_is_405`, `test_a_non_get_on_an_unknown_path_is_still_404`, `test_a_module_exception_is_500_internal_with_its_message_and_no_traceback`, `test_every_response_is_json_uncached_and_has_no_cors_header`.
+
+**AC-7** — `cli.py:985` (SIGTERM), `:1012-1029` (stdin EOF → `shutdown()`), `:993-997` (`serve_forever`, `server_close`). Tests: `test_the_app_serves_hardware_until_its_stdin_closes`, `test_the_app_exits_zero_on_a_signal[2]/[15]`.
+
+**AC-8** — `server.py:99` (HTTP/1.0), `:101`+`:292` (injectable timeout), `:295` (`daemon_threads`), `:105-107` (`log_message` silenced), `:65-85` + `:157-162` (one stderr line). Tests: `test_an_idle_connection_is_closed_after_the_handler_timeout`, `test_a_refusal_writes_one_stderr_line_and_a_served_request_writes_nothing`, `test_the_refusal_line_carries_no_header_value_and_no_query`.
+
+## Red-checks (each removed, observed, restored — no `RED-CHECK` markers remain)
+
+| Removal | Failing test(s) |
+|---|---|
+| Host check → `if False` | `test_a_foreign_host_is_403_bad_host`, `test_an_absent_host_is_403_bad_host` |
+| Origin check removed | `test_any_origin_header_is_403_origin_refused`, `test_the_guard_runs_before_the_router` |
+| Token compare removed | `test_a_missing_or_wrong_token_is_401_unauthorized`, `test_the_token_is_compared_as_bytes…`, `test_a_refused_request_reaches_no_handler_and_runs_no_module` |
+| `str` compare instead of UTF-8 bytes | `test_the_token_is_compared_as_bytes…` — `TypeError: comparing strings with non-ASCII characters is not supported` (a 500) |
+| Guard not consulted (`_route` first) | 11 failures, every refusal test |
+| `Cache-Control` header dropped | `test_every_response_is_json_uncached_and_has_no_cors_header` (`KeyError`) |
+| `_log_refusal` skipped | `test_no_response_or_log_echoes…`, `test_a_refusal_writes_one_stderr_line…`, `test_the_refusal_line_carries…` |
+| `log_message` → base class | `test_a_refusal_writes_one_stderr_line_and_a_served_request_writes_nothing` (default access line on stderr) |
+| Factory ignores `timeout` | `test_an_idle_connection_is_closed_after_the_handler_timeout` (`TimeoutError` at 5 s) |
+| `install_plan` ValueError uncaught | `test_an_install_plan_value_error_is_500_naming_the_engine` (`internal`, not `install_plan_failed`) |
+| Bind `OSError` uncaught | `test_the_app_reports_a_bind_failure_on_stderr_and_exits_two` (exit 1 + traceback) |
+| stdin watcher thread not started | `test_the_app_serves_hardware_until_its_stdin_closes`, `test_the_app_started_with_dev_null_exits_at_once_by_design` (both hung → 60 s timeout) |
+| SIGTERM handler not installed | `test_the_app_exits_zero_on_a_signal[15]` (exit −15; `[2]` still passed) |
+
+The first `_stop_at_eof` read `sys.stdin.buffer` and SIGTERM was caught red by the same test as a SIGABRT (`_enter_buffered_busy`, daemon thread holding the `BufferedReader` lock at finalisation). It now reads `sys.stdin.buffer.raw`.
+
+## Judgement calls you may want to overrule
+
+- **404 vs 405**: path is resolved before method (AC-6 says "on these three paths"), so `POST /nope` is 404. Pinned in `test_a_non_get_on_an_unknown_path_is_still_404`.
+- **Refusal logging** covers the three guard refusals only; 404/405/500 write no stderr line (AC-8 says "every guard refusal").
+- **Query strings** are dropped from routing and from the logged path, so a token pasted into a query cannot reach stderr; `/hardware?x=1` still serves `/hardware`.
+- **Signals interrupt `serve_forever`** (SIGTERM → `KeyboardInterrupt`) rather than calling `shutdown()` from the handler, which deadlocks when `serve_forever` runs in the main thread. Exit code and port release are identical; the stdin watcher does call `shutdown()`.
+- **`install_plan` is not a `make_server` seam** (the pinned signature names four); tests monkeypatch `engines.install_plan`, as `test_cli.py` already does with `engines.detect_all`. `timeout=` was added to the factory because the audit's idle test requires an injected short one.
+- **Unlisted verbs**: only the plan's seven `do_*` methods exist, so `TRACE`/`CONNECT`/an arbitrary verb still gets the base class's HTML 501 — the one response that is not the pinned JSON shape. Adding them is outside the plan's method list.
+- **Not verified**: the manual curl/browser checks, `lsof`, and real-client behaviour; the IPv4-only bind means a client that resolves `localhost` to `::1` is refused at connect (the guard would accept the Host string).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     87   12840489   12667392    93445   98.7%   0.120034
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M tests/test_cli.py
+?? .paul/orders/v5-04-01-server.log
+?? .paul/orders/v5-04-01-server.md
+?? BLOCKED.md
+?? ohyesmlx/server.py
+?? tests/test_server.py
+ .paul/STATE.md     |   6 +--
+ docs/interfaces.md |  23 +++++++++
+ ohyesmlx/cli.py    | 100 ++++++++++++++++++++++++++++++++++++
+ tests/test_cli.py  | 145 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 270 insertions(+), 4 deletions(-)

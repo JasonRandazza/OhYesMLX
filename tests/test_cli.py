@@ -10,11 +10,21 @@ results is ``tests/test_report.py``'.
 from __future__ import annotations
 
 import dataclasses
+import http.client
+import json
+import signal
+import socket
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from ohyesmlx import cli
+
+# The repo root, so the `app` subprocess finds the package it is being tested from.
+ROOT = Path(__file__).resolve().parent.parent
 
 # Two formats, one runtime: a legal format-axis selection, and both cells share an artifact
 # directory so the default fixture builds one counter for the pair.
@@ -569,7 +579,7 @@ def test_cli_help_flag_prints_usage_and_exits_zero(capsys, monkeypatch):
 def test_cli_subcommand_help_exits_zero(capsys, monkeypatch):
     # Python 3.14 argparse colours help when FORCE_COLOR is set; the assertion is on the text.
     monkeypatch.setenv("NO_COLOR", "1")
-    for subcmd in ("run", "grid", "sweep", "canary"):
+    for subcmd in ("run", "grid", "sweep", "canary", "app"):
         with pytest.raises(SystemExit) as exc_info:
             cli.main([subcmd, "--help"])
         assert exc_info.value.code == 0
@@ -909,6 +919,139 @@ def test_a_manifest_without_a_canary_spec_is_refused_before_anything_is_measured
     err = capsys.readouterr().err
     assert "mlxlm" in err and "has no canary spec" in err
     assert fake.calls == []
+
+
+# --- the app subcommand -----------------------------------------------------------------------
+#
+# A real subprocess, because the contract is process-level: one line on stdout, the token on a
+# pipe and nowhere else, and exit 0 when the parent's end of stdin closes. The server itself is
+# checked over real sockets in tests/test_server.py; here only the launch line, the exit codes
+# and the shutdown paths are. No test binds a fixed port and no test leaves a process behind.
+
+
+def run_app(*flags, stdin=subprocess.PIPE):
+    """`python -m ohyesmlx.cli app ...` with the pipes the app uses, from the repo root."""
+    return subprocess.Popen(
+        [sys.executable, "-m", "ohyesmlx.cli", "app", *flags],
+        stdin=stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(ROOT),
+    )
+
+
+def read_launch(process) -> dict:
+    """AC-1's single line, parsed; a missing line reports what stderr said instead."""
+    line = process.stdout.readline()
+    assert line, f"the app printed no launch line; stderr: {process.stderr.read()!r}"
+    launch = json.loads(line)
+    assert set(launch) == {"port", "token"}
+    assert isinstance(launch["port"], int) and launch["port"] > 0
+    assert isinstance(launch["token"], str) and launch["token"]
+    return launch
+
+
+def stop(process) -> None:
+    """Leave no child behind, whatever the assertions did."""
+    if process.poll() is None:
+        process.kill()
+        process.wait()
+    process.stdout.close()
+    process.stderr.close()
+
+
+def test_the_app_serves_hardware_until_its_stdin_closes():
+    """AC-1 and AC-7 end to end: one line, an authorised GET against the real read-only scan,
+    then stdin EOF, exit 0, nothing else on stdout and the port released."""
+    process = run_app()
+    try:
+        launch = read_launch(process)
+
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", launch["port"], timeout=10
+        )
+        try:
+            connection.request(
+                "GET",
+                "/hardware",
+                headers={"Authorization": f"Bearer {launch['token']}"},
+            )
+            response = connection.getresponse()
+            body = json.loads(response.read())
+        finally:
+            connection.close()
+
+        assert response.status == 200
+        for key in ("supported", "chip", "macos", "ram_bytes", "disk_free_bytes", "volumes"):
+            assert key in body, key
+
+        process.stdin.close()
+        assert process.wait(timeout=10) == 0
+        assert process.stdout.read() == "", "the launch line is the only thing on stdout"
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", launch["port"]), timeout=5)
+    finally:
+        stop(process)
+
+
+@pytest.mark.parametrize("number", (signal.SIGINT, signal.SIGTERM))
+def test_the_app_exits_zero_on_a_signal(number):
+    """AC-7's other parent-death paths end in the same clean shutdown and a free port."""
+    process = run_app()
+    try:
+        launch = read_launch(process)
+
+        process.send_signal(number)
+        assert process.wait(timeout=10) == 0
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", launch["port"]), timeout=5)
+    finally:
+        stop(process)
+
+
+def test_the_app_started_with_dev_null_exits_at_once_by_design():
+    """Audit item 9: stdin EOF is the parent-death signal, so `app </dev/null` is not a crash."""
+    finished = subprocess.run(
+        [sys.executable, "-m", "ohyesmlx.cli", "app"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=60,
+    )
+
+    assert finished.returncode == 0
+    assert len(finished.stdout.splitlines()) == 1
+    assert json.loads(finished.stdout)["port"] > 0
+
+
+def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two():
+    """AC-1: nothing on stdout, one stderr error line, exit 2 -- which the app can tell from a
+    hang waiting on a launch line that will never come."""
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    try:
+        finished = subprocess.run(
+            [sys.executable, "-m", "ohyesmlx.cli", "app", "--port", str(port)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT),
+            timeout=60,
+        )
+    finally:
+        blocker.close()
+
+    assert finished.returncode == 2
+    assert finished.stdout == ""
+    lines = finished.stderr.splitlines()
+    assert len(lines) == 1, finished.stderr
+    error = json.loads(lines[0])["error"]
+    assert error["code"] == "bind_failed"
+    assert error["message"]
 
 
 

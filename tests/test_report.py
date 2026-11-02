@@ -1603,8 +1603,9 @@ def test_cells_is_the_only_cell_selector_the_cli_has():
     # runtime and measure nothing -- and `sweep`'s `--varying` names a header pin, never a cell
     # -- so the selector count for a *run* is still one. `canary` (approved 2026-10-29, Decision
     # 135) composes one `--cells` string from the manifest and goes through `build_cells`; its
-    # `--engines` filters the manifest's own cells and selects none.
-    assert set(subcommands.choices) == {"run", "grid", "sweep", "canary"}
+    # `--engines` filters the manifest's own cells and selects none. `app` (approved 2026-10-29,
+    # v5.0) serves the onboarding API and measures nothing.
+    assert set(subcommands.choices) == {"run", "grid", "sweep", "canary", "app"}
 
 
 def test_modules_stay_on_the_standard_library():
