@@ -9,6 +9,7 @@ under test.
 
 from __future__ import annotations
 
+import subprocess
 from collections import namedtuple
 
 from ohyesmlx.hardware import _volume_paths, model_budget, scan
@@ -48,11 +49,27 @@ def scan_hw(answers):
     return scan(run=fake_run(answers), volume_paths=no_volumes)
 
 
+IOREG_AGX = ("ioreg", "-rc", "AGXAccelerator", "-d1")
+
+AGX_M2_MAX_30 = """\
++-o AGXAcceleratorG14X  <class AGXAcceleratorG14X, id 0x10000046d, registered, matched, active, busy 0 (0 ms), retain 9>
+    {
+      "IOClass" = "AGXAcceleratorG14X"
+      "IOMatchCategory" = "IOFramebuffer"
+      "IOProviderClass" = "IOResource"
+      "gpu-core-count" = 30
+      "gpu-instance-count" = 1
+      "name" = "AGXAccelerator"
+    }
+"""
+
+
 M2_MAX_64 = {
     ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M2 Max",
     ("sysctl", "-n", "hw.memsize"): "68719476736",
     ("sysctl", "-n", "hw.ncpu"): "12",
     ("sw_vers", "-productVersion"): "15.4",
+    IOREG_AGX: AGX_M2_MAX_30,
 }
 
 
@@ -66,10 +83,40 @@ def test_m2_max_64_gib_is_a_supported_max_chip():
     assert hw.macos == "15.4"
     assert hw.supported is True
     assert hw.unsupported_reason is None
-    assert hw.gpu_cores is None
+    assert hw.gpu_cores == 30
     assert hw.disk_free_bytes == 0
     assert hw.volumes == []
     assert hw.model_budget_bytes == 49392123904
+
+
+def test_gpu_cores_is_the_ioreg_gpu_core_count():
+    hw = scan_hw({**M2_MAX_64, IOREG_AGX: AGX_M2_MAX_30})
+    assert hw.gpu_cores == 30
+
+
+def test_gpu_cores_is_none_when_ioreg_omits_the_key_or_says_nothing():
+    without_key = "\n".join(
+        line for line in AGX_M2_MAX_30.splitlines() if "gpu-core-count" not in line
+    )
+    assert scan_hw({**M2_MAX_64, IOREG_AGX: without_key}).gpu_cores is None
+    assert scan_hw({**M2_MAX_64, IOREG_AGX: ""}).gpu_cores is None
+
+
+def test_gpu_cores_is_none_when_ioreg_fails_and_the_other_fields_survive():
+    errors = [subprocess.CalledProcessError(1, list(IOREG_AGX)), OSError("ioreg not found")]
+    for error in errors:
+
+        def failing_run(argv, error=error):
+            if tuple(argv) == IOREG_AGX:
+                raise error
+            return M2_MAX_64[tuple(argv)]
+
+        hw = scan(run=failing_run, volume_paths=no_volumes)
+        assert hw.gpu_cores is None
+        assert hw.chip == "Apple M2 Max"
+        assert hw.cpu_cores == 12
+        assert hw.ram_bytes == 68719476736
+        assert hw.model_budget_bytes == 49392123904
 
 
 M1_16 = {
@@ -77,6 +124,7 @@ M1_16 = {
     ("sysctl", "-n", "hw.memsize"): "17179869184",
     ("sysctl", "-n", "hw.ncpu"): "8",
     ("sw_vers", "-productVersion"): "15.4",
+    IOREG_AGX: "",
 }
 
 
@@ -96,6 +144,7 @@ M3_PRO_36 = {
     ("sysctl", "-n", "hw.memsize"): "38654705664",
     ("sysctl", "-n", "hw.ncpu"): "12",
     ("sw_vers", "-productVersion"): "14.7.1",
+    IOREG_AGX: "",
 }
 
 
@@ -114,6 +163,7 @@ M4_ULTRA_128 = {
     ("sysctl", "-n", "hw.memsize"): "137438953472",
     ("sysctl", "-n", "hw.ncpu"): "28",
     ("sw_vers", "-productVersion"): "15.4",
+    IOREG_AGX: "",
 }
 
 
@@ -131,6 +181,7 @@ INTEL_16 = {
     ("sysctl", "-n", "hw.memsize"): "17179869184",
     ("sysctl", "-n", "hw.ncpu"): "12",
     ("sw_vers", "-productVersion"): "10.15.7",
+    IOREG_AGX: "",
 }
 
 
@@ -149,6 +200,7 @@ M2_4 = {
     ("sysctl", "-n", "hw.memsize"): "4294967296",
     ("sysctl", "-n", "hw.ncpu"): "8",
     ("sw_vers", "-productVersion"): "13.6.9",
+    IOREG_AGX: "",
 }
 
 
@@ -168,6 +220,7 @@ M7_32 = {
     ("sysctl", "-n", "hw.memsize"): "34359738368",
     ("sysctl", "-n", "hw.ncpu"): "10",
     ("sw_vers", "-productVersion"): "27.0",
+    IOREG_AGX: "",
 }
 
 

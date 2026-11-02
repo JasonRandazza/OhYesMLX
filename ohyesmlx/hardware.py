@@ -5,13 +5,15 @@ tier, the core count, unified memory, free disk, and the macOS version. ``scan``
 side effects as parameters -- commands go through ``run(argv)``, volumes come from
 ``volume_paths()``, and each volume's space from ``disk_usage(path)`` -- so the parsing is
 checked against captured text and the real machine is one default away. ``gpu_cores`` is
-``None``: no command this slice runs reports it, and a guessed number would be worse than
-an honest absence.
+the ``gpu-core-count`` that ``ioreg -rc AGXAccelerator -d1`` reports for this Mac's GPU,
+and ``None`` when macOS does not report it -- an absent line, empty output, or a command
+that fails.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -61,6 +63,15 @@ def _chip_identity(chip: str) -> tuple[str, str]:
     return tokens[1], _SUFFIX_TIERS.get(suffix, "base")
 
 
+_GPU_CORE_COUNT = re.compile(r'"gpu-core-count" = (\d+)')
+
+
+def _gpu_cores(ioreg: str) -> int | None:
+    """The AGX accelerator's core count from ``ioreg`` text; first match, or ``None``."""
+    match = _GPU_CORE_COUNT.search(ioreg)
+    return int(match.group(1)) if match else None
+
+
 def _support(chip: str, ram_bytes: int) -> tuple[bool, str | None]:
     if not chip.startswith("Apple"):
         return False, "this Mac is not Apple silicon"
@@ -107,6 +118,10 @@ def scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths) -> 
     ram_bytes = int(run(["sysctl", "-n", "hw.memsize"]))
     cpu_cores = int(run(["sysctl", "-n", "hw.ncpu"]))
     macos = run(["sw_vers", "-productVersion"])
+    try:
+        ioreg = run(["ioreg", "-rc", "AGXAccelerator", "-d1"])
+    except (OSError, subprocess.CalledProcessError):
+        ioreg = ""
     family, tier = _chip_identity(chip)
     supported, reason = _support(chip, ram_bytes)
     disk_free_bytes = 0
@@ -126,7 +141,7 @@ def scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths) -> 
         family=family,
         tier=tier,
         cpu_cores=cpu_cores,
-        gpu_cores=None,
+        gpu_cores=_gpu_cores(ioreg),
         ram_bytes=ram_bytes,
         macos=macos,
         disk_free_bytes=disk_free_bytes,

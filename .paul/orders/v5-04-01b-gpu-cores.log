@@ -1,0 +1,38 @@
+I'll read the spec and the current hardware module.
+I'll check the interfaces doc and look for other full `hardware.scan` fakes before editing.
+Baseline: 992 passed. Only `tests/test_hardware.py` builds full `fake_run` answer sets, so nothing else breaks. Now I'll edit the module.
+Now the tests: fixtures gain the ioreg argv, plus the three cases.
+Now the remaining six full answer sets.
+Running the suite.
+Green at 995. Red-check: I'll break the parser so it returns `None` and confirm the 30 test fails.
+
+Red-check confirmed (`assert None == 30` in both 30 tests). Restoring.
+
+Implemented and green.
+
+**Parse:** `ohyesmlx/hardware.py:69` — `_gpu_cores` uses `_GPU_CORE_COUNT = re.compile(r'"gpu-core-count" = (\d+)')` (line 66) with `search` (first match) and returns `int | None`; `scan` calls `run(["ioreg", "-rc", "AGXAccelerator", "-d1"])` at line 122 inside `except (OSError, subprocess.CalledProcessError)` (line 123), assigns `gpu_cores=_gpu_cores(ioreg)` at line 144. Docstring lines 7–10 now name ioreg as the source and the three `None` conditions.
+
+**Tests** (`tests/test_hardware.py`):
+- `test_gpu_cores_is_the_ioreg_gpu_core_count` — realistic multi-line `AGX_M2_MAX_30` block → 30
+- `test_gpu_cores_is_none_when_ioreg_omits_the_key_or_says_nothing` — key stripped and empty output → `None`
+- `test_gpu_cores_is_none_when_ioreg_fails_and_the_other_fields_survive` — `CalledProcessError` and `OSError` → `None`, chip/cores/RAM/budget intact
+- `test_m2_max_64_gib_is_a_supported_max_chip` now asserts `gpu_cores == 30` (its fixture carries the real capture); `IOREG_AGX` added to all seven full answer sets (the other six answer `""`).
+
+**Red-check:** changed `_gpu_cores` to always return `None`; 2 failed with `AssertionError: assert None == 30` (`test_gpu_cores_is_the_ioreg_gpu_core_count` and the M2 Max test), then restored.
+
+**Final pytest:** `995 passed in 54.43s` (baseline 992 passed). Live smoke `hardware.scan().gpu_cores` printed `30`.
+
+**Not done / not verified:** I did not create `.paul/phases/v5-onboarding/04-01b-SUMMARY.md` — the plan's `<output>` asks for it, but this order restricts me to `ohyesmlx/hardware.py` and `tests/test_hardware.py`; the coordinator should write it. No `/hardware` endpoint test run (no server started), and no other GPU/chip was exercised live.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     11     513198     472704    13711   92.1%   0.015719
+
+== cc-agent: git status ==
+ M ohyesmlx/hardware.py
+ M tests/test_hardware.py
+?? .paul/orders/v5-04-01b-gpu-cores.log
+?? .paul/orders/v5-04-01b-gpu-cores.md
+?? .paul/phases/v5-onboarding/04-01b-PLAN.md
+ ohyesmlx/hardware.py   | 21 ++++++++++++++++---
+ tests/test_hardware.py | 55 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 72 insertions(+), 4 deletions(-)
