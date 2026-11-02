@@ -43,11 +43,20 @@ OPTIQ_VENV = f"{HOME}/Dev/tools/mlx-optiq/.venv"
 MLXLM_VENV = f"{HOME}/.local/share/ohyesmlx/mlx-lm-0.31.3"
 
 VERSIONS = {
-    "osaurus": "0.25.28",
-    "omlx": "0.7.2",
+    "osaurus": "0.25.29",
+    "omlx": "0.7.3",
     "optiq": "0.5.13",
     "mlxlm": "0.31.3",
     "vmlx": "1.6.59",
+}
+
+# The date each version was adopted, as the shipped manifest records it.
+VERIFIED = {
+    "mlxlm": "2026-10-29",
+    "osaurus": "2026-11-02",
+    "omlx": "2026-11-02",
+    "optiq": "2026-10-29",
+    "vmlx": "2026-10-29",
 }
 
 
@@ -176,9 +185,9 @@ def test_tested_is_true_when_the_installed_versions_match_the_harness_table():
 
 
 def test_tested_is_false_when_an_installed_version_differs():
-    versions = {**VERSIONS, "omlx": "0.7.3", "mlxlm": "0.32.2"}
+    versions = {**VERSIONS, "omlx": "0.7.4", "mlxlm": "0.32.2"}
     statuses = {status.name: status for status in detect_all(installed_env(versions))}
-    assert statuses["omlx"].version == "0.7.3"
+    assert statuses["omlx"].version == "0.7.4"
     assert statuses["omlx"].tested is False
     assert statuses["mlxlm"].version == "0.32.2"
     assert statuses["mlxlm"].tested is False
@@ -921,7 +930,7 @@ def test_tested_versions_are_derived_from_the_loaded_manifest():
 def test_the_shipped_manifest_carries_the_versions_the_tests_expect():
     payload = json.loads(engines.MANIFEST_PATH.read_text(encoding="utf-8"))
     assert {name: entry["version"] for name, entry in payload.items()} == VERSIONS
-    assert {entry["verified"] for entry in payload.values()} == {"2026-10-29"}
+    assert {name: entry["verified"] for name, entry in payload.items()} == VERIFIED
 
 
 def test_no_engine_version_literal_remains_in_the_module():
@@ -1024,7 +1033,9 @@ def test_engine_status_exposes_the_manifests_verified_date():
     """The date belongs to the table, not to the install: an engine that is absent, or
     present at another build, is still tested against the manifest's own record."""
     for env in (FakeEnv(), installed_env()):
-        assert {status.verified for status in detect_all(env)} == {"2026-10-29"}
+        assert {status.name: status.verified for status in detect_all(env)} == {
+            name: entry["verified"] for name, entry in engines.MANIFEST.items()
+        }
 
 
 def test_a_drifted_version_is_untested_and_still_carries_the_verified_date():
