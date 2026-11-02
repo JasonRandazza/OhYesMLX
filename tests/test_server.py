@@ -18,6 +18,7 @@ import http.client
 import json
 import socket
 import threading
+import time
 
 import pytest
 
@@ -115,7 +116,9 @@ def launch():
     def start(**kwargs):
         kwargs.setdefault("token", TOKEN)
         listener = server.make_server(0, **kwargs)
-        thread = threading.Thread(target=listener.serve_forever, daemon=True)
+        thread = threading.Thread(
+            target=listener.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
         thread.start()
         started.append((listener, thread))
         return listener
@@ -636,3 +639,852 @@ def test_every_error_body_carries_the_http_status_it_was_sent_with(launch):
         code, _, raw = request(listener, path, **kwargs)
         assert code == expected
         assert error_of(raw)["status"] == code
+
+
+# --- the job routes, plan 04-02 ---------------------------------------------------------------
+#
+# A job is a request, a thread, a stream and a slot, so every test here uses a real server over a
+# real socket and a fake module seam. The fakes emit the pinned event shape and end with `done`,
+# because that is the modules' contract and the server's one slot frees on it; no test installs,
+# downloads or opens a network connection.
+
+
+def an_event(kind, message="", *, payload=None, fraction=None):
+    """One event in the pinned shape; the job assigns the seq the stream carries."""
+    return {
+        "seq": 0,
+        "type": kind,
+        "message": message,
+        "fraction": fraction,
+        "payload": payload,
+    }
+
+
+def scripted(*events, result=True):
+    """A module seam that emits the given events in order and records each call."""
+    calls = []
+
+    def module(name, confirmed, **kwargs):
+        calls.append({"name": name, "confirmed": confirmed, **kwargs})
+        for event in events:
+            kwargs["emit"](event)
+        return result
+
+    module.calls = calls
+    return module
+
+
+def cancelled_on_request(result=False):
+    """A download/install seam that emits progress, then ends when its cancel probe says so."""
+
+    def module(name, confirmed, **kwargs):
+        kwargs["emit"](an_event("progress", "started"))
+        for _ in range(500):
+            if kwargs["cancel"]():
+                kwargs["emit"](
+                    an_event("error", "cancelled", payload={"code": "cancelled"})
+                )
+                kwargs["emit"](an_event("done", "cancelled"))
+                return result
+            time.sleep(0.01)
+        return result
+
+    return module
+
+
+def blocking(release):
+    """A module seam that emits one event, waits for *release*, then emits `done`."""
+    started = threading.Event()
+    calls = []
+
+    def module(name, confirmed, **kwargs):
+        calls.append({"name": name, "confirmed": confirmed, **kwargs})
+        kwargs["emit"](an_event("progress", "started"))
+        started.set()
+        release.wait(5)
+        kwargs["emit"](an_event("done", "finished"))
+        return True
+
+    module.started = started
+    module.calls = calls
+    return module
+
+
+def never_called(*args, **kwargs):
+    raise AssertionError("no module may run for a request the server refused")
+
+
+def wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def send_to(listener, path, *, method="POST", body=b"", headers=None, token=TOKEN):
+    """One request with its own raw headers; ``body`` is sent as-is after them."""
+    given = {}
+    if token is not None:
+        given["Authorization"] = f"Bearer {token}"
+    given["Host"] = f"127.0.0.1:{listener.server_address[1]}"
+    given.update(headers or {})
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", listener.server_address[1], timeout=10
+    )
+    try:
+        connection.putrequest(method, path, skip_host=True)
+        for name, value in given.items():
+            connection.putheader(name, value)
+        connection.endheaders()
+        if body:
+            connection.send(body)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        connection.close()
+
+
+def post_job(
+    listener,
+    payload,
+    *,
+    content_type="application/json",
+    headers=None,
+    token=TOKEN,
+    body=None,
+):
+    """POST /jobs with a JSON body the caller may override or omit."""
+    raw = json.dumps(payload).encode() if body is None else body
+    given = {}
+    if content_type is not None:
+        given["Content-Type"] = content_type
+    given["Content-Length"] = str(len(raw))
+    given.update(headers or {})
+    return send_to(listener, "/jobs", body=raw, headers=given, token=token)
+
+
+def open_stream(listener, job_id, *, last_event_id=None, timeout=10.0, rcvbuf=None):
+    """A raw socket carrying GET /jobs/{id}/events, so a test can read it at its own pace."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if rcvbuf is not None:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+        sock.settimeout(timeout)
+        sock.connect(("127.0.0.1", listener.server_address[1]))
+    except OSError:
+        sock.close()
+        raise
+    lines = [
+        f"GET /jobs/{job_id}/events HTTP/1.0",
+        f"Host: 127.0.0.1:{listener.server_address[1]}",
+        f"Authorization: Bearer {TOKEN}",
+    ]
+    if last_event_id is not None:
+        lines.append(f"Last-Event-ID: {last_event_id}")
+    sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+    return sock
+
+
+class StreamReader:
+    """A tiny buffered reader for a live event stream."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.buffer = b""
+
+    def read_until(self, marker):
+        while marker not in self.buffer:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise AssertionError(f"the stream closed before {marker!r}")
+            self.buffer += chunk
+        head, _, self.buffer = self.buffer.partition(marker)
+        return head
+
+    def read_to_close(self):
+        chunks = [self.buffer]
+        while True:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+
+
+def sse_events(body: bytes):
+    """The ``(id, event)`` pairs in a stream body, keepalive comments skipped."""
+    events = []
+    for block in body.decode("utf-8").split("\n\n"):
+        block = block.strip("\n")
+        if not block or block.startswith(":"):
+            continue
+        lines = block.splitlines()
+        event_id = int(lines[0].split(":", 1)[1].strip())
+        event = json.loads(lines[1].split(":", 1)[1].strip())
+        events.append((event_id, event))
+    return events
+
+
+def stream_to_close(listener, job_id, *, last_event_id=None):
+    """``(header text, body bytes)`` for a stream the server has already finished."""
+    sock = open_stream(listener, job_id, last_event_id=last_event_id)
+    try:
+        raw = StreamReader(sock).read_to_close()
+    finally:
+        sock.close()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    return head.decode("latin-1"), body
+
+
+def posted_job_id(listener, payload):
+    code, _, raw = post_job(listener, payload)
+    assert code == 202, raw
+    return json.loads(raw)["job_id"]
+
+
+DOWNLOAD = {"kind": "download", "args": {"repo": "org/small", "confirmed": True}}
+
+
+# --- AC-1: names, a literal true, and a body that is refused before it is read -----------------
+
+
+def test_an_install_job_takes_a_name_and_the_literal_true(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(install=module, scan=Recorder(this_mac(macos="26.1")))
+
+    job_id = posted_job_id(
+        listener, {"kind": "install", "args": {"engine": "mlxlm", "confirmed": True}}
+    )
+
+    assert len(job_id) == 16 and all(char in "0123456789abcdef" for char in job_id)
+    assert module.started.wait(5)
+    call = module.calls[0]
+    assert call["name"] == "mlxlm"
+    assert call["confirmed"] is True
+    assert call["macos_major"] == 26, "the plan gets the scan's macOS generation"
+    assert callable(call["emit"]) and callable(call["cancel"])
+
+    release.set()
+    head, body = stream_to_close(listener, job_id)
+    assert [event["type"] for _, event in sse_events(body)] == ["progress", "done"]
+
+
+@pytest.mark.parametrize("kind", ["download", "evict"])
+def test_download_and_evict_take_a_repo_name(launch, kind):
+    module = scripted(an_event("done", "finished"))
+    listener = launch(download=module, evict=module)
+
+    job_id = posted_job_id(
+        listener, {"kind": kind, "args": {"repo": "org/small", "confirmed": True}}
+    )
+
+    assert wait_until(lambda: listener.jobs.running is None)
+    assert module.calls[0]["name"] == "org/small"
+    assert module.calls[0]["confirmed"] is True
+    _, body = stream_to_close(listener, job_id)
+    assert [event["type"] for _, event in sse_events(body)] == ["done"]
+
+
+@pytest.mark.parametrize(
+    "payload, named",
+    [
+        ({"kind": "install", "args": {"engine": "mlxlm", "confirmed": "true"}}, "confirmed"),
+        ({"kind": "download", "args": {"repo": "org/small", "confirmed": 1}}, "confirmed"),
+        ({"kind": "install", "args": {"engine": "mlxlm"}}, "confirmed"),
+        (
+            {"kind": "install", "args": {"engine": "mlxlm", "confirmed": True, "path": "/tmp"}},
+            "path",
+        ),
+        ({"kind": "download", "args": {"confirmed": True}}, "repo"),
+        ({"kind": "evict", "args": {"repo": 5, "confirmed": True}}, "repo"),
+        ({"kind": "install", "args": "mlxlm"}, "args"),
+    ],
+)
+def test_bad_args_is_400_naming_the_key_and_starts_no_job(launch, payload, named):
+    """`confirmed` must be JSON true -- not "true" and not 1 -- and no thread may start."""
+    listener = launch(
+        install=never_called,
+        download=scripted(an_event("done", "finished")),
+        evict=never_called,
+    )
+
+    code, _, raw = post_job(listener, payload)
+
+    assert code == 400
+    error = error_of(raw)
+    assert error["code"] == "bad_args"
+    assert named in error["message"], error["message"]
+    assert listener.jobs.jobs == {}, "a refused request created a job"
+    assert post_job(listener, DOWNLOAD)[0] == 202, "the slot was left taken"
+
+
+@pytest.mark.parametrize("kind", ["quickbench", "command", None, 7, ["install"]])
+def test_an_unknown_kind_is_400_bad_kind(launch, kind):
+    listener = launch(install=never_called)
+
+    code, _, raw = post_job(
+        listener, {"kind": kind, "args": {"engine": "mlxlm", "confirmed": True}}
+    )
+
+    assert code == 400
+    assert error_of(raw)["code"] == "bad_kind"
+
+
+@pytest.mark.parametrize(
+    "content_type", ["text/plain", "application/x-www-form-urlencoded", None]
+)
+def test_a_non_json_content_type_is_415(launch, content_type):
+    listener = launch(install=never_called)
+
+    code, _, raw = post_job(
+        listener,
+        {"kind": "install", "args": {"engine": "mlxlm", "confirmed": True}},
+        content_type=content_type,
+    )
+
+    assert code == 415
+    assert error_of(raw)["code"] == "unsupported_media_type"
+
+
+def test_a_missing_or_non_integer_content_length_is_413_before_the_body(launch):
+    listener = launch(install=never_called)
+
+    for length in (None, "three", "-1"):
+        headers = {"Content-Type": "application/json"}
+        if length is not None:
+            headers["Content-Length"] = length
+        code, _, raw = send_to(listener, "/jobs", body=b"", headers=headers)
+
+        assert code == 413, length
+        assert error_of(raw)["code"] == "body_too_large"
+    assert listener.jobs.jobs == {}
+
+
+def test_an_oversize_body_is_413_and_is_never_read(launch):
+    """The client sends no body at all: a server that read one would block until its timeout."""
+    listener = launch(install=never_called, timeout=1.0)
+
+    code, _, raw = send_to(
+        listener,
+        "/jobs",
+        body=b"",
+        headers={"Content-Type": "application/json", "Content-Length": "4097"},
+    )
+
+    assert code == 413
+    assert error_of(raw)["code"] == "body_too_large"
+
+
+def test_a_body_of_exactly_the_limit_is_accepted(launch):
+    listener = launch(download=scripted(an_event("done", "finished")))
+    body = json.dumps(DOWNLOAD).encode()
+    padded = body + b" " * (server.MAX_BODY_BYTES - len(body))
+
+    code, _, raw = send_to(
+        listener,
+        "/jobs",
+        body=padded,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Content-Length": str(len(padded)),
+        },
+    )
+
+    assert code == 202
+    job_id = json.loads(raw)["job_id"]
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+
+def test_invalid_json_is_400_bad_json(launch):
+    listener = launch(install=never_called)
+
+    code, _, raw = post_job(listener, None, body=b'{"kind": ')
+
+    assert code == 400
+    assert error_of(raw)["code"] == "bad_json"
+
+
+# --- AC-2: the module owns the name and its refusal is an event --------------------------------
+
+
+def test_the_modules_own_refusal_arrives_as_its_error_and_done_events(launch):
+    module = scripted(
+        an_event("error", "org/nope is not a catalog model", payload={"code": "unknown_repo"}),
+        an_event("done", "download failed"),
+        result=False,
+    )
+    listener = launch(download=module)
+
+    job_id = posted_job_id(
+        listener, {"kind": "download", "args": {"repo": "org/nope", "confirmed": True}}
+    )
+
+    _, body = stream_to_close(listener, job_id)
+    events = [event for _, event in sse_events(body)]
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert events[0]["payload"] == {"code": "unknown_repo"}
+
+
+def test_a_raising_module_ends_the_stream_with_internal_and_done_after_its_own_seq(launch):
+    def broken(name, confirmed, *, emit, cancel):
+        emit(an_event("log", "about to fail"))
+        raise RuntimeError("the module broke")
+
+    listener = launch(download=broken)
+
+    job_id = posted_job_id(listener, DOWNLOAD)
+
+    _, body = stream_to_close(listener, job_id)
+    events = sse_events(body)
+    assert [event_id for event_id, _ in events] == [1, 2, 3]
+    assert [event["type"] for _, event in events] == ["log", "error", "done"]
+    assert events[1][1]["payload"] == {"code": "internal"}
+    assert "the module broke" in events[1][1]["message"]
+
+
+# --- AC-3: one job at a time -------------------------------------------------------------------
+
+
+def test_a_second_job_while_one_is_running_is_409_busy_naming_the_job(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(download=module, evict=module)
+
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert module.started.wait(5)
+
+    for payload in (DOWNLOAD, {"kind": "evict", "args": {"repo": "org/x", "confirmed": True}}):
+        code, _, raw = post_job(listener, payload)
+
+        assert code == 409, payload
+        error = error_of(raw)
+        assert error["code"] == "busy"
+        assert job_id in error["message"], "the refusal has to name the job holding the slot"
+    assert len(module.calls) == 1, "a refused request started a second job"
+
+    release.set()
+    assert wait_until(lambda: listener.jobs.running is None)
+    assert post_job(listener, DOWNLOAD)[0] == 202, "the slot did not free at done"
+
+
+# --- AC-4: the event stream --------------------------------------------------------------------
+
+
+def test_the_stream_frames_events_and_closes_after_done(launch):
+    module = scripted(
+        an_event("progress", "one", fraction=0.5, payload={"step": "x"}),
+        an_event("result", "two", payload={"installed": True}),
+        an_event("done", "finished"),
+    )
+    listener = launch(download=module)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+    head, body = stream_to_close(listener, job_id)
+
+    lines = head.splitlines()
+    assert lines[0].endswith("200 OK"), lines[0]
+    lowered = head.lower()
+    assert "content-type: text/event-stream" in lowered
+    assert "cache-control: no-store" in lowered
+    assert "access-control-" not in lowered, "a stream must not carry a CORS header"
+    assert body.startswith(b"id: 1\ndata: ")
+    events = sse_events(body)
+    assert [event_id for event_id, _ in events] == [1, 2, 3]
+    assert [event["type"] for _, event in events] == ["progress", "result", "done"]
+    assert events[0][1]["payload"] == {"step": "x"}
+    assert events[0][1]["fraction"] == 0.5
+
+
+def test_the_stream_replays_after_last_event_id(launch):
+    module = scripted(
+        an_event("log", "one"),
+        an_event("progress", "two"),
+        an_event("result", "three"),
+        an_event("done", "four"),
+    )
+    listener = launch(download=module)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+    _, body = stream_to_close(listener, job_id, last_event_id=2)
+
+    assert [event_id for event_id, _ in sse_events(body)] == [3, 4]
+
+
+@pytest.mark.parametrize("value", ["abc", "-1", "1.5", ""])
+def test_a_bad_last_event_id_is_400_bad_event_id(launch, value):
+    listener = launch(download=scripted(an_event("done", "finished")))
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+    code, _, raw = send_to(
+        listener,
+        f"/jobs/{job_id}/events",
+        method="GET",
+        headers={"Last-Event-ID": value},
+    )
+
+    assert code == 400
+    assert error_of(raw)["code"] == "bad_event_id"
+
+
+def test_a_last_event_id_beyond_the_last_stored_seq_waits_for_new_events(launch):
+    release = threading.Event()
+
+    def module(name, confirmed, *, emit, cancel):
+        emit(an_event("progress", "one"))
+        release.wait(5)
+        emit(an_event("progress", "two"))
+        emit(an_event("done", "three"))
+        return True
+
+    listener = launch(download=module)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: len(listener.jobs.get(job_id).events) == 1)
+
+    sock = open_stream(listener, job_id, last_event_id=2)
+    try:
+        reader = StreamReader(sock)
+        head = reader.read_until(b"\r\n\r\n").decode("latin-1")
+        assert " 200 " in head.splitlines()[0]
+        release.set()
+        block = reader.read_until(b"\n\n").decode("utf-8")
+    finally:
+        sock.close()
+
+    assert block.startswith("id: 3"), "the client's claimed seq was not re-sent"
+
+
+def test_a_job_quiet_for_longer_than_the_socket_timeout_still_streams(launch):
+    """The wait is on the job's condition: a 0.2 s socket timeout does not cut a 0.5 s gap."""
+    def module(name, confirmed, *, emit, cancel):
+        emit(an_event("progress", "one"))
+        time.sleep(0.5)
+        emit(an_event("done", "two"))
+        return True
+
+    listener = launch(download=module, timeout=0.2, keepalive_s=5.0)
+
+    job_id = posted_job_id(listener, DOWNLOAD)
+
+    _, body = stream_to_close(listener, job_id)
+    assert [event["type"] for _, event in sse_events(body)] == ["progress", "done"]
+
+
+def test_a_client_that_never_reads_is_dropped_at_the_write_timeout_while_the_job_runs(launch):
+    """Clearing the socket timeout would leave this handler blocked in send forever."""
+    release = threading.Event()
+
+    def module(name, confirmed, *, emit, cancel):
+        for number in range(300):
+            emit(an_event("progress", "x" * 8192, payload={"n": number}))
+        release.wait(10)
+        emit(an_event("done", "finished"))
+        return True
+
+    listener = launch(download=module, timeout=0.2, keepalive_s=5.0)
+    job_id = posted_job_id(listener, DOWNLOAD)
+
+    sock = open_stream(listener, job_id, rcvbuf=4096)
+    try:
+        # Read the headers byte by byte, so the handler is provably in its stream and this
+        # client has provably stopped reading before the timeout is expected to fire.
+        head = b""
+        while not head.endswith(b"\r\n\r\n"):
+            chunk = sock.recv(1)
+            assert chunk, "the stream closed before its headers"
+            head += chunk
+        assert b" 200 " in head.split(b"\r\n")[0]
+
+        handlers = lambda: [
+            thread
+            for thread in threading.enumerate()
+            if "process_request_thread" in thread.name
+        ]
+        assert wait_until(lambda: handlers() == [], timeout=5.0), (
+            "a client that stopped reading held its handler thread"
+        )
+        assert not listener.jobs.get(job_id).done, "a dropped stream must never end the job"
+    finally:
+        sock.close()
+        release.set()
+
+    assert wait_until(lambda: listener.jobs.running is None)
+    _, body = stream_to_close(listener, job_id)
+    assert sse_events(body)[-1][1]["type"] == "done"
+
+
+def test_keepalive_is_written_while_the_job_is_quiet(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(download=module, keepalive_s=0.05)
+
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert module.started.wait(5)
+
+    sock = open_stream(listener, job_id, timeout=5.0)
+    try:
+        reader = StreamReader(sock)
+        reader.read_until(b"\r\n\r\n")
+        first = reader.read_until(b"\n\n")
+        assert first.startswith(b"id: 1"), first
+        keepalive = reader.read_until(b"\n\n")
+        assert keepalive == b": keepalive", keepalive
+        release.set()
+        rest = reader.read_to_close().decode("utf-8")
+    finally:
+        sock.close()
+
+    assert 'id: 2' in rest and '"type": "done"' in rest
+
+
+def test_a_client_disconnect_leaves_the_job_running_and_holds_the_slot_until_done(launch):
+    release = threading.Event()
+
+    def module(name, confirmed, *, emit, cancel):
+        emit(an_event("progress", "one"))
+        release.wait(5)
+        emit(an_event("progress", "two"))
+        emit(an_event("done", "three"))
+        return True
+
+    listener = launch(download=module, evict=scripted(an_event("done", "finished")))
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: len(listener.jobs.get(job_id).events) == 1)
+
+    sock = open_stream(listener, job_id)
+    reader = StreamReader(sock)
+    reader.read_until(b"\r\n\r\n")
+    reader.read_until(b"\n\n")
+    sock.close()
+
+    assert not listener.jobs.get(job_id).done
+    code, _, raw = post_job(
+        listener, {"kind": "evict", "args": {"repo": "org/x", "confirmed": True}}
+    )
+    assert code == 409 and error_of(raw)["code"] == "busy"
+
+    release.set()
+    assert wait_until(lambda: listener.jobs.running is None)
+    _, body = stream_to_close(listener, job_id)
+    assert [event["type"] for _, event in sse_events(body)] == [
+        "progress",
+        "progress",
+        "done",
+    ]
+
+
+def test_past_the_event_cap_the_job_ends_with_too_many_events_and_done(launch):
+    def module(name, confirmed, *, emit, cancel):
+        for number in range(server.MAX_EVENTS + 50):
+            emit(an_event("log", "x", payload={"n": number}))
+        emit(an_event("done", "the module's own done"))
+        return True
+
+    listener = launch(download=module)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+    events = listener.jobs.get(job_id).events
+    assert len(events) == server.MAX_EVENTS
+    assert events[-2]["type"] == "error"
+    assert events[-2]["payload"] == {"code": "too_many_events"}
+    assert events[-1]["type"] == "done"
+    assert wait_until(lambda: listener.jobs.running is None)
+    assert post_job(listener, DOWNLOAD)[0] == 202
+
+
+def test_an_unknown_job_id_is_404_unknown_job_on_both_routes(launch):
+    listener = launch()
+    unknown = "0" * 16
+
+    for method, path in (("GET", f"/jobs/{unknown}/events"), ("POST", f"/jobs/{unknown}/cancel")):
+        code, _, raw = send_to(listener, path, method=method)
+
+        assert code == 404, path
+        assert error_of(raw)["code"] == "unknown_job"
+
+
+def test_a_job_path_without_an_action_or_with_a_bad_id_is_404(launch):
+    listener = launch()
+
+    for path in ("/jobs/" + "0" * 16, "/jobs/xyz/events", "/jobs/" + "0" * 15 + "/events"):
+        code, _, raw = send_to(listener, path, method="GET")
+
+        assert code == 404, path
+        assert error_of(raw)["code"] == "not_found"
+
+
+# --- AC-5: cancel ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind, args", [
+    ("download", {"repo": "org/small", "confirmed": True}),
+    ("install", {"engine": "mlxlm", "confirmed": True}),
+])
+def test_cancel_makes_the_modules_probe_answer_true_and_the_stream_ends_cancelled(
+    launch, kind, args
+):
+    module = cancelled_on_request()
+    listener = launch(
+        download=module, install=module, scan=Recorder(this_mac()),
+    )
+    job_id = posted_job_id(listener, {"kind": kind, "args": args})
+    assert wait_until(lambda: len(listener.jobs.get(job_id).events) == 1)
+
+    code, _, raw = send_to(listener, f"/jobs/{job_id}/cancel")
+
+    assert code == 202
+    assert json.loads(raw) == {"job_id": job_id}
+    _, body = stream_to_close(listener, job_id)
+    events = [event for _, event in sse_events(body)]
+    assert [event["type"] for event in events] == ["progress", "error", "done"]
+    assert events[1]["payload"] == {"code": "cancelled"}
+
+
+def test_cancel_of_an_evict_job_is_409_not_cancellable(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(evict=module)
+    job_id = posted_job_id(
+        listener, {"kind": "evict", "args": {"repo": "org/small", "confirmed": True}}
+    )
+    assert module.started.wait(5)
+
+    code, _, raw = send_to(listener, f"/jobs/{job_id}/cancel")
+
+    assert code == 409
+    assert error_of(raw)["code"] == "not_cancellable"
+    release.set()
+    assert wait_until(lambda: listener.jobs.running is None)
+
+
+def test_cancel_of_a_finished_job_is_409_job_finished(launch):
+    listener = launch(download=scripted(an_event("done", "finished")))
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+    code, _, raw = send_to(listener, f"/jobs/{job_id}/cancel")
+
+    assert code == 409
+    assert error_of(raw)["code"] == "job_finished"
+
+
+# --- AC-6: the stderr record and shutdown ------------------------------------------------------
+
+
+def test_each_job_writes_one_start_and_one_end_line_and_nothing_else(launch, capsys):
+    module = scripted(
+        an_event("error", "org/nope is not a catalog model", payload={"code": "unknown_repo"}),
+        an_event("done", "download failed"),
+        result=False,
+    )
+    listener = launch(download=module)
+
+    job_id = posted_job_id(
+        listener, {"kind": "download", "args": {"repo": "org/nope", "confirmed": True}}
+    )
+    assert wait_until(lambda: listener.jobs.running is None)
+
+    lines = []
+    deadline = time.monotonic() + 5
+    while len(lines) < 2 and time.monotonic() < deadline:
+        lines.extend(capsys.readouterr().err.splitlines())
+        if len(lines) < 2:
+            time.sleep(0.01)
+
+    assert len(lines) == 2, lines
+    start, end = (json.loads(line) for line in lines)
+    assert set(start) == {"job", "kind", "name", "time"}
+    assert start["job"] == job_id
+    assert start["kind"] == "download"
+    assert start["name"] == "org/nope"
+    assert set(end) == {"job", "ok", "code", "time"}
+    assert end["job"] == job_id
+    assert end["ok"] is False
+    assert end["code"] == "unknown_repo"
+    assert TOKEN not in "".join(lines)
+
+
+def test_shutdown_cancel_waits_for_a_running_job_to_its_done(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(download=module)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert module.started.wait(5)
+
+    threading.Timer(0.2, release.set).start()
+    began = time.monotonic()
+    listener.jobs.cancel_and_wait(5)
+    elapsed = time.monotonic() - began
+
+    assert elapsed >= 0.1, "cancel_and_wait returned before the job finished"
+    assert listener.jobs.get(job_id).done
+    assert module.calls[0]["cancel"](), "a running download's cancel flag was not set"
+
+
+def test_shutdown_does_not_cancel_an_evict_and_waits_for_it(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(evict=module)
+    job_id = posted_job_id(
+        listener, {"kind": "evict", "args": {"repo": "org/small", "confirmed": True}}
+    )
+    assert module.started.wait(5)
+
+    threading.Timer(0.2, release.set).start()
+    began = time.monotonic()
+    listener.jobs.cancel_and_wait(5)
+    elapsed = time.monotonic() - began
+
+    assert elapsed >= 0.1
+    assert listener.jobs.get(job_id).done, "an evict was abandoned by the shutdown wait"
+
+
+# --- AC-7: the job routes are behind the 04-01 guard -------------------------------------------
+
+
+def test_every_job_route_is_behind_the_04_01_guard(launch):
+    install = never_called
+    download = never_called
+    evict = never_called
+    listener = launch(install=install, download=download, evict=evict)
+    paths = [("POST", "/jobs"), ("GET", f"/jobs/{'0' * 16}/events"),
+             ("POST", f"/jobs/{'0' * 16}/cancel")]
+
+    for method, path in paths:
+        code, _, raw = send_to(listener, path, method=method, token=None)
+        assert code == 401 and error_of(raw)["code"] == "unauthorized", (method, path)
+
+        code, _, raw = send_to(
+            listener, path, method=method, headers={"Origin": "https://evil.example"}
+        )
+        assert code == 403 and error_of(raw)["code"] == "origin_refused", (method, path)
+
+        code, _, raw = send_to(listener, path, method=method, headers={"Host": "evil.example"})
+        assert code == 403 and error_of(raw)["code"] == "bad_host", (method, path)
+
+    assert listener.jobs.jobs == {}, "a refused request created a job"
+
+
+def test_a_job_response_carries_no_cors_header(launch):
+    listener = launch(
+        install=never_called,
+        download=scripted(an_event("done", "finished")),
+        evict=never_called,
+    )
+
+    responses = [
+        post_job(listener, DOWNLOAD),
+        post_job(listener, {"kind": "install", "args": {"engine": "x", "confirmed": "yes"}}),
+        send_to(listener, "/jobs/" + "0" * 16 + "/events", method="GET"),
+    ]
+
+    assert [code for code, _, _ in responses] == [202, 400, 404]
+    for code, headers, _ in responses:
+        assert not [
+            name for name in headers if name.lower().startswith("access-control-")
+        ], code

@@ -12,10 +12,13 @@ from __future__ import annotations
 import dataclasses
 import http.client
 import json
+import os
 import signal
 import socket
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1055,3 +1058,86 @@ def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two():
 
 
 
+
+
+def test_shutdown_cancels_a_running_download_and_exits_zero(monkeypatch):
+    """AC-6: stdin EOF arrives mid-job, the job is cancelled at its next check, exit is 0.
+
+    In-process, against the real ``server.make_server`` with the download seam faked: what is
+    checked is that ``_app``'s shutdown path cancels the one running job and waits for it. The
+    signal handler is stubbed because ``_app`` is not a subprocess here.
+    """
+    from ohyesmlx import server
+
+    launch_token = "the-launch-token-for-this-test"
+    cancelled = threading.Event()
+    started = threading.Event()
+    posted = []
+    failures = []
+
+    read_fd, write_fd = os.pipe()
+    stdin = SimpleNamespace(
+        buffer=SimpleNamespace(raw=os.fdopen(read_fd, "rb", buffering=0))
+    )
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(cli, "signal", SimpleNamespace(
+        SIGTERM=signal.SIGTERM, signal=lambda number, handler: None
+    ))
+
+    def download(repo, confirmed, *, emit, cancel):
+        started.set()
+        os.close(write_fd)  # the app's end of stdin closes while the job is running
+        for _ in range(500):
+            if cancel():
+                emit({
+                    "seq": 1, "type": "error", "message": "cancelled",
+                    "fraction": None, "payload": {"code": "cancelled"},
+                })
+                emit({
+                    "seq": 2, "type": "done", "message": "cancelled",
+                    "fraction": None, "payload": None,
+                })
+                cancelled.set()
+                return False
+            time.sleep(0.01)
+        return False
+
+    def client(listener):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", listener.server_address[1], timeout=10
+        )
+        try:
+            connection.request(
+                "POST",
+                "/jobs",
+                body=json.dumps(
+                    {"kind": "download", "args": {"repo": "org/small", "confirmed": True}}
+                ).encode(),
+                headers={
+                    "Authorization": f"Bearer {launch_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response = connection.getresponse()
+            posted.append((response.status, response.read()))
+        except Exception as error:  # reported by the test, never swallowed
+            failures.append(error)
+        finally:
+            connection.close()
+
+    real_make_server = server.make_server
+
+    def make_server(port=0):
+        listener = real_make_server(port, download=download, token=launch_token)
+        threading.Thread(target=client, args=(listener,), daemon=True).start()
+        return listener
+
+    monkeypatch.setattr(server, "make_server", make_server)
+
+    code = cli.main(["app"])
+
+    assert code == 0
+    assert failures == []
+    assert started.is_set(), "the job never started"
+    assert posted and posted[0][0] == 202, posted
+    assert cancelled.is_set(), "shutdown left the running download uncancelled"

@@ -1211,3 +1211,63 @@ def test_detection_refuses_a_lab_paths_file_that_is_not_json():
     with pytest.raises(ValueError) as raised:
         detect_all(env)
     assert LAB_PATHS_FILE in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# engines.install -- cancelling (plan 04-02, AC-5)
+#
+# A cancel is only ever noticed between steps and between guided polls: a running pip step
+# keeps its own timeout, and the rollback removes what this call created before it stops.
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_before_the_second_step_rolls_back_the_first(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlxlm-0.31.3"
+    plan = command_plan(
+        str(venv),
+        [
+            Step("create-venv", "make the venv", ["{python}", "-m", "venv", str(venv)]),
+            Step("install", "install the wheel",
+                 [f"{venv}/bin/python", "-m", "pip", "install", "mlx-lm==0.31.3"]),
+        ],
+    )
+    monkeypatch.setattr(engines, "install_plan", lambda name, major: plan)
+
+    def create_venv(argv):
+        if argv[1:3] == ["-m", "venv"]:
+            (venv / "bin").mkdir(parents=True)
+            (venv / "pyvenv.cfg").write_text("version = 3.12.13\n", encoding="utf-8")
+
+    run = FakeRun(on_call=create_venv)
+    ok, events, opened, sleeps = do_install(
+        tmp_path, run=run, cancel=lambda: len(run.calls) >= 1
+    )
+
+    assert ok is False
+    assert len(run.calls) == 1, "the step after the cancel must not run"
+    assert not venv.exists(), "the venv step 1 created was not rolled back"
+    assert [event["type"] for event in events] == ["progress", "error", "done"]
+    assert events[1]["payload"] == {"code": "cancelled"}
+    assert events[-1]["type"] == "done"
+
+
+def test_cancel_during_the_guided_poll_ends_within_one_poll(tmp_path):
+    detect = FakeDetect("osaurus", [False], limit=10)
+    sleeps = []
+    probes = []
+
+    def cancel():
+        probes.append(True)
+        return len(probes) > 1
+
+    ok, events, opened, _ = do_install(
+        tmp_path, engine="osaurus", detect=detect, sleep=sleeps.append,
+        poll_s=1.0, poll_timeout_s=10.0, cancel=cancel,
+    )
+
+    assert ok is False
+    assert sleeps == [1.0], "the cancel was noticed after more than one poll"
+    assert detect.calls == 2, "the already-installed check plus one poll"
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert events[0]["payload"] == {"code": "cancelled"}
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"]

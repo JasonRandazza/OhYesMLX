@@ -841,6 +841,11 @@ def _disk_required(size_bytes_estimate: int | None) -> int:
     return 2 * size_bytes_estimate
 
 
+def _never_cancelled() -> bool:
+    """The default cancel probe: a CLI install is never cancelled from elsewhere."""
+    return False
+
+
 def _url_allowed(url: str) -> bool:
     parts = urllib.parse.urlsplit(url)
     return parts.scheme == "https" and parts.hostname in ALLOWED_DOWNLOAD_HOSTS
@@ -933,6 +938,7 @@ def install(
     run=_real_run,
     open_url=_real_open,
     emit=_print_event,
+    cancel=_never_cancelled,
     detect=detect_all,
     hardware=_scan_hardware,
     sleep=time.sleep,
@@ -954,6 +960,12 @@ def install(
     busy -> low disk. Steps then run with the injected interpreter and a hermetic
     environment, progress follows each one, and ``done`` is last. A failed step
     removes only what this call created (AC-7).
+
+    *cancel* is probed before each step and before each guided-download poll, never
+    while a step runs: a cancelled install takes the same rollback path a failed step
+    does and ends with ``error`` code ``cancelled`` and ``done``. A pip step in
+    progress therefore keeps its own timeout and the installer's rollback still
+    applies, which is what lets an abandoned guided wait release the job slot.
     """
     try:
         plan = install_plan(engine, macos_major)  # AC-6: an unknown name raises here, first
@@ -994,6 +1006,13 @@ def install(
         send("error", message, payload={"code": code})
         return False
 
+    def cancelled(created: list[str]) -> bool:
+        """The failure path a cancel takes: error, the same rollback, then done."""
+        send("error", f"the install of {engine} was cancelled", payload={"code": "cancelled"})
+        _rollback(created, engines_dir, send)
+        send("done", "install cancelled; nothing else was run")
+        return False
+
     if not confirmed:
         return refuse("consent_required", "consent was not given; nothing was installed")
 
@@ -1009,6 +1028,8 @@ def install(
         created: list[str] = []
         source_dir = _plan_engines_dir(plan)
         for position, step in enumerate(plan.steps):
+            if cancel():
+                return cancelled(created)
             if step.command is None:
                 continue
             argv = _relocate(
@@ -1055,6 +1076,8 @@ def install(
         attempts = max(1, math.ceil(poll_timeout_s / poll_s))
         installed = False
         for _ in range(attempts):
+            if cancel():
+                return cancelled([])
             installed = _installed(detect(), engine)
             if installed:
                 break

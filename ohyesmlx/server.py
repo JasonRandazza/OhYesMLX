@@ -1,10 +1,15 @@
-"""The app's read-only localhost API: three GET endpoints behind a per-launch token.
+"""The app's localhost API: three read-only GETs and the job routes, behind a per-launch token.
 
-Seam S6, plan 04-01. The SwiftUI app (Phase 5) is a client of this server and nothing else,
-so this module is the contract -- and it holds no rule a module already defines. ``/hardware``
+Seam S6, plans 04-01 and 04-02. The SwiftUI app (Phase 5) is a client of this server and nothing
+else, so this module is the contract -- and it holds no rule a module already defines. ``/hardware``
 is ``hardware.scan``, ``/engines`` is ``detect_all`` with ``engines.install_plan`` composed in,
 ``/recommendations`` is ``recommend.pick`` plus ``recommend.exclusion_reason``; a fit rule or a
 version comparison written here would be a second copy of one that lives in its module.
+
+``POST /jobs`` is the first surface that changes this Mac, and it carries a NAME and a literal
+``true`` and nothing else: no path, no URL, no command, no version. The module it calls owns the
+allowlist, the consent gate, the lock and the rollback, so an unknown name or a low disk is that
+module's own refusal, delivered on the job's event stream -- never a rule invented here.
 
 Any page the user opens can send requests to 127.0.0.1, so every request passes one guard
 before the router sees it: the ``Host`` must name this server, an ``Origin`` header is refused
@@ -23,8 +28,11 @@ from __future__ import annotations
 import dataclasses
 import hmac
 import json
+import re
 import secrets
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,9 +43,25 @@ from ohyesmlx import catalog, engines, fetch, hardware, recommend
 # can refuse.
 HOST = "127.0.0.1"
 
-# AC-8: a client that opens a connection and then says nothing -- or dribbles headers -- holds
-# its thread until this elapses, and the base class turns the timeout into a closed connection.
+# AC-8 of 04-01: a client that opens a connection and then says nothing -- or dribbles headers --
+# holds its thread until this elapses, and the base class turns the timeout into a closed
+# connection. It stays set on a job stream too, where it bounds each WRITE: a client that stops
+# reading is released at the first blocked send instead of holding a handler thread forever.
 HANDLER_TIMEOUT_S = 10.0
+
+# AC-4: while a job is quiet the stream writes this comment every 15 s. The wait is on the job's
+# condition, never on the socket, so the interval is a comment and not a read timeout.
+KEEPALIVE_S = 15.0
+
+# AC-4: a job keeps at most this many events. The terminal error and done are stored inside the
+# cap, so a job that overflows is ended at exactly the cap.
+MAX_EVENTS = 10_000
+
+# AC-1: the largest job body this server reads, checked from the header before the read.
+MAX_BODY_BYTES = 4_096
+
+# AC-6: shutdown cancels a running install or download and waits at most this long for it.
+JOB_SHUTDOWN_WAIT_S = 120.0
 
 # The three paths that answer, and the handler each one runs. Anything else is 404, whatever
 # the method -- and this mapping is the only place the set is written down.
@@ -47,19 +71,191 @@ _ENDPOINTS = {
     "/recommendations": "_get_recommendations",
 }
 
+# AC-1: the closed set of args per kind, as the one name key; ``confirmed`` is the other key and
+# must be JSON true. No kind has a key that names a path, a URL, a command or a version.
+_JOB_ARGS = {
+    "install": "engine",
+    "download": "repo",
+    "evict": "repo",
+}
+
+# The only pattern a job path takes: the 16-hex id and one of the two actions. A job with no
+# action is nothing this server serves, and a path that does not match is 404.
+_JOB_PATH = re.compile(r"/jobs/([0-9a-f]{16})(/events|/cancel)?")
+
 # The pinned codes with their statuses (docs/interfaces.md, v5.0, **Errors**). The message is
-# fixed per code, so a refusal can never echo a header value or the token; ``internal`` and
-# ``install_plan_failed`` carry the exception's message instead, and no exception this module
-# raises on its own path includes request data.
+# fixed per code, so a refusal can never echo a header value or the token; ``internal``,
+# ``install_plan_failed`` and ``bad_args`` carry a message instead, and no exception this module
+# raises on its own path includes request data (``bad_args`` names a JSON key, never a value).
 _ERRORS = {
     "bad_host": (403, "the Host header must be 127.0.0.1:<port> or localhost:<port>"),
     "origin_refused": (403, "a request carrying an Origin header is refused"),
     "unauthorized": (401, "a valid Authorization: Bearer token is required"),
     "not_found": (404, "no such path"),
-    "method_not_allowed": (405, "only GET is served on this path"),
+    "method_not_allowed": (405, "the method is not served on this path"),
     "internal": (500, None),
     "install_plan_failed": (500, None),
+    "bad_kind": (400, "kind must be install, download or evict"),
+    "bad_args": (400, None),
+    "bad_json": (400, "the body is not valid JSON"),
+    "unsupported_media_type": (415, "the body must be application/json"),
+    "body_too_large": (413, "Content-Length must be an integer no greater than 4096"),
+    "busy": (409, "another job is already running"),
+    "unknown_job": (404, "no such job"),
+    "bad_event_id": (400, "Last-Event-ID must be a non-negative integer"),
+    "not_cancellable": (409, "an evict job cannot be cancelled"),
+    "job_finished": (409, "the job has already finished"),
 }
+
+
+def _event(kind: str, message: str, payload: dict | None) -> dict:
+    """One server-authored event in the pinned shape; ``_Job._store`` assigns its seq."""
+    return {
+        "seq": 0,
+        "type": kind,
+        "message": message,
+        "fraction": None,
+        "payload": payload,
+    }
+
+
+class _Job:
+    """One accepted job: its id, its events, the condition they arrive on, and its cancel flag.
+
+    ``append`` is the module's ``emit``. It is the only writer, it assigns the job's own ``seq``
+    (the stream's event id), and it stores ``done`` last: the moment that event is stored the
+    registry's one slot is freed (AC-3), so a job's outcome and its slot cannot disagree.
+    """
+
+    def __init__(self, registry: "_Jobs", job_id: str, kind: str, name: str):
+        self.id = job_id
+        self.kind = kind
+        self.name = name
+        self.events: list[dict] = []
+        self.condition = threading.Condition()
+        self.done = False
+        self.cancel_requested = False
+        self._registry = registry
+
+    def append(self, event: dict) -> None:
+        """Store one module event and wake the stream; end the job at the cap or on ``done``."""
+        terminal = False
+        with self.condition:
+            if self.done:
+                return
+            if event.get("type") == "done":
+                self._store(event)
+                terminal = True
+            elif len(self.events) >= MAX_EVENTS - 2:
+                self.cancel_requested = True
+                self._store(
+                    _event(
+                        "error",
+                        "the job produced too many events; it was ended",
+                        {"code": "too_many_events"},
+                    )
+                )
+                self._store(_event("done", "job ended at the event cap", None))
+                terminal = True
+            else:
+                self._store(event)
+            if terminal:
+                self.done = True
+            self.condition.notify_all()
+        if terminal:
+            self._registry.finished(self)
+
+    def _store(self, event: dict) -> None:
+        stored = dict(event)
+        stored["seq"] = len(self.events) + 1
+        self.events.append(stored)
+
+    def cancelled(self) -> bool:
+        """The callable a module probes; True from the moment ``POST /jobs/{id}/cancel`` lands."""
+        return self.cancel_requested
+
+
+class _Jobs:
+    """Every job this process has accepted, and the one running slot, under one lock (AC-3)."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.running: _Job | None = None
+        self.jobs: dict[str, _Job] = {}
+
+    def get(self, job_id: str) -> _Job | None:
+        with self.lock:
+            return self.jobs.get(job_id)
+
+    def claim(self, job: _Job) -> _Job | None:
+        """Take the slot for *job*, or return the job already holding it."""
+        with self.lock:
+            if self.running is not None:
+                return self.running
+            self.running = job
+            self.jobs[job.id] = job
+            return None
+
+    def finished(self, job: _Job) -> None:
+        with self.lock:
+            if self.running is job:
+                self.running = None
+
+    def cancel_and_wait(self, timeout: float) -> None:
+        """Cancel a running install or download, wait for the job, and give up after *timeout*.
+
+        An evict has no cancel flag and is only waited for: it is a handful of unlinks and
+        interrupting it would leave a ledger that disagrees with the disk. AC-6: the wait is a
+        bound, not a promise -- a pip step can outlive it, and docs/interfaces.md says so.
+        """
+        with self.lock:
+            job = self.running
+        if job is None:
+            return
+        if job.kind in ("install", "download"):
+            job.cancel_requested = True
+        deadline = time.monotonic() + timeout
+        with job.condition:
+            while not job.done:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                job.condition.wait(remaining)
+
+
+def _job_code(job: _Job) -> str | None:
+    """The code of the last error event stored, or null: what a job's end line reports."""
+    for event in reversed(job.events):
+        if event.get("type") == "error":
+            return (event.get("payload") or {}).get("code")
+    return None
+
+
+def _args_problem(args, name_key: str) -> str | None:
+    """The first reason *args* is not the closed set for its kind, naming the key; else None.
+
+    Names, versions, paths and disk numbers are not checked here: a string that is not an
+    engine or a catalog repo is the module's own refusal (``unknown_engine``, ``unknown_repo``),
+    delivered on the job's stream. ``confirmed`` must be JSON ``true`` -- not ``"true"``, not 1
+    -- because it is the client's statement that a user chose this action (docs/interfaces.md).
+    """
+    if not isinstance(args, dict):
+        return "args must be an object"
+    extra = sorted(set(args) - {name_key, "confirmed"})
+    if extra:
+        return f"unexpected key {extra[0]}"
+    missing = [key for key in (name_key, "confirmed") if key not in args]
+    if missing:
+        return f"missing key {missing[0]}"
+    if not isinstance(args[name_key], str):
+        return f"{name_key} must be a string"
+    if args["confirmed"] is not True:
+        return "confirmed must be true"
+    return None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _log_refusal(code: str, method: str, path: str) -> None:
@@ -76,7 +272,7 @@ def _log_refusal(code: str, method: str, path: str) -> None:
                 "refused": code,
                 "method": method,
                 "path": path,
-                "time": datetime.now(timezone.utc).isoformat(),
+                "time": _now(),
             }
         ),
         file=sys.stderr,
@@ -84,13 +280,24 @@ def _log_refusal(code: str, method: str, path: str) -> None:
     )
 
 
+def _log_job(record: dict) -> None:
+    """One JSON line per job start and per job end (AC-6), and nothing per event.
+
+    The start line is ``{"job", "kind", "name", "time"}`` and the end line
+    ``{"job", "ok", "code", "time"}``; neither carries a token or a header value, so the record
+    the app can surface says what ran and how it ended and nothing a secret could hide in.
+    """
+    print(json.dumps(record), file=sys.stderr, flush=True)
+
+
 class _Handler(BaseHTTPRequestHandler):
-    """The request handler: one guard, three endpoints, and no other response shape.
+    """The request handler: one guard, three GETs, the job routes, and no other response shape.
 
     ``self.server`` is the object :func:`make_server` built, carrying the injected ``scan``,
-    ``detect`` and ``load_catalog`` seams and the launch ``token``. ``timeout`` is overridden
-    per server by the factory, so the test that proves a stalled connection is dropped does not
-    wait the production ten seconds.
+    ``detect``, ``load_catalog``, ``install``, ``download`` and ``evict`` seams, the job
+    registry and the launch ``token``. ``timeout`` is overridden per server by the factory, so
+    the test that proves a stalled connection -- or a stalled stream write -- is dropped does
+    not wait the production ten seconds.
     """
 
     # HTTP/1.0 is the base class's default and is load-bearing here: it is what closes the
@@ -167,14 +374,22 @@ class _Handler(BaseHTTPRequestHandler):
         return self.path.partition("?")[0]
 
     def _route(self, method: str) -> None:
-        """404 for an unknown path, 405 for a non-GET on one of the three, else the endpoint.
+        """Exact paths for the GETs and the job routes; anything else is 404.
 
         The path is resolved before the method: there is nothing at an unknown path to be
         method-not-allowed about, so a POST to one is a 404, while a POST to ``/hardware`` is
         the 405 AC-6 names. A module that raises is a 500 carrying its message and no
         traceback, which is the one diagnostic the app needs and nothing more.
         """
-        endpoint = _ENDPOINTS.get(self._path())
+        path = self._path()
+        if path == "/jobs":
+            self._route_job_create(method)
+            return
+        match = _JOB_PATH.fullmatch(path)
+        if match is not None:
+            self._route_job_action(method, match.group(1), match.group(2))
+            return
+        endpoint = _ENDPOINTS.get(path)
         if endpoint is None:
             self._respond("not_found")
             return
@@ -185,6 +400,36 @@ class _Handler(BaseHTTPRequestHandler):
             getattr(self, endpoint)()
         except Exception as error:  # a module raised; its message is the whole report
             self._respond("internal", str(error))
+
+    def _route_job_create(self, method: str) -> None:
+        if method != "POST":
+            self._respond("method_not_allowed")
+            return
+        try:
+            self._post_job()
+        except TimeoutError:
+            # A body that stopped arriving is the socket timeout's case, not a 500.
+            self.close_connection = True
+        except Exception as error:  # a thread that would not start is the only likely raise
+            self._respond("internal", str(error))
+
+    def _route_job_action(self, method: str, job_id: str, action: str | None) -> None:
+        if action == "/events":
+            if method != "GET":
+                self._respond("method_not_allowed")
+                return
+            self._get_job_events(job_id)
+            return
+        if action == "/cancel":
+            if method != "POST":
+                self._respond("method_not_allowed")
+                return
+            try:
+                self._post_job_cancel(job_id)
+            except Exception as error:
+                self._respond("internal", str(error))
+            return
+        self._respond("not_found")
 
     # --- the endpoints ---------------------------------------------------------------------
 
@@ -200,7 +445,7 @@ class _Handler(BaseHTTPRequestHandler):
         500 naming the engine: a silent null would report an engine as having nothing to
         install.
         """
-        macos_major = int(self.server.scan().macos.split(".", 1)[0])
+        macos_major = self._macos_major()
         statuses = []
         for status in self.server.detect():
             entry = dataclasses.asdict(status)
@@ -254,6 +499,190 @@ class _Handler(BaseHTTPRequestHandler):
             },
         )
 
+    def _macos_major(self) -> int:
+        """The integer before the first dot of ``Hardware.macos``: one definition, two callers."""
+        return int(self.server.scan().macos.split(".", 1)[0])
+
+    # --- the job routes --------------------------------------------------------------------
+
+    def _post_job(self) -> None:
+        """Validate, take the one slot, answer 202, and start the module call on a thread.
+
+        The order is AC-1's exactly: Content-Type, Content-Length (refused before the body is
+        read), the body, JSON, kind, args. Only after all of it is the slot claimed and the
+        thread started, so no job exists for a request that was refused.
+        """
+        body = self._job_body()
+        if body is None:
+            return
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            self._respond("bad_json")
+            return
+
+        kind = payload.get("kind") if isinstance(payload, dict) else None
+        name_key = _JOB_ARGS.get(kind) if isinstance(kind, str) else None
+        if name_key is None:
+            self._respond("bad_kind")
+            return
+        args = payload.get("args")
+        problem = _args_problem(args, name_key)
+        if problem is not None:
+            self._respond("bad_args", problem)
+            return
+
+        job = _Job(self.server.jobs, secrets.token_hex(8), kind, args[name_key])
+        running = self.server.jobs.claim(job)
+        if running is not None:
+            self._respond("busy", f"job {running.id} is still running")
+            return
+        _log_job({"job": job.id, "kind": job.kind, "name": job.name, "time": _now()})
+        threading.Thread(
+            target=self._run_job, args=(job,), daemon=True, name=f"job-{job.id}"
+        ).start()
+        self._write_json(202, {"job_id": job.id})
+
+    def _job_body(self) -> bytes | None:
+        """Read the body, or refuse it from the headers first; None means a refusal was written."""
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._respond("unsupported_media_type")
+            return None
+        try:
+            length = int(self.headers.get("Content-Length"))
+        except (TypeError, ValueError):
+            self._respond("body_too_large")
+            return None
+        if length < 0 or length > MAX_BODY_BYTES:
+            self._respond("body_too_large")
+            return None
+        return self.rfile.read(length)
+
+    def _run_job(self, job: _Job) -> None:
+        """Run the one module call, and make a raise end the stream with ``internal`` and ``done``.
+
+        The module owns its consent gate, its lock, its rollback and its refusal codes; the
+        server hands it the validated name, the literal ``true`` and its emit/cancel callables,
+        and adds nothing of its own. The end line is written however the call ended.
+        """
+        ok = False
+        try:
+            if job.kind == "install":
+                ok = self.server.install(
+                    job.name,
+                    True,
+                    macos_major=self._macos_major(),
+                    emit=job.append,
+                    cancel=job.cancelled,
+                )
+            elif job.kind == "download":
+                ok = self.server.download(
+                    job.name, True, emit=job.append, cancel=job.cancelled
+                )
+            else:
+                ok = self.server.evict(job.name, True, emit=job.append)
+        except Exception as error:
+            job.append(
+                _event("error", str(error) or "the job failed unexpectedly", {"code": "internal"})
+            )
+            job.append(_event("done", "the job ended after an unexpected error", None))
+        finally:
+            _log_job(
+                {"job": job.id, "ok": ok is True, "code": _job_code(job), "time": _now()}
+            )
+
+    def _post_job_cancel(self, job_id: str) -> None:
+        """Flip a running install's or download's cancel flag; an evict has none (AC-5)."""
+        job = self.server.jobs.get(job_id)
+        if job is None:
+            self._respond("unknown_job")
+            return
+        if job.kind == "evict":
+            self._respond("not_cancellable")
+            return
+        if job.done:
+            self._respond("job_finished")
+            return
+        job.cancel_requested = True
+        self._write_json(202, {"job_id": job.id})
+
+    def _get_job_events(self, job_id: str) -> None:
+        """Stream the job's events as server-sent events, then close after ``done`` (AC-4).
+
+        The stream waits on the job's condition, never on the socket, so a job that is quiet
+        for longer than the socket timeout is not cut off; the socket timeout stays set so it
+        bounds each WRITE, and a client that stops reading releases its handler thread at the
+        first blocked send. A disconnect ends the handler and never the job.
+        """
+        job = self.server.jobs.get(job_id)
+        if job is None:
+            self._respond("unknown_job")
+            return
+        last_seq = self._last_event_id()
+        if last_seq is None:
+            return
+        try:
+            self._stream_job(job, last_seq)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            self.close_connection = True
+
+    def _last_event_id(self) -> int | None:
+        """The ``Last-Event-ID`` to resume after, 0 for the whole stream, or None on a refusal."""
+        value = self.headers.get("Last-Event-ID")
+        if value is None:
+            return 0
+        try:
+            last_seq = int(value)
+        except (TypeError, ValueError):
+            self._respond("bad_event_id")
+            return None
+        if last_seq < 0:
+            self._respond("bad_event_id")
+            return None
+        return last_seq
+
+    def _stream_job(self, job: _Job, last_seq: int) -> None:
+        """Write stored events in seq order, wait for new ones, and keepalive while quiet."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.flush()
+
+        with job.condition:
+            cursor = 0
+            while cursor < len(job.events) and job.events[cursor]["seq"] <= last_seq:
+                cursor += 1
+
+        while True:
+            with job.condition:
+                if cursor >= len(job.events) and job.done:
+                    return
+                if cursor >= len(job.events):
+                    before = len(job.events)
+                    job.condition.wait(self.server.keepalive_s)
+                    batch = job.events[cursor:] if len(job.events) > before else None
+                else:
+                    batch = job.events[cursor:]
+                cursor = len(job.events)
+            if batch is None:
+                if job.done:
+                    return
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+                continue
+            for event in batch:
+                if event["seq"] <= last_seq:
+                    continue
+                last_seq = event["seq"]
+                self.wfile.write(
+                    f"id: {event['seq']}\ndata: {json.dumps(event)}\n\n".encode("utf-8")
+                )
+                self.wfile.flush()
+                if event.get("type") == "done":
+                    return
+
     # --- one response builder ---------------------------------------------------------------
 
     def _respond(self, code: str, message: str | None = None) -> None:
@@ -291,16 +720,22 @@ def make_server(
     scan=hardware.scan,
     detect=engines.detect_all,
     load_catalog=catalog.load,
+    install=engines.install,
+    download=fetch.download,
+    evict=fetch.evict,
     token: str | None = None,
     timeout: float = HANDLER_TIMEOUT_S,
+    keepalive_s: float = KEEPALIVE_S,
 ) -> ThreadingHTTPServer:
     """The listening server on 127.0.0.1:*port*, already accepting connections.
 
-    The three module seams default to the real functions, so the CLI passes none of them and a
-    test passes fakes. *token* is generated fresh with ``secrets.token_urlsafe(32)`` when the
-    caller has none, and it lives only on this object and in the one line the CLI prints -- no
-    file, no log, no argv. *timeout* bounds each connection and is short only in the test that
-    proves it.
+    The module seams default to the real functions, so the CLI passes none of them and a test
+    passes fakes; the job seams take a name and a literal ``true`` and emit on the job, so a
+    test never installs, downloads or opens a socket. *token* is generated fresh with
+    ``secrets.token_urlsafe(32)`` when the caller has none, and it lives only on this object and
+    in the one line the CLI prints -- no file, no log, no argv. *timeout* bounds each connection
+    (and each stream write) and is short only in the tests that prove it; *keepalive_s* is the
+    quiet interval between stream comments and is short only in the test that proves one.
 
     The socket is bound and listening before this returns, so a client may connect the moment
     it has read the announced line; a bind that fails raises ``OSError`` to the caller, which is
@@ -314,5 +749,10 @@ def make_server(
     listener.scan = scan
     listener.detect = detect
     listener.load_catalog = load_catalog
+    listener.install = install
+    listener.download = download
+    listener.evict = evict
+    listener.jobs = _Jobs()
+    listener.keepalive_s = keepalive_s
     listener.token = token if token is not None else secrets.token_urlsafe(32)
     return listener

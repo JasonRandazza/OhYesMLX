@@ -1439,10 +1439,37 @@ is the rows `exclusion_reason` answers non-null for, and on an unsupported Mac `
 `unsupported_reason` carries `Hardware.unsupported_reason` -- the recommender never copies that
 sentence into a reason.
 
-**Job** (`POST /jobs` body `{"kind": "install|download|quickbench", "args": {...}}` -> `{"job_id": str}`)
+**Job** (`POST /jobs` body `{"kind": "install|download|evict", "args": {...}}` -> `202 {"job_id": "16-hex"}`)
+`args` is the closed set `{"engine": str, "confirmed": true}` for `install` and `{"repo": str, "confirmed": true}` for
+`download` and `evict`: an extra key, a missing key, a non-string name, or `confirmed` that is not JSON `true` is
+`400 bad_args` naming the key, and an unknown kind (including `quickbench` until 04-03) is `400 bad_kind`. `confirmed`
+is the client's statement that its UI showed this action and the user chose it; the server cannot verify a human, so
+Phase 5 sends it only from a user gesture. The server validates no engine name, repo id, version, path or disk number
+itself: an unknown name is the module's own refusal (`unknown_engine`, `unknown_repo`), delivered as the job's `error`
+and `done` events, and a module that raises still ends the stream with `error` payload `{"code": "internal"}` and
+`done`, continuing the job's seq. A non-JSON Content-Type is `415 unsupported_media_type`; a missing, non-integer or
+over-4096 `Content-Length` is `413 body_too_large` and the body is never read; invalid JSON is `400 bad_json`. One job
+runs at a time: a second `POST /jobs` is `409 busy` naming the running job's id, and the slot frees the moment its
+`done` event is stored. Jobs are not persisted; they live as long as the process.
 Events on `GET /jobs/{id}/events` (server-sent events), one JSON object per `data:` line:
 `{"seq": int, "type": "progress|log|result|error|done", "message": str, "fraction": float|null, "payload": object|null}`.
-`install` and `download` require `"confirmed": true` in `args`; the server refuses otherwise (the consent gate).
+Each event is framed `id: <seq>\ndata: <event JSON>\n\n` in seq order. An unknown job id is `404 unknown_job`; stored
+events replay first, a `Last-Event-ID` request header resumes after that seq (non-integer or negative is
+`400 bad_event_id`, one beyond the last stored seq waits for new events), a `: keepalive` comment is written every 15 s
+while nothing arrives, and the server closes the connection after `done`, so a finished job replays everything and
+closes. A job keeps at most 10,000 events; past that it is ended with `error` payload `{"code": "too_many_events"}` and
+`done`. The stream waits on the job's condition, never on the socket, so a quiet job is not cut off; the socket timeout
+stays set and bounds each write, so a client that stops reading releases its handler thread at the first blocked send.
+`POST /jobs/{id}/cancel` answers `202` and makes the `cancel` callable the module holds answer True from then on; a
+download stops at its next chunk, an install only between steps and between guided-download polls (never inside a
+running pip step, whose own 900 s timeout and the installer's rollback still apply), and the stream ends with the
+module's own cancelled `error`/`done`. Cancelling an `evict` is `409 not_cancellable`; a finished job is
+`409 job_finished`; an unknown id is `404 unknown_job`.
+Shutdown (stdin EOF, `SIGINT`, `SIGTERM`) cancels a running install or download at its next check and waits for any
+running job at most 120 s, then exits 0; an evict is waited for, never cancelled. Each job start writes one stderr line
+`{"job": id, "kind": str, "name": str, "time": iso}` and each end one `{"job": id, "ok": bool, "code": str|null,
+"time": iso}` — never a token or a header value. Residual risk: a pip step still running when the 120 s wait expires
+can outlive the server, and the installer's rollback does not run for it; Phase 4.5 owns that.
 A download's in-flight `progress` events carry `fraction` = (bytes of files already finished + bytes
 written so far of the current file) / the model's total bytes and payload
 `{"path": str, "bytes_done": int, "bytes_total": int}` (the same numerator and the model's total, so a
@@ -1462,15 +1489,18 @@ Every request passes one guard before the router sees it, in this order: a `Host
 `403 origin_refused`; anything but `Authorization: Bearer <token>` is `401 unauthorized`, compared as UTF-8 bytes with
 `hmac.compare_digest` so a non-ASCII header value is a 401 and never a 500. The token is the primary control: a
 cross-site `<img>` or navigation carries no `Origin` and a correct `Host`, and only the token stops it. `GET /hardware`,
-`GET /engines` and `GET /recommendations` answer the shapes above; an authorised request to any other path is
-`404 not_found`, a non-GET on one of the three is `405 method_not_allowed`, a `ValueError` from `engines.install_plan`
+`GET /engines` and `GET /recommendations` answer the shapes above and the job routes answer theirs; an authorised
+request to any other path is `404 not_found`, a non-GET on one of the three GETs is `405 method_not_allowed`, a
+`ValueError` from `engines.install_plan`
 is `500 install_plan_failed` naming the engine, and any other module exception is `500 internal` carrying the
-exception's message and no traceback. Every response is `Content-Type: application/json; charset=utf-8` with
-`Cache-Control: no-store`; no `Access-Control-*` header is ever sent, `OPTIONS` included; the handler stays on
+exception's message and no traceback. Every JSON response is `Content-Type: application/json; charset=utf-8` with
+`Cache-Control: no-store`, and an event stream is `Content-Type: text/event-stream` with the same `no-store`; no
+`Access-Control-*` header is ever sent, `OPTIONS` included; the handler stays on
 HTTP/1.0, so one request is one connection, handler threads are daemons, and a connection idle for 10 s is closed.
 Each guard refusal writes one JSON line to stderr, `{"refused": code, "method", "path", "time"}` — never a header value
-or the token, and with the query string dropped — while a served request writes nothing (the access log is silenced),
-so the client can surface a probe without handling a secret. The server dies with its parent: stdin reaching EOF,
+or the token, and with the query string dropped — while a served GET writes nothing (the access log is silenced); a job
+writes only the start and end lines pinned above, so the client can surface a probe without handling a secret. The
+server dies with its parent: stdin reaching EOF,
 `SIGINT` or `SIGTERM` shuts it down, releases the port and exits 0 — which means `ohyesmlx app </dev/null` exits at
 once by design, because EOF on stdin *is* the parent-death signal. A socket that cannot be bound prints nothing on
 stdout, writes one `{"error": {"code": "bind_failed", "message": str}}` line to stderr and exits 2, so the client can

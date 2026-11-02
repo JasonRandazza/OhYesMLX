@@ -776,10 +776,11 @@ def _parser() -> argparse.ArgumentParser:
 
     app = commands.add_parser(
         "app",
-        help="serve the app's read-only localhost API",
-        description="Serve GET /hardware, /engines and /recommendations on 127.0.0.1 behind "
-        "the per-launch token printed on stdout. Serves until stdin reaches EOF (how the app "
-        "learns its parent has gone) or SIGINT/SIGTERM arrives.",
+        help="serve the app's localhost API",
+        description="Serve the app's localhost API on 127.0.0.1 behind the per-launch token "
+        "printed on stdout: GET /hardware, /engines and /recommendations, and the job routes "
+        "POST /jobs, GET /jobs/{id}/events and POST /jobs/{id}/cancel. Serves until stdin "
+        "reaches EOF (how the app learns its parent has gone) or SIGINT/SIGTERM arrives.",
     )
     app.add_argument(
         "--port",
@@ -962,7 +963,10 @@ def _app(args) -> int:
     stdin EOF is the parent-death signal -- the app holds the pipe open for exactly as long as
     it lives -- which is why ``ohyesmlx app </dev/null`` exits at once, by design (documented in
     ``docs/interfaces.md``). SIGINT and SIGTERM end the same serve loop, and every path leaves
-    through ``server_close()`` with exit 0, so the port is released before the process is gone.
+    through a job wait and ``server_close()`` with exit 0, so the port is released before the
+    process is gone. AC-6: a running install or download is cancelled first (at its next step
+    boundary) and waited for at most 120 s -- an evict is only waited for -- so a job is never
+    abandoned silently, though a pip step can outlive the wait.
 
     A port that cannot be bound prints nothing on stdout: the client waits on that line, so an
     error there is one stderr line and exit 2, which it can tell from a hang.
@@ -994,6 +998,7 @@ def _app(args) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        listener.jobs.cancel_and_wait(server.JOB_SHUTDOWN_WAIT_S)
         listener.server_close()
     return 0
 
