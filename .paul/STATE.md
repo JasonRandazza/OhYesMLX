@@ -15,9 +15,9 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 built on `main` (945 tests); Phases 4 (server, quickbench) and 5 (SwiftUI app, packaging) not started.
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main` (959 tests); Phase 4 planning (04-01 written); Phase 4.5 security hardening inserted; Phase 5 not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); next: plan Phase 4. Handoff: `.paul/HANDOFF.md`.
+Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); Phase 4 plan 04-01 created, awaiting audit and approval. Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-01 — Phase 3 closed: catalog, recommender, fetch (real-download smoke PASS). Earlier: canary baselines for all five engines (2026-10-29/30).
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [v5.0 Phases 2.5-3 unified and reviewed; Phase 4 not planned]
+  ✓        ○        ○     [04-01 created, awaiting audit and approval]
 ```
 
 ## Performance Metrics
@@ -129,6 +129,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Decision 137: Phase 3 catalog is capped by disk size (~2 GB of weights), downloads use the Hugging Face cache layout, and oMLX's HF-cache scan is recorded not changed | v5.0 2026-11-01 | Jason's call. 3B-class models are in (SmolLM3-3B, Llama-3.2-3B); the two measured larger models are a higher tier; no <=3B MoE exists for MLX. `docs/research/2026-10-30-phase3-models.md`. AGENTS.md oMLX hazard corrected (it also scans the user's HF cache; ids still resolve to the cell's entry). |
 | Decision 138: one download at a time, across repos and processes (03-03 AC-7) | v5.0 2026-11-02 | Jason's call at the Phase 2.5-3 review. The per-repo lock let two models download at once, each checking free disk alone, so together they could overrun `DISK_MARGIN`. `fetch` now takes one `download.lock`; refusal stays `busy`. |
 | Decision 139: adopt Osaurus 0.25.29 and oMLX 0.7.3 as tested builds | v5.0 2026-11-02 | Jason's call. Both auto-updated past their tested builds (0.25.28, 0.7.2). Canary 2026-11-02 12:47-12:57 EST, `scripts/run_canary.sh`, verdicts only, load 1.5-3.2, Osaurus restored byte-exact (`cmp`): Osaurus decode 62.0 -> 63.1 tok/s (+1.8%), TTFT 0.305 -> 0.311 s (+2.0%); oMLX decode 85.4 -> 83.2 (-2.6%), TTFT 0.172 -> 0.176 s (+2.3%); both "no effect on our tables" (5% floor). The manifest's baselines were re-recorded from that same run through `canary.record` (both rows PASS, `runtime_version` equal to the adopted build), not from a second run. Raw: `results/canary/20261102T174716Z-osaurus`, `20261102T175323Z-omlx`. vMLX 1.6.82 is still untested. |
+| Decision 140: Phase 4 shape — lighter quickbench cells (D9), token + Host + Origin guard and a catalog `base` field (D10), three plans, and a Phase 4.5 security-hardening phase | v5.0 2026-11-02 | Jason's calls. A full-rigor cell took 4-6 min in the 2026-11-02 canaries, so quickbench trades rigor for D4's ~10 min and labels its results "quick". The guard lands in 04-01, before any endpoint that changes the machine. Phase 4.5 reviews the whole backend as an attack surface before the SwiftUI app ships. |
 | Decision 136: OptiQ's 0.5.13 to 0.7.8 self-update cut TTFT ~30% (0.24 s to 0.17 s, reproducible); decode within the noise floor | v5.0 2026-10-30 | Canary finding, `docs/research/2026-10-30-optiq-0513-vs-078-canary.md`. Published 0.5.x OptiQ TTFT figures describe the old build; whether to re-run OptiQ columns is Jason's call. A pinned package is not a pinned build: `install_plan("optiq")` now also pins mlx-lm (unpinned it served HTTP 404). The harness on this host runs the 0.5.13 lab copy via `lab-paths.json`. |
 | Decision 135: Upstream drift is handled by lab copies, a canary and one tested-versions manifest | v5.0 2026-10-29 | Jason's call. Phase 2.5 inserted (`.paul/phases/v5-onboarding/PLAN.md`). OptiQ on this host is 0.7.8 (self-updated 2026-10-29), untested: the harness is verified on 0.5.13 and no cell has been measured on 0.7.8; it joins nothing earlier. |
 | Decision 134: v5.0 Onboarding App takes priority over MTPLX | v5.0 2026-10-29 | Jason's call. SwiftUI shell over a stdlib Python localhost API; guided install with consent; curated catalog first, Hugging Face live later; decisions D1–D8 in `.paul/phases/v5-onboarding/PLAN.md`. MTPLX work parked on branch `mtplx-wip`. |
@@ -163,7 +164,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 Last session: 2026-11-01 (Claude Sonnet 5.5 coordinator)
 Stopped at: Phase 3 committed (`8df8a19`); handoff written.
-Next action: `/paul:plan` Phase 4 (see HANDOFF).
+Next action: `/paul:audit .paul/phases/v5-onboarding/04-01-PLAN.md`, then APPLY.
+Resume file: `.paul/phases/v5-onboarding/04-01-PLAN.md`
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-137).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 

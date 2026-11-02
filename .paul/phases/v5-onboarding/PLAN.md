@@ -19,6 +19,8 @@ with consent; curated catalog first (Hugging Face live later); new milestone, ah
 - D6 Standalone Python (python-build-standalone) bundled in the .app with the ohyesmlx package.
 - D7 First release = unsigned GitHub Releases .app zip (right-click, Open); notarization waits on an Apple Developer account decision. Xcode build is the developer path; the CLI stays.
 - D8 Local only: no telemetry, no upload. Results in ~/Library/Application Support/OhYesMLX/; "Export results" writes a JSON file. Models in the HF cache by default; the user may pick another volume.
+- D9 (2026-11-02) Quickbench runs lighter cells than the harness: fixed small warmup, 5 measured requests, 10 s cooldown, coherence gate kept, about 1-1.5 min per cell so 4-6 cells fit D4's ~10 minutes. Results are labelled "quick" and never join the published tables.
+- D10 (2026-11-02) The localhost API is guarded by a per-launch bearer token printed on startup, a Host check (127.0.0.1/localhost:<port> only) and refusal of any request carrying an Origin header. Stage B finds a model's other formats through a catalog `base` field.
 
 ## Purpose
 
@@ -103,7 +105,12 @@ Surfaces approved by Jason 2026-10-29: `ohyesmlx/engines-tested.json`, subcomman
 - T4.1 `ohyesmlx app` subcommand + server skeleton, `GET /hardware`, `/engines`.
 - T4.2 `GET /recommendations`.
 - T4.3 Jobs: install and download as jobs with an event stream.
-- T4.4 `quickbench`: fixed small cell set (one model, installed engines, `--cells` is still the only selector) -> summary.
+- T4.4 `quickbench`: fixed small cell set (one model, installed engines, `--cells` is still the only selector) -> summary. Lighter cells per D9; stage B via the catalog `base` field (D10).
+
+Plans (2026-11-02): 04-01 server + guard + GET endpoints (T4.1, T4.2); 04-02 jobs + SSE for install and download (T4.3); 04-03 quickbench (T4.4). Each gets `/paul:audit` before APPLY.
+
+### Phase 4.5 — Security hardening [INSERTED 2026-11-02, Jason]
+Why: v5.0 is the first time OYMLX runs installers, downloads and a network-reachable server on a non-technical user's Mac. After Phase 4, before the SwiftUI app ships, one phase reviews the whole backend as an attack surface: the localhost API (guard, job args, body limits), installer subprocesses and their environment, downloader URL/path handling and the HF cache, files written under Application Support (permissions, symlinks), the ledger and logs, and what a bundled Python (D6) exposes. Output: a threat model, findings fixed with tests, and a checklist the Phase 5 packaging must keep. Plan written after Phase 4 lands.
 
 ### Phase 5 — SwiftUI app (S7)
 - T5.1 Xcode package, backend launcher (spawn + health wait + quit), `APIClient` with stub.
