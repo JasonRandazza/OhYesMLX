@@ -354,6 +354,62 @@ def test_tight_reason_is_the_fixed_template():
 
 
 # --------------------------------------------------------------------------------------
+# AC-2: a row already in the cache says so, and is not asked for disk
+# --------------------------------------------------------------------------------------
+
+
+def test_a_downloaded_row_says_it_is_on_this_mac_and_names_no_download_size():
+    row = model(**QWEN_2B_OQ4)
+    here = frozenset({row.repo})
+
+    [comfortable] = pick(hardware(BUDGET_16_GIB), [row], [], PLENTY_OF_DISK, here)
+    assert comfortable.downloaded is True
+    assert comfortable.reason == (
+        "Fits with about 7.5 GB of memory to spare; already on this Mac"
+    )
+    assert "GB download" not in comfortable.reason
+
+    [tight] = pick(hardware(BUDGET_8_GIB), [row], [], PLENTY_OF_DISK, here)
+    assert tight.fit == "tight"
+    assert tight.reason == "Tight fit, about 1.8 GB of memory to spare; already on this Mac"
+    assert "GB download" not in tight.reason
+
+
+def test_a_row_not_in_downloaded_still_says_its_download_size():
+    [only] = pick(
+        hardware(BUDGET_16_GIB),
+        [model(**QWEN_2B_OQ4)],
+        [],
+        PLENTY_OF_DISK,
+        frozenset({"someone/else"}),
+    )
+    assert only.downloaded is False
+    assert only.reason.endswith("1.8 GB download")
+
+
+def test_a_downloaded_row_is_offered_on_a_mac_short_of_disk():
+    """The download has already been paid for, so the disk budget has nothing to decide."""
+    row = model(**QWEN_2B_OQ4)
+    hw = hardware(BUDGET_16_GIB)
+
+    assert pick(hw, [row], [], 0) == []
+    assert exclusion_reason(row, hw, 0) is not None
+    assert exclusion_reason(row, hw, 0, frozenset({row.repo})) is None
+    [only] = pick(hw, [row], [], 0, frozenset({row.repo}))
+    assert only.downloaded is True
+
+
+def test_memory_still_excludes_a_downloaded_row():
+    row = model(**LFM_8B)
+    hw = hardware(BUDGET_8_GIB)
+
+    assert pick(hw, [row], [], 0, frozenset({row.repo})) == []
+    assert exclusion_reason(row, hw, 0, frozenset({row.repo})) == (
+        "Needs about 9.6 GB of memory at peak; this Mac's budget is 3.6 GB"
+    )
+
+
+# --------------------------------------------------------------------------------------
 # AC-6: the pinned Pick shape
 # --------------------------------------------------------------------------------------
 
@@ -371,6 +427,7 @@ def test_pick_has_exactly_the_pinned_fields():
         "install_needed",
         "start_here",
         "reason",
+        "downloaded",
         "measured_here",
     ]
 
@@ -393,6 +450,7 @@ def test_pick_is_frozen_and_carries_no_measurement_here():
     assert only.format == "mlx affine 4-bit gs64"
     assert only.size_bytes == 4_782_228_614
     assert only.fit_basis == "estimated"
+    assert only.downloaded is False
     assert only.measured_here is None
     with pytest.raises(FrozenInstanceError):
         only.fit = "tight"

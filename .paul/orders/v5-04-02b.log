@@ -1,0 +1,117 @@
+I'll start by reading the plan spec and the files I may touch.
+Now let me read recommend.py, engines.py, and the relevant parts of server.py.
+Now let me look at server.py's `_get_recommendations`, docs/interfaces.md, and the test files.
+
+Now the tests. Let me read them.
+
+
+Let me get the baseline test count before changing anything.
+
+
+Baseline is 995 passed. Let me check every existing test that asserts a fetch event sequence or references progress.
+
+I have the full picture. Baseline: **995 passed**. Let me start with `fetch.py` — `downloaded`, the two throttle constants, and the in-flight progress emission.
+
+
+
+
+
+Now `recommend.py` — the `downloaded` keyword, the Pick field, and the reason template.
+
+
+
+Now `engines.py` — the tested-release URL table.
+
+
+Now the server composes the downloaded set.
+
+Now the interface docs.
+Now the tests. First `tests/test_fetch.py` — a fake clock, the `downloaded` checks, and the progress tests.
+
+
+
+
+
+
+
+
+
+Let me run the four affected test files.
+
+
+All green: **1013 passed** (995 baseline + 18 new). Now the three required red-checks, each reverted after.
+
+Throttle removal confirmed to break both event-count tests. Restoring.
+
+
+Wrong-size test fails without the size checks, as required. Restoring.
+
+
+URL tests fail with `releases/latest` back, as required. Restoring and running the full suite.
+
+Full suite green. Let me run the plan's live check directly (read-only, no server) and review the diff.
+The live check says False for all three, while the plan expects two to be True. Let me inspect the real cache against the catalog pins.
+
+
+The two named rows are present but their `model.safetensors` is a regular, locally modified file (different size, no blob), so AC-1's size rule correctly says False. Let me see if any real cached row does verify, to confirm the check works against a real cache.
+Let me review the full diff for anything unintended.
+One gap: no test proves the fraction counts files already finished. Let me add that, and pin the payloads in the existing event-sequence test.
+
+
+
+
+
+All done. Final state: **1014 passed** (baseline 995 + 19 new tests), no files outside the allow-list touched.
+
+## Per AC
+
+**AC-1 — `fetch.downloaded`** (`ohyesmlx/fetch.py:248`)
+Sizes and links only: each `plan`-named snapshot path must resolve to a regular file at the catalog size, and the pinned blob must be present at that size; nothing is hashed (`test_downloaded_checks_sizes_not_hashes`, test_fetch.py:1406) and nothing is written (`test_downloaded_is_false_and_writes_nothing_before_a_download`, :1372). Partial `.incomplete` is False (:1380), wrong-size blob False (:1390), missing link False (:1398), complete tree True (:1365), `plan`'s `ValueError` propagates (:1416).
+
+**AC-2 — `Pick.downloaded`** (`ohyesmlx/recommend.py:82`, `exclusion_reason` :117, `pick` :161, reason template :100)
+`downloaded=` keyword on both functions; a downloaded row carries `downloaded: true`, its reason is the fixed template ending "already on this Mac" with no download size (:361), and the disk budget is skipped while memory still applies (:390, :402). Server: `server.py:233` builds the set with `fetch.downloaded` over the catalog and passes it to both calls. Tests: `test_a_downloaded_row_says_it_is_on_this_mac_and_names_no_download_size`, `test_a_downloaded_row_is_offered_on_a_mac_short_of_disk`, `test_memory_still_excludes_a_downloaded_row`, `test_recommendations_asks_fetch_downloaded_and_marks_the_picks` (test_server.py:440).
+
+**AC-3 — tested-release URLs** (`ohyesmlx/engines.py:560` table, `_release_url` :567, used at :622)
+One `(base, tag prefix)` entry per engine; the URL is built from `TESTED_VERSIONS`. `install_plan("osaurus", 26).source_url` ends `/releases/tag/0.25.29`. Tests: `test_guided_source_urls_pin_the_three_tested_releases_and_never_latest` (test_engines.py:230) pins all three literals and rejects `releases/latest`; `test_a_tested_version_bump_moves_the_guided_url_with_no_other_edit` (:245) bumps `TESTED_VERSIONS` and watches the URL move. `_url_allowed` untouched.
+
+**AC-4 — byte-level progress** (`ohyesmlx/fetch.py:66-74` constants, emission at :1041-1065)
+Emitted inside the existing write loop, after each chunk, only while the file is mid-transfer (`written < size`, so a sub-chunk file emits only its per-file event). Fraction = (files finished + this file's bytes)/model total; payload `{"path","bytes_done","bytes_total"}`; throttled by the injected `clock` at 0.5 s and +0.005 fraction since the last event; `last_fraction` survives retries so an emitted fraction never decreases. Per-file completion event kept verbatim. Tests: `test_in_flight_progress_is_byte_level_throttled_and_monotonic` (:1437), `test_in_flight_progress_needs_the_fraction_to_have_advanced` (:1464), `test_in_flight_fraction_counts_the_files_already_finished` (:1481), `test_a_resumed_download_starts_its_fraction_from_the_bytes_on_disk` (:1513), `test_a_file_no_larger_than_one_chunk_emits_only_the_per_file_event` (:1538). The existing event-sequence test gained exact payload assertions rather than loosening.
+
+`docs/interfaces.md:1412-1440` pins `downloaded` and the new signatures; `:1446` notes the download progress payload beside the Job event shape.
+
+## Red-checks (each reverted)
+- Removed both throttle gates → `test_in_flight_progress_is_byte_level_throttled_and_monotonic` and `..._needs_the_fraction_to_have_advanced` both failed (one event per chunk: `[100, 200, 300, …]` vs `[300, 600, …]`).
+- Made `downloaded` ignore size → `test_downloaded_is_false_for_a_blob_of_the_wrong_size` failed (`assert True is False`).
+- Put back `releases/latest` → three URL tests failed (`/releases/latest0.25.29`).
+
+## Final pytest line
+`1014 passed in 54.79s`
+
+## Two things to flag
+1. **The plan's Task 1 live check cannot pass on this Mac as written.** `~/.cache/huggingface/hub` holds both named repos at the catalog revision, but each `model.safetensors` is a *regular file* (not a link, no blob) and slightly larger than the catalog pin — Qwen3.5-4B-4bit: 3,034,300,695 pinned vs 3,034,301,568 on disk (+873); LFM2.5-8B-A1B-MLX-4bit: 4,764,265,165 vs 4,764,265,304 (+139). Every other file matches exactly. Under AC-1's size rule both are correctly `downloaded: false`; "snapshot dir exists" would say true but AC-1 forbids it. Whether the catalog pins or those two local artifacts are stale is a coordinator decision.
+2. The plan's `<output>` asks for `.paul/phases/v5-onboarding/04-02b-SUMMARY.md`, which is outside the order's file allow-list, so I did not write it. Nothing was committed.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     64   10225319   10027904    68119   98.1%   0.100567
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/recommend.py
+ M ohyesmlx/server.py
+ M tests/test_engines.py
+ M tests/test_fetch.py
+ M tests/test_recommend.py
+ M tests/test_server.py
+?? .paul/orders/v5-04-02b.log
+ docs/interfaces.md      |  36 +++++---
+ ohyesmlx/engines.py     |  28 ++++--
+ ohyesmlx/fetch.py       |  69 +++++++++++++++
+ ohyesmlx/recommend.py   |  55 +++++++++---
+ ohyesmlx/server.py      |  20 +++--
+ tests/test_engines.py   |  35 ++++++--
+ tests/test_fetch.py     | 225 ++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_recommend.py |  58 +++++++++++++
+ tests/test_server.py    |  29 +++++++
+ 9 files changed, 510 insertions(+), 45 deletions(-)

@@ -156,6 +156,19 @@ class Flag:
         return self.value
 
 
+class Clock:
+    """A fake clock the download reads; a response's reads advance it by a fixed step."""
+
+    def __init__(self, start=100.0):
+        self.value = start
+
+    def __call__(self):
+        return self.value
+
+    def advance(self, seconds, _response=None):
+        self.value += seconds
+
+
 class Harness:
     """Every injected seam for one test, all rooted in ``tmp_path``."""
 
@@ -441,6 +454,10 @@ def test_happy_path_events_use_the_pinned_job_shape(tmp_path):
     assert [event["seq"] for event in harness.events] == [1, 2, 3, 4, 5]
     for event in harness.events:
         assert set(event) == {"seq", "type", "message", "fraction", "payload"}
+    assert [event["payload"] for event in harness.events[1:3]] == [
+        {"path": "weights.safetensors", "bytes": 11},
+        {"path": "config.json", "bytes": 7},
+    ]
     assert harness.events[1]["fraction"] == 11 / 18
     assert harness.events[2]["fraction"] == 1.0
     assert harness.events[3]["payload"] == {
@@ -1330,3 +1347,211 @@ def test_a_corrupt_ledger_makes_download_refuse_before_any_write(tmp_path):
 
     assert harness.codes() == ["ledger_unreadable"]
     assert not harness.cache.exists()
+
+
+# ---------------------------------------------------------------------------
+# 15. fetch.downloaded: sizes and links only, never a hash (AC-1)
+# ---------------------------------------------------------------------------
+
+
+def cached(tmp_path):
+    """A model downloaded into a scratch cache, with its Harness returned."""
+    transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
+    harness = Harness(tmp_path, [make_model(TWO_FILES)], transport)
+    assert harness.download() is True
+    return harness
+
+
+def test_downloaded_is_true_only_once_the_whole_tree_is_there(tmp_path):
+    harness = cached(tmp_path)
+    model = harness.models[0]
+
+    assert fetch.downloaded(model, str(harness.cache)) is True
+
+
+def test_downloaded_is_false_and_writes_nothing_before_a_download(tmp_path):
+    model = make_model(TWO_FILES)
+    harness = Harness(tmp_path, [model], serve({}))
+
+    assert fetch.downloaded(model, str(harness.cache)) is False
+    assert not harness.cache.exists(), "downloaded must never create the cache"
+
+
+def test_downloaded_is_false_for_a_partial_incomplete_download(tmp_path):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    harness = Harness(tmp_path, [model], serve({}))
+    incomplete = harness.blobs / f"{SHA}.incomplete"
+    incomplete.parent.mkdir(parents=True)
+    incomplete.write_bytes(WEIGHTS[:5])
+
+    assert fetch.downloaded(model, str(harness.cache)) is False
+
+
+def test_downloaded_is_false_for_a_blob_of_the_wrong_size(tmp_path):
+    harness = cached(tmp_path)
+
+    (harness.blobs / SHA).write_bytes(WEIGHTS[:5])
+
+    assert fetch.downloaded(harness.models[0], str(harness.cache)) is False
+
+
+def test_downloaded_is_false_when_a_snapshot_link_is_missing(tmp_path):
+    harness = cached(tmp_path)
+
+    (harness.snapshot / "config.json").unlink()
+
+    assert fetch.downloaded(harness.models[0], str(harness.cache)) is False
+
+
+def test_downloaded_checks_sizes_not_hashes(tmp_path):
+    """AC-1: the request path cannot hash a multi-GB file. A same-size, wrong-bytes blob
+    reads as downloaded here; ``_verify`` is what catches it, after a transfer."""
+    harness = cached(tmp_path)
+
+    (harness.blobs / SHA).write_bytes(b"HELLO WORLD")
+
+    assert fetch.downloaded(harness.models[0], str(harness.cache)) is True
+
+
+def test_downloaded_propagates_plans_value_error(tmp_path):
+    model = make_model(TWO_FILES, repo="org/../../etc")
+
+    with pytest.raises(ValueError):
+        fetch.downloaded(model, str(tmp_path / "hub"))
+
+
+# ---------------------------------------------------------------------------
+# 16. Byte-level progress while a file is in flight (AC-4)
+# ---------------------------------------------------------------------------
+
+
+def in_flight(harness):
+    """The progress events carrying the in-flight payload, in emitted order."""
+    return [
+        event
+        for event in harness.events
+        if event["type"] == "progress" and "bytes_total" in event["payload"]
+    ]
+
+
+def test_in_flight_progress_is_byte_level_throttled_and_monotonic(tmp_path):
+    body = b"x" * 1_000
+    model = make_model([("weights.safetensors", body, "lfs")])
+    clock = Clock()
+    transport = serve(
+        {"weights.safetensors": body}, chunk=100, on_read=lambda _response: clock.advance(0.25)
+    )
+    harness = Harness(tmp_path, [model], transport)
+
+    assert harness.download(clock=clock) is True
+
+    events = in_flight(harness)
+    # Ten chunks of 10%: the first emits, then the 0.5 s gate admits every second chunk --
+    # without it there would be one event per chunk (nine).
+    assert [event["fraction"] for event in events] == [0.1, 0.3, 0.5, 0.7, 0.9]
+    assert [event["payload"] for event in events] == [
+        {"path": "weights.safetensors", "bytes_done": done, "bytes_total": 1_000}
+        for done in (100, 300, 500, 700, 900)
+    ]
+    fractions = [event["fraction"] for event in harness.events if event["type"] == "progress"]
+    assert fractions == sorted(fractions), "an emitted fraction never goes backwards"
+    assert harness.events[-3]["payload"] == {
+        "path": "weights.safetensors",
+        "bytes": 1_000,
+    }, "the per-file completion event is kept"
+
+
+def test_in_flight_progress_needs_the_fraction_to_have_advanced(tmp_path):
+    """A clock that flies past the time gate still cannot emit per chunk: 0.2% each."""
+    body = b"x" * 50_000
+    model = make_model([("weights.safetensors", body, "lfs")])
+    clock = Clock(0.0)
+    transport = serve(
+        {"weights.safetensors": body}, chunk=100, on_read=lambda _response: clock.advance(10.0)
+    )
+    harness = Harness(tmp_path, [model], transport)
+
+    assert harness.download(clock=clock) is True
+
+    assert [event["payload"]["bytes_done"] for event in in_flight(harness)] == list(
+        range(300, 50_000, 300)
+    )
+
+
+def test_in_flight_fraction_counts_the_files_already_finished(tmp_path):
+    first = b"a" * 1_000
+    second = b"b" * 1_000
+    model = make_model(
+        [("first.safetensors", first, "lfs"), ("second.safetensors", second, "lfs")]
+    )
+    clock = Clock(0.0)
+    transport = serve(
+        {"first.safetensors": first, "second.safetensors": second},
+        chunk=100,
+        on_read=lambda _response: clock.advance(0.25),
+    )
+    harness = Harness(tmp_path, [model], transport)
+
+    assert harness.download(clock=clock) is True
+
+    second_file = [
+        event for event in in_flight(harness) if event["payload"]["path"] == "second.safetensors"
+    ]
+    # The 1,000 bytes of the finished first file are in every numerator, and the model's
+    # 2,000 bytes in every denominator.
+    assert [event["payload"]["bytes_done"] for event in second_file] == [
+        1_100,
+        1_300,
+        1_500,
+        1_700,
+        1_900,
+    ]
+    assert [event["fraction"] for event in second_file] == [0.55, 0.65, 0.75, 0.85, 0.95]
+    assert {event["payload"]["bytes_total"] for event in second_file} == {2_000}
+
+
+def test_a_resumed_download_starts_its_fraction_from_the_bytes_on_disk(tmp_path):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    clock = Clock(50.0)
+    transport = serve(
+        {"weights.safetensors": WEIGHTS}, chunk=3, on_read=lambda _response: clock.advance(1.0)
+    )
+    harness = Harness(tmp_path, [model], transport)
+    incomplete = harness.blobs / f"{SHA}.incomplete"
+    incomplete.parent.mkdir(parents=True)
+    incomplete.write_bytes(WEIGHTS[:5])
+
+    assert harness.download(clock=clock) is True
+
+    events = in_flight(harness)
+    assert events[0]["fraction"] == 8 / 11
+    assert events[0]["payload"] == {
+        "path": "weights.safetensors",
+        "bytes_done": 8,
+        "bytes_total": 11,
+    }
+    fractions = [event["fraction"] for event in harness.events if event["type"] == "progress"]
+    assert fractions == sorted(fractions)
+    assert fractions[-1] == 1.0
+
+
+def test_a_file_no_larger_than_one_chunk_emits_only_the_per_file_event(tmp_path):
+    body = b"x" * 500  # one chunk, whatever the clock does
+    model = make_model([("weights.safetensors", body, "lfs")])
+    clock = Clock(0.0)
+    transport = serve(
+        {"weights.safetensors": body}, on_read=lambda _response: clock.advance(10.0)
+    )
+    harness = Harness(tmp_path, [model], transport)
+
+    assert harness.download(clock=clock) is True
+
+    assert [event["type"] for event in harness.events] == [
+        "log",
+        "progress",
+        "result",
+        "done",
+    ]
+    assert in_flight(harness) == []
+    assert harness.events[1]["fraction"] == 1.0
+    assert harness.events[1]["payload"] == {"path": "weights.safetensors", "bytes": 500}

@@ -63,6 +63,16 @@ REF_NAME = "main"
 # a server sending more than the catalog size is caught before much of it is buffered.
 CHUNK_SIZE = 256 * 1024
 
+# AC-4: an in-flight progress event is emitted at most once this often on the injected
+# clock, so a fast transfer cannot write one event per chunk (a few GB is tens of thousands
+# of chunks).
+PROGRESS_INTERVAL_S = 0.5
+
+# AC-4: an in-flight event also needs the model-wide fraction to have advanced by at least
+# this much (0.5%) since the last one, so a 2 GB download emits on the order of a few hundred
+# events in total rather than one every half second however little moved.
+PROGRESS_MIN_FRACTION = 0.005
+
 # AC-10: four tries in total, exponential backoff between them, and a 429's Retry-After
 # honoured up to a ceiling so a hostile header cannot park the job for a day.
 MAX_ATTEMPTS = 4
@@ -233,6 +243,35 @@ def plan(model: Model, cache_dir: str | None = None) -> Planned:
         files=files,
         size_bytes=sum(item.size for item in model.files),
     )
+
+
+def downloaded(model: Model, cache_dir: str | None = None) -> bool:
+    """Whether every file ``plan`` names is already in the cache, by size and link only (AC-1).
+
+    This answers a recommendation request, where a multi-GB file cannot be hashed: each
+    snapshot link must be present and resolve to a file of the catalog's size, and the blob
+    it resolves into must be there at that size too. That is the evidence a resume already
+    trusts before it asks for a byte -- a file of the right size but the wrong bytes reads
+    as downloaded here, which is the price of the cheap check and why ``_verify`` still runs
+    after a transfer. Nothing is written and nothing is hashed; a ``.incomplete`` file alone
+    is not a download, because the snapshot link is written only after every file verifies
+    (AC-15). ``plan``'s ``ValueError`` for a hostile name propagates: the caller is asking
+    about a catalog row, and a name that cannot be planned is not a name this answers for.
+    """
+    planned = plan(model, cache_dir)
+    for planned_file in planned.files:
+        try:
+            if not os.path.isfile(planned_file.link):
+                return False
+            if os.path.getsize(planned_file.link) != planned_file.size:
+                return False
+            if not os.path.isfile(planned_file.blob):
+                return False
+            if os.path.getsize(planned_file.blob) != planned_file.size:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -838,6 +877,11 @@ def _download(
             )
         reresolved = False
         attempts = 0
+        # AC-4: the in-flight progress this file has already reported, kept across a retry
+        # so an emitted fraction never goes backwards -- a 200 to a Range request restarts
+        # the write at zero.
+        last_progress = None
+        last_fraction = 0.0
         while True:
             if cancel():
                 return cancelled()
@@ -994,6 +1038,31 @@ def _download(
                             break
                         handle.write(chunk)
                         written += len(chunk)
+                        # AC-4: bytes in flight, by byte: a multi-GB file is one file, and a
+                        # per-file event left the bar at 0% for minutes. The fraction is the
+                        # whole model's -- files finished plus this file's bytes so far --
+                        # and the two gates keep a fast disk from emitting per chunk while
+                        # still moving a slow transfer's bar.
+                        if written < planned_file.size:
+                            now = clock()
+                            fraction = (accounted + written) / planned.size_bytes
+                            if fraction >= last_fraction + PROGRESS_MIN_FRACTION and (
+                                last_progress is None
+                                or now - last_progress >= PROGRESS_INTERVAL_S
+                            ):
+                                last_progress = now
+                                last_fraction = fraction
+                                send(
+                                    "progress",
+                                    f"{planned_file.path}: {written} of "
+                                    f"{planned_file.size} bytes",
+                                    fraction=fraction,
+                                    payload={
+                                        "path": planned_file.path,
+                                        "bytes_done": accounted + written,
+                                        "bytes_total": planned.size_bytes,
+                                    },
+                                )
                 if over:
                     return size_mismatch(
                         f"{planned_file.path}: the server sent more than the "

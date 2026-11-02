@@ -213,9 +213,9 @@ def test_a_wheel_installed_optiq_reads_its_version_from_dist_info_metadata():
 
 def test_app_engines_are_guided_downloads_with_a_page_then_a_verify_step():
     sources = {
-        "osaurus": "https://github.com/osaurus-ai/osaurus/releases/latest",
-        "omlx": "https://github.com/jundot/omlx/releases",
-        "vmlx": "https://github.com/jjang-ai/vmlx/releases/latest",
+        "osaurus": "https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29",
+        "omlx": "https://github.com/jundot/omlx/releases/tag/v0.7.3",
+        "vmlx": "https://github.com/jjang-ai/vmlx/releases/tag/v1.6.59",
     }
     for name, source_url in sources.items():
         plan = install_plan(name, 15)
@@ -225,6 +225,29 @@ def test_app_engines_are_guided_downloads_with_a_page_then_a_verify_step():
         assert [step.id for step in plan.steps] == ["open-page", "verify-install"]
         assert [step.command for step in plan.steps] == [None, None]
         assert "detected" in plan.steps[1].label
+
+
+def test_guided_source_urls_pin_the_three_tested_releases_and_never_latest():
+    """AC-3: the URL is the tested build's tag page, not whatever shipped last (139)."""
+    assert install_plan("osaurus", 15).source_url == (
+        "https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"
+    )
+    assert install_plan("omlx", 26).source_url == (
+        "https://github.com/jundot/omlx/releases/tag/v0.7.3"
+    )
+    assert install_plan("vmlx", 15).source_url == (
+        "https://github.com/jjang-ai/vmlx/releases/tag/v1.6.59"
+    )
+    for name in ("osaurus", "omlx", "vmlx"):
+        assert "/releases/latest" not in install_plan(name, 15).source_url
+
+
+def test_a_tested_version_bump_moves_the_guided_url_with_no_other_edit(monkeypatch):
+    prefixes = {"osaurus": "", "omlx": "v", "vmlx": "v"}
+    for name, prefix in prefixes.items():
+        monkeypatch.setitem(engines.TESTED_VERSIONS, name, "9.9.9")
+        url = install_plan(name, 15).source_url
+        assert url.endswith(f"/releases/tag/{prefix}9.9.9")
 
 
 def test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version():
@@ -635,7 +658,7 @@ def test_a_known_size_needs_twice_its_estimate_free(tmp_path):
         poll_s=1.0, poll_timeout_s=10.0,
     )
     assert ok is True
-    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/latest"]
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"]
 
 
 def test_an_unknown_size_falls_back_to_a_two_gib_floor(tmp_path):
@@ -788,7 +811,7 @@ def test_a_guided_plan_opens_the_https_page_then_polls_detect_until_installed(tm
         poll_s=1.0, poll_timeout_s=10.0,
     )
     assert ok is True
-    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/latest"]
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"]
     assert detect.calls == 3
     assert sleeps == [1.0]
     assert [event["type"] for event in events] == ["result", "done"]
@@ -803,7 +826,7 @@ def test_guided_polling_that_times_out_is_a_result_not_an_error(tmp_path):
         poll_s=1.0, poll_timeout_s=3.0,
     )
     assert ok is False
-    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/latest"]
+    assert opened == ["https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"]
     assert detect.calls == 4  # the pre-check plus three one-second polls
     assert sleeps == [1.0, 1.0, 1.0]
     assert [event["type"] for event in events] == ["result", "done"]

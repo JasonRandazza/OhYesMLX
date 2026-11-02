@@ -549,14 +549,26 @@ def detect_all(env=DEFAULT_ENV) -> list[EngineStatus]:
     return statuses
 
 
-# The guided routes open the release page: neither oMLX nor vMLX has a fixed asset URL,
-# so the plan names the asset and never resolves "latest" over the wire (research §2.1,
-# §5.1). Osaurus's README points at `Osaurus.dmg` on the same page (§1.1).
-_GUIDED_SOURCES = {
-    "osaurus": "https://github.com/osaurus-ai/osaurus/releases/latest",
-    "omlx": "https://github.com/jundot/omlx/releases",
-    "vmlx": "https://github.com/jjang-ai/vmlx/releases/latest",
+# The guided routes open the release page of the version this harness is written against,
+# never `releases/latest`: a new Osaurus build was out within hours of the one this harness
+# adopted (Decision 139), so "latest" installs whatever shipped last. Neither oMLX nor vMLX
+# has a fixed asset URL, so the plan names the asset and the page it lives on (research §2.1,
+# §5.1; Osaurus's README points at `Osaurus.dmg` on the same page, §1.1). Each entry is
+# (release base, tag prefix) and the URL is built from TESTED_VERSIONS, so a version bump
+# moves the page with no other edit. Osaurus tags bare versions; oMLX and vMLX prefix "v"
+# (tag pages checked 2026-11-02 with `gh api`).
+_GUIDED_TRACKS = {
+    "osaurus": ("https://github.com/osaurus-ai/osaurus/releases/tag/", ""),
+    "omlx": ("https://github.com/jundot/omlx/releases/tag/", "v"),
+    "vmlx": ("https://github.com/jjang-ai/vmlx/releases/tag/", "v"),
 }
+
+
+def _release_url(name: str) -> str:
+    """The tested build's GitHub release page: one base and tag prefix per engine (AC-3)."""
+    base, prefix = _GUIDED_TRACKS[name]
+    return f"{base}{prefix}{TESTED_VERSIONS[name]}"
+
 
 _OSAURUS_ASSET = "Osaurus.dmg (the standard build, not the ~3.6 GB -full one)"
 _OSAURUS_SIZE = 85_900_000
@@ -607,7 +619,7 @@ def _guided_plan(name: str, macos_major: int) -> Plan:
     return Plan(
         engine=name,
         kind="guided_download",
-        source_url=_GUIDED_SOURCES[name],
+        source_url=_release_url(name),
         size_bytes_estimate=_GUIDED_SIZES[name][generation],
         needs_admin=False,
         steps=[

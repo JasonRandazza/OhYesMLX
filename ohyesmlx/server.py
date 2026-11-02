@@ -28,7 +28,7 @@ import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ohyesmlx import catalog, engines, hardware, recommend
+from ohyesmlx import catalog, engines, fetch, hardware, recommend
 
 # The only address this server ever binds: never 0.0.0.0 and never ::, so nothing off this
 # machine can reach it and a page's DNS-rebinding request arrives with a foreign Host the guard
@@ -220,21 +220,29 @@ class _Handler(BaseHTTPRequestHandler):
         """``pick`` and ``exclusion_reason`` over the scan, the detections and the catalog.
 
         The free disk is ``Hardware.disk_free_bytes``, the same number ``/hardware`` reports.
-        On an unsupported Mac both lists are empty and ``unsupported_reason`` carries the one
-        sentence: a per-model exclusion there would be a copy of a reason that belongs to the
-        Mac, not to the model.
+        The rows already in this Mac's Hugging Face cache are asked of ``fetch.downloaded``,
+        which is the one definition of that question (sizes and links, never hashes), and
+        passed to both functions, so a downloaded row is not excluded for disk and says so
+        in its reason. On an unsupported Mac both lists are empty and
+        ``unsupported_reason`` carries the one sentence: a per-model exclusion there would
+        be a copy of a reason that belongs to the Mac, not to the model.
         """
         hw = self.server.scan()
         statuses = self.server.detect()
         models = self.server.load_catalog()
+        downloaded = frozenset(model.repo for model in models if fetch.downloaded(model))
         picks = [
             dataclasses.asdict(pick)
-            for pick in recommend.pick(hw, models, statuses, hw.disk_free_bytes)
+            for pick in recommend.pick(
+                hw, models, statuses, hw.disk_free_bytes, downloaded
+            )
         ]
         excluded = []
         if hw.supported:
             for model in models:
-                reason = recommend.exclusion_reason(model, hw, hw.disk_free_bytes)
+                reason = recommend.exclusion_reason(
+                    model, hw, hw.disk_free_bytes, downloaded
+                )
                 if reason is not None:
                     excluded.append({"model_id": model.repo, "reason": reason})
         self._write_json(

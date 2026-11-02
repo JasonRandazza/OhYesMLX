@@ -1409,10 +1409,10 @@ artifact. A violation raises `ValueError` naming the file, the repo and the fiel
 `fetch.plan` applies it to the row it is handed. `catalog.disk_needed(nbytes) -> int` is
 `ceil(nbytes * DISK_MARGIN)`, the one disk-margin rule `recommend` and `fetch` both ask.
 
-**`Pick`** (`recommend.pick(hw, models, engines, free_disk) -> list[Pick]`, pure; plan 03-02)
+**`Pick`** (`recommend.pick(hw, models, engines, free_disk, downloaded=frozenset()) -> list[Pick]`, pure; plan 03-02)
 `{"model_id": str, "title": str, "params_b": float, "format": str, "size_bytes": int,
 "fit": "comfortable|tight", "fit_basis": "estimated", "engines": [str], "install_needed": bool,
-"start_here": bool, "reason": str, "measured_here": object|null}`.
+"start_here": bool, "reason": str, "downloaded": bool, "measured_here": object|null}`.
 `model_id` is the catalog row's repo id and `params_b` the **base** count in billions, one decimal.
 `fit` is an estimate from `Hardware.model_budget_bytes` alone -- comfortable when twice `size_bytes`
 fits it, tight when 1.25x does, otherwise the row is left out -- and `fit_basis` is always
@@ -1421,21 +1421,35 @@ row's own `engines`; when none is installed it lists the row's catalog engines w
 `install_needed: true` ("install X first"). `start_here` marks the first three after ranking:
 comfortable before tight, then larger `params`, starter tier first only while free disk is under
 20 GiB, ties by repo id. `reason` is a fixed template with numbers in decimal GB (1e9 bytes, one
-decimal) and carries no speed claim. `measured_here` is non-null only for a run on this user's Mac
-(Decision D5); it is null in Phase 3 and is never filled from our M2 Max rows.
+decimal) and carries no speed claim; a `downloaded` row's template says it is already on this Mac
+and names no download size. `downloaded` is true when every file `fetch.plan` names has its
+snapshot link present and resolving to a blob of the catalog size (`fetch.downloaded(model,
+cache_dir=None) -> bool`, sizes and links only, never hashes, never writes; `plan`'s `ValueError`
+propagates). Such a row is exempt from the **disk** budget because there is nothing left to
+download, and still answers to memory. `measured_here` is non-null only for a run on this user's
+Mac (Decision D5); it is null in Phase 3 and is never filled from our M2 Max rows.
 
-`recommend.exclusion_reason(model, hw, free_disk) -> str | None` is the pure companion for the rows
-`pick` leaves out: a fixed-template reason naming the memory or disk shortfall, null for a row that
-clears both budgets. `GET /recommendations` (Phase 4) composes
+`recommend.exclusion_reason(model, hw, free_disk, downloaded=frozenset()) -> str | None` is the pure
+companion for the rows `pick` leaves out: a fixed-template reason naming the memory or disk
+shortfall, null for a row that clears both budgets (and for a repo in `downloaded`, whose disk
+budget is not applied). `GET /recommendations` (Phase 4) composes
 `{"picks": [Pick], "excluded": [{"model_id": str, "reason": str}], "unsupported_reason": str|null}`
-from these two functions: `excluded` is the rows `exclusion_reason` answers non-null for, and on an
-unsupported Mac `picks` is empty and `unsupported_reason` carries `Hardware.unsupported_reason` --
-the recommender never copies that sentence into a reason.
+from these two functions, building `downloaded` from `fetch.downloaded` over the catalog: `excluded`
+is the rows `exclusion_reason` answers non-null for, and on an unsupported Mac `picks` is empty and
+`unsupported_reason` carries `Hardware.unsupported_reason` -- the recommender never copies that
+sentence into a reason.
 
 **Job** (`POST /jobs` body `{"kind": "install|download|quickbench", "args": {...}}` -> `{"job_id": str}`)
 Events on `GET /jobs/{id}/events` (server-sent events), one JSON object per `data:` line:
 `{"seq": int, "type": "progress|log|result|error|done", "message": str, "fraction": float|null, "payload": object|null}`.
 `install` and `download` require `"confirmed": true` in `args`; the server refuses otherwise (the consent gate).
+A download's in-flight `progress` events carry `fraction` = (bytes of files already finished + bytes
+written so far of the current file) / the model's total bytes and payload
+`{"path": str, "bytes_done": int, "bytes_total": int}` (the same numerator and the model's total, so a
+resumed download starts from the bytes already on disk). They are emitted at most once per 0.5 s of the
+injected clock and only when `fraction` has advanced by at least 0.005 since the last one, so a multi-GB
+download emits on the order of a few hundred events rather than one per chunk, and a file no larger than
+one chunk emits none. Each finished file still emits one `progress` with payload `{"path", "bytes"}`.
 
 **Errors** are `{"error": {"code": str, "status": int, "message": str}}` with a 4xx/5xx status; `status` repeats the HTTP status (added 2026-11-02, Jason) so a body read on its own still names it. The server binds 127.0.0.1 only.
 

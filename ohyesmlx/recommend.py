@@ -10,7 +10,10 @@ Two separate budgets, each defined once where it is decided and never restated h
   through ``COMFORTABLE_FACTOR`` and ``TIGHT_FACTOR``; the constants carry the measured
   rationale.
 - **Disk.** ``catalog.disk_needed`` is the one definition of the margin; this module asks
-  it rather than computing a second copy.
+  it rather than computing a second copy. A row whose files are already in this Mac's
+  Hugging Face cache is exempt from this budget, because there is no download to make
+  room for; memory still applies, and the caller says which rows those are through the
+  ``downloaded`` set (``fetch.downloaded`` is what builds it).
 
 Both are estimates from RAM and disk, never measurements -- `Pick.fit_basis` says so, and
 `Pick.measured_here` stays ``None`` here: D5 fills it from the user's own runs in Phase 4
@@ -59,9 +62,10 @@ class Pick:
     ``fit`` is D5's honesty label on an estimate: ``"comfortable"`` or ``"tight"``, with
     ``fit_basis`` always ``"estimated"``. ``engines`` names the installed engines that can
     serve the row, or -- when none is installed -- every engine the catalog says can, so
-    the screen can say "install X first" under ``install_needed``. ``measured_here`` is
-    this user's own run on this Mac, which Phase 4 fills; it is null here and never filled
-    from our M2 Max rows.
+    the screen can say "install X first" under ``install_needed``. ``downloaded`` says the
+    row's files are already in this Mac's Hugging Face cache, so there is nothing to fetch.
+    ``measured_here`` is this user's own run on this Mac, which Phase 4 fills; it is null
+    here and never filled from our M2 Max rows.
     """
 
     model_id: str  # the catalog row's repo id
@@ -75,6 +79,7 @@ class Pick:
     install_needed: bool
     start_here: bool
     reason: str
+    downloaded: bool  # every file is already in this Mac's Hugging Face cache
     measured_here: dict | None = None
 
 
@@ -92,19 +97,34 @@ def _gb(byte_count: float) -> str:
     return f"{byte_count / _BYTES_PER_GB:.1f}"
 
 
-def _reason(model: Model, fit: str, budget_bytes: int) -> str:
-    """The fixed template for an offerable row: what is left over memory, and the download."""
+def _reason(model: Model, fit: str, budget_bytes: int, downloaded: bool) -> str:
+    """The fixed template for an offerable row: memory to spare, then the download (AC-2).
+
+    A downloaded row's template names no download size at all: the number would be a
+    figure the user has already paid, and the sentence would read as "download 4.8 GB"
+    for a model sitting on their disk.
+    """
     spare = _gb(budget_bytes - model.size_bytes)
-    download = _gb(model.size_bytes)
     if fit == "comfortable":
-        return f"Fits with about {spare} GB of memory to spare; {download} GB download"
-    return f"Tight fit, about {spare} GB of memory to spare; {download} GB download"
+        lead = f"Fits with about {spare} GB of memory to spare"
+    else:
+        lead = f"Tight fit, about {spare} GB of memory to spare"
+    if downloaded:
+        return f"{lead}; already on this Mac"
+    return f"{lead}; {_gb(model.size_bytes)} GB download"
 
 
-def exclusion_reason(model: Model, hw: Hardware, free_disk: int) -> str | None:
+def exclusion_reason(
+    model: Model,
+    hw: Hardware,
+    free_disk: int,
+    downloaded: frozenset[str] = frozenset(),
+) -> str | None:
     """Why :func:`pick` leaves *model* out, or None when the row clears both budgets.
 
-    Memory is checked first, because it is the budget a download cannot fix. The two
+    Memory is checked first, because it is the budget a download cannot fix. A repo in
+    *downloaded* has already been paid for on disk, so the disk budget is not applied to
+    it -- there is nothing left to make room for -- while memory still decides it. The
     templates carry numbers and nothing else -- no speed claim, and no restatement of
     `Hardware.unsupported_reason`: an unsupported Mac is :func:`pick`'s refusal alone, so
     the sentence is never copied into a per-model reason.
@@ -115,6 +135,8 @@ def exclusion_reason(model: Model, hw: Hardware, free_disk: int) -> str | None:
             f"Needs about {_gb(model.size_bytes * COMFORTABLE_FACTOR)} GB of memory at peak; "
             f"this Mac's budget is {_gb(hw.model_budget_bytes)} GB"
         )
+    if model.repo in downloaded:
+        return None
     needed = disk_needed(model.size_bytes)
     if free_disk < needed:
         return (
@@ -136,26 +158,30 @@ def pick(
     models: list[Model],
     engines: list[EngineStatus],
     free_disk: int,
+    downloaded: frozenset[str] = frozenset(),
 ) -> list[Pick]:
     """The catalog rows this Mac can hold and download, ranked; pure, and no I/O.
 
     An unsupported Mac is an empty list: `Hardware.unsupported_reason` already carries the
     one sentence the screen shows, so this function neither duplicates it nor builds a
     pick-shaped stand-in for it. Every other row is offered or left out by
-    `exclusion_reason` alone, so neither budget is decided a second time here.
+    `exclusion_reason` alone, so neither budget is decided a second time here. *downloaded*
+    is the set of repo ids already in this Mac's cache; those rows still answer to memory,
+    are not asked for disk, and say so in their reason.
     """
     if not hw.supported:
         return []
     installed = {status.name for status in engines if status.installed}
     offerable = []
     for model in models:
-        if exclusion_reason(model, hw, free_disk) is not None:
+        if exclusion_reason(model, hw, free_disk, downloaded) is not None:
             continue
         offerable.append((model, _fit(model.size_bytes, hw.model_budget_bytes)))
     offerable.sort(key=lambda pair: _rank(pair[0], pair[1], free_disk))
     picks = []
     for position, (model, fit) in enumerate(offerable):
         installed_here = [name for name in model.engines if name in installed]
+        already_here = model.repo in downloaded
         picks.append(
             Pick(
                 model_id=model.repo,
@@ -168,7 +194,8 @@ def pick(
                 engines=installed_here or list(model.engines),
                 install_needed=not installed_here,
                 start_here=position < START_HERE_COUNT,
-                reason=_reason(model, fit, hw.model_budget_bytes),
+                reason=_reason(model, fit, hw.model_budget_bytes, already_here),
+                downloaded=already_here,
             )
         )
     return picks

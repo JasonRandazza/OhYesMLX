@@ -422,17 +422,46 @@ def test_recommendations_is_the_pinned_composition(launch):
         "install_needed",
         "start_here",
         "reason",
+        "downloaded",
         "measured_here",
     }
     assert pick["params_b"] == 3.0
     assert isinstance(pick["size_bytes"], int)
     assert pick["fit"] == "comfortable"
+    assert pick["downloaded"] is False
 
     large = MODELS[1]
     assert body["excluded"][0] == {
         "model_id": large.repo,
         "reason": recommend.exclusion_reason(large, this_mac(), this_mac().disk_free_bytes),
     }
+
+
+def test_recommendations_asks_fetch_downloaded_and_marks_the_picks(launch, monkeypatch):
+    """AC-2: the set comes from `fetch.downloaded` over the catalog, and a downloaded row
+    is offered even on a Mac whose free disk could not hold the download."""
+    asked = []
+
+    def downloaded(model, cache_dir=None):
+        asked.append(model.repo)
+        return model.repo == "org/small"
+
+    monkeypatch.setattr(server.fetch, "downloaded", downloaded)
+    listener = launch(
+        scan=Recorder(this_mac(disk_free_bytes=0)),
+        detect=Recorder([]),
+        load_catalog=Recorder(MODELS),
+    )
+
+    body = json.loads(request(listener, "/recommendations", token=TOKEN)[2])
+
+    assert asked == ["org/small", "org/large"]
+    assert [pick["model_id"] for pick in body["picks"]] == ["org/small"]
+    pick = body["picks"][0]
+    assert pick["downloaded"] is True
+    assert "already on this Mac" in pick["reason"]
+    assert "GB download" not in pick["reason"]
+    assert [row["model_id"] for row in body["excluded"]] == ["org/large"]
 
 
 def test_recommendations_uses_the_hardware_scans_free_disk(launch):
