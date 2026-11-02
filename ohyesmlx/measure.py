@@ -451,6 +451,7 @@ def run_cells(
     kv_quant: str | None = None,
     mtp_depth: str | None = None,
     stream_experts: str | None = None,
+    quick: bool = False,
     cooldown_s: float = 30.0,
     prompt_tokens: dict | None = None,
     results_dir: str,
@@ -508,6 +509,12 @@ def run_cells(
     state is ``FAIL`` with that evidence quoted, never a number published under a pin it does not
     hold.
 
+    ``quick`` is the one header pin that is not a sweep axis: ``True`` marks a run quickbench
+    drove, and the joined grid and sweep refuse any header carrying it rather than compare it
+    -- quickbench results never join the published tables. It defaults to ``False``, which is
+    also what a header written before the key existed is read as, so every run measured so far
+    joins exactly as it always did.
+
     ``warmup`` is the plateau rule by default and an ``int`` for a fixed budget of that many
     batches; either way the budget each cell needed is published as ``warmup_count``. Results
     are written to ``<results_dir>/results.jsonl`` after every visit, so a run that dies still
@@ -562,6 +569,11 @@ def run_cells(
             "the pin existed left each runtime's own default in place, and OptiQ's default is "
             "'auto', which streams a large MoE without being asked"
         )
+    if not isinstance(quick, bool):
+        raise ValueError(
+            f"quick must be true or false, not {quick!r}: the header records it as a bool, and "
+            "the join reads a header without the key as false"
+        )
     if cooldown_s < 0:
         raise ValueError("cooldown_s must be >= 0")
     workloads = _workloads(workloads)
@@ -607,6 +619,10 @@ def run_cells(
         # `runtimes.MTP_DEPTHS`' and `runtimes.STREAM_EXPERTS`'.
         "mtp_depth": mtp_depth,
         "stream_experts": stream_experts,
+        # The quickbench pin: `True` on a run quickbench drove, `False` on every ordinary run.
+        # The join refuses any quick run outright -- the value, not a mismatch, is what it
+        # reads -- so this field never has to be compared, only carried.
+        "quick": quick,
         "cooldown_s": cooldown_s,
     }
 
@@ -1388,8 +1404,8 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     """The run's ``results.jsonl``: a header line of the pins, then one line per result.
 
     Line 1 is the run header — temperature, seed, warmup, measured, concurrency, prompt_tokens,
-    cache_state, kv_quant, mtp_depth, stream_experts, cooldown_s and every workload that was
-    measured, each with the messages it sent and its own max_tokens (a single run-level cap
+    cache_state, kv_quant, mtp_depth, stream_experts, quick, cooldown_s and every workload that
+    was measured, each with the messages it sent and its own max_tokens (a single run-level cap
     would be a half-truth once three workloads carry three of them). ``warmup`` is the rule that
     was in force, as a dict, or the integer budget a caller pinned instead; which one it is is
     what tells a reader how to read ``warmup_count``. ``measured`` counts batches and
@@ -1407,7 +1423,10 @@ def write_jsonl(results: list[CellResult], path: str | Path, *, run: dict) -> No
     ``None`` — no ``seed`` key in the request body at all, which is what keeps an mlx-lm or
     OptiQ request on its batchable path. Each record's ``request_seed`` is the other half of it:
     what that cell's requests actually carried, ``0`` on the one exception (an OptiQ cell at an
-    MTP depth) and ``None`` everywhere else.
+    MTP depth) and ``None`` everywhere else. ``quick`` rides beside the pins as a bool that is
+    never a sweep axis: ``True`` says quickbench drove the run, and both joined tables refuse it
+    by value; a header without the key is read as ``False``, which is what every run measured
+    before the pin existed did.
 
     Every line after it is one (cell, workload) pair, naming the workload that produced it.
     Rewritten whole and atomically after every visit, so a run that dies still has everything

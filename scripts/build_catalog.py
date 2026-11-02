@@ -1,6 +1,6 @@
 """Build ``ohyesmlx/catalog.json`` from read-only Hugging Face API calls.
 
-Standard library only, and re-runnable: the researched columns (title, params, format,
+Standard library only, and re-runnable: the researched columns (base, title, params, format,
 modality, license, tier, measured_here, notes) are literals in ``SEED`` below, and the
 columns a build must not invent -- the commit, the file list, each file's size and hash --
 are read from the Hub every time. No weight bytes are fetched; the two endpoints are
@@ -53,6 +53,7 @@ LFM = "LFM Open License 1.0 (other)"
 SEED = [
     {
         "repo": "mlx-community/Qwen3-0.6B-4bit",
+        "base": "Qwen3-0.6B",
         "title": "Qwen3 0.6B 4-bit",
         "params": 751_632_384,
         "format": STOCK,
@@ -64,6 +65,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/Qwen3.5-0.8B-4bit",
+        "base": "Qwen3.5-0.8B",
         "title": "Qwen3.5 0.8B 4-bit",
         "params": 873_438_784,
         "format": STOCK,
@@ -75,6 +77,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
+        "base": "Qwen3.5-0.8B",
         "title": "Qwen3.5 0.8B OptiQ 4-bit",
         "params": 873_438_784,
         "format": "OptiQ-4bit (4/8-bit mixed)",
@@ -86,6 +89,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/LFM2.5-1.2B-Instruct-4bit",
+        "base": "LFM2.5-1.2B-Instruct",
         "title": "LFM2.5 1.2B Instruct 4-bit",
         "params": 1_170_340_608,
         "format": STOCK,
@@ -97,6 +101,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/granite-4.0-h-1b-4bit",
+        "base": "granite-4.0-h-1b",
         "title": "Granite 4.0 H 1B 4-bit",
         "params": 1_461_538_368,
         "format": STOCK,
@@ -108,6 +113,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "base": "Qwen3.5-2B",
         "title": "Qwen3.5 2B 4-bit",
         "params": 2_274_069_824,
         "format": STOCK,
@@ -119,6 +125,7 @@ SEED = [
     },
     {
         "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+        "base": "Qwen3.5-2B",
         "title": "Qwen3.5 2B oQ4",
         "params": 2_274_069_824,
         "format": "oQ4 (mixed 4/5/6/8)",
@@ -130,6 +137,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/LFM2.5-2.6B-4bit",
+        "base": "LFM2.5-2.6B",
         "title": "LFM2.5 2.6B 4-bit",
         "params": 2_697_198_592,
         "format": STOCK,
@@ -141,6 +149,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/SmolLM3-3B-4bit",
+        "base": "SmolLM3-3B",
         "title": "SmolLM3 3B 4-bit",
         "params": 3_075_098_624,
         "format": STOCK,
@@ -152,6 +161,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/Llama-3.2-3B-Instruct-4bit",
+        "base": "Llama-3.2-3B-Instruct",
         "title": "Llama 3.2 3B Instruct 4-bit",
         "params": 3_212_749_824,
         "format": STOCK,
@@ -163,6 +173,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/Qwen3.5-4B-4bit",
+        "base": "Qwen3.5-4B",
         "title": "Qwen3.5 4B 4-bit",
         # The research table does not carry this row: the base count is read from
         # Qwen/Qwen3.5-4B's metadata by the method research 1.1 pins for params.
@@ -176,6 +187,7 @@ SEED = [
     },
     {
         "repo": "mlx-community/LFM2.5-8B-A1B-MLX-4bit",
+        "base": "LFM2.5-8B-A1B",
         "title": "LFM2.5 8B A1B MoE 4-bit",
         "params": 8_467_856_832,
         "format": STOCK,
@@ -245,7 +257,8 @@ def build() -> dict:
         models.append(
             {
                 **{key: row[key] for key in (
-                    "repo", "title", "params", "format", "modality", "license", "tier"
+                    "repo", "base", "title", "params", "format", "modality", "license",
+                    "tier"
                 )},
                 "revision": revision,
                 "size_bytes": sum(file["size"] for file in files),

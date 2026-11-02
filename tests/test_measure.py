@@ -2698,6 +2698,40 @@ def test_the_run_header_pins_the_prompt_length_verbatim_or_none(harness):
     assert harness.header(harness.tmp_path / "literals")["prompt_tokens"] is None
 
 
+def test_the_run_header_pins_quick_false_by_default(harness):
+    """An ordinary run writes the quickbench pin as false, which is also what a header without
+    the key is read as: the two have to compare equal for every existing run to keep joining."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.run([cell], measured=1)
+
+    assert harness.header()["quick"] is False
+    assert measure.load_run(harness.results_file())[0]["quick"] is False
+
+
+def test_the_run_header_pins_quick_true_for_a_quickbench_run(harness):
+    """The join refuses this header outright, so the record has to say exactly what was run."""
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    harness.run([cell], measured=1, quick=True)
+
+    assert harness.header()["quick"] is True
+    assert measure.load_run(harness.results_file())[0]["quick"] is True
+
+
+def test_a_quick_pin_that_is_not_a_bool_is_refused_before_anything_starts(harness):
+    harness.add_runtime("mlxlm")
+    cell = harness.cell("oq__mlxlm", "mlxlm")
+
+    for bad in (1, "true", None):
+        with pytest.raises(ValueError, match="quick"):
+            harness.run([cell], measured=1, quick=bad)
+
+    assert harness.transport.calls == []
+
+
 # ---------------------------------------------------------------------------- the cache pin
 #
 # The pin exists so one cell can be measured with its prefix/KV reuse off and on. The absence

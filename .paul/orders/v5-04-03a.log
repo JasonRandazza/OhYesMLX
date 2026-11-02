@@ -1,0 +1,182 @@
+I'll read the spec and audit first.
+Now let me read the current implementation files.
+tests/test_osaurus_settings.py doesn't exist yet. Let me read measure.py, report.py, and interfaces.md.
+Now let me look at report.py's PIN_FIELDS and join guards.
+
+Let me look at the grid and sweep entry points.
+Now let me look at test_report.py's grid fixtures and test_measure.py's header tests.
+
+
+
+
+
+
+
+Let me check who sources the pin script and see the current baseline test count.
+Baseline is 1065 passed. Let me read run_canary.sh and its Osaurus pin path.
+Now I'll implement AC-1 in catalog.py.
+
+
+
+
+Now the catalog JSON and the builder. I'll insert `base` from a verified mapping so the file's formatting stays byte-identical apart from the new lines.
+
+
+Now AC-2: the `quick` pin in measure.py.
+
+
+
+
+
+
+Now report.py: the `quick` pin and the join refusal.
+
+Now the ABSENT_PINS entry and the refusal function.
+
+
+
+
+
+Now AC-3 in osaurus_settings.py.
+
+
+
+
+Now the shell runner.
+
+
+
+
+
+
+
+Now the Model shape and the Osaurus section.
+Now append the 04-03a section to interfaces.md.
+
+
+
+
+Now the tests. First test_catalog.py.
+
+
+
+Now the shipped-catalog base table, siblings, and builder tests.
+
+
+
+
+
+
+
+Now add the report tests after the harness-mismatch test.
+
+
+Now the new Osaurus settings test file.
+
+
+
+
+
+
+
+
+
+
+
+
+The Model change breaks `test_fetch.py`/`test_server.py`, which build rows directly and are outside my allowed file set. I'll keep `base` optional on the dataclass while the loader still requires it on every row.
+
+Full suite is 1091 passed (1065 baseline + 26 new). Now the three required red-checks, one at a time.
+
+
+
+
+
+Now the end-to-end checks. First the CLI refusal and `siblings`.
+Now the shell round-trip dry check against a scratch HOME.
+The setup chain broke on a stray `cp` (exit 1). Re-running cleanly.
+Found a real bug in the dry check: `config_dir` as a string breaks `write_baseline`. Fixing the coercion.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Done. Final report:
+
+## AC-1 — catalog `base` and `siblings`
+- `ohyesmlx/catalog.py:117` `Model.base`, `:208` required at load (`ValueError` names file/repo/field), `:296` `siblings()` (same base, other repo, catalog order). Docstring rule added at top.
+- `ohyesmlx/catalog.json`: `base` on all 12 rows; `scripts/build_catalog.py`: `base` in each `SEED` row and in `build()`'s copied keys.
+- `docs/interfaces.md:1403-1411` pins `base` in the `Model` shape; `:1447+` new 04-03a section.
+- Tests: `test_a_valid_entry_loads_as_the_recorded_values`, `test_a_base_that_is_missing_or_not_a_string_is_refused_naming_the_repo`, `test_every_base_and_its_rows_are_pinned`, `test_only_two_bases_carry_two_formats_today`, `test_siblings_answers_the_other_format_of_one_base_and_nothing_else`, `test_the_builder_writes_base_so_a_rebuild_does_not_drop_it`.
+- `siblings(Qwen3.5-2B-4bit)` → `RepublicOfKorokke/Qwen3.5-2B-oQ4` and nothing else (also checked from the CLI runner).
+
+## AC-2 — the `quick` pin
+- `ohyesmlx/measure.py:454` `quick: bool = False`, `:572` bool refusal, `:625` header field; docstrings updated.
+- `ohyesmlx/report.py:249` `quick` in `PIN_FIELDS`, `:1438` `ABSENT_PINS["quick"] = False`, `:1463` `_check_not_quick`, called at `:527` (grid) and `:2325` (sweep).
+- Tests: `test_the_run_header_pins_quick_false_by_default`, `test_the_run_header_pins_quick_true_for_a_quickbench_run`, `test_a_quick_pin_that_is_not_a_bool_is_refused_before_anything_starts`; `test_the_grid_refuses_one_run_directory_whose_header_pins_quick`, `test_a_quick_vs_quick_pair_is_refused_too`, `test_the_sweep_refuses_a_quick_run_at_any_value_of_its_swept_pin`, `test_a_header_without_quick_joins_one_that_pins_it_false`, `test_two_pre_quick_runs_still_join`, `test_quick_is_a_pin_field_and_an_absence_is_false`. One existing literal updated (`test_the_join_states_the_pins...`) because the provenance line now prints `quick \`False\``.
+- `ohyesmlx grid`/`sweep` on scratch `results.jsonl` headers with `quick: true` exit 2 with the required message (single dir, quick-vs-quick, and a concurrency sweep all checked).
+
+## AC-3 — one Python Osaurus pin
+- `ohyesmlx/osaurus_settings.py:46` `PIN_FILES`, `:49` `BACKUP_DIR_MODE`, `:166` `_write_atomic` (temp in same dir + `os.replace`, fsync, mode preserved), `:211` `pin`, `:268` `_put_back` (`filecmp.cmp(shallow=False)`, backups removed only on success), `:297` `restore`, `:314` `recover`. One JSON line to stderr per pin/restore/recover (files + outcome only).
+- `scripts/osaurus-pin.sh`: trap, sweep and restore verdict unchanged; its inline edit/copies now call `pin`/`restore`. Backups live in `~/.osaurus/config.phase4-orig/`.
+- Tests (all scratch dirs): `tests/test_osaurus_settings.py` — `test_pin_backs_up_both_configs_byte_exact_and_applies_the_run_settings`, `test_pin_writes_the_baseline_the_drift_guard_reads_to_the_given_path`, `test_pin_never_writes_the_repos_baseline_unless_it_is_passed`, `test_the_backup_directory_is_created_0700`, `test_a_second_pin_refuses_rather_than_overwriting_the_users_original`, `test_a_pin_that_killed_the_write_between_temp_and_replace_leaves_the_files_intact`, `test_restore_puts_both_files_back_byte_exact_and_removes_the_backup`, `test_restore_returns_false_and_keeps_the_backup_when_a_file_is_not_byte_identical`, `test_restore_without_a_backup_refuses`, `test_pin_and_restore_accept_the_strings_the_shell_hands_them`, `test_recover_restores_a_backup_a_crash_left_behind`, `test_recover_is_a_no_op_without_a_backup`, `test_pin_and_restore_each_write_one_json_line_naming_the_files_and_the_outcome`.
+
+## Red-checks (each reverted and re-greened)
+- Removed both `_check_not_quick` calls → `test_the_grid_refuses_one_run_directory_whose_header_pins_quick`, `test_a_quick_vs_quick_pair_is_refused_too`, `test_the_sweep_refuses_a_quick_run_at_any_value_of_its_swept_pin` failed (3 failed).
+- `restore` skipped the byte compare → `test_restore_returns_false_and_keeps_the_backup_when_a_file_is_not_byte_identical` failed (`assert True is False`).
+- `recover` made a no-op → `test_recover_restores_a_backup_a_crash_left_behind` failed (`assert False is True`).
+
+## Suite
+Baseline at `b002eb4`: `1065 passed in 43.66s`. Final: **`1092 passed in 43.85s`**. `sh -n scripts/osaurus-pin.sh` clean; `git diff --check` clean. Not committed.
+
+## Scope notes (not blockers)
+- `Model.base` has a dataclass default (`""`) placed last: `tests/test_fetch.py` and `tests/test_server.py` construct `Model(...)` directly and are outside the permitted file set. `load()` still requires `base` on every row; five new tests pin it.
+- The shell's literal `cmp` in `osaurus_restore_check` is now the module's `filecmp.cmp(shallow=False)`, because `restore` removes the backup on success, so a shell `cmp` afterwards would have nothing to compare and would be a second definition. The printed verdict and trap behaviour are unchanged. A scratch-`HOME` run of `osaurus_pin` → `osaurus_restore_check` pinned (900/false/false), logged one JSON line each, restored both files byte-identical (`cmp`), removed the backup, and left `config/osaurus-settings-baseline.json` clean.
+- The dry check caught a real defect: `config_dir`/`baseline_path` arriving as strings (the shell interpolates them into `python -c`) broke `write_baseline`; coerced with `Path(...)` and pinned by `test_pin_and_restore_accept_the_strings_the_shell_hands_them`.
+- Not verified: no server, runtime, model or canary was run; no measured run; `~/.osaurus` was never read or written (the round-trip used a scratch `HOME`).
+- The plan's `<output>` asks for `.paul/phases/v5-onboarding/04-03a-SUMMARY.md`, but the order's permitted-file list excludes it, so I did not write it.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    119   19810279   19583872    79655   98.9%   0.140506
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/catalog.json
+ M ohyesmlx/catalog.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/osaurus_settings.py
+ M ohyesmlx/report.py
+ M scripts/build_catalog.py
+ M scripts/osaurus-pin.sh
+ M tests/test_catalog.py
+ M tests/test_measure.py
+ M tests/test_report.py
+?? .paul/orders/v5-04-03a.log
+?? tests/test_osaurus_settings.py
+ docs/interfaces.md           |  80 +++++++++++++++--
+ ohyesmlx/catalog.json        |  12 +++
+ ohyesmlx/catalog.py          |  24 ++++++
+ ohyesmlx/measure.py          |  25 +++++-
+ ohyesmlx/osaurus_settings.py | 199 +++++++++++++++++++++++++++++++++++++++++++
+ ohyesmlx/report.py           |  79 +++++++++++------
+ scripts/build_catalog.py     |  17 +++-
+ scripts/osaurus-pin.sh       |  63 +++++++-------
+ tests/test_catalog.py        |  94 ++++++++++++++++++++
+ tests/test_measure.py        |  34 ++++++++
+ tests/test_report.py         |  87 ++++++++++++++++++-
+ 11 files changed, 643 insertions(+), 71 deletions(-)

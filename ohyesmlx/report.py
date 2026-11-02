@@ -235,15 +235,17 @@ _RANK_PLACES = dict(CARD_FIELDS)
 
 # The run-header pins the grid's first join guard compares across columns. A header carries
 # these and the workloads it measured, and nothing else -- a pin belongs here on the day one
-# exists, and six did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c),
+# exists, and seven did: `concurrency` (plan 06-01b), `prompt_tokens` (plan 06-01c),
 # `cache_state` (plan 06-02), `kv_quant` (study 03-05), `mtp_depth` and `stream_experts`
-# (studies 03-06 and 03-03). The first two were pinned in the header and left out of this
-# tuple, so an N=8 run and a 32k-prompt run would each have joined a grid of their opposite
-# without a word; the last four are here from the day they were written. Every one of the six
-# is a property of how the run drove its cells, which is exactly why the grid may not join runs
-# that disagree about it -- and the last four are two mechanisms' two questions each, so two
-# runs of one cell under different codecs, depths or streaming states are a sweep's columns and
-# never one grid.
+# (studies 03-06 and 03-03), and `quick` (plan 04-03a). The first two were pinned in the header
+# and left out of this tuple, so an N=8 run and a 32k-prompt run would each have joined a grid
+# of their opposite without a word; the last five are here from the day they were written. Every
+# one of the seven is a property of how the run drove its cells, which is exactly why the grid
+# may not join runs that disagree about it -- the cache, codec, depth and streaming pins are two
+# mechanisms' two questions each, so two runs of one cell that differ there are a sweep's columns
+# and never one grid. `quick` never reaches the comparison: `_check_not_quick` refuses a run that
+# pins it true before guard 1 runs, and `ABSENT_PINS` reads an absent key as the false every
+# pre-quickbench run did.
 PIN_FIELDS = (
     "temperature",
     "seed",
@@ -256,6 +258,7 @@ PIN_FIELDS = (
     "kv_quant",
     "mtp_depth",
     "stream_experts",
+    "quick",
 )
 
 # The caveat a value carries once it exists: a rate's is the delta rule's, TTFT's is the
@@ -494,12 +497,12 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
     string its row prints there.
 
     Phase 3 measured the grid one column at a time, which makes joining the columns the one
-    place this project could vary two things without noticing. Four disagreements refuse the
-    join before a table is drawn — pins that differ, a cell in two run directories, one
-    format label at two artifacts, one runtime at two versions — and each names both run
-    directories and the field that disagreed, because a grid that refuses has to say which
-    two files disagreed and on what. It refuses rather than picks: which run is newer is not
-    which run is right.
+    place this project could vary two things without noticing. Five disagreements refuse the
+    join before a table is drawn — a quickbench run named at all, pins that differ, a cell in
+    two run directories, one format label at two artifacts, one runtime at two versions — and
+    each names both run directories and the field that disagreed, because a grid that refuses
+    has to say which two files disagreed and on what. It refuses rather than picks: which run
+    is newer is not which run is right.
 
     A **column** is one runtime across many formats and is the format axis; a **row** is one
     format across many runtimes and is the runtime axis. Both readings are printed below the
@@ -521,6 +524,7 @@ def render_grid(runs: list[tuple[str, dict, list[dict]]], *, rank: str = DEFAULT
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
     _check_harness(runs)
     _check_known_runtime_versions(runs)
+    _check_not_quick(runs)
     _check_pins(runs)
     _check_cells_appear_once(
         runs,
@@ -1418,17 +1422,19 @@ def _footnotes() -> list[str]:
 
 
 # What a pin is worth on a header that predates it. `concurrency`, `prompt_tokens`,
-# `cache_state`, `kv_quant`, `mtp_depth` and `stream_experts` are the six that arrived after runs
-# existed: every header written before them drove its requests one at a time and sized no prompt
-# at all and ran each runtime's own cache default and its own KV codec and its own MTP default
-# and its own expert default, so `1` and five `None`s are what those runs did rather than
-# defaults standing in for something unknown -- which is what separates them from an absent
-# `temperature`, whose absence is a header this guard cannot compare. The `None`s are the ones
-# that matter most here: an absent pin is not `"off"`, because the runs it stands for were not
-# uniform -- the Osaurus grid columns ran with its prefix cache ON, OptiQ's default expert mode
-# is `auto`, and vMLX runs MTP on any bundle that carries the heads -- so reading an absence as
-# a state would fold two different states into one column and call them a sweep. Every one of
-# the six is the absence being the fact: `ABSENT_PINS` is where that is written once.
+# `cache_state`, `kv_quant`, `mtp_depth`, `stream_experts` and `quick` are the seven that
+# arrived after runs existed: every header written before them drove its requests one at a time
+# and sized no prompt at all and ran each runtime's own cache default and its own KV codec and
+# its own MTP default and its own expert default, and none of them was quickbench, so `1`, five
+# `None`s and `False` are what those runs did rather than defaults standing in for something
+# unknown -- which is what separates them from an absent `temperature`, whose absence is a
+# header this guard cannot compare. The `None`s are the ones that matter most here: an absent
+# pin is not `"off"`, because the runs it stands for were not uniform -- the Osaurus grid
+# columns ran with its prefix cache ON, OptiQ's default expert mode is `auto`, and vMLX runs MTP
+# on any bundle that carries the heads -- so reading an absence as a state would fold two
+# different states into one column and call them a sweep. `quick`'s absence is the plainest of
+# all: no run measured before the pin existed was a quickbench run. Every one of the seven is
+# the absence being the fact: `ABSENT_PINS` is where that is written once.
 ABSENT_PINS = {
     "concurrency": 1,
     "prompt_tokens": None,
@@ -1436,6 +1442,7 @@ ABSENT_PINS = {
     "kv_quant": None,
     "mtp_depth": None,
     "stream_experts": None,
+    "quick": False,
 }
 
 # The five entry states as the two joined tables spell them out: the grid and the sweep print
@@ -1451,6 +1458,24 @@ ENTRY_LEGEND = (
     "| `—` | a combination no run measured |",
     "",
 )
+
+
+def _check_not_quick(runs: list[tuple]) -> None:
+    """Refuse a joined run directory whose header pins ``quick``: it is not a published table.
+
+    The refusal is on the **value**, not on a disagreement between two headers: a quick-vs-quick
+    pair is refused as surely as a quick run beside an ordinary one, because the reason is what
+    the numbers are (a quickbench pass) and not what they differ from. A header without the key
+    is an ordinary run -- every header written before quickbench existed lacked it -- so only a
+    truthy pin refuses, and `ohyesmlx grid` on a single quick run refuses before its one column
+    is drawn.
+    """
+    for label, header, _rows in runs:
+        if header.get("quick", False):
+            raise ValueError(
+                f"{label} was measured by quickbench (its run header pins quick: true); "
+                "quickbench results never join the published tables"
+            )
 
 
 def _check_known_runtime_versions(runs: list[tuple]) -> None:
@@ -2234,7 +2259,8 @@ def render_sweep(
     afterwards. Guard 1 is the grid's, with the swept pin skipped, and beside it sit the two
     refusals a sweep needs and a grid has no use for: a pin holding one value across every run
     -- a table with one column is not a sweep -- and the same cell measured at one value by two
-    run directories.
+    run directories. A quickbench run is refused exactly as the grid refuses it, and before the
+    swept pin is read: it is not a column at any value of any pin, so `varying` cannot make one.
 
     `varying="prompt_tokens"` is the one relaxation, and the refusal it does not lift is worth
     reading beside it. Its pin is ``{"target": N, "achieved": M}`` and its runs measure the
@@ -2296,6 +2322,7 @@ def render_sweep(
     runs = [(label, dict(header or {}), list(rows)) for label, header, rows in runs]
     _check_harness(runs)
     _check_known_runtime_versions(runs)
+    _check_not_quick(runs)
     _check_pins(runs, varying=varying)
     _check_sweep_varies(runs, varying)
     _check_cells_appear_once(

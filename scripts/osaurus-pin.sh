@@ -1,44 +1,39 @@
 # Sourced, not run. The Osaurus settings pin for the Phase 4 runners, run_grid_35b.sh now among
-# its callers: both ~/.osaurus/config files are copied byte-exact, then
+# its callers: `osaurus_settings.pin` copies both ~/.osaurus/config files byte-exact into a backup
+# directory, then
 #   modelIdleResidencyPolicy.seconds = 900 (the host's 30 unloads the model inside the 30 s
 #     cooldown, and the drift guard refuses to start against the committed baseline's 900),
 #   cache.prefix.enabled = cache.blockDisk.enabled = false (the other four runtimes prefill cold),
-# the baseline is re-recorded so the guard passes, and afterwards both files are restored and
-# verified with `cmp`. 2026-09-25: the Phase 4 night ran without this and every Osaurus cell was N/A.
+# the baseline is re-recorded so the guard passes, and afterwards `osaurus_settings.restore` puts
+# both files back and returns true only when each is byte-identical to its backup. 2026-09-25: the
+# Phase 4 night ran without this and every Osaurus cell was N/A. The edit, the copies and the
+# byte-exact check live in ohyesmlx/osaurus_settings.py -- one definition, which quickbench calls
+# too; this file is the shell wrapper around it.
 # ponytail: copies remain in run_grid.sh / run_grid_moe.sh (they pin idle 900 only and leave the
 # host's caches alone), run_sweep_cache*.sh (there the Osaurus cache IS the varied pin), and
 # run_accuracy_*.sh / run_jang_*.sh / run_sweep_prompt.sh; point them here when next touched.
 # Needs $PY and a sweep() from the caller; both traps sweep, as the callers' own does. osaurus_pin installs a restoring trap; callers call
 # osaurus_restore_check when their Osaurus runs are done.
-CONF="$HOME/.osaurus/config/server-runtime.json"
-SERVER="$HOME/.osaurus/config/server.json"
-CONF_ORIG="$CONF.phase4-orig"
-SERVER_ORIG="$SERVER.phase4-orig"
+CONFIG_DIR="$HOME/.osaurus/config"
+BACKUP_DIR="$CONFIG_DIR.phase4-orig"
+CONF="$CONFIG_DIR/server-runtime.json"
+SERVER="$CONFIG_DIR/server.json"
+CONF_ORIG="$BACKUP_DIR/server-runtime.json"
+SERVER_ORIG="$BACKUP_DIR/server.json"
 
 osaurus_restore() {
-  [ -f "$CONF_ORIG" ] || return 0
-  cp -p "$CONF_ORIG" "$CONF"
-  cp -p "$SERVER_ORIG" "$SERVER"
+  if [ ! -f "$CONF_ORIG" ] && [ ! -f "$SERVER_ORIG" ]; then return 0; fi
+  $PY -c "
+from ohyesmlx import osaurus_settings as s
+s.restore('$CONFIG_DIR', backup_dir='$BACKUP_DIR')" || return 1
   git checkout -- config/osaurus-settings-baseline.json
 }
 
 osaurus_pin() {
-  if [ ! -f "$CONF_ORIG" ]; then
-    cp -p "$CONF" "$CONF_ORIG"
-    cp -p "$SERVER" "$SERVER_ORIG"
-  fi
   trap 'echo "ABORTED $(date +%H:%M:%S) -- restoring Osaurus settings"; sweep; osaurus_restore; exit 130' INT TERM HUP
   $PY -c "
-import json
-conf, server = '$CONF', '$SERVER'
-runtime = json.load(open(conf))
-runtime.setdefault('cache', {}).setdefault('prefix', {})['enabled'] = False
-runtime['cache'].setdefault('blockDisk', {})['enabled'] = False
-json.dump(runtime, open(conf, 'w'), indent=2)
-hardware = json.load(open(server))
-hardware.setdefault('modelIdleResidencyPolicy', {})['seconds'] = 900
-json.dump(hardware, open(server, 'w'), indent=2)"
-  $PY -c "from ohyesmlx import osaurus_settings as s; s.write_baseline()"
+from ohyesmlx import osaurus_settings as s
+s.pin('$CONFIG_DIR', backup_dir='$BACKUP_DIR')" || return 1
   echo "  osaurus cache off & idle residency pinned to 900 s"
 }
 
@@ -47,8 +42,8 @@ json.dump(hardware, open(server, 'w'), indent=2)"
 # --max-concurrent and vMLX's --max-num-seqs are the same edit). Osaurus takes no such flag, so
 # its cap is this host setting. The baseline is re-recorded exactly as osaurus_pin does it, or
 # osaurus_settings' drift gate refuses every start. Refuses before osaurus_pin has copied $CONF
-# byte-exact: with no copy there is nothing osaurus_restore_check's cmp could put back, and the
-# host would silently keep the run's N.
+# byte-exact: with no copy there is nothing osaurus_restore_check's byte-exact check could put
+# back, and the host would silently keep the run's N.
 osaurus_set_seqs() {
   case ${1:-} in
     ''|*[!0-9]*) echo "osaurus_set_seqs: refusing -- expected a positive integer, got '${1:-}'"; return 1 ;;
@@ -73,13 +68,19 @@ print('  osaurus %s = %r (baseline re-recorded)' % (key, host))"
 }
 
 osaurus_restore_check() {
-  [ -f "$CONF_ORIG" ] || { echo "  osaurus settings were never pinned; nothing to restore"; return 0; }
-  osaurus_restore
-  if cmp -s "$CONF" "$CONF_ORIG" && cmp -s "$SERVER" "$SERVER_ORIG"; then
-    echo "  osaurus settings restored byte-exact (cmp)"
-    rm -f "$CONF_ORIG" "$SERVER_ORIG"
-  else
-    echo "RESTORE FAILED: ~/.osaurus/config differs from $CONF_ORIG / $SERVER_ORIG -- copies kept"
+  if [ ! -f "$CONF_ORIG" ] && [ ! -f "$SERVER_ORIG" ]; then
+    echo "  osaurus settings were never pinned; nothing to restore"
+    return 0
   fi
+  # The byte-exact check is `osaurus_settings.restore`'s `filecmp.cmp(shallow=False)` -- the one
+  # definition of it -- and its verdict is printed here exactly as the `cmp` it replaced was.
+  if $PY -c "
+from ohyesmlx import osaurus_settings as s
+raise SystemExit(0 if s.restore('$CONFIG_DIR', backup_dir='$BACKUP_DIR') else 1)"; then
+    echo "  osaurus settings restored byte-exact (cmp)"
+  else
+    echo "RESTORE FAILED: ~/.osaurus/config differs from $BACKUP_DIR -- copies kept"
+  fi
+  git checkout -- config/osaurus-settings-baseline.json
   trap 'echo "ABORTED $(date +%H:%M:%S)"; sweep; exit 130' INT TERM HUP
 }

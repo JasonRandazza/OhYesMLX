@@ -235,11 +235,12 @@ def run_cells(cells: list[Cell], workloads: list[Workload], *,
               warmup: int | str = "plateau", measured: int = 9, concurrency: int = 1,
               cache_state: str | None = None, kv_quant: str | None = None,
               mtp_depth: str | None = None, stream_experts: str | None = None,
-              cooldown_s: float = 30.0, prompt_tokens: dict | None = None,
+              quick: bool = False, cooldown_s: float = 30.0,
+              prompt_tokens: dict | None = None,
               results_dir: str) -> list[CellResult]: ...
 # warmup/measured/concurrency: see "Phase 6 plan 06-01b"; prompt_tokens: 06-01c;
-# cache_state: 06-02; kv_quant: 03-05; mtp_depth and stream_experts: 03-06 and 03-03.
-# Every one of them is a run header pin and none is a cell property.
+# cache_state: 06-02; kv_quant: 03-05; mtp_depth and stream_experts: 03-06 and 03-03;
+# quick: 04-03a. Every one of them is a run header pin and none is a cell property.
 ```
 
 A **record** carries every `CellResult` field except `measured_pin`, adds three derived ones
@@ -574,9 +575,10 @@ without noticing, so the join refuses rather than renders when:
 
 1. **The pins disagree.** Every run header field — `report.PIN_FIELDS`:
    `temperature`, `seed`, `warmup`, `measured`, `cooldown_s`, `concurrency`,
-   `prompt_tokens`, `cache_state`, `kv_quant`, `mtp_depth`, `stream_experts` — and every
-   workload's `messages` and `max_tokens` must be identical across all runs. Columns that
-   answered different prompts are not one grid.
+   `prompt_tokens`, `cache_state`, `kv_quant`, `mtp_depth`, `stream_experts`,
+   `quick` — and every workload's `messages` and `max_tokens` must be identical across all
+   runs. Columns that answered different prompts are not one grid. An absent `quick` is
+   `False` (plan 04-03a), so a run measured before the pin joins one that pinned it `False`.
 2. **A cell appears twice.** The same `(label, runtime, workload_id)` from two run
    directories is ambiguous; name both directories and refuse. There is no "latest wins"
    rule, because which run is newer is not which run is right.
@@ -594,6 +596,13 @@ without noticing, so the join refuses rather than renders when:
    `harness.source_sha256` and refuses a join whose columns were measured by different
    harness source, naming both directories; a header predating the block carries none and is
    skipped. Two revisions of the loop are not one grid.
+
+**A quickbench run is refused before guard 1, on the value rather than a mismatch.** `_check_not_quick`
+runs in `render_grid` and `render_sweep` ahead of `_check_pins`, so `ohyesmlx grid` on a single
+directory whose header pins `quick: true` refuses, and a quick-vs-quick pair is refused like any
+other. The message names the directory and says quickbench results never join the published tables.
+A header without the key is an ordinary run: `ABSENT_PINS["quick"]` is `False`, which is what every
+run measured before the pin existed did.
 
 Guard 4 compares `runtime_version` as an exact string, after each runtime's
 `parse_version`. mlx-optiq's own parser strips the prose off `"mlx-optiq, version 0.5.6"`
@@ -1392,11 +1401,14 @@ and `detect_all` looks in them first, so a canary reports the lab copy's version
 `guided_download` (Osaurus, oMLX, vMLX) opens `source_url` and verifies afterwards; `command` runs `steps`.
 
 **`Model`** (`catalog.load(path=CATALOG_PATH) -> list[Model]`; the seed is `ohyesmlx/catalog.json`, plan 03-01)
-`{"repo": "org/name", "title": str, "params": int, "format": str, "modality": "text|vision-language",
+`{"repo": "org/name", "base": str, "title": str, "params": int, "format": str, "modality": "text|vision-language",
 "license": str, "tier": "starter|standard", "revision": "40-hex commit", "size_bytes": int,
 "files": [{"path": str, "size": int, "sha256": "64-hex|null", "git_oid": "40-hex|null"}],
 "engines": ["mlxlm|osaurus|omlx|optiq|vmlx"], "measured_here": bool, "notes": str}`.
-`params` is the **base** model's count, never the artifact's `safetensors.total` (research §1.1). `size_bytes`
+`base` names the **base model** a format was quantized from (e.g. `"Qwen3.5-2B"`): the same string on
+every format of one base and a different one across bases, a non-empty string (plan 04-03a), so
+`catalog.siblings(model, models) -> list[Model]` answers the model's other formats from the data, in
+catalog order. `params` is the **base** model's count, never the artifact's `safetensors.total` (research §1.1). `size_bytes`
 is the sum of `files`, which holds every file the tree listing has, so it is what the disk pays. An LFS file
 carries `sha256` (the listing's `lfs.oid`) and a plain git file carries `git_oid`, never both and never
 neither — one of them is what a download verifies, and `fetch._verify` holds the one definition of how.
@@ -1522,3 +1534,55 @@ unless `--allow-noisy` is passed. Without `--yes` the quiet-machine rule and the
 are printed and nothing starts. `--record` writes the detected version, the date and the baseline only:
 the tested `version` and its `verified` date are never adopted silently.
 
+
+## v5.0 plan 04-03a — the catalog `base`, the `quick` pin, and one Osaurus pin
+
+The three foundations quickbench (04-03b) stands on, each with one definition.
+
+**`Model.base` and `catalog.siblings`.** Every catalog row carries `base`, the name of the base
+model it was quantized from — `"Qwen3.5-0.8B"` on both the stock 4-bit and the OptiQ row,
+`"Qwen3.5-2B"` on both the stock 4-bit and the oQ4 row (the only two bases with two rows today).
+`scripts/build_catalog.py` writes it from its own seed table, so a rebuild cannot drop it.
+`catalog.siblings(model, models)` returns the other rows with the same `base` in catalog order;
+a missing or non-string `base` is a `ValueError` naming the file, the repo and the field, like
+every other row check.
+
+**The `quick` header pin.** `run_cells(..., quick=False)` records `quick` (a bool) in the run
+header; `False` is the default and is what a header written before the pin existed is read as.
+`quick` joins `report.PIN_FIELDS`, but the joined tables never compare it: `_check_not_quick`
+refuses any grid or sweep naming a run directory whose header pins `quick: true`, by value and
+before guard 1, so a quick-vs-quick pair is refused as surely as a quick run beside a full one.
+The refusal names the directory and says quickbench results never join the published tables.
+`ABSENT_PINS["quick"]` is `False`, so every pre-04-03a run joins exactly as it did before.
+
+**`osaurus_settings.pin` / `restore` / `recover`.** The pin moved out of shell into the module so
+quickbench and `scripts/osaurus-pin.sh` share one definition of it.
+
+```
+pin(config_dir=None, *, backup_dir, baseline_path=None) -> None
+restore(config_dir=None, *, backup_dir) -> bool
+recover(config_dir=None, *, backup_dir) -> bool
+```
+
+`pin` copies `server-runtime.json` and `server.json` (`PIN_FILES`) byte-exact into `backup_dir`,
+sets `cache.prefix.enabled = false`, `cache.blockDisk.enabled = false` and
+`modelIdleResidencyPolicy.seconds = 900`, and writes the baseline the drift guard reads to
+`baseline_path` — `BASELINE_PATH` (the repo's `config/`) by default, the harness's default; the
+app passes its own Application Support path. It refuses (`ValueError`) while a backup exists,
+because overwriting it would destroy the only copy of the user's own settings; recovering first
+is the caller's move. Both configs are parsed before either is replaced, so a malformed file
+leaves its neighbour untouched.
+
+`restore` puts each backed-up file back, returns `True` only when each is byte-identical to its
+backup (`filecmp.cmp(shallow=False)`), and removes the backups on success; `False` keeps them so a
+restore that did not take effect can be retried. `recover` is the same restore for a backup a
+crash between pin and restore left behind, and a no-op (`False`, no error) without one — 04-03b
+calls it before any new pin, and the app may call it at launch.
+
+Every write is a temp file in the same directory followed by `os.replace`, so a kill mid-write
+never leaves a half-written Osaurus config; the backup directory is created `0700`; the file's
+own mode is preserved across the replace. `pin` and `restore`/`recover` each write one JSON line
+to stderr, naming the files and the outcome and never their contents.
+`scripts/osaurus-pin.sh` keeps its trap, its port/app sweep and its restore verdict, and calls
+these functions instead of carrying its own copy of the edit; the byte-exact verdict printed as
+"restored byte-exact (cmp)" is now the module's `filecmp` comparison, the one definition of it.

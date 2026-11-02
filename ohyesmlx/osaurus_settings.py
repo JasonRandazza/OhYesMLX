@@ -15,11 +15,24 @@ records what the settings were, not what they ought to be. Notably the disk bloc
 and the prefix cache are on by default, which is the same class of defect that made oMLX
 get ``--no-cache`` pinned; deciding whether they should be off is a separate call this
 module does not make.
+
+**The pin, one definition for the harness and the app.** :func:`pin` copies both files
+byte-exact into ``backup_dir``, applies the run's settings -- ``modelIdleResidencyPolicy.seconds
+= 900`` and both caches off -- and records the baseline the drift guard reads. :func:`restore`
+puts both files back and returns ``True`` only when each is byte-identical to its backup,
+removing the backup on success; :func:`recover` is the same restore for a backup a crash left
+behind, and a no-op without one. Every write here is a temp file in the same directory followed
+by ``os.replace``, so a kill mid-write never leaves a half-written Osaurus config, and the
+backup directory is created ``0700``. The shell runner (``scripts/osaurus-pin.sh``) calls these
+functions rather than carrying its own copy of the edit.
 """
 
 from __future__ import annotations
 
+import filecmp
 import json
+import os
+import sys
 from pathlib import Path
 
 DEFAULT_CONFIG_DIR = Path.home() / ".osaurus" / "config"
@@ -27,6 +40,13 @@ DEFAULT_CONFIG_DIR = Path.home() / ".osaurus" / "config"
 BASELINE_PATH = (
     Path(__file__).resolve().parents[1] / "config" / "osaurus-settings-baseline.json"
 )
+
+# The two host files `pin` backs up and edits: the caches live in one, the idle residency
+# policy in the other. A backup of one without the other could not restore a host.
+PIN_FILES = ("server-runtime.json", "server.json")
+
+# The backup directory holds copies of the user's own settings, so nobody else gets to read it.
+BACKUP_DIR_MODE = 0o700
 
 # (file, dotted key path) for every setting that can move a measurement.
 # Kept explicit rather than hashing whole files: Osaurus writes UI state, window sizes
@@ -126,6 +146,185 @@ def write_baseline(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({"settings": settings}, indent=2, sort_keys=True) + "\n")
     return settings
+
+
+def _read_object(path: Path) -> dict:
+    """One Osaurus config as a JSON object, or ``ValueError`` naming the file."""
+    try:
+        text = path.read_text()
+    except OSError as error:
+        raise ValueError(f"cannot read the Osaurus config {path}: {error}") from error
+    try:
+        payload = json.loads(text)
+    except ValueError as error:
+        raise ValueError(f"the Osaurus config {path} is not JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"the Osaurus config {path} does not hold a JSON object")
+    return payload
+
+
+def _write_atomic(target: Path, data: bytes) -> None:
+    """Replace *target*'s bytes through a temp file in its own directory.
+
+    A kill between the write and the ``os.replace`` leaves the original file exactly as it
+    was, and the temp is removed rather than left beside it: a half-written Osaurus config
+    is a host that will not start, and a leftover ``.pin-tmp`` is a file nobody would
+    recognise as stale.
+    """
+    temporary = target.with_name(target.name + ".pin-tmp")
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if target.exists():
+            # The replace installs the temp's mode too, and the user's own file mode is not
+            # this module's to change.
+            os.chmod(temporary, target.stat().st_mode & 0o7777)
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _backups(backup_dir: Path) -> list[Path]:
+    """The backups present in *backup_dir*, in the pin's own file order."""
+    return [path for name in PIN_FILES if (path := backup_dir / name).exists()]
+
+
+def _log(action: str, outcome: str, files: list[Path], backup_dir: Path) -> None:
+    """One JSON line per pin or restore: the files and the outcome, never their contents."""
+    print(
+        json.dumps(
+            {
+                "action": action,
+                "outcome": outcome,
+                "files": [str(path) for path in files],
+                "backup_dir": str(backup_dir),
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+
+
+def pin(
+    config_dir: Path | None = None,
+    *,
+    backup_dir: Path,
+    baseline_path: Path | None = None,
+) -> None:
+    """Pin Osaurus's measurement-relevant host settings, backing the originals up first.
+
+    Both ``PIN_FILES`` are copied byte-exact into *backup_dir* (created ``0700``, refused if a
+    backup is already there, because overwriting it would destroy the only copy of the user's
+    own settings), then ``cache.prefix.enabled`` and ``cache.blockDisk.enabled`` are set false
+    and ``modelIdleResidencyPolicy.seconds`` to 900, and the baseline the drift guard reads is
+    written to *baseline_path* -- ``BASELINE_PATH`` by default, which is the harness's copy in
+    the repo; the app passes its own.
+
+    Both configs are parsed before either is replaced, so an unreadable file leaves its
+    neighbour untouched, and every write is atomic.
+    """
+    root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
+    backups = Path(backup_dir)
+    baseline = (
+        Path(baseline_path) if baseline_path is not None else BASELINE_PATH
+    )
+
+    existing = _backups(backups)
+    if existing:
+        raise ValueError(
+            f"refusing to pin Osaurus settings: {backups} already holds a backup "
+            f"({', '.join(path.name for path in existing)}); restore it, or call "
+            "osaurus_settings.recover, rather than overwriting the user's original settings"
+        )
+    sources = [Path(root) / name for name in PIN_FILES]
+    missing = [path for path in sources if not path.exists()]
+    if missing:
+        raise ValueError(
+            "refusing to pin Osaurus settings: "
+            f"{', '.join(str(path) for path in missing)} does not exist"
+        )
+
+    runtime = _read_object(sources[0])
+    server = _read_object(sources[1])
+
+    backups.mkdir(parents=True, exist_ok=True)
+    os.chmod(backups, BACKUP_DIR_MODE)
+    for source in sources:
+        _write_atomic(backups / source.name, source.read_bytes())
+
+    runtime.setdefault("cache", {}).setdefault("prefix", {})["enabled"] = False
+    runtime["cache"].setdefault("blockDisk", {})["enabled"] = False
+    server.setdefault("modelIdleResidencyPolicy", {})["seconds"] = 900
+    _write_atomic(sources[0], json.dumps(runtime, indent=2).encode())
+    _write_atomic(sources[1], json.dumps(server, indent=2).encode())
+
+    write_baseline(baseline, root)
+    _log("pin", "pinned", sources, backups)
+
+
+def _put_back(root: Path, backups: Path, present: list[Path], *, action: str) -> bool:
+    """Copy each backup back, verify it byte-exact, and remove the backups only when they match."""
+    restored = [Path(root) / backup.name for backup in present]
+    for backup, target in zip(present, restored):
+        _write_atomic(target, backup.read_bytes())
+    mismatched = [
+        target
+        for backup, target in zip(present, restored)
+        if not filecmp.cmp(target, backup, shallow=False)
+    ]
+    if mismatched:
+        _log(
+            action,
+            "not byte-identical, so the backup is kept: "
+            + ", ".join(str(path) for path in mismatched),
+            restored,
+            backups,
+        )
+        return False
+    for backup in present:
+        backup.unlink()
+    try:
+        backups.rmdir()
+    except OSError:
+        pass  # something else is in the directory; the backups themselves are gone
+    _log(action, "restored byte-exact", restored, backups)
+    return True
+
+
+def restore(config_dir: Path | None = None, *, backup_dir: Path) -> bool:
+    """Put both config files back from *backup_dir*; ``True`` only when each is byte-exact.
+
+    ``False`` leaves the backup in place, so a restore that did not take effect can be
+    retried or examined rather than reported as done. A directory holding no backup at all
+    raises: unlike :func:`recover`, a caller that asks to restore has said a backup exists.
+    """
+    root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
+    backups = Path(backup_dir)
+    present = _backups(backups)
+    if not present:
+        raise ValueError(
+            f"refusing to restore Osaurus settings: {backups} holds no backup to restore"
+        )
+    return _put_back(root, backups, present, action="restore")
+
+
+def recover(config_dir: Path | None = None, *, backup_dir: Path) -> bool:
+    """Restore a backup that a crash between pin and restore left behind.
+
+    ``True`` when a leftover backup was put back byte-exact and removed, ``False`` when there
+    was nothing to recover -- the ordinary case, and deliberately not an error: this runs at
+    launch and before a pin. A restore that does not verify keeps the backup and returns
+    ``False`` exactly as :func:`restore` does.
+    """
+    root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
+    backups = Path(backup_dir)
+    present = _backups(backups)
+    if not present:
+        return False
+    return _put_back(root, backups, present, action="recover")
 
 
 def diff_against_baseline(

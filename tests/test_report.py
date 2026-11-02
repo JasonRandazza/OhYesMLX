@@ -2445,6 +2445,91 @@ def test_harness_source_mismatch_refuses_grid_and_sweep_joins():
     assert "source_sha256" in str(raised.value)
 
 
+QUICK_REFUSAL = "quickbench results never join the published tables"
+
+
+def quick_run(run_label=RUN_A, *, runtime="mlxlm", version="mlx-lm 0.31.3"):
+    """One quickbench run directory: its header pins the value that refuses every join."""
+    return grid_run(
+        run_label,
+        runtime,
+        version,
+        ("oq4",),
+        workload_ids=("chat",),
+        header=run_header(("chat",), quick=True),
+    )
+
+
+def test_the_grid_refuses_one_run_directory_whose_header_pins_quick():
+    """Refusal is on the value, not on a mismatch, so a single quick directory is refused and
+    `ohyesmlx grid` on it draws no column at all."""
+    with pytest.raises(ValueError) as raised:
+        report.render_grid([quick_run()])
+
+    message = str(raised.value)
+    assert RUN_A in message
+    assert "quick: true" in message
+    assert QUICK_REFUSAL in message
+
+
+def test_a_quick_vs_quick_pair_is_refused_too():
+    runs = [
+        quick_run(RUN_A),
+        quick_run(RUN_B, runtime="omlx", version="oMLX 0.6.4"),
+    ]
+    with pytest.raises(ValueError) as raised:
+        report.render_grid(runs)
+
+    assert RUN_A in str(raised.value)
+    assert QUICK_REFUSAL in str(raised.value)
+
+
+def test_the_sweep_refuses_a_quick_run_at_any_value_of_its_swept_pin():
+    runs = [
+        concurrency_run(SWEEP_RUNS[0], 1),
+        concurrency_run(
+            SWEEP_RUNS[1], 8, header=run_header(("chat",), concurrency=8, quick=True)
+        ),
+    ]
+    with pytest.raises(ValueError) as raised:
+        report.render_sweep(runs, varying="concurrency")
+
+    assert SWEEP_RUNS[1] in str(raised.value)
+    assert QUICK_REFUSAL in str(raised.value)
+
+
+def test_a_header_without_quick_joins_one_that_pins_it_false():
+    """An absent key is the false it stands for: every run measured before the pin joins a run
+    that pinned it, exactly as it joined before the pin existed."""
+    legacy = grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",))
+    assert "quick" not in legacy[1]
+    pinned = grid_run(
+        RUN_B,
+        "omlx",
+        "oMLX 0.6.4",
+        ("oq4",),
+        workload_ids=("chat",),
+        header=run_header(("chat",), quick=False),
+    )
+
+    assert set(grid_tables(report.render_grid([legacy, pinned]))) == {"chat"}
+
+
+def test_two_pre_quick_runs_still_join():
+    runs = [
+        grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
+        grid_run(RUN_B, "omlx", "oMLX 0.6.4", ("oq4",), workload_ids=("chat",)),
+    ]
+    assert all("quick" not in header for _label, header, _rows in runs)
+
+    assert set(grid_tables(report.render_grid(runs))) == {"chat"}
+
+
+def test_quick_is_a_pin_field_and_an_absence_is_false():
+    assert "quick" in report.PIN_FIELDS
+    assert report.ABSENT_PINS["quick"] is False
+
+
 def test_legacy_runs_without_harness_provenance_still_join():
     rendered = report.render_grid([
         grid_run(RUN_A, "mlxlm", "mlx-lm 0.31.3", ("oq4",), workload_ids=("chat",)),
@@ -2495,7 +2580,7 @@ def test_the_join_states_the_pins_and_every_run_directory_it_joined():
     assert (
         "Pins all columns share: temperature `0.0`, seed `0`, warmup `3`, measured `5`, "
         "cooldown_s `30.0`, concurrency `1`, prompt_tokens `—`, cache_state `—`, "
-        "kv_quant `—`, mtp_depth `—`, stream_experts `—`." in grid
+        "kv_quant `—`, mtp_depth `—`, stream_experts `—`, quick `False`." in grid
     )
     assert "Workloads all columns ran, with identical messages: `chat` (max_tokens 128)" in grid
 

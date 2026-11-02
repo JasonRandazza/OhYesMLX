@@ -5,6 +5,7 @@
   "models": [
     {
       "repo": "mlx-community/Qwen3-0.6B-4bit",
+      "base": "Qwen3-0.6B",
       "title": "Qwen3 0.6B 4-bit",
       "params": 751632384,
       "format": "mlx affine 4-bit gs64",
@@ -93,6 +94,7 @@
     },
     {
       "repo": "mlx-community/Qwen3.5-0.8B-4bit",
+      "base": "Qwen3.5-0.8B",
       "title": "Qwen3.5 0.8B 4-bit",
       "params": 873438784,
       "format": "mlx affine 4-bit gs64",
@@ -187,6 +189,7 @@
     },
     {
       "repo": "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
+      "base": "Qwen3.5-0.8B",
       "title": "Qwen3.5 0.8B OptiQ 4-bit",
       "params": 873438784,
       "format": "OptiQ-4bit (4/8-bit mixed)",
@@ -305,6 +308,7 @@
     },
     {
       "repo": "mlx-community/LFM2.5-1.2B-Instruct-4bit",
+      "base": "LFM2.5-1.2B-Instruct",
       "title": "LFM2.5 1.2B Instruct 4-bit",
       "params": 1170340608,
       "format": "mlx affine 4-bit gs64",
@@ -387,6 +391,7 @@
     },
     {
       "repo": "mlx-community/granite-4.0-h-1b-4bit",
+      "base": "granite-4.0-h-1b",
       "title": "Granite 4.0 H 1B 4-bit",
       "params": 1461538368,
       "format": "mlx affine 4-bit gs64",
@@ -481,6 +486,7 @@
     },
     {
       "repo": "mlx-community/Qwen3.5-2B-4bit",
+      "base": "Qwen3.5-2B",
       "title": "Qwen3.5 2B 4-bit",
       "params": 2274069824,
       "format": "mlx affine 4-bit gs64",
@@ -575,6 +581,7 @@
     },
     {
       "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+      "base": "Qwen3.5-2B",
       "title": "Qwen3.5 2B oQ4",
       "params": 2274069824,
       "format": "oQ4 (mixed 4/5/6/8)",
@@ -657,6 +664,7 @@
     },
     {
       "repo": "mlx-community/LFM2.5-2.6B-4bit",
+      "base": "LFM2.5-2.6B",
       "title": "LFM2.5 2.6B 4-bit",
       "params": 2697198592,
       "format": "mlx affine 4-bit gs64",
@@ -733,6 +741,7 @@
     },
     {
       "repo": "mlx-community/SmolLM3-3B-4bit",
+      "base": "SmolLM3-3B",
       "title": "SmolLM3 3B 4-bit",
       "params": 3075098624,
       "format": "mlx affine 4-bit gs64",
@@ -815,6 +824,7 @@
     },
     {
       "repo": "mlx-community/Llama-3.2-3B-Instruct-4bit",
+      "base": "Llama-3.2-3B-Instruct",
       "title": "Llama 3.2 3B Instruct 4-bit",
       "params": 3212749824,
       "format": "mlx affine 4-bit gs64",
@@ -885,6 +895,7 @@
     },
     {
       "repo": "mlx-community/Qwen3.5-4B-4bit",
+      "base": "Qwen3.5-4B",
       "title": "Qwen3.5 4B 4-bit",
       "params": 4659865088,
       "format": "mlx affine 4-bit gs64",
@@ -973,6 +984,7 @@
     },
     {
       "repo": "mlx-community/LFM2.5-8B-A1B-MLX-4bit",
+      "base": "LFM2.5-8B-A1B",
       "title": "LFM2.5 8B A1B MoE 4-bit",
       "params": 8467856832,
       "format": "mlx affine 4-bit gs64",

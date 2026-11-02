@@ -13,6 +13,7 @@ downloader.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from dataclasses import FrozenInstanceError
 from datetime import date
@@ -38,6 +39,7 @@ def entry(**overrides):
     """One valid catalog row; a check breaks exactly one field of it."""
     row = {
         "repo": "mlx-community/Qwen3.5-4B-4bit",
+        "base": "Qwen3.5-4B",
         "title": "Qwen3.5 4B 4-bit",
         "params": 4_659_865_088,
         "format": "mlx affine 4-bit gs64",
@@ -81,6 +83,7 @@ def refusal(path, row):
 def test_a_valid_entry_loads_as_the_recorded_values(tmp_path):
     (model,) = load(write(tmp_path, [entry()]))
     assert model.repo == "mlx-community/Qwen3.5-4B-4bit"
+    assert model.base == "Qwen3.5-4B"
     assert model.params == 4_659_865_088
     assert model.modality == "vision-language"
     assert model.tier == "standard"
@@ -150,9 +153,23 @@ def test_a_repo_that_is_not_org_slash_name_is_refused_naming_the_file(tmp_path):
         assert "repo" in message
 
 
+def test_a_base_that_is_missing_or_not_a_string_is_refused_naming_the_repo(tmp_path):
+    """`base` is what `siblings` reads, so a row without one has no other format it can name."""
+    for base in (None, 7, "", ["Qwen3.5-4B"]):
+        row = entry()
+        if base is None:
+            del row["base"]
+        else:
+            row["base"] = base
+        message = refusal(tmp_path, row)
+        assert "base" in message, base
+        assert entry()["repo"] in message, base
+
+
 def test_every_required_field_is_named_when_it_is_missing(tmp_path):
     path = tmp_path / "catalog.json"
     for field in (
+        "base",
         "title",
         "params",
         "format",
@@ -446,3 +463,80 @@ def test_disk_needed_is_the_one_disk_rule_rounded_up():
     assert catalog.disk_needed(0) == 0
     assert catalog.disk_needed(10) == 12
     assert catalog.disk_needed(11) == 14
+
+
+# --------------------------------------------------------------------------------------
+# AC-1: `base` names the base model, and `siblings` reads it
+# --------------------------------------------------------------------------------------
+
+# Every base in today's catalog with its rows, in catalog order, taken from each repo's own
+# base model -- the title carries it. Pinned by hand rather than derived, so a typo in one
+# row's `base` is a failure here instead of a sibling that quietly disappears.
+BASES = {
+    "Qwen3-0.6B": ["mlx-community/Qwen3-0.6B-4bit"],
+    "Qwen3.5-0.8B": [
+        "mlx-community/Qwen3.5-0.8B-4bit",
+        "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
+    ],
+    "LFM2.5-1.2B-Instruct": ["mlx-community/LFM2.5-1.2B-Instruct-4bit"],
+    "granite-4.0-h-1b": ["mlx-community/granite-4.0-h-1b-4bit"],
+    "Qwen3.5-2B": [
+        "mlx-community/Qwen3.5-2B-4bit",
+        "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+    ],
+    "LFM2.5-2.6B": ["mlx-community/LFM2.5-2.6B-4bit"],
+    "SmolLM3-3B": ["mlx-community/SmolLM3-3B-4bit"],
+    "Llama-3.2-3B-Instruct": ["mlx-community/Llama-3.2-3B-Instruct-4bit"],
+    "Qwen3.5-4B": ["mlx-community/Qwen3.5-4B-4bit"],
+    "LFM2.5-8B-A1B": ["mlx-community/LFM2.5-8B-A1B-MLX-4bit"],
+}
+
+
+def test_every_base_and_its_rows_are_pinned():
+    rows = {}
+    for model in shipped():
+        rows.setdefault(model.base, []).append(model.repo)
+    assert rows == BASES
+
+
+def test_only_two_bases_carry_two_formats_today():
+    assert sorted(base for base, repos in BASES.items() if len(repos) > 1) == [
+        "Qwen3.5-0.8B",
+        "Qwen3.5-2B",
+    ]
+
+
+def test_siblings_answers_the_other_format_of_one_base_and_nothing_else():
+    models = shipped()
+    by_repo = {model.repo: model for model in models}
+
+    assert [
+        model.repo
+        for model in catalog.siblings(by_repo["mlx-community/Qwen3.5-2B-4bit"], models)
+    ] == ["RepublicOfKorokke/Qwen3.5-2B-oQ4"]
+    assert [
+        model.repo
+        for model in catalog.siblings(by_repo["RepublicOfKorokke/Qwen3.5-2B-oQ4"], models)
+    ] == ["mlx-community/Qwen3.5-2B-4bit"]
+    assert catalog.siblings(by_repo["mlx-community/SmolLM3-3B-4bit"], models) == []
+
+
+def test_the_builder_writes_base_so_a_rebuild_does_not_drop_it(monkeypatch):
+    """`build()` with the Hub stubbed out: the file it would write carries every row's base."""
+    path = Path(catalog.__file__).resolve().parent.parent / "scripts" / "build_catalog.py"
+    spec = importlib.util.spec_from_file_location("build_catalog_under_test", path)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+
+    monkeypatch.setattr(builder, "files_at", lambda repo, revision: [
+        {"path": "config.json", "size": 1, "sha256": None, "git_oid": GIT_OID}
+    ])
+    monkeypatch.setattr(
+        builder, "_get", lambda url: ({"gated": False, "sha": REVISION}, None)
+    )
+    monkeypatch.setattr(builder.time, "sleep", lambda seconds: None)
+
+    payload = builder.build()
+    assert {row["repo"]: row["base"] for row in payload["models"]} == {
+        model.repo: model.base for model in shipped()
+    }

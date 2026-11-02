@@ -19,6 +19,10 @@ Four rules shape the file this reads:
   (or none) cannot verify a download, and how each is checked lives at ``fetch._verify``.
 - **A row no engine can serve is not a row.** ``engines`` is a subset of the five engines
   in ``engines.ONBOARDING_ENGINES``, taken from the research table's own column.
+- **``base`` names the model, not the format.** Every row of one base model carries that
+  base's name -- ``Qwen3.5-2B`` on both its stock 4-bit and its oQ4 row -- so
+  :func:`siblings` answers "what other formats of this model does the catalog hold?" from
+  the data rather than by parsing titles at request time.
 
 ``load()`` refuses a missing, unreadable or ill-shaped file with ``ValueError`` naming the
 file, the row and the field: a row half-read would report a size or a hash nobody checked.
@@ -105,6 +109,12 @@ class Model:
     engines: list[str]  # a subset of ONBOARDING_ENGINES
     measured_here: bool  # a results/**/results.jsonl row exists for this exact artifact
     notes: str
+    # Last because it is the one field with a default, and a default may not precede a field
+    # without one. `load` requires it on every row -- a missing or non-string `base` is a
+    # ValueError naming the repo -- so a catalog row can never take this default; it exists
+    # for the rows other modules' tests build by hand, which name a model for a test of
+    # something else.
+    base: str = ""  # the base model's name, the same for every format of one base
 
 
 def _string(where: str, entry: dict, field: str) -> str:
@@ -195,6 +205,7 @@ def _model(path: pathlib.Path, position: int, entry) -> Model:
     # From here the row can name itself, and every later message uses that name.
     where = f"the model catalog {path} entry {repo}"
 
+    base = _string(where, entry, "base")
     title = _string(where, entry, "title")
     params = _integer(where, entry, "params", positive=True)
     model_format = _string(where, entry, "format")
@@ -238,6 +249,7 @@ def _model(path: pathlib.Path, position: int, entry) -> Model:
 
     return Model(
         repo=repo,
+        base=base,
         title=title,
         params=params,
         format=model_format,
@@ -279,3 +291,15 @@ def load(path=CATALOG_PATH) -> list[Model]:
     if not isinstance(models, list):
         raise ValueError(f"the model catalog {path} has no 'models' list")
     return [_model(path, position, entry) for position, entry in enumerate(models)]
+
+
+def siblings(model: Model, models: list[Model]) -> list[Model]:
+    """The other rows of *model*'s base: every other format of the same model.
+
+    In catalog order, so the stock format comes before the one built on it. The rows are
+    matched on ``base`` -- the data -- and not on a title parsed at request time, which is
+    why a hand-entered base is worth a test that lists every one of them.
+    """
+    return [
+        other for other in models if other.base == model.base and other.repo != model.repo
+    ]
