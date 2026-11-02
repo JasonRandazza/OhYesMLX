@@ -1,13 +1,16 @@
-"""The app's localhost API: three read-only GETs and the job routes, behind a per-launch token.
+"""The app's localhost API: four read-only GETs and the job routes, behind a per-launch token.
 
-Seam S6, plans 04-01 and 04-02. The SwiftUI app (Phase 5) is a client of this server and nothing
-else, so this module is the contract -- and it holds no rule a module already defines. ``/hardware``
-is ``hardware.scan``, ``/engines`` is ``detect_all`` with ``engines.install_plan`` composed in,
-``/recommendations`` is ``recommend.pick`` plus ``recommend.exclusion_reason``; a fit rule or a
-version comparison written here would be a second copy of one that lives in its module.
+Seam S6, plans 04-01, 04-02 and 04-03b. The SwiftUI app (Phase 5) is a client of this server and
+nothing else, so this module is the contract -- and it holds no rule a module already defines.
+``/hardware`` is ``hardware.scan``, ``/engines`` is ``detect_all`` with ``engines.install_plan``
+composed in, ``/recommendations`` is ``recommend.pick`` plus ``recommend.exclusion_reason`` (and
+``Pick.measured_here`` from ``quickbench.latest``), and ``/quickbench/plan`` is
+``quickbench.plan``; a fit rule or a version comparison written here would be a second copy of
+one that lives in its module.
 
-``POST /jobs`` is the first surface that changes this Mac, and it carries a NAME and a literal
-``true`` and nothing else: no path, no URL, no command, no version. The module it calls owns the
+``POST /jobs`` is the first surface that changes this Mac, and it carries a NAME, a literal
+``true`` and -- for quickbench -- one boolean of consent, and nothing else: no path, no URL, no
+command, no version. The module it calls owns the
 allowlist, the consent gate, the lock and the rollback, so an unknown name or a low disk is that
 module's own refusal, delivered on the job's event stream -- never a rule invented here.
 
@@ -33,10 +36,11 @@ import secrets
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ohyesmlx import catalog, engines, fetch, hardware, recommend
+from ohyesmlx import catalog, engines, fetch, hardware, quickbench, recommend
 
 # The only address this server ever binds: never 0.0.0.0 and never ::, so nothing off this
 # machine can reach it and a page's DNS-rebinding request arrives with a foreign Host the guard
@@ -63,12 +67,13 @@ MAX_BODY_BYTES = 4_096
 # AC-6: shutdown cancels a running install or download and waits at most this long for it.
 JOB_SHUTDOWN_WAIT_S = 120.0
 
-# The three paths that answer, and the handler each one runs. Anything else is 404, whatever
-# the method -- and this mapping is the only place the set is written down.
+# The paths that answer, and the handler each one runs. Anything else is 404, whatever the
+# method -- and this mapping is the only place the set is written down.
 _ENDPOINTS = {
     "/hardware": "_get_hardware",
     "/engines": "_get_engines",
     "/recommendations": "_get_recommendations",
+    "/quickbench/plan": "_get_quickbench_plan",
 }
 
 # AC-1: the closed set of args per kind, as the one name key; ``confirmed`` is the other key and
@@ -77,7 +82,12 @@ _JOB_ARGS = {
     "install": "engine",
     "download": "repo",
     "evict": "repo",
+    "quickbench": "repo",
 }
+
+# The one kind that also takes a boolean the client states: whether the user allowed Osaurus's
+# host settings to be pinned for the run and restored afterwards (AC-3).
+_JOB_FLAGS = {"quickbench": ("osaurus",)}
 
 # The only pattern a job path takes: the 16-hex id and one of the two actions. A job with no
 # action is nothing this server serves, and a path that does not match is 404.
@@ -95,7 +105,7 @@ _ERRORS = {
     "method_not_allowed": (405, "the method is not served on this path"),
     "internal": (500, None),
     "install_plan_failed": (500, None),
-    "bad_kind": (400, "kind must be install, download or evict"),
+    "bad_kind": (400, "kind must be install, download, evict or quickbench"),
     "bad_args": (400, None),
     "bad_json": (400, "the body is not valid JSON"),
     "unsupported_media_type": (415, "the body must be application/json"),
@@ -127,10 +137,13 @@ class _Job:
     registry's one slot is freed (AC-3), so a job's outcome and its slot cannot disagree.
     """
 
-    def __init__(self, registry: "_Jobs", job_id: str, kind: str, name: str):
+    def __init__(self, registry: "_Jobs", job_id: str, kind: str, name: str, args=None):
         self.id = job_id
         self.kind = kind
         self.name = name
+        # The validated closed set this job was accepted with. The streams pass ``name`` on,
+        # and quickbench's ``osaurus`` consent is the one other value a module is handed.
+        self.args = dict(args or {})
         self.events: list[dict] = []
         self.condition = threading.Condition()
         self.done = False
@@ -202,17 +215,19 @@ class _Jobs:
                 self.running = None
 
     def cancel_and_wait(self, timeout: float) -> None:
-        """Cancel a running install or download, wait for the job, and give up after *timeout*.
+        """Cancel a running install, download or quickbench, wait, and give up after *timeout*.
 
         An evict has no cancel flag and is only waited for: it is a handful of unlinks and
-        interrupting it would leave a ledger that disagrees with the disk. AC-6: the wait is a
-        bound, not a promise -- a pip step can outlive it, and docs/interfaces.md says so.
+        interrupting it would leave a ledger that disagrees with the disk. A quickbench run
+        has one and notices it between cells, where its own eviction and Osaurus restore
+        still run. AC-6: the wait is a bound, not a promise -- a pip step can outlive it, and
+        docs/interfaces.md says so.
         """
         with self.lock:
             job = self.running
         if job is None:
             return
-        if job.kind in ("install", "download"):
+        if job.kind in ("install", "download", "quickbench"):
             job.cancel_requested = True
         deadline = time.monotonic() + timeout
         with job.condition:
@@ -231,26 +246,31 @@ def _job_code(job: _Job) -> str | None:
     return None
 
 
-def _args_problem(args, name_key: str) -> str | None:
+def _args_problem(args, name_key: str, *, flags=()) -> str | None:
     """The first reason *args* is not the closed set for its kind, naming the key; else None.
 
     Names, versions, paths and disk numbers are not checked here: a string that is not an
     engine or a catalog repo is the module's own refusal (``unknown_engine``, ``unknown_repo``),
     delivered on the job's stream. ``confirmed`` must be JSON ``true`` -- not ``"true"``, not 1
     -- because it is the client's statement that a user chose this action (docs/interfaces.md).
+    *flags* are the booleans a kind also takes (quickbench's ``osaurus``); each is required and
+    must be a JSON bool, for the same reason ``confirmed`` is: it records a choice.
     """
     if not isinstance(args, dict):
         return "args must be an object"
-    extra = sorted(set(args) - {name_key, "confirmed"})
+    extra = sorted(set(args) - {name_key, "confirmed", *flags})
     if extra:
         return f"unexpected key {extra[0]}"
-    missing = [key for key in (name_key, "confirmed") if key not in args]
+    missing = [key for key in (name_key, "confirmed", *flags) if key not in args]
     if missing:
         return f"missing key {missing[0]}"
     if not isinstance(args[name_key], str):
         return f"{name_key} must be a string"
     if args["confirmed"] is not True:
         return "confirmed must be true"
+    for flag in flags:
+        if not isinstance(args[flag], bool):
+            return f"{flag} must be true or false"
     return None
 
 
@@ -471,15 +491,30 @@ class _Handler(BaseHTTPRequestHandler):
         in its reason. On an unsupported Mac both lists are empty and
         ``unsupported_reason`` carries the one sentence: a per-model exclusion there would
         be a copy of a reason that belongs to the Mac, not to the model.
+
+        ``measured_here`` is D5's one field this Mac can fill: the ``best`` block of the
+        newest finished quickbench summary for that repo, read through
+        ``quickbench.latest`` -- a quick run on this Mac, never one of our M2 Max rows. A
+        repo with no finished quick run (or one whose every cell failed) keeps null.
         """
         hw = self.server.scan()
         statuses = self.server.detect()
         models = self.server.load_catalog()
         downloaded = frozenset(model.repo for model in models if fetch.downloaded(model))
+        measured = {
+            repo: summary["best"]
+            for repo, summary in self.server.summaries().items()
+            if isinstance(summary.get("best"), dict)
+        }
         picks = [
             dataclasses.asdict(pick)
             for pick in recommend.pick(
-                hw, models, statuses, hw.disk_free_bytes, downloaded
+                hw,
+                models,
+                statuses,
+                hw.disk_free_bytes,
+                downloaded,
+                measured_here=measured,
             )
         ]
         excluded = []
@@ -498,6 +533,38 @@ class _Handler(BaseHTTPRequestHandler):
                 "unsupported_reason": hw.unsupported_reason,
             },
         )
+
+    def _get_quickbench_plan(self) -> None:
+        """AC-1's plan for one catalog repo, so the app can show it before the click.
+
+        The query carries the only argument -- ``repo`` -- and no path, version or number.
+        A repo that is not in the catalog, or one that is not in this Mac's cache, is the
+        module's own ``ValueError`` delivered as ``400 bad_args`` with its message: "download
+        it first" is a refusal the user can act on, and the plan never fetches it for them.
+        """
+        values = self._query().get("repo") or []
+        if len(values) != 1 or not values[0]:
+            self._respond("bad_args", "repo must name exactly one catalog model")
+            return
+        try:
+            shown = quickbench.plan(
+                values[0],
+                self.server.scan(),
+                self.server.detect(),
+                self.server.load_catalog(),
+            )
+        except ValueError as error:
+            self._respond("bad_args", str(error))
+            return
+        self._write_json(200, dataclasses.asdict(shown))
+
+    def _query(self) -> dict:
+        """The request's query string as a mapping, with the path's text never logged.
+
+        Client text lives here and nowhere else: it is read to answer the request and never
+        echoed into a stderr line, which is why the refusal log writes the path without it.
+        """
+        return urllib.parse.parse_qs(self.path.partition("?")[2], keep_blank_values=True)
 
     def _macos_major(self) -> int:
         """The integer before the first dot of ``Hardware.macos``: one definition, two callers."""
@@ -527,12 +594,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond("bad_kind")
             return
         args = payload.get("args")
-        problem = _args_problem(args, name_key)
+        problem = _args_problem(args, name_key, flags=_JOB_FLAGS.get(kind, ()))
         if problem is not None:
             self._respond("bad_args", problem)
             return
 
-        job = _Job(self.server.jobs, secrets.token_hex(8), kind, args[name_key])
+        job = _Job(self.server.jobs, secrets.token_hex(8), kind, args[name_key], args)
         running = self.server.jobs.claim(job)
         if running is not None:
             self._respond("busy", f"job {running.id} is still running")
@@ -579,6 +646,14 @@ class _Handler(BaseHTTPRequestHandler):
             elif job.kind == "download":
                 ok = self.server.download(
                     job.name, True, emit=job.append, cancel=job.cancelled
+                )
+            elif job.kind == "quickbench":
+                ok = self.server.quickbench(
+                    job.name,
+                    confirmed=True,
+                    osaurus=job.args.get("osaurus") is True,
+                    emit=job.append,
+                    cancel=job.cancelled,
                 )
             else:
                 ok = self.server.evict(job.name, True, emit=job.append)
@@ -723,6 +798,8 @@ def make_server(
     install=engines.install,
     download=fetch.download,
     evict=fetch.evict,
+    quickbench=quickbench.run,
+    summaries=quickbench.latest,
     token: str | None = None,
     timeout: float = HANDLER_TIMEOUT_S,
     keepalive_s: float = KEEPALIVE_S,
@@ -730,8 +807,11 @@ def make_server(
     """The listening server on 127.0.0.1:*port*, already accepting connections.
 
     The module seams default to the real functions, so the CLI passes none of them and a test
-    passes fakes; the job seams take a name and a literal ``true`` and emit on the job, so a
-    test never installs, downloads or opens a socket. *token* is generated fresh with
+    passes fakes; the job seams take a name, a literal ``true`` and -- for quickbench -- the
+    client's boolean ``osaurus``, and emit on the job, so a test never installs, downloads,
+    starts a runtime or opens a socket. *summaries* is the quickbench reader
+    ``/recommendations`` asks for ``measured_here``, injected so a test never reads this
+    Mac's Application Support directory. *token* is generated fresh with
     ``secrets.token_urlsafe(32)`` when the caller has none, and it lives only on this object and
     in the one line the CLI prints -- no file, no log, no argv. *timeout* bounds each connection
     (and each stream write) and is short only in the tests that prove it; *keepalive_s* is the
@@ -752,6 +832,8 @@ def make_server(
     listener.install = install
     listener.download = download
     listener.evict = evict
+    listener.quickbench = quickbench
+    listener.summaries = summaries
     listener.jobs = _Jobs()
     listener.keepalive_s = keepalive_s
     listener.token = token if token is not None else secrets.token_urlsafe(32)

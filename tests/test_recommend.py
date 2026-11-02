@@ -454,3 +454,26 @@ def test_pick_is_frozen_and_carries_no_measurement_here():
     assert only.measured_here is None
     with pytest.raises(FrozenInstanceError):
         only.fit = "tight"
+
+
+def test_measured_here_is_the_callers_run_for_that_repo_and_null_without_one():
+    """D5: only a run handed in for the repo fills it; the catalog's own flag is not one."""
+    best = {
+        "engine": "mlxlm",
+        "decode_tps": 60.0,
+        "ttft_s": 0.2,
+        "measured_at": "2026-11-02T10:00:00+00:00",
+        "quick": True,
+    }
+
+    picks = pick(
+        hardware(BUDGET_64_GIB),
+        [model(**QWEN_06B), model(**LFM_8B)],
+        [],
+        PLENTY_OF_DISK,
+        measured_here={QWEN_06B["repo"]: best},
+    )
+
+    by_id = {pick.model_id: pick for pick in picks}
+    assert by_id[QWEN_06B["repo"]].measured_here == best
+    assert by_id[LFM_8B["repo"]].measured_here is None

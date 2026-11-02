@@ -64,8 +64,9 @@ class Pick:
     serve the row, or -- when none is installed -- every engine the catalog says can, so
     the screen can say "install X first" under ``install_needed``. ``downloaded`` says the
     row's files are already in this Mac's Hugging Face cache, so there is nothing to fetch.
-    ``measured_here`` is this user's own run on this Mac, which Phase 4 fills; it is null
-    here and never filled from our M2 Max rows.
+    ``measured_here`` is this user's own run on this Mac: the newest finished
+    ``quickbench`` summary's ``best`` block, handed in by the caller; it is null when there
+    is none and is never filled from our M2 Max rows (D5).
     """
 
     model_id: str  # the catalog row's repo id
@@ -159,6 +160,7 @@ def pick(
     engines: list[EngineStatus],
     free_disk: int,
     downloaded: frozenset[str] = frozenset(),
+    measured_here: dict[str, dict] | None = None,
 ) -> list[Pick]:
     """The catalog rows this Mac can hold and download, ranked; pure, and no I/O.
 
@@ -168,9 +170,14 @@ def pick(
     `exclusion_reason` alone, so neither budget is decided a second time here. *downloaded*
     is the set of repo ids already in this Mac's cache; those rows still answer to memory,
     are not asked for disk, and say so in their reason.
+
+    *measured_here* maps a repo id to this Mac's own quickbench ``best`` block (D5); it is
+    the caller's, built from ``quickbench.latest``, so nothing here reads a file and a row
+    with no run on this Mac carries null rather than an estimate standing in for one.
     """
     if not hw.supported:
         return []
+    measured = measured_here or {}
     installed = {status.name for status in engines if status.installed}
     offerable = []
     for model in models:
@@ -196,6 +203,7 @@ def pick(
                 start_here=position < START_HERE_COUNT,
                 reason=_reason(model, fit, hw.model_budget_bytes, already_here),
                 downloaded=already_here,
+                measured_here=measured.get(model.repo),
             )
         )
     return picks

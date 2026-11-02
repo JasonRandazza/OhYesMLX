@@ -115,6 +115,9 @@ def launch():
 
     def start(**kwargs):
         kwargs.setdefault("token", TOKEN)
+        # No test reads this Mac's Application Support directory: the quickbench summaries
+        # `/recommendations` asks for are empty unless the test hands in its own.
+        kwargs.setdefault("summaries", lambda: {})
         listener = server.make_server(0, **kwargs)
         thread = threading.Thread(
             target=listener.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
@@ -277,7 +280,12 @@ def test_a_refused_request_reaches_no_handler_and_runs_no_module(launch):
         {"token": TOKEN, "headers": {"Origin": "https://evil.example"}},
         {"token": TOKEN, "headers": {"Host": "evil.example"}},
     )
-    for path in ("/hardware", "/engines", "/recommendations"):
+    for path in (
+        "/hardware",
+        "/engines",
+        "/recommendations",
+        "/quickbench/plan?repo=org/small",
+    ):
         for refusal in refusals:
             code, _, _ = request(listener, path, **refusal)
             assert code in (401, 403), (path, refusal)
@@ -393,6 +401,91 @@ def test_an_install_plan_value_error_is_500_naming_the_engine(launch, monkeypatc
     assert "optiq" in error["message"], "the failure has to name the engine it is about"
 
 
+# --- AC-1 (04-03b): GET /quickbench/plan -----------------------------------------------------
+
+
+def a_quick_plan(repo="org/small"):
+    """The module's own plan shape, returned by a fake so no cache or hardware is read."""
+    from ohyesmlx import quickbench
+
+    return quickbench.QuickPlan(
+        repo=repo,
+        format="oq4",
+        stage_a=[quickbench.PlannedEngine("mlxlm", "0.31.3", True)],
+        stage_b=[quickbench.PlannedSibling("org/sibling", "stock4bit", 2_000, False)],
+        download_bytes=2_000,
+        osaurus=False,
+        estimate_s=120,
+    )
+
+
+def test_the_quickbench_plan_endpoint_returns_the_plan(launch, monkeypatch):
+    from ohyesmlx import quickbench
+
+    calls = []
+
+    def fake_plan(repo, hw, statuses, models, **kwargs):
+        calls.append({"repo": repo, "hw": hw, "statuses": statuses, "models": models})
+        return a_quick_plan(repo)
+
+    monkeypatch.setattr(quickbench, "plan", fake_plan)
+    hw = this_mac()
+    statuses = [status("mlxlm", installed=True, version="0.31.3")]
+    listener = launch(
+        scan=Recorder(hw), detect=Recorder(statuses), load_catalog=Recorder(MODELS)
+    )
+
+    code, headers, raw = request(listener, "/quickbench/plan?repo=org/small", token=TOKEN)
+
+    assert code == 200
+    body = json.loads(raw)
+    assert set(body) == {
+        "repo",
+        "format",
+        "stage_a",
+        "stage_b",
+        "download_bytes",
+        "osaurus",
+        "estimate_s",
+    }
+    assert body["repo"] == "org/small"
+    assert body["stage_a"] == [{"engine": "mlxlm", "version": "0.31.3", "tested": True}]
+    assert body["stage_b"][0]["repo"] == "org/sibling"
+    assert calls == [{"repo": "org/small", "hw": hw, "statuses": statuses, "models": MODELS}]
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+
+
+def test_the_quickbench_plan_endpoint_refuses_a_missing_repo(launch):
+    listener = launch()
+
+    code, _, raw = request(listener, "/quickbench/plan", token=TOKEN)
+
+    assert code == 400
+    error = error_of(raw)
+    assert error["code"] == "bad_args"
+    assert "repo" in error["message"]
+
+
+def test_the_quickbench_plan_endpoint_delivers_the_modules_refusal(launch, monkeypatch):
+    """A repo that is not downloaded is a 400 whose message says to download it first."""
+    from ohyesmlx import quickbench
+
+    def refuse(*args, **kwargs):
+        raise ValueError(
+            "org/nope is not in this Mac's Hugging Face cache; download it first"
+        )
+
+    monkeypatch.setattr(quickbench, "plan", refuse)
+    listener = launch()
+
+    code, _, raw = request(listener, "/quickbench/plan?repo=org/nope", token=TOKEN)
+
+    assert code == 400
+    error = error_of(raw)
+    assert error["code"] == "bad_args"
+    assert "download it first" in error["message"]
+
+
 # --- AC-5: GET /recommendations -------------------------------------------------------------
 
 
@@ -432,6 +525,7 @@ def test_recommendations_is_the_pinned_composition(launch):
     assert isinstance(pick["size_bytes"], int)
     assert pick["fit"] == "comfortable"
     assert pick["downloaded"] is False
+    assert pick["measured_here"] is None, "no quick run on this Mac has named the row"
 
     large = MODELS[1]
     assert body["excluded"][0] == {
@@ -465,6 +559,46 @@ def test_recommendations_asks_fetch_downloaded_and_marks_the_picks(launch, monke
     assert "already on this Mac" in pick["reason"]
     assert "GB download" not in pick["reason"]
     assert [row["model_id"] for row in body["excluded"]] == ["org/large"]
+
+
+def test_recommendations_fills_measured_here_from_the_newest_quick_run(launch):
+    """AC-5: the newest finished quickbench summary's `best` block is the pick's own run."""
+    best = {
+        "engine": "mlxlm",
+        "decode_tps": 60.0,
+        "ttft_s": 0.2,
+        "measured_at": "2026-11-02T10:00:00+00:00",
+        "quick": True,
+    }
+    listener = launch(
+        scan=Recorder(this_mac()),
+        detect=Recorder([status("mlxlm", installed=True, version="0.31.3")]),
+        load_catalog=Recorder(MODELS),
+        summaries=lambda: {
+            "org/small": {"repo": "org/small", "ended": "finished", "best": best}
+        },
+    )
+
+    body = json.loads(request(listener, "/recommendations", token=TOKEN)[2])
+
+    picks = {pick["model_id"]: pick for pick in body["picks"]}
+    assert picks["org/small"]["measured_here"] == best
+
+
+def test_recommendations_leaves_measured_here_null_without_a_finished_quick_run(launch):
+    """A cancelled run is a record, not a recommendation: its summary has no `best`."""
+    listener = launch(
+        scan=Recorder(this_mac()),
+        detect=Recorder([status("mlxlm", installed=True, version="0.31.3")]),
+        load_catalog=Recorder(MODELS),
+        summaries=lambda: {
+            "org/small": {"repo": "org/small", "ended": "cancelled", "best": None}
+        },
+    )
+
+    body = json.loads(request(listener, "/recommendations", token=TOKEN)[2])
+
+    assert body["picks"][0]["measured_here"] is None
 
 
 def test_recommendations_uses_the_hardware_scans_free_disk(launch):
@@ -887,6 +1021,73 @@ def test_download_and_evict_take_a_repo_name(launch, kind):
     assert [event["type"] for _, event in sse_events(body)] == ["done"]
 
 
+QUICKBENCH = {
+    "kind": "quickbench",
+    "args": {"repo": "org/small", "confirmed": True, "osaurus": True},
+}
+
+
+def test_a_quickbench_job_carries_its_repo_and_the_osaurus_boolean(launch):
+    """AC-1/AC-4: the kind takes the repo it measures and the client's pin consent."""
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(quickbench=module)
+
+    job_id = posted_job_id(listener, QUICKBENCH)
+
+    assert module.started.wait(5)
+    call = module.calls[0]
+    assert call["name"] == "org/small"
+    assert call["confirmed"] is True
+    assert call["osaurus"] is True
+    assert callable(call["emit"]) and callable(call["cancel"])
+
+    release.set()
+    _, body = stream_to_close(listener, job_id)
+    assert [event["type"] for _, event in sse_events(body)] == ["progress", "done"]
+
+
+@pytest.mark.parametrize("kind", ["download", "evict"])
+def test_download_and_evict_take_a_repo_name(launch, kind):
+    module = scripted(an_event("done", "finished"))
+    listener = launch(download=module, evict=module)
+
+    job_id = posted_job_id(
+        listener, {"kind": kind, "args": {"repo": "org/small", "confirmed": True}}
+    )
+
+    assert wait_until(lambda: listener.jobs.running is None)
+    assert module.calls[0]["name"] == "org/small"
+    assert module.calls[0]["confirmed"] is True
+    _, body = stream_to_close(listener, job_id)
+    assert [event["type"] for _, event in sse_events(body)] == ["done"]
+
+
+@pytest.mark.parametrize(
+    "args, named",
+    [
+        ({"repo": "org/small", "confirmed": True}, "osaurus"),
+        ({"repo": "org/small", "confirmed": True, "osaurus": "true"}, "osaurus"),
+        ({"repo": "org/small", "confirmed": True, "osaurus": 1}, "osaurus"),
+        (
+            {"repo": "org/small", "confirmed": True, "osaurus": False, "engine": "mlxlm"},
+            "engine",
+        ),
+        ({"repo": 5, "confirmed": True, "osaurus": False}, "repo"),
+    ],
+)
+def test_quickbench_args_are_a_closed_set(launch, args, named):
+    """`osaurus` is required and must be a JSON bool; nothing else is accepted either."""
+    listener = launch(quickbench=never_called)
+
+    code, _, raw = post_job(listener, {"kind": "quickbench", "args": args})
+
+    assert code == 400
+    error = error_of(raw)
+    assert error["code"] == "bad_args"
+    assert named in error["message"]
+
+
 @pytest.mark.parametrize(
     "payload, named",
     [
@@ -920,7 +1121,7 @@ def test_bad_args_is_400_naming_the_key_and_starts_no_job(launch, payload, named
     assert post_job(listener, DOWNLOAD)[0] == 202, "the slot was left taken"
 
 
-@pytest.mark.parametrize("kind", ["quickbench", "command", None, 7, ["install"]])
+@pytest.mark.parametrize("kind", ["bench", "command", None, 7, ["install"]])
 def test_an_unknown_kind_is_400_bad_kind(launch, kind):
     listener = launch(install=never_called)
 

@@ -1,48 +1,82 @@
 ---
-description: "OhYesMLX (OYMLX) session handoff, 2026-11-01: v5.0 Onboarding App, Phases 0-3 built"
+description: "OhYesMLX (OYMLX) session handoff, 2026-11-02: v5.0 Phase 4 built (server, jobs, quickbench); one quickbench gap open"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-11-01
+# Handoff — 2026-11-02
 
-> Read this, then `.paul/STATE.md` (Decisions 134-137), `.paul/phases/v5-onboarding/PLAN.md`, then `AGENTS.md`. STATE wins on conflict.
-> Previous handoff (MTPLX class landed, 2026-10-10): `.paul/archive/2026-10-10-handoff-mtplx-class-landed.md`. Jason calls the project **OYMLX** in conversation.
+> Read this, then `.paul/STATE.md` (Decisions 138-141 and the audit rows), `.paul/phases/v5-onboarding/PLAN.md`
+> (Phase 4 notes, Phase 4.5), then `AGENTS.md`. STATE wins on conflict.
+> Previous handoff (Phases 0-3 built): `.paul/archive/2026-11-01-handoff-phases-0-3-built.md`.
+> Jason calls the project **OYMLX**.
 
 ## Where things stand
 
-OYMLX is being turned from a CLI benchmark into a guided app for non-technical Mac owners (v5.0, Decision 134; MTPLX v4.0 is parked on branch `mtplx-wip`, commit `925c4a4`, unmerged). Architecture: a stdlib Python backend (headless, test-driven) behind a localhost JSON API, with a SwiftUI shell on top. **Phases 0-3 are built and committed on `main`; 945 tests pass.** Nothing in Phases 4-5 exists yet: no server, no `quickbench`, no Swift.
+v5.0 turns OYMLX from a CLI benchmark into a guided Mac app: a stdlib Python backend behind a guarded localhost
+JSON API, with a SwiftUI shell to come (Phase 5). **Phase 4 is built on `main`; 1144 tests pass.** One plan,
+04-03b, closed with a known gap, and the phase-end code review has not been run.
 
-| Phase | Built | Where |
+| Plan | What | Summary |
 |---|---|---|
-| 0 contract | governance, decisions D1-D8, pinned shapes | `docs/interfaces.md` "v5.0 -- Onboarding shapes" |
-| 1 hardware | `hardware.scan`: chip, RAM, disk, volumes, `model_budget` | `ohyesmlx/hardware.py` |
-| 2 engines | `detect_all`, `install_plan` (data), consent-gated `install` (12 audited guards) | `ohyesmlx/engines.py` |
-| 2.5 version stability | tested-versions manifest, `canary`, machine-local `lab-paths.json`, lab-copy doc | `ohyesmlx/engines-tested.json`, `canary.py`, `docs/runtimes/lab-copies.md` |
-| 3 models | revision-pinned catalog (12 models), `recommend.pick`, `fetch` (HF-cache layout, resumable, ledger-limited evict) | `catalog.py/.json`, `recommend.py`, `fetch.py` |
+| 04-01 | `ohyesmlx app`: 127.0.0.1 server, per-launch token, Host/Origin/token guard, GET /hardware /engines /recommendations | `04-01-SUMMARY.md` |
+| 04-01b | `gpu_cores` from `ioreg` (30 on this M2 Max) | `04-01b-SUMMARY.md` |
+| 04-02b | `Pick.downloaded`, tested-release install links, per-byte download progress | `04-02b-SUMMARY.md` |
+| 04-02 | Jobs: install/download/evict, SSE stream, cancel, one job at a time | `04-02-SUMMARY.md` |
+| 04-03a | catalog `base`/`siblings`, `quick: true` header pin, Python Osaurus pin/restore/recover | `04-03a-SUMMARY.md` |
+| 04-03b | `quickbench` (module approved): stages A/B, light cells, job kind, `measured_here` | `04-03b-SUMMARY.md` |
 
-Plans, audits and per-phase summaries live in `.paul/phases/v5-onboarding/` (`02-0x`, `025-0x`, `03-0x` PLAN/AUDIT, `PHASE-1-2-SUMMARY.md`, `PHASE-2.5-3-SUMMARY.md`).
+Every plan has a PLAN, an AUDIT (except quick fixes) and a SUMMARY in `.paul/phases/v5-onboarding/`. Earlier the
+same day: the Phase 2.5-3 review gate (9 findings fixed), T2.5.5 (pip constraints freezes), Osaurus 0.25.29 and
+oMLX 0.7.3 adopted (Decision 139), `paul.toml` deleted.
 
 ## Do next, in this order
 
-1. ~~Code-review gate for Phases 2.5 and 3~~ **done 2026-11-02**: Standards + Spec read-only reviews, 9 verified findings fixed in one worker pass (canary None/zero crash, non-LFS files now checked by git blob sha1, canary honours `HF_HUB_CACHE`, one download at a time per Decision 138, one path guard and one `catalog.disk_needed`). Orders and logs: `.paul/orders/v5-review-25-3-*`.
-2. **Plan Phase 4** (`/paul:plan`, then `/paul:audit` on it; the localhost API is the riskiest surface: CSRF from any web page, so install/download jobs must take engine/repo NAMES only and require `confirmed`): `ohyesmlx app` server, `GET /hardware /engines /recommendations`, jobs with an SSE event stream, `quickbench` (D3 two-stage, D4 10-minute budget, D5 "measured on your Mac"). `recommend` is meant to be composed as `{picks, excluded, unsupported_reason}` (see its `Pick` pin). `quickbench` must prepend engine lab bin dirs to PATH the way `runtimes._engine_env` already does.
-3. **Phase 5**: run the `prototype` skill for the screens first, then SwiftUI tickets (XCTest with a stub client), packaging with bundled standalone Python (D6) and an unsigned right-click-Open zip (D7).
-4. Still owed to Jason's hands: `scripts/lab-copies-wizard.sh` (generate with the `wizard` skill from `docs/runtimes/lab-copies.md`) to archive the tested DMGs of Osaurus, oMLX, vMLX and turn their auto-update off; ~~T2.5.5~~ done 2026-11-02 (`ohyesmlx/constraints/<engine>-<version>.txt`, applied by `install_plan` with `pip -c`).
+1. **Fix the quickbench Osaurus gap** (`04-03b-SUMMARY.md`, "Known gap"). Quickbench pins Osaurus against a
+   baseline under Application Support; the runtime's drift guard reads the repo's
+   `config/osaurus-settings-baseline.json`, so the pinned host reads as drift and the Osaurus cell is N/A. Fix:
+   pin against the baseline the guard reads and back it up/restore it with the two config files. Then re-run
+   quickbench with Jason's go (recipe below) and show the Osaurus cell PASS and the restore byte-exact. A small
+   plan (quick-fix track) is enough.
+2. **Phase 4 code-review gate** (the process gate in PLAN.md): `cc-agent review` Standards + Spec workers, as for
+   Phases 2.5-3 (`.paul/orders/v5-review-25-3-*.md` are the pattern). Review the change since `1c157b0^`, the
+   commit before 04-01's code. Verify each finding against the code, fix in one
+   worker pass, commit.
+3. **Plan Phase 4.5, security hardening** (PLAN.md has its scope). Carried items: clean-account smoke (a throwaway
+   user driven with `sudo -u`, Jason's call when), a pip step outliving a server shutdown, per-job stream-reader
+   cap, the Osaurus app rewriting its config mid-run, fetch's post-transfer snapshot-conflict check, where the
+   Osaurus baseline lives in a packaged app, the token never logged by the Swift client.
 
 ## Decisions waiting on Jason
 
-- OptiQ's 0.5.13 to 0.7.8 self-update cut TTFT ~30% (Decision 136). Re-run the OptiQ columns of published tables, or label them 0.5.x? Harness here runs the 0.5.13 lab copy.
-- Merge or keep parking `mtplx-wip`; the 0.3.1 version bump; Apple Developer account for notarization (not needed before Phase 5 packaging); README rewrite (deferred since 2026-10-09).
-- Vault: a short decision note for v5.0 (Decisions 134-137) is proposed, not written (needs Jason's yes per the Vault Contract).
+- **Hero-model safetensors on disk differ from the pinned bytes** (STATE Blockers): the Qwen3.5-4B and
+  LFM2.5-8B-A1B `model.safetensors` in `~/.cache/huggingface/hub` are regular files, 873 / 139 bytes larger than
+  the revision lists, dated 2026-09-15/16. Every published table measured them. Compare against a fresh pinned
+  download (3.0 + 4.8 GB, scratch cache) or record the caveat.
+- vMLX 1.6.82 stays untested (same-build canary read -5.5%, session variance; 1.6.59 has no baseline).
+- Older, unchanged: Decision 136 (OptiQ 0.5.x vs 0.7.8 tables), `mtplx-wip`, the 0.3.1 bump, README rewrite,
+  the v5.0 vault decision note, Apple Developer account, `scripts/lab-copies-wizard.sh`.
 
-## Standing rules and traps learned this session
+## Recipes and traps learned this session
 
-- **Pytest** lives in a permanent venv: `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` (the old temp-job venv in older docs is gone; 20 scripts and AGENTS.md now point here; three `fetch_*.sh` scripts still reference a missing `hf` binary).
-- **Osaurus**: Jason's standing authorisation (2026-10-29) lets any test or canary pin it (idle 900, caches off) if his own settings (idle 30) are restored byte-exact and the report says so. Always go through `scripts/osaurus-pin.sh`; `scripts/run_canary.sh` is the pattern. Verify with `cmp`.
-- **Measuring**: confirm with Jason first; machine quiet. `ohyesmlx canary --yes` (all five ~17 min; one engine ~3-4 min); it reads load average and refuses to `--record` a noisy engine. Time Machine's post-backup thinning is light and was tolerated. First baselines are in `ohyesmlx/engines-tested.json` (OptiQ at 0.7.8 and vMLX at 1.6.82 are untested builds).
-- **Lab copy**: `~/Library/Application Support/OhYesMLX/lab-paths.json` points OptiQ at the pinned 0.5.13 venv; delete it to use the global install. A pinned package is not a pinned build: OptiQ needs `mlx-lm==0.31.3` beside it or it serves HTTP 404.
-- **Workers** (`cc-agent`, DeepSeek v4.1 flash): set `CC_AGENT_MAX_TURNS=300`; they cannot reach the network reliably; `review`/`explain` cannot run shell; a worker may write a `BLOCKED.md` at the repo root (read it as a finding, then delete it; the stale tracked copy was removed 2026-11-02); a worker's BLOCKED report is a finding (this session one caught a wrong literal in a coordinator order). If cc-agent says "Not authenticated", Jason runs `! cmd login`. The coordinator reviews every diff and runs the suite and a real-Mac smoke itself: that caught the OptiQ version bug and the machine-specific manifest path, which tests did not.
-- Keep graphify current: a post-commit hook rebuilds it; workers are told to use `graphify query`.
-- oMLX also scans the user's HF cache (AGENTS.md corrected 2026-11-01); the downloader writes the HF cache layout on purpose.
-- Search tools for workers: `searxng` (Omarchy, `http://100.73.137.9:8888`) first, then Tavily, then Exa.
+- **Quickbench checkpoint run** (needs Jason's go, quiet machine, Osaurus app closed):
+  `/private/tmp/.../scratchpad/qb-run.sh` is gone with the session; its shape: export PATH with the mlx-lm venv
+  (`~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin`), `HF_HUB_CACHE=<scratch>`, unload the control hub
+  (`launchctl bootout gui/$UID/com.dualnode.controlhub.{dashboard,agent}`; reload with `bootstrap` and the plist
+  in `~/Library/LaunchAgents`), `fetch.download('mlx-community/Qwen3.5-2B-4bit', True)`, then
+  `ohyesmlx quickbench --repo mlx-community/Qwen3.5-2B-4bit --osaurus` (plan) and `--yes` (run, ~9 min). Copy
+  `~/.osaurus/config/server{,-runtime}.json` first and `cmp` after.
+- **Quiet machine**: check `uptime`, `ps -r`, engine ports, `pgrep -f '^/Applications/[oO]saurus.app/...'`.
+  Jason chose to stop only orphans (an orphaned `mcp-server-cloudflare` ran at 100% CPU) and the control hub;
+  everything else stays.
+- **Workers** (`cc-agent`, DeepSeek v4.1 flash, `CC_AGENT_MAX_TURNS=300`): every BLOCKED this session was right
+  (twice a test pinned the subcommand set). Pre-authorise that file in the order when a new subcommand lands.
+  Workers do not write SUMMARY files when the order's file list excludes them; the coordinator writes them.
+- **Live checks find what tests do not**: this session's live runs found `Pick.downloaded` false on the hero
+  models (the bytes differ), the quickbench Osaurus baseline mismatch, and quickbench ignoring its `cache_dir`.
+  Keep a live check in every plan's verification.
+- The Osaurus pin now lives in `ohyesmlx/osaurus_settings.py`; `scripts/osaurus-pin.sh` calls it and keeps its
+  trap and cmp. Its backup is `~/.osaurus/config.phase4-orig/`; `pin` refuses while a backup exists, so run
+  `recover` first after a crash.
+- Pytest: `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`. A post-commit hook rebuilds
+  graphify.

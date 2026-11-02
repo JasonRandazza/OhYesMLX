@@ -1,0 +1,232 @@
+I'll start by reading the plan, the audit, the spec files, and the pinned interfaces before touching anything.
+I have the plan and audit. Let me read the interfaces doc and the current state of the files I'll touch.
+Now let me read the modules I'll build on and modify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let me establish the baseline test count before changing anything.
+
+
+
+
+
+
+
+
+
+
+Now I'll implement Task 0 — the lab-paths writer and its call from `install`.
+
+
+
+
+
+
+
+
+Now the main module — `ohyesmlx/quickbench.py`.
+
+
+
+
+
+
+
+
+
+
+
+Now the test module for quickbench — fakes only.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the pinned interfaces document.
+
+
+
+
+
+Now the required red-checks. First: evicting the chosen repo.
+
+
+
+Second red-check: skipping the port probe.
+
+
+Third red-check: dropping the restore `finally`.
+
+
+Fourth red-check: dropping the lab-paths write from `install`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Implemented plan 04-03b (Tasks 0-2). Everything below is against the dispatch's file list; nothing was committed.
+
+## AC-0 — app-installed pip engines reach PATH
+- `ohyesmlx/engines.py:433` `record_lab_path(engine, bin_dir, *, path=LAB_PATHS_FILE)` — one atomic writer (temp in the same dir + `os.replace` + fsync), read-modify-write so other engines are kept; `ohyesmlx/engines.py:362` `_lab_paths_beside(engines_dir)` derives the file beside the injected engines dir, so scratch paths never touch this Mac's file; `ohyesmlx/engines.py:1126` `install` calls it after the last pip step succeeds (nothing written on a failed/cancelled step; app engines refused).
+- Tests: `tests/test_engines.py:569` (optiq → `{"optiq": "<scratch>/optiq-0.5.13/bin"}`, no `.tmp`, `runtimes._engine_env` puts it first on PATH), `:592`, `:614`.
+
+## AC-1 — the plan is shown before anything runs
+- `ohyesmlx/quickbench.py:214` `plan(repo, hw, statuses, models, *, cache_dir, downloaded)` (pure apart from the injected download check), `:131` `QuickPlan`, `:112`/`:121` planned engine/sibling, `:156` `estimate_seconds` (90 s/cell + 20 MB/s).
+- Refusal: `:242` raises `"… download it first"` for a repo not in the cache.
+- CLI: `ohyesmlx/cli.py:784` subcommand, `:993` `_quickbench` prints the plan as JSON and exits 2 without `--yes`.
+- Server: `ohyesmlx/server.py:537` `_get_quickbench_plan` (`GET /quickbench/plan?repo=R`, `:76`), job args `{repo, confirmed:true, osaurus:bool}` at `:90`/`:249`/`:597`, dispatch at `:650`.
+- Tests: `tests/test_quickbench.py:321,339,349,359,364,376,381`; `tests/test_cli.py:955,1025`; `tests/test_server.py:422,458,469,1030,1079`.
+
+## AC-2 — stage A, then stage B, one variable each
+- `quickbench.py:431` `run`; stage A at `:649`; one `run_cells` per cell at `:587` through `cell_spec` (`:276`) + `cli.build_cells`, with `warmup=3`/`measured=5`/`cooldown_s=10`/`quick=True` (`:61-67`) and `<root>/A/<engine>` or `<root>/B/<format>__<engine>`; artifact dirs from `fetch.plan(...).snapshot_dir` (`:498`, `:714`), never an mtime lookup; `_winner` at `:315` (5% = `canary.NOISE_FLOOR`); stage B at `:695-772` (reused chosen row, download → cell → evict, one sibling on disk at a time).
+- Tests: `tests/test_quickbench.py:393,417,427,442,451,467,481,493,502`.
+
+## AC-3 — consent and put-back
+- `quickbench.py:368` `_skip_reason` (port in use → `quit <engine> first`; Osaurus app → `quit the Osaurus app first`; `osaurus:false` → its own reason); nothing is stopped. Osaurus block at `:564` (`recover` → `pin` → cell → `restore` in `finally`, backup/baseline under Application Support); failed restore emits `restore_failed` with `backup_dir` and ends the run (`:600-629`).
+- Tests: `tests/test_quickbench.py:563,578,594,605,629,646,667,683`.
+
+## AC-4 / AC-4b — job, cancel, record
+- `server.py:650` runs quickbench on the job slot with `emit`/`cancel`; `server.py:214` cancels it at shutdown; `quickbench.py:650,710,747` check cancel between cells (and between a download and its cell), `:779` evicts outstanding siblings; load read before/after each stage (`:549`) and labelled `this Mac was busy`.
+- Summary at `quickbench.py:502`, cancellation fill-in `:789`, `best` only on `finished` `:820`, atomic writer `_write_summary`.
+- Tests: `tests/test_quickbench.py:510,701,713,733,757,791,795`; `tests/test_server.py:1030`.
+
+## AC-5 — measured_here
+- `ohyesmlx/recommend.py:163` `pick(..., measured_here=None)` and pass-through at `:206`; `quickbench.py:847` `latest` (newest `finished` summary per repo); `server.py:499` fills it in `_get_recommendations`.
+- Tests: `tests/test_recommend.py:459`; `tests/test_server.py:564,588`.
+
+## Red-checks (all reverted and re-run green)
+1. Evicted the chosen repo (`evict(model.repo, …)`) → `test_the_chosen_repo_is_never_downloaded_or_evicted` failed listing the chosen repo in `evicts`.
+2. Skipped the port probe → `test_an_engine_whose_port_is_in_use_is_skipped_with_quit_first` failed (`'PASS' == 'SKIPPED'`).
+3. Restore `finally` → `else` → `test_a_cell_that_raises_still_restores_osaurus` saw `['recover','pin']` only.
+4. Removed the lab-paths write → `test_a_successful_pip_install_records_its_venv_bin_and_engine_env_prefixes_it` failed with `FileNotFoundError` on `lab-paths.json`.
+
+## Baseline and final
+Started at **1092 passed**. Final: **`1144 passed in 43.82s`** (`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`).
+
+## Not verified / judgment calls
+- I did **not** create `.paul/phases/v5-onboarding/04-03b-SUMMARY.md`: the dispatch's explicit file list and "touch nothing else" outrank the plan's `<output>` block. Say so and I'll write it.
+- `record_lab_path` failing after a successful pip install raises out of `install` (the server turns it into `error internal` + `done`). No pinned code exists for it; swallowing it would reproduce the silent failure AC-0 exists to prevent.
+- `plan`'s `hw` is accepted per the pinned signature and documented as not varying the plan; I did not invent a use for it.
+- The real probes were smoke-run once on this Mac (`_port_in_use(1)` → False, `_osaurus_app_running()` → False). Their positive branches are exercised only through fakes; I did not start the Osaurus app or any server.
+- `QuickPlan.osaurus` states that Osaurus is in stage A; consent is the run's separate `osaurus` argument (CLI flag / job bool), so `/quickbench/plan` shows availability, not a consent-granted plan.
+- A sibling whose catalog `engines` does not include the winning engine is still attempted, because AC-2 says each sibling and no rule here filters it; it records the harness's own FAIL.
+- The plan endpoint reuses pinned `bad_args` (400) for an unknown or undownloaded repo rather than adding a code.
+- Tests were checked to leave this Mac's real `lab-paths.json` (Oct 30, 92 B) and Application Support untouched; no `quickbench/` directory was created there.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    156   42766129   42393088   139368   99.1%   0.266756
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines.py
+ M ohyesmlx/recommend.py
+ M ohyesmlx/server.py
+ M tests/test_cli.py
+ M tests/test_engines.py
+ M tests/test_recommend.py
+ M tests/test_report.py
+ M tests/test_server.py
+?? .paul/orders/v5-04-03b.log
+?? ohyesmlx/quickbench.py
+?? tests/test_quickbench.py
+ docs/interfaces.md      | 159 ++++++++++++++++++++++++++++++++++---
+ ohyesmlx/cli.py         |  89 +++++++++++++++++++++
+ ohyesmlx/engines.py     |  62 +++++++++++++++
+ ohyesmlx/recommend.py   |  12 ++-
+ ohyesmlx/server.py      | 136 +++++++++++++++++++++++++-------
+ tests/test_cli.py       | 119 +++++++++++++++++++++++++++-
+ tests/test_engines.py   |  59 ++++++++++++++
+ tests/test_recommend.py |  23 ++++++
+ tests/test_report.py    |   7 +-
+ tests/test_server.py    | 205 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 10 files changed, 826 insertions(+), 45 deletions(-)

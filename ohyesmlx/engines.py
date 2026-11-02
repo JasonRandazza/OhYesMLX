@@ -359,6 +359,16 @@ def _lab_paths_file(home: str) -> str:
     return os.path.join(home, _APP_SUPPORT, LAB_PATHS_NAME)
 
 
+def _lab_paths_beside(engines_dir: str) -> str:
+    """The lab-paths file of the app-support directory *engines_dir* is a child of.
+
+    ``_engines_dir`` and ``_lab_paths_file`` are two children of one directory; ``install`` is
+    handed the first and writes the second beside it, so a scratch engines directory an
+    injected or test run uses keeps its own lab-paths file rather than this Mac's real one.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(engines_dir)), LAB_PATHS_NAME)
+
+
 LAB_PATHS_FILE = _lab_paths_file(DEFAULT_ENV.home)
 
 # The engines a lab path may name, and the whole of them: the two pip packages install
@@ -418,6 +428,50 @@ def lab_paths(path=LAB_PATHS_FILE, *, read=None) -> dict[str, str]:
                 f"the lab paths file {path} entry {name} is not a non-empty string path"
             )
     return dict(payload)
+
+
+def record_lab_path(engine: str, bin_dir: str, *, path=LAB_PATHS_FILE) -> None:
+    """Record *engine*'s bin directory in the machine-local lab-paths file, atomically.
+
+    The one writer for one file, and :func:`lab_paths` its one reader. ``install`` calls this
+    after a pip engine's install succeeds, because the venv it created lives under Application
+    Support where no shell exports it: the start commands use bare names, so without this
+    entry every mlx-lm and OptiQ cell on a Mac that installed through the app fails to start.
+
+    Read, replace, write: every other engine's entry is kept, and *engine*'s is replaced only
+    by an install of the version the manifest pins (:func:`install_plan` pins
+    ``TESTED_VERSIONS``). The write is a temp file in the same directory followed by
+    ``os.replace``, so a kill mid-write leaves the previous file whole.
+
+    A file this function cannot read is refused by :func:`lab_paths` rather than overwritten,
+    and an engine outside :data:`LAB_ENGINES` is refused here for the same reason that reader
+    refuses one: the app engines are archived, not run from a bin directory.
+    """
+    if engine not in LAB_ENGINES:
+        raise ValueError(
+            f"refusing to record a lab path for {engine!r}: only {', '.join(LAB_ENGINES)} "
+            "install into a bin directory, and the app engines are archived rather than run "
+            "from one"
+        )
+    if not isinstance(bin_dir, str) or not bin_dir:
+        raise ValueError(
+            f"refusing to record a lab path for {engine}: {bin_dir!r} is not a non-empty "
+            "directory"
+        )
+    entries = lab_paths(path)
+    entries[engine] = bin_dir
+    target = pathlib.Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(entries, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _detect_osaurus(env) -> tuple[str | None, str | None]:
@@ -1027,6 +1081,7 @@ def install(
     def run_steps() -> bool:
         created: list[str] = []
         source_dir = _plan_engines_dir(plan)
+        installed_bin: str | None = None
         for position, step in enumerate(plan.steps):
             if cancel():
                 return cancelled(created)
@@ -1054,6 +1109,11 @@ def install(
                 _rollback(created, engines_dir, send)
                 send("done", "install failed; nothing else was run")
                 return False
+            if root is not None:
+                # The venv this install created is the one a later start must find on PATH
+                # (AC-0); it is recorded only after the step succeeded, and beside the engines
+                # directory this call was handed rather than this Mac's real one.
+                installed_bin = os.path.join(root, "bin")
             send(
                 "progress",
                 step.label,
@@ -1062,6 +1122,8 @@ def install(
                 step=step.id,
                 exit_code=exit_code,
             )
+        if installed_bin is not None:
+            record_lab_path(engine, installed_bin, path=_lab_paths_beside(engines_dir))
         send("done", "install finished")
         return True
 

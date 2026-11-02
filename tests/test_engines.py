@@ -561,6 +561,65 @@ def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path)
     assert events[-1]["seq"] == 3
 
 
+# AC-0 (04-03b): a pip engine the app installed is an engine the harness can start. The venv
+# lives under Application Support, where no shell exports it, so the install writes its bin
+# directory into the machine-local lab-paths file the start commands' PATH is built from.
+
+
+def test_a_successful_pip_install_records_its_venv_bin_and_engine_env_prefixes_it(tmp_path):
+    """The install of the tested version leaves exactly its own entry, and PATH finds it."""
+    from ohyesmlx import runtimes
+
+    def create_venv(argv):
+        if argv[1:3] == ["-m", "venv"]:
+            (Path(argv[3]) / "bin").mkdir(parents=True, exist_ok=True)
+
+    ok, events, _opened, _sleeps = do_install(
+        tmp_path, engine="optiq", run=FakeRun(on_call=create_venv)
+    )
+
+    assert ok is True
+    lab_paths = tmp_path / "lab-paths.json"
+    assert json.loads(lab_paths.read_text()) == {
+        "optiq": f"{tmp_path}/engines/optiq-0.5.13/bin"
+    }
+    assert not (tmp_path / "lab-paths.json.tmp").exists(), "the write is atomic"
+
+    env = runtimes._engine_env(lab_paths_path=str(lab_paths))
+    assert env["PATH"].split(os.pathsep)[0] == f"{tmp_path}/engines/optiq-0.5.13/bin"
+
+
+def test_a_failed_pip_install_records_no_lab_path_and_keeps_the_others(tmp_path):
+    """A step that failed installed nothing, so the PATH must not gain a directory."""
+    (tmp_path / "lab-paths.json").write_text(
+        json.dumps({"mlxlm": "/lab/mlx-lm/bin"}), encoding="utf-8"
+    )
+    failed, _events, _opened, _sleeps = do_install(
+        tmp_path, engine="optiq", run=FakeRun([(0, "venv made"), (1, "boom")])
+    )
+    assert failed is False
+    assert json.loads((tmp_path / "lab-paths.json").read_text()) == {
+        "mlxlm": "/lab/mlx-lm/bin"
+    }
+
+    ok, _events, _opened, _sleeps = do_install(tmp_path, engine="optiq")
+    assert ok is True
+    assert json.loads((tmp_path / "lab-paths.json").read_text()) == {
+        "mlxlm": "/lab/mlx-lm/bin",
+        "optiq": f"{tmp_path}/engines/optiq-0.5.13/bin",
+    }
+
+
+@pytest.mark.parametrize("name", ["osaurus", "omlx", "vmlx"])
+def test_record_lab_path_refuses_an_app_engine_and_writes_nothing(tmp_path, name):
+    path = tmp_path / "lab-paths.json"
+
+    with pytest.raises(ValueError, match="app engines are archived"):
+        engines.record_lab_path(name, "/lab/bin", path=path)
+
+    assert not path.exists()
+
+
 def test_each_step_is_bounded_by_the_injected_timeout(tmp_path):
     run = FakeRun()
     do_install(tmp_path, run=run)

@@ -1439,7 +1439,9 @@ snapshot link present and resolving to a blob of the catalog size (`fetch.downlo
 cache_dir=None) -> bool`, sizes and links only, never hashes, never writes; `plan`'s `ValueError`
 propagates). Such a row is exempt from the **disk** budget because there is nothing left to
 download, and still answers to memory. `measured_here` is non-null only for a run on this user's
-Mac (Decision D5); it is null in Phase 3 and is never filled from our M2 Max rows.
+Mac (Decision D5); it is null until a finished quickbench summary names the row, and is never filled from our M2 Max
+rows. `pick` takes it as an optional `measured_here={repo: block}` argument (plan 04-03b), so the module still reads
+no file itself.
 
 `recommend.exclusion_reason(model, hw, free_disk, downloaded=frozenset()) -> str | None` is the pure
 companion for the rows `pick` leaves out: a fixed-template reason naming the memory or disk
@@ -1451,10 +1453,11 @@ is the rows `exclusion_reason` answers non-null for, and on an unsupported Mac `
 `unsupported_reason` carries `Hardware.unsupported_reason` -- the recommender never copies that
 sentence into a reason.
 
-**Job** (`POST /jobs` body `{"kind": "install|download|evict", "args": {...}}` -> `202 {"job_id": "16-hex"}`)
-`args` is the closed set `{"engine": str, "confirmed": true}` for `install` and `{"repo": str, "confirmed": true}` for
-`download` and `evict`: an extra key, a missing key, a non-string name, or `confirmed` that is not JSON `true` is
-`400 bad_args` naming the key, and an unknown kind (including `quickbench` until 04-03) is `400 bad_kind`. `confirmed`
+**Job** (`POST /jobs` body `{"kind": "install|download|evict|quickbench", "args": {...}}` -> `202 {"job_id": "16-hex"}`)
+`args` is the closed set `{"engine": str, "confirmed": true}` for `install`, `{"repo": str, "confirmed": true}` for
+`download` and `evict`, and `{"repo": str, "confirmed": true, "osaurus": bool}` for `quickbench`: an extra key, a
+missing key, a non-string name, a `confirmed` that is not JSON `true`, or an `osaurus` that is not a JSON bool is
+`400 bad_args` naming the key, and an unknown kind is `400 bad_kind`. `confirmed`
 is the client's statement that its UI showed this action and the user chose it; the server cannot verify a human, so
 Phase 5 sends it only from a user gesture. The server validates no engine name, repo id, version, path or disk number
 itself: an unknown name is the module's own refusal (`unknown_engine`, `unknown_repo`), delivered as the job's `error`
@@ -1474,10 +1477,13 @@ closes. A job keeps at most 10,000 events; past that it is ended with `error` pa
 stays set and bounds each write, so a client that stops reading releases its handler thread at the first blocked send.
 `POST /jobs/{id}/cancel` answers `202` and makes the `cancel` callable the module holds answer True from then on; a
 download stops at its next chunk, an install only between steps and between guided-download polls (never inside a
-running pip step, whose own 900 s timeout and the installer's rollback still apply), and the stream ends with the
-module's own cancelled `error`/`done`. Cancelling an `evict` is `409 not_cancellable`; a finished job is
+running pip step, whose own 900 s timeout and the installer's rollback still apply), a quickbench run only between
+cells (its in-flight cell's stop path, sibling eviction and Osaurus restore still run, and the run ends `cancelled`
+with a summary), and the stream ends with the module's own cancelled `error`/`done`. Cancelling an `evict` is
+`409 not_cancellable`; a finished job is
 `409 job_finished`; an unknown id is `404 unknown_job`.
-Shutdown (stdin EOF, `SIGINT`, `SIGTERM`) cancels a running install or download at its next check and waits for any
+Shutdown (stdin EOF, `SIGINT`, `SIGTERM`) cancels a running install, download or quickbench at its next check and
+waits for any
 running job at most 120 s, then exits 0; an evict is waited for, never cancelled. Each job start writes one stderr line
 `{"job": id, "kind": str, "name": str, "time": iso}` and each end one `{"job": id, "ok": bool, "code": str|null,
 "time": iso}` — never a token or a header value. Residual risk: a pip step still running when the 120 s wait expires
@@ -1501,8 +1507,8 @@ Every request passes one guard before the router sees it, in this order: a `Host
 `403 origin_refused`; anything but `Authorization: Bearer <token>` is `401 unauthorized`, compared as UTF-8 bytes with
 `hmac.compare_digest` so a non-ASCII header value is a 401 and never a 500. The token is the primary control: a
 cross-site `<img>` or navigation carries no `Origin` and a correct `Host`, and only the token stops it. `GET /hardware`,
-`GET /engines` and `GET /recommendations` answer the shapes above and the job routes answer theirs; an authorised
-request to any other path is `404 not_found`, a non-GET on one of the three GETs is `405 method_not_allowed`, a
+`GET /engines`, `GET /recommendations` and `GET /quickbench/plan` answer the shapes above and the job routes answer theirs; an authorised
+request to any other path is `404 not_found`, a non-GET on one of those GETs is `405 method_not_allowed`, a
 `ValueError` from `engines.install_plan`
 is `500 install_plan_failed` naming the engine, and any other module exception is `500 internal` carrying the
 exception's message and no traceback. Every JSON response is `Content-Type: application/json; charset=utf-8` with
@@ -1586,3 +1592,136 @@ to stderr, naming the files and the outcome and never their contents.
 `scripts/osaurus-pin.sh` keeps its trap, its port/app sweep and its restore verdict, and calls
 these functions instead of carrying its own copy of the edit; the byte-exact verdict printed as
 "restored byte-exact (cmp)" is now the module's `filecmp` comparison, the one definition of it.
+
+## v5.0 plan 04-03b — quickbench, and the lab path an install writes
+
+**`engines.record_lab_path(engine, bin_dir, *, path=LAB_PATHS_FILE) -> None`** (AC-0). One atomic
+writer for the machine-local lab-paths file, beside the one reader `lab_paths`. `install` calls it
+after a pip engine's steps succeed, with that venv's `bin` directory, because the venv lives under
+Application Support where no shell exports it and the start commands use bare names; without the
+entry every mlx-lm and OptiQ cell on a Mac that installed through the app fails to start. The path
+is written beside the `engines_dir` the call was handed (`engines._lab_paths_beside`), so a scratch
+engines directory keeps its own file. Every other engine's entry is kept, and the engine's own is
+replaced only by an install of the version the manifest pins. A failed step writes nothing; an
+app engine is refused (`ValueError`), like the reader refuses one.
+
+**`GET /quickbench/plan?repo=R`** (AC-1). The plan below, as the app shows it before the click.
+`repo` is the only query parameter; a missing or repeated one is `400 bad_args`, and the module's
+own refusal — a repo that is not in the catalog, or one that is not in this Mac's cache
+("download it first") — is `400 bad_args` carrying its message. The endpoint never fetches.
+
+```python
+# ohyesmlx/quickbench.py
+def plan(repo, hw, statuses, models, *, cache_dir=None,
+         downloaded=fetch.downloaded) -> QuickPlan: ...
+def run(repo, *, confirmed, osaurus=False, models=None, statuses=None, hw=None,
+        run_cells=measure.run_cells, download=fetch.download, evict=fetch.evict,
+        downloaded=fetch.downloaded, pin=osaurus_settings.pin,
+        restore=osaurus_settings.restore, recover=osaurus_settings.recover,
+        port_in_use=_port_in_use, osaurus_app_running=_osaurus_app_running,
+        load=canary.load, clock=time.time, emit=_print_event, cancel=_never_cancelled,
+        cache_dir=None, results_dir=DEFAULT_RESULTS_DIR,
+        backup_dir=DEFAULT_BACKUP_DIR, baseline_path=DEFAULT_BASELINE_PATH) -> bool: ...
+def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]: ...
+def cell_spec(fmt: str, engine: str, artifact_dir: str) -> str: ...
+def estimate_seconds(cells: int, download_bytes: int) -> int: ...
+
+@dataclass(frozen=True)
+class PlannedEngine:   # one stage-A cell's engine
+    engine: str
+    version: str | None
+    tested: bool
+
+@dataclass(frozen=True)
+class PlannedSibling:  # one stage-B format
+    repo: str
+    format: str
+    size_bytes: int
+    downloaded: bool
+
+@dataclass(frozen=True)
+class QuickPlan:
+    repo: str
+    format: str
+    stage_a: list[PlannedEngine]   # installed engines that list the row, detection order
+    stage_b: list[PlannedSibling]  # catalog.siblings(row, models), catalog order
+    download_bytes: int            # the sum of the missing siblings' size_bytes
+    osaurus: bool                  # Osaurus is in stage A: the run pins it if allowed
+    estimate_s: int
+```
+
+`plan` is pure apart from the injected `downloaded`: no directory is created, nothing is fetched,
+no runtime is started. `stage_a` includes an untested build and labels it (`tested: false`); it
+never invents an engine the row does not list. An empty `stage_a` is a legal plan and the run says
+why it measured nothing. `estimate_s` is `cards * ESTIMATE_PER_CELL_S (90) + download_bytes /
+DOWNLOAD_BYTES_PER_S (20_000_000)`, the two constants and the function being the one definition of
+the estimate the summary compares with its actual seconds.
+
+`run` returns True when the run finished, False for a refusal, a cancel or a failed Osaurus
+restore. Every side effect is a parameter; the defaults are the real functions. `--cells` remains
+the only selector: each cell is one `run_cells` call (one light cell, `--cells` string composed by
+`cell_spec` and parsed by `cli.build_cells`), with `warmup=3`, `measured=5`, `cooldown_s=10` and
+`quick=True`, under `.../quickbench/<stamp>/A/<engine>` or `.../quickbench/<stamp>/B/<format>__<engine>`.
+
+The run's rules, each one a rule the harness already paid for:
+
+- **One variable per stage.** Stage A varies the engine on the chosen row's format; its winner is
+  the PASS cell with the highest `decode_tps`, and PASS cells inside `canary.NOISE_FLOOR` (5%) of
+  it are reported as a tie. Stage B holds that engine and varies the format over the chosen row
+  plus its siblings; the chosen row's stage-A row is reused, never measured twice. With no PASS
+  cell stage B does not run and the summary says why. Neither stage's numbers can be read as the
+  other's claim: the summary carries each stage's caveat, and every cell carries the label
+  `quick: measured on this Mac`.
+- **The user's choice stays.** A sibling is downloaded only when missing, measured, and evicted
+  after its cell, so at most one extra model is on disk. The chosen repo is never downloaded and
+  never evicted by quickbench; a sibling the ledger does not list is refused by `fetch.evict`.
+- **Nothing is started on an occupied port.** An engine whose port answers is skipped with the
+  reason `quit <engine> first`, and nothing on that port is stopped. Osaurus is also skipped while
+  its app process runs, matched by its full executable path and never by name (`quit the Osaurus
+  app first`); quickbench never runs a stale-instance sweep.
+- **Osaurus is asked, pinned and restored.** It runs only with `osaurus=True`; `recover` runs
+  before any `pin`, both with quickbench's fixed backup directory under Application Support, and
+  `restore` runs in a `finally` around the cell. A recover that does not verify leaves the backup in
+  place, so `pin` refuses and the cell is skipped with that reason. A restore that does not verify
+  emits an `error` naming the backup directory and ends the run.
+- **Contention is recorded, not refused.** `canary.load()` is read before and after each stage; a
+  stage above `canary.LOAD_NOISY` is labelled `this Mac was busy`.
+
+The summary is `.../quickbench/<stamp>/summary.json`, written atomically and written on every
+ending (finished, cancelled, restore failed, unexpected raise):
+
+```python
+{
+  "label": "quick: measured on this Mac",
+  "repo": str, "format": str,
+  "plan": <QuickPlan as JSON>, "estimate_s": int, "actual_s": float,
+  "ended": "finished" | "cancelled" | "restore_failed" | "error",
+  "results_dir": str,                      # the stamp directory
+  "harness": {"version": str, "source_sha256": str},
+  "engines": [{"name": str, "version": str|null, "tested": bool}],   # stage A's engines
+  "load": {"stage_a": {"before": float, "after": float, "label": str|null} | null,
+           "stage_b": ... | null},
+  "osaurus": {"allowed": bool, "pinned": bool, "restored": bool|null, "reason": str|null},
+  "stage_a": {"caveat": "engines compared on one format only", "cells": [cell],
+              "winner": str|null, "tie": [str], "note": str|null},
+  "stage_b": {"caveat": "formats compared on one engine only", "engine": str|null,
+              "cells": [cell], "note": str|null},
+  "best": {"engine": str, "decode_tps": float, "ttft_s": float,
+           "measured_at": iso, "quick": true} | null
+}
+# cell: {"engine", "format", "artifact_dir", "status": "PASS|FAIL|SKIPPED",
+#        "reason": str|null, "decode_tps": float|null, "ttft_s": float|null,
+#        "runtime_version": str|null, "label": "quick: measured on this Mac",
+#        "reused": bool}
+```
+
+`best` is non-null only on a finished run: a cancelled or half-restored run is a record of what
+happened, never a recommendation. `quickbench.latest(root)` returns the newest **finished** summary
+per repo, keyed by repo id, skipping a file it cannot read — and `GET /recommendations` hands each
+row's `best` to `recommend.pick(measured_here=...)`, which is the only way `Pick.measured_here` is
+ever filled (D5).
+
+The job kind is the same keystrokes the CLI uses: `ohyesmlx quickbench --repo R --yes [--osaurus]`
+prints the plan and starts nothing without `--yes`; the `quickbench` job kind takes `repo`,
+`confirmed: true` and the bool `osaurus`; `POST /jobs/{id}/cancel` stops it between cells.
+

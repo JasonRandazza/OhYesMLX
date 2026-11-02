@@ -582,7 +582,7 @@ def test_cli_help_flag_prints_usage_and_exits_zero(capsys, monkeypatch):
 def test_cli_subcommand_help_exits_zero(capsys, monkeypatch):
     # Python 3.14 argparse colours help when FORCE_COLOR is set; the assertion is on the text.
     monkeypatch.setenv("NO_COLOR", "1")
-    for subcmd in ("run", "grid", "sweep", "canary", "app"):
+    for subcmd in ("run", "grid", "sweep", "canary", "quickbench", "app"):
         with pytest.raises(SystemExit) as exc_info:
             cli.main([subcmd, "--help"])
         assert exc_info.value.code == 0
@@ -922,6 +922,123 @@ def test_a_manifest_without_a_canary_spec_is_refused_before_anything_is_measured
     err = capsys.readouterr().err
     assert "mlxlm" in err and "has no canary spec" in err
     assert fake.calls == []
+
+
+# --- the quickbench subcommand ----------------------------------------------------------------
+#
+# The subcommand is a thin caller: the plan it prints and the run it starts are the module's
+# own functions, faked here. Nothing scans this Mac, reads the catalog or starts a runtime --
+# `hardware.scan`, `detect_all` and `catalog.load` are stubbed because the CLI composes their
+# answers into `plan`, and a test must not shell out for a real machine's hardware.
+
+
+@pytest.fixture
+def quick_plan(monkeypatch):
+    from ohyesmlx import catalog, engines, hardware, quickbench
+
+    monkeypatch.setattr(hardware, "scan", lambda: SimpleNamespace())
+    monkeypatch.setattr(engines, "detect_all", lambda env=None: [])
+    monkeypatch.setattr(catalog, "load", lambda: [])
+    return quickbench.QuickPlan(
+        repo="org/two-b-stock",
+        format="stock4bit",
+        stage_a=[quickbench.PlannedEngine("mlxlm", "0.31.3", True)],
+        stage_b=[
+            quickbench.PlannedSibling("org/two-b-oq4", "oq4", 3_000_000_000, False)
+        ],
+        download_bytes=3_000_000_000,
+        osaurus=False,
+        estimate_s=240,
+    )
+
+
+def test_quickbench_without_yes_prints_the_plan_and_starts_nothing(
+    quick_plan, monkeypatch, capsys
+):
+    from ohyesmlx import quickbench
+
+    monkeypatch.setattr(quickbench, "plan", lambda *args, **kwargs: quick_plan)
+    monkeypatch.setattr(
+        quickbench, "run", lambda *args, **kwargs: pytest.fail("the run started")
+    )
+
+    code = cli.main(["quickbench", "--repo", "org/two-b-stock"])
+
+    out = capsys.readouterr().out
+    assert code == 2
+    assert '"repo": "org/two-b-stock"' in out
+    assert '"estimate_s": 240' in out
+    assert "org/two-b-oq4" in out
+    assert "Nothing was started" in out
+
+
+def test_quickbench_with_yes_runs_once_with_the_confirmed_flags(
+    quick_plan, monkeypatch, capsys
+):
+    from ohyesmlx import quickbench
+
+    calls = []
+
+    def run(repo, **kwargs):
+        calls.append({"repo": repo, **kwargs})
+        kwargs["emit"](
+            {
+                "seq": 1,
+                "type": "result",
+                "message": "quickbench finished",
+                "fraction": None,
+                "payload": {
+                    "results_dir": "/scratch/quickbench/20260101T000000Z",
+                    "best": {
+                        "engine": "mlxlm",
+                        "decode_tps": 60.0,
+                        "ttft_s": 0.2,
+                        "measured_at": "2026-01-01T00:00:00+00:00",
+                        "quick": True,
+                    },
+                },
+            }
+        )
+        kwargs["emit"](
+            {"seq": 2, "type": "done", "message": "quickbench finished", "fraction": None,
+             "payload": None}
+        )
+        return True
+
+    monkeypatch.setattr(quickbench, "plan", lambda *args, **kwargs: quick_plan)
+    monkeypatch.setattr(quickbench, "run", run)
+
+    code = cli.main(
+        ["quickbench", "--repo", "org/two-b-stock", "--yes", "--osaurus"]
+    )
+
+    assert code == 0
+    assert calls[0]["repo"] == "org/two-b-stock"
+    assert calls[0]["confirmed"] is True
+    assert calls[0]["osaurus"] is True
+    out = capsys.readouterr().out
+    assert "best for you: mlxlm at 60.0 tok/s, 0.200 s TTFT" in out
+    assert "quick: measured on this Mac" in out
+    assert "summary: /scratch/quickbench/20260101T000000Z/summary.json" in out
+
+
+def test_quickbench_refuses_a_repo_the_plan_refuses(monkeypatch, capsys):
+    from ohyesmlx import catalog, engines, hardware, quickbench
+
+    monkeypatch.setattr(hardware, "scan", lambda: SimpleNamespace())
+    monkeypatch.setattr(engines, "detect_all", lambda env=None: [])
+    monkeypatch.setattr(catalog, "load", lambda: [])
+
+    def refuse(*args, **kwargs):
+        raise ValueError("org/nope is not in this Mac's Hugging Face cache; download it first")
+
+    monkeypatch.setattr(quickbench, "plan", refuse)
+    monkeypatch.setattr(
+        quickbench, "run", lambda *args, **kwargs: pytest.fail("the run started")
+    )
+
+    assert cli.main(["quickbench", "--repo", "org/nope", "--yes"]) == 2
+    assert "download it first" in capsys.readouterr().err
 
 
 # --- the app subcommand -----------------------------------------------------------------------

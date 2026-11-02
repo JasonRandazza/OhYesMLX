@@ -15,6 +15,7 @@ names its metric and the metric card carries every number behind it.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import signal
@@ -451,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "canary":
         return _canary(args)
+    if args.command == "quickbench":
+        return _quickbench(args)
     if args.command == "app":
         return _app(args)
     return _run(args)
@@ -541,6 +544,10 @@ def multiturn_workloads(measure) -> list:
 
 
 def _parser() -> argparse.ArgumentParser:
+    # The quick run's label is defined once, in the module that writes it into every cell;
+    # the help text names the same string a reader will see in the output.
+    from ohyesmlx.quickbench import LABEL
+
     parser = argparse.ArgumentParser(
         prog="ohyesmlx",
         description="Honest benchmarks for local LLM serving on Apple Silicon. "
@@ -774,6 +781,37 @@ def _parser() -> argparse.ArgumentParser:
         "quiet-machine rule and the time estimate are printed, and nothing is started.",
     )
 
+    quickbench = commands.add_parser(
+        "quickbench",
+        help="measure two single-axis stages on this Mac",
+        description="Measure stage A (installed engines on the chosen model's format) and "
+        "then stage B (the winning engine over that model and its sibling formats), with "
+        "light cells and the coherence gate, and write a best-for-you summary under "
+        "Application Support. Every number is labelled "
+        f"\"{LABEL}\" and never joins the published tables. Without --yes the plan is "
+        "printed and nothing is started.",
+    )
+    quickbench.add_argument(
+        "--repo",
+        required=True,
+        help="the catalog model to measure, which must already be downloaded: quickbench "
+        "never fetches or evicts the model you chose",
+    )
+    quickbench.add_argument(
+        "--osaurus",
+        action="store_true",
+        help="allow quickbench to pin Osaurus's measurement-side host settings for its "
+        "cells and restore them afterwards. Without this flag Osaurus is skipped with that "
+        "reason, because its settings are the user's and nothing here changes them without "
+        "consent.",
+    )
+    quickbench.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm the run may start. Without it the plan is printed and nothing is "
+        "measured.",
+    )
+
     app = commands.add_parser(
         "app",
         help="serve the app's localhost API",
@@ -950,6 +988,57 @@ def _canary_engines(spec: str | None) -> list[str]:
             f"{', '.join(engines.ONBOARDING_ENGINES)}"
         )
     return [name for name in engines.ONBOARDING_ENGINES if name in named]
+
+
+def _quickbench(args) -> int:
+    """``ohyesmlx quickbench``: show the plan, then -- with ``--yes`` -- measure it.
+
+    The plan is the module's own :func:`quickbench.plan`, printed as JSON so the same shape
+    the app renders is the shape the terminal shows, and it is computed before the consent
+    gate: a run that is not confirmed starts no ``run_cells``, opens no port and writes no
+    file. The summary's path is the result event's ``results_dir``, which is where the record
+    on disk lives when the run ends early.
+    """
+    from ohyesmlx import catalog, hardware
+    from ohyesmlx import quickbench as module
+
+    try:
+        shown = module.plan(
+            args.repo,
+            hardware.scan(),
+            engines.detect_all(),
+            catalog.load(),
+        )
+    except ValueError as exc:
+        print(f"ohyesmlx quickbench: {exc}", file=sys.stderr)
+        return 2
+
+    print(json.dumps(dataclasses.asdict(shown), indent=2, sort_keys=True))
+    print(
+        f"Every number is labelled \"{module.LABEL}\" and never joins the published tables. "
+        f"Estimated {shown.estimate_s} s."
+    )
+    if not args.yes:
+        print("Nothing was started. Pass --yes to run it.")
+        return 2
+
+    captured: dict = {}
+
+    def emit(event):
+        print(json.dumps(event), flush=True)
+        if event.get("type") == "result" and isinstance(event.get("payload"), dict):
+            captured.update(event["payload"])
+
+    ok = module.run(args.repo, confirmed=True, osaurus=args.osaurus, emit=emit)
+    best = captured.get("best")
+    if best is not None:
+        print(
+            f"best for you: {best['engine']} at {best['decode_tps']:.1f} tok/s, "
+            f"{best['ttft_s']:.3f} s TTFT -- {module.LABEL}"
+        )
+    if captured.get("results_dir"):
+        print(f"summary: {captured['results_dir']}/summary.json")
+    return 0 if ok else 2
 
 
 def _app(args) -> int:
