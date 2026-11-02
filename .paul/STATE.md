@@ -15,10 +15,10 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main` (959 tests); Phase 4 planning (04-01 written); Phase 4.5 security hardening inserted; Phase 5 not started.
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01 (guarded server) done 2026-11-02, 992 tests; 04-01b, 04-02, 04-03 to plan; Phase 4.5 security hardening inserted; Phase 5 not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); Phase 4 plan 04-01 approved and in APPLY (worker dispatched). Handoff: `.paul/HANDOFF.md`.
-Last activity: 2026-11-01 — Phase 3 closed: catalog, recommender, fetch (real-download smoke PASS). Earlier: canary baselines for all five engines (2026-10-29/30).
+Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); 04-01 closed (SUMMARY written). Handoff: `.paul/HANDOFF.md`.
+Last activity: 2026-11-02 — 04-01 unified: `ohyesmlx app` guarded loopback API (`1c157b0`).
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
 ## Loop Position
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ◉        ○     [04-01 approved 2026-11-02; APPLY in progress]
+  ✓        ✓        ✓     [04-01 loop closed - ready for next PLAN]
 ```
 
 ## Performance Metrics
@@ -163,11 +163,11 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-11-01 (Claude Sonnet 5.5 coordinator)
-Stopped at: Phase 3 committed (`8df8a19`); handoff written.
-Next action: review the 04-01 worker's diff, run the manual curl/browser checks, Jason's human-verify checkpoint, then UNIFY.
-Resume file: `.paul/phases/v5-onboarding/04-01-PLAN.md`
-Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-137).
+Last session: 2026-11-02 (Claude Opus 5.5 coordinator)
+Stopped at: 04-01 unified.
+Next action: plan 04-01b (gpu_cores quick fix), then 04-02 (jobs + SSE, Pick.downloaded); see the v5 PLAN.md Phase 4 notes.
+Resume file: `.paul/phases/v5-onboarding/04-01-SUMMARY.md`
+Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-140).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---
