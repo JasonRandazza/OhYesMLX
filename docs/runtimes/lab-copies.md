@@ -149,21 +149,51 @@ property of the project.
 
 ## 4. The pip engines: a version-pinned venv
 
-Both pip engines install the same way, and the installer already pins:
+Both pip engines install the same way, and the installer pins both the package and its dependency
+set:
 
 ```sh
 {python} -m venv ~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>
 ~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>/bin/python -m pip install \
-    --no-input --disable-pip-version-check <distribution>==<manifest version>
+    --no-input --disable-pip-version-check <distribution>==<manifest version> \
+    -c ohyesmlx/constraints/<name>-<manifest version>.txt
 ```
 
 (`engines._command_plan`, VERIFIED in the tree; `<python>` must be 3.11 or later — stock
 `/usr/bin/python3` is 3.9.6 on this macOS, research §3.3 VERIFIED.) The two steps are the
-installer's own `Plan`, so the harness's "install" and this document's "freeze" are the same
-operation with the same version pin. The clean-install sizes were measured by running exactly these
-commands on 2026-10-29 (research §8, VERIFIED): mlx-lm 472 MB and OptiQ 612 MB per venv, with wall
-times of 177 s and 104 s. The older figures in research §3.2 and §4.2 (846 MB, 434 MB) came from
-environments that were not clean and are superseded by §8 for planning disk.
+installer's own `Plan`, and the install step applies the committed constraints file, so the
+harness's "install" and this document's "freeze" are the same operation. The clean-install sizes
+were measured by running exactly these commands on 2026-10-29 (research §8, VERIFIED): mlx-lm 472 MB
+and OptiQ 612 MB per venv, with wall times of 177 s and 104 s. The older figures in research §3.2
+and §4.2 (846 MB, 434 MB) came from environments that were not clean and are superseded by §8 for
+planning disk.
+
+**The constraints file is the other half of the pin.** A package pin alone does not pin the build:
+the two lab venvs had already drifted apart at the same engine versions (mlx 0.32.4 vs 0.32.2,
+transformers 5.12.1 vs 5.17.0), and `pip install mlx-optiq==<version>` leaves `mlx-lm` unpinned, so
+pip resolved a server whose chat endpoint answered HTTP 404 (2026-10-30,
+`docs/research/2026-10-30-optiq-0513-vs-078-canary.md`). `engines.constraints_path` is the one
+definition of the file's name, one per pip engine per tested version:
+`ohyesmlx/constraints/<name>-<TESTED_VERSIONS[name]>.txt`. `engines.install_plan` refuses with
+`ValueError` naming that path when it is missing, so a version bump without a new freeze fails
+before a venv is created.
+
+**Freezing a venv into its constraints file.** The header is the three comment lines both committed
+files carry — engine-version, venv root, interpreter — and the body is the venv's whole freeze:
+
+```sh
+{
+  printf '# pip constraints for the <name>-<version> lab copy: its full dependency set, frozen <ISO date> (T2.5.5).\n'
+  printf '# Venv: <venv root>\n'
+  printf '# Interpreter: Python <X.Y.Z> (<arch>)\n'
+  <venv>/bin/python -m pip freeze --all
+} > ohyesmlx/constraints/<name>-<version>.txt
+```
+
+`--all` is not optional: without it `pip freeze` omits the toolchain (`pip` itself), and the freeze
+would describe a different environment from the one that runs the server. Freeze the venv that was
+just installed from the manifest's version, and commit the file in the same commit as the version it
+names.
 
 The venv root names are the ones `engines._app_engine_venvs` derives — `engines/<name>-<version>`
 with a bare `engines/<name>` as the second candidate — so detection, install and this document
@@ -474,12 +504,16 @@ record: the 2026-09-16 grid published a 40.6% drift that was contention, not a r
 9. **Move the frozen copy, and keep the old one.** A new tested version is a new venv
    (`engines/<name>-<new>`) or a new archive directory; the old one stays until no table names it.
    Update the machine-local `lab-paths.json` entry if the pip engine's lab path moves — the file,
-   never the committed manifest.
+   never the committed manifest. For a pip engine, freeze the new venv with
+   `<venv>/bin/python -m pip freeze --all`, prefixed by the three header lines §4 shows, into
+   `ohyesmlx/constraints/<name>-<new>.txt`: **a bump is not done until its constraints file is
+   committed**, and `install_plan` refuses the install until it exists.
 10. **Rows from different builds never share a table.** A row records `runtime_version`; the join
     guard refuses to join across builds, and this is a rule about tables, not only about joins.
     If a table must show both, they are two columns that each name their build.
-11. **Commit.** The manifest edit, the STATE row, the doc change if the procedure changed. The
-    commit message says which build was adopted and what the canary said.
+11. **Commit.** The manifest edit, the pip engine's constraints file, the STATE row, the doc change
+    if the procedure changed. The commit message says which build was adopted and what the canary
+    said.
 
 **Osaurus standing authorisation, from AGENTS.md (Jason, 2026-10-29).** Any test, canary or run
 may pin Osaurus (idle 900, caches off, baseline re-recorded) provided his own settings (idle

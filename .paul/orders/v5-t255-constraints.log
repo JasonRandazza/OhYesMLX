@@ -1,0 +1,69 @@
+I'll read the four named files and the constraints directory first.
+Now let me read the tests and the two docs files.
+Let me read the remaining test sections and check interfaces.md for the install argv pin.
+Let me check the interfaces.md Plan section and the test file header.
+Let me check for other references to `_PIP_COPINS`, the test helpers, and the docs' pip section.
+Let me read the install-test helpers and the section where plan tests live.
+Let me check the pip freeze content and any T2.5.4 references.
+Now I'll make the engines.py changes: replace `_PIP_COPINS` with the constraints definition, wire `-c` into the argv, and refuse a plan when the file is missing.
+
+Now the tests. I'll add the constraints path constant, update the three argv expectations, and add the new checks.
+
+Now the documentation: §4 gets the constraints story and freeze command, §8 the checklist entries.
+Now I'll run the suite with the project's test venv.
+One existing guard forbids version literals in engines.py — my comment carried `0.31.3`. I'll reword it to keep the finding without the literal.
+
+Suite is green at 959. Now I'll red-check the new guard by removing it and watching the test fail.
+
+Failed as expected (`DID NOT RAISE`). Restoring the guard, then red-checking the `-c` argv.
+
+
+Three argv checks failed on the missing `-c` token, as intended. Restoring.
+
+Let me review the final diff to confirm exactly what changed and capture line numbers.
+
+
+Done. Final suite: `959 passed in 38.94s` (baseline 957; +2 tests). Changed only `ohyesmlx/engines.py`, `tests/test_engines.py`, `docs/runtimes/lab-copies.md`. `docs/interfaces.md` untouched — it pins the `Plan` shape (`command: [str]`), not the install argv.
+
+**1. One definition + `-c` in argv**
+- `ohyesmlx/engines.py:597` `CONSTRAINTS_DIR`, `:600` `constraints_path(engine)` → `ohyesmlx/constraints/<engine>-<TESTED_VERSIONS[engine]>.txt`, resolved from `__file__` like `MANIFEST_PATH`.
+- `ohyesmlx/engines.py:663-665`: install argv is now `<package>==<version>` then `-c <path>`.
+
+**2. `_PIP_COPINS` removed**
+- Deleted with its comment. The HTTP-404 finding is in the constraints comment at `engines.py:589-596`.
+- Note: `test_no_engine_version_literal_remains_in_the_module` forbids version literals in `engines.py`, so the comment describes the finding ("its freeze names mlx-lm at the tested mlx-lm version") rather than restating `0.31.3`.
+
+**3. Missing file fails loudly**
+- `engines.py:690-697`: `install_plan` raises `ValueError` naming the expected path.
+- Guards/`_relocate`, checked by reading: `_plan_engines_dir` (`:844`) yields the engines dir; `_relocate` (`:852`) rewrites only tokens equal to it or under it. The constraints path is `<repo>/ohyesmlx/constraints/...`, so it passes through verbatim — proven by `test_two_steps_run_in_order...`, which passes a tmp `engines_dir` and still expects the repo path. Consent, `_installed` (`:822`), lock, `_disk_required` (`:826`, `None` for pip) and the guided-only `_url_allowed` (`:832`) never inspect argv; `_rollback` (`:870`) removes only venv roots in `created`.
+- Observation, not changed (order does not authorise touching `install`): `install`'s `except ValueError` (`:946-954`) logs `code: "unknown_engine"` for any `install_plan` ValueError, so a missing constraints file would be labelled that way before re-raising.
+
+**4. Tests**
+- `tests/test_engines.py:221` `test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version` — argv includes `-c` + real file.
+- `:244` `test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version` — same, plus `assert [token for token in install_argv if token.startswith("mlx-lm==")] == []`.
+- `:272` `test_a_tested_version_without_a_constraints_file_raises_before_a_plan_exists` — bumps `TESTED_VERSIONS` to 9.9.9, expects the path.
+- `:279` `test_every_pip_engine_has_a_constraints_file_for_its_tested_version` — iterates `_PIP_PACKAGES`; fails on a bump without a freeze.
+- `:504` `test_two_steps_run_in_order_with_progress_after_each_and_done_last` — updated expectation.
+
+**5. Docs**
+- `docs/runtimes/lab-copies.md:150-195` §4: `-c` in the install command, the drift/404 rationale, and the freeze command (`<venv>/bin/python -m pip freeze --all` plus the three header lines the committed files carry).
+- `:504-516` §8: step 9 now states the freeze and "a bump is not done until its constraints file is committed"; step 11 adds the constraints file to the commit.
+
+**Red checks:** removing the guard made the new test fail `DID NOT RAISE ValueError`; removing `-c` made the three argv tests fail on the missing token; both restored, suite green again.
+
+**Not verified:** no pip run and no venv touched, so pip's acceptance of the files is unverified; constraints files untouched; no `graphify update` (coordinator's).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     26    2195442    2104320    27155   95.8%   0.036274
+
+== cc-agent: git status ==
+ M docs/runtimes/lab-copies.md
+ M ohyesmlx/engines.py
+ M tests/test_engines.py
+?? .paul/orders/v5-t255-constraints.log
+?? .paul/orders/v5-t255-constraints.md
+?? ohyesmlx/constraints/
+ docs/runtimes/lab-copies.md | 54 ++++++++++++++++++++++++++++++++++++---------
+ ohyesmlx/engines.py         | 34 +++++++++++++++++++++-------
+ tests/test_engines.py       | 36 +++++++++++++++++++++++++++---
+ 3 files changed, 103 insertions(+), 21 deletions(-)

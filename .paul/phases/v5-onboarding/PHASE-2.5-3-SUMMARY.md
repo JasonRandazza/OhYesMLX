@@ -21,7 +21,7 @@ Tests 733 -> 945. Real checks by the coordinator: canary live on all five engine
 ## Findings (details: `docs/research/2026-10-30-optiq-0513-vs-078-canary.md`, `2026-10-30-phase3-models.md`)
 
 - OptiQ TTFT 0.24 s (0.5.13) vs 0.17 s (0.7.8), reproduced twice; decode within noise (Decision 136).
-- A pinned package is not a pinned build: unpinned `mlx-lm` under OptiQ 0.5.13 gave HTTP 404. `install_plan("optiq")` now pins it; T2.5.5 (full freeze) is open.
+- A pinned package is not a pinned build: unpinned `mlx-lm` under OptiQ 0.5.13 gave HTTP 404. T2.5.5 closed 2026-11-02: both lab venvs frozen into committed constraints files that every pip install applies.
 - The shipped manifest must be portable: lab paths are machine-local (`lab-paths.json`).
 - No MLX MoE at or under 3B exists; "3B" models are 3.08-3.2B; catalog cap is disk size (~2 GB), Decision 137.
 - oMLX appends the user's HF cache to its model dirs; AGENTS.md corrected, command unchanged.

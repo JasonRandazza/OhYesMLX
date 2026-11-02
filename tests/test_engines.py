@@ -29,6 +29,9 @@ HOME = "/Users/test"
 # install_plan takes no env: the venv it names is under the real user's home.
 ENGINES_DIR = os.path.expanduser("~/Library/Application Support/OhYesMLX/engines")
 
+# The committed constraints files live beside the package, in ohyesmlx/constraints/.
+CONSTRAINTS = Path(__file__).resolve().parent.parent / "ohyesmlx" / "constraints"
+
 OSAURUS_BUNDLE = "/Applications/osaurus.app"
 OMLX_BUNDLE = "/Applications/oMLX.app"
 OMLX_SHIM = f"{HOME}/.omlx/bin/omlx"
@@ -231,8 +234,11 @@ def test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--no-input",
             "--disable-pip-version-check",
             "mlx-lm==0.31.3",
+            "-c",
+            str(CONSTRAINTS / "mlxlm-0.31.3.txt"),
         ],
     ]
+    assert (CONSTRAINTS / "mlxlm-0.31.3.txt").is_file()
 
 
 def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
@@ -251,11 +257,33 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--no-input",
             "--disable-pip-version-check",
             "mlx-optiq==0.5.13",
-            # OptiQ serves through mlx_lm.server and does not pin it: unpinned, pip resolved
-            # mlx-lm 0.32.2 and every chat request answered HTTP 404 (2026-10-30 lab copy).
-            "mlx-lm==0.31.3",
+            # The constraints file pins mlx-lm for OptiQ, because OptiQ serves through
+            # mlx_lm.server and does not pin it: unpinned, pip resolved mlx-lm 0.32.2 and
+            # every chat request answered HTTP 404 (2026-10-30 lab copy).
+            "-c",
+            str(CONSTRAINTS / "optiq-0.5.13.txt"),
         ],
     ]
+    install_argv = plan.steps[1].command
+    assert (CONSTRAINTS / "optiq-0.5.13.txt").is_file()
+    assert [token for token in install_argv if token.startswith("mlx-lm==")] == []
+
+
+def test_a_tested_version_without_a_constraints_file_raises_before_a_plan_exists(monkeypatch):
+    for name in engines._PIP_PACKAGES:
+        monkeypatch.setitem(engines.TESTED_VERSIONS, name, "9.9.9")
+        with pytest.raises(ValueError, match=rf"{name}-9\.9\.9\.txt"):
+            install_plan(name, 15)
+
+
+def test_every_pip_engine_has_a_constraints_file_for_its_tested_version():
+    assert set(engines._PIP_PACKAGES) == {"mlxlm", "optiq"}
+    for name in engines._PIP_PACKAGES:
+        path = CONSTRAINTS / f"{name}-{engines.TESTED_VERSIONS[name]}.txt"
+        assert path.is_file(), (
+            f"{name} {engines.TESTED_VERSIONS[name]} has no constraints file at {path}; "
+            "freeze the lab venv (docs/runtimes/lab-copies.md §4) with the bump"
+        )
 
 
 def test_omlx_asset_and_size_follow_the_macos_generation():
@@ -488,6 +516,8 @@ def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path)
             "--no-input",
             "--disable-pip-version-check",
             "mlx-lm==0.31.3",
+            "-c",
+            str(CONSTRAINTS / "mlxlm-0.31.3.txt"),
         ],
     ]
     assert [event["type"] for event in events] == ["progress", "progress", "done"]

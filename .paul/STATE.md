@@ -17,7 +17,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 built on `main` (945 tests); Phases 4 (server, quickbench) and 5 (SwiftUI app, packaging) not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); next: plan Phase 4. Handoff: `.paul/HANDOFF.md`.
+Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); next: plan Phase 4. Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-01 — Phase 3 closed: catalog, recommender, fetch (real-download smoke PASS). Earlier: canary baselines for all five engines (2026-10-29/30).
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
@@ -164,7 +164,7 @@ Last session: 2026-11-01 (Claude Sonnet 5.5 coordinator)
 Stopped at: Phase 3 committed (`8df8a19`); handoff written.
 Next action: `/paul:plan` Phase 4 (see HANDOFF).
 Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-137).
-Engine builds on this host: Osaurus 0.25.28, oMLX 0.7.2, OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
+Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 auto-updated past their tested 0.25.28 / 0.7.2 (canary both on Jason's go, then adopt or roll back), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---
 *STATE.md — Updated after every significant action*

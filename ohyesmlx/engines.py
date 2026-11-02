@@ -586,12 +586,20 @@ _PIP_SOURCES = {
 # PyPI's latest: every start command and refusal is written against that build (§6.3).
 _PIP_PACKAGES = {"mlxlm": "mlx-lm", "optiq": "mlx-optiq"}
 
-# A package that serves through another engine's server but does not pin it: OptiQ runs
-# `mlx_lm.server` and leaves mlx-lm unpinned, so pip takes the newest and every chat request
-# answers HTTP 404 (found 2026-10-30 building the OptiQ lab copy). (requirement, whose tested
-# version it is pinned to.) ponytail: only mlx-lm is pinned; a full per-venv `pip freeze`
-# constraints file is the upgrade if a transitive dependency (mlx, transformers) drifts.
-_PIP_COPINS = {"optiq": (("mlx-lm", "mlxlm"),)}
+# A pip engine's pin is only half a pin: pinning the distribution leaves its dependency
+# set to float, and the two lab venvs had already drifted apart at the same versions (mlx
+# 0.32.4 vs 0.32.2, transformers 5.12.1 vs 5.17.0). The committed constraints file pins
+# the whole set, one per pip engine per tested version, beside the package the way the
+# manifest is. It also records the finding that made this necessary: OptiQ serves through
+# `mlx_lm.server` and does not pin mlx-lm, so unpinned pip took the newest and every chat
+# request answered HTTP 404 (found 2026-10-30 building the OptiQ lab copy); its freeze
+# names mlx-lm at the tested mlx-lm version.
+CONSTRAINTS_DIR = pathlib.Path(__file__).resolve().parent / "constraints"
+
+
+def constraints_path(engine: str) -> pathlib.Path:
+    """The constraints file for *engine*'s tested version: the one definition of its name."""
+    return CONSTRAINTS_DIR / f"{engine}-{TESTED_VERSIONS[engine]}.txt"
 
 
 def _guided_plan(name: str, macos_major: int) -> Plan:
@@ -653,7 +661,8 @@ def _command_plan(name: str) -> Plan:
                     "--no-input",
                     "--disable-pip-version-check",
                     f"{package}=={version}",
-                    *[f"{dep}=={TESTED_VERSIONS[owner]}" for dep, owner in _PIP_COPINS.get(name, ())],
+                    "-c",
+                    str(constraints_path(name)),
                 ],
             ),
         ],
@@ -666,7 +675,10 @@ def install_plan(name: str, macos_major: int) -> Plan:
     Pure data: no network, no subprocess, no filesystem write. The two kinds are the
     research's own split -- the three app engines are guided downloads that open the
     release page, and the two Python packages are commands that create the venv under
-    the app's engines dir and install into it (Decision D2).
+    the app's engines dir and install into it (Decision D2). A pip engine's plan is
+    refused with ``ValueError`` naming the expected file when the tested version has no
+    committed constraints file, because a package pin without its freeze installs a
+    build nobody measured.
 
     ``{python}`` in the first command is a placeholder: 02-03 substitutes the
     interpreter it picked, so the plan does not choose one here.
@@ -676,6 +688,12 @@ def install_plan(name: str, macos_major: int) -> Plan:
             f"unknown engine {name!r}; expected one of {', '.join(ONBOARDING_ENGINES)}"
         )
     if name in _PIP_PACKAGES:
+        constraints = constraints_path(name)
+        if not constraints.is_file():
+            raise ValueError(
+                f"no pip constraints file for {name} {TESTED_VERSIONS[name]}: "
+                f"expected {constraints}"
+            )
         return _command_plan(name)
     return _guided_plan(name, macos_major)
 
@@ -931,7 +949,8 @@ def install(
         # AC-10: a refused attempt is still an attempt, so it leaves a line before it raises.
         _append_install_log(
             log_path, engine=engine, confirmed=confirmed, kind="error", step=None,
-            exit_code=None, code="unknown_engine",
+            exit_code=None,
+            code="no_constraints" if engine in ONBOARDING_ENGINES else "unknown_engine",
         )
         raise
 
