@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ◉     [Plan 03-09 Complete & Unified; Milestone v3 Phase 4 Closed; Milestone v3 Complete]
+  ○        ○        ◉     [v5.0 Phases 2.5-3 unified (PHASE-2.5-3-SUMMARY.md); code-review gate in progress]
 ```
 
 ## Performance Metrics
