@@ -49,7 +49,7 @@ model), the real HF cache listing unchanged, `grid` refuses the quick directory,
 | AC-0 app installs reach PATH | Pass (tests; red-check) |
 | AC-1 plan first, chosen repo must be downloaded | Pass (plan printed live; tests) |
 | AC-2 stages, light cells, pinned snapshot, winner/tie, caveats | Pass (live) |
-| AC-3 consent, port/app probes, recover/pin/restore | **Partial**: probes, recover, pin and byte-exact restore pass live; the Osaurus cell cannot run (Known gap) |
+| AC-3 consent, port/app probes, recover/pin/restore | Pass: Partial on 2026-11-02 (Known gap); closed by 04-03c, Osaurus cell PASS live 2026-11-03 |
 | AC-4 job kind, cancel between cells, load recorded | Pass (tests; load recorded live) |
 | AC-4b summary record | Pass (live) |
 | AC-5 measured_here | Pass (live) |
@@ -57,7 +57,7 @@ model), the real HF cache listing unchanged, `grid` refuses the quick directory,
 
 1144 tests green.
 
-## Known gap (fix first next session)
+## Known gap (fixed 2026-11-03 by 04-03c)
 
 `quickbench` pins Osaurus with `baseline_path` under Application Support (as the plan said), but
 `runtimes`' Osaurus start guard reads `osaurus_settings.BASELINE_PATH` (the repo's
