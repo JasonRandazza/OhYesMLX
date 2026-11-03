@@ -14,6 +14,7 @@ generated fresh per launch is the one place a real token is read.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import http.client
 import json
 import socket
@@ -22,7 +23,7 @@ import time
 
 import pytest
 
-from ohyesmlx import catalog, engines, hardware, recommend, server
+from ohyesmlx import catalog, engines, fetch, hardware, recommend, server
 
 TOKEN = "a-fixed-launch-token-for-these-tests"
 
@@ -1005,22 +1006,6 @@ def test_an_install_job_takes_a_name_and_the_literal_true(launch):
     assert [event["type"] for _, event in sse_events(body)] == ["progress", "done"]
 
 
-@pytest.mark.parametrize("kind", ["download", "evict"])
-def test_download_and_evict_take_a_repo_name(launch, kind):
-    module = scripted(an_event("done", "finished"))
-    listener = launch(download=module, evict=module)
-
-    job_id = posted_job_id(
-        listener, {"kind": kind, "args": {"repo": "org/small", "confirmed": True}}
-    )
-
-    assert wait_until(lambda: listener.jobs.running is None)
-    assert module.calls[0]["name"] == "org/small"
-    assert module.calls[0]["confirmed"] is True
-    _, body = stream_to_close(listener, job_id)
-    assert [event["type"] for _, event in sse_events(body)] == ["done"]
-
-
 QUICKBENCH = {
     "kind": "quickbench",
     "args": {"repo": "org/small", "confirmed": True, "osaurus": True},
@@ -1226,6 +1211,31 @@ def test_the_modules_own_refusal_arrives_as_its_error_and_done_events(launch):
     events = [event for _, event in sse_events(body)]
     assert [event["type"] for event in events] == ["error", "done"]
     assert events[0]["payload"] == {"code": "unknown_repo"}
+
+
+def test_a_real_evict_refusal_ends_its_stream_and_frees_the_slot(launch, tmp_path):
+    """The real `fetch.evict`, not a fake: its refusal is `error` + its own `done`, and the
+    slot is free for the next job instead of 409 until restart."""
+    ledger = tmp_path / "fetched.json"
+    ledger.write_text(json.dumps({"repos": {}}), encoding="utf-8")
+    real_evict = functools.partial(
+        fetch.evict,
+        cache_dir=str(tmp_path / "cache"),
+        ledger_path=str(ledger),
+        log_path=str(tmp_path / "fetch-log.jsonl"),
+    )
+    listener = launch(evict=real_evict)
+    payload = {"kind": "evict", "args": {"repo": "org/nope", "confirmed": True}}
+
+    job_id = posted_job_id(listener, payload)
+
+    _, body = stream_to_close(listener, job_id)
+    events = [event for _, event in sse_events(body)]
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert events[0]["payload"]["code"] == "unknown_repo"
+    assert events[-1]["message"] == "fetch ended", "the module's done, not the server's guard"
+
+    assert post_job(listener, payload)[0] == 202, "the slot did not free at the module's done"
 
 
 def test_a_raising_module_ends_the_stream_with_internal_and_done_after_its_own_seq(launch):

@@ -120,13 +120,7 @@ _ERRORS = {
 
 def _event(kind: str, message: str, payload: dict | None) -> dict:
     """One server-authored event in the pinned shape; ``_Job._store`` assigns its seq."""
-    return {
-        "seq": 0,
-        "type": kind,
-        "message": message,
-        "fraction": None,
-        "payload": payload,
-    }
+    return engines._job_event(0, kind, message, None, payload)
 
 
 class _Job:
@@ -663,6 +657,10 @@ class _Handler(BaseHTTPRequestHandler):
             )
             job.append(_event("done", "the job ended after an unexpected error", None))
         finally:
+            if not job.done:
+                # The guard, not a second contract: the module owns its ending, and this only
+                # frees the slot if one returned without it.
+                job.append(_event("done", "the job ended without a done event", None))
             _log_job(
                 {"job": job.id, "ok": ok is True, "code": _job_code(job), "time": _now()}
             )

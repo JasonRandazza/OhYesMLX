@@ -996,8 +996,9 @@ def _quickbench(args) -> int:
     The plan is the module's own :func:`quickbench.plan`, printed as JSON so the same shape
     the app renders is the shape the terminal shows, and it is computed before the consent
     gate: a run that is not confirmed starts no ``run_cells``, opens no port and writes no
-    file. The summary's path is the result event's ``results_dir``, which is where the record
-    on disk lives when the run ends early.
+    file. The summary's path is the ``results_dir`` a terminal event carries -- the result
+    event's for a finished run, the early ending's ``error``/``done`` otherwise -- so the
+    record on disk is named even when the run stops early.
     """
     from ohyesmlx import catalog, hardware
     from ohyesmlx import quickbench as module
@@ -1026,8 +1027,15 @@ def _quickbench(args) -> int:
 
     def emit(event):
         print(json.dumps(event), flush=True)
-        if event.get("type") == "result" and isinstance(event.get("payload"), dict):
-            captured.update(event["payload"])
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return
+        if event.get("type") == "result":
+            captured.update(payload)
+        if "results_dir" in payload:
+            # Every ending that wrote a summary names its directory in a terminal event,
+            # so a run that stopped early still tells the user where the record is.
+            captured["results_dir"] = payload["results_dir"]
 
     ok = module.run(args.repo, confirmed=True, osaurus=args.osaurus, emit=emit)
     best = captured.get("best")
@@ -1037,7 +1045,7 @@ def _quickbench(args) -> int:
             f"{best['ttft_s']:.3f} s TTFT -- {module.LABEL}"
         )
     if captured.get("results_dir"):
-        print(f"summary: {captured['results_dir']}/summary.json")
+        print(f"summary: {captured['results_dir']}/{module.SUMMARY_NAME}")
     return 0 if ok else 2
 
 

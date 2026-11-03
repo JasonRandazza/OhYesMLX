@@ -198,6 +198,27 @@ def test_a_pin_that_killed_the_write_between_temp_and_replace_leaves_the_files_i
         assert not (config_dir / f"{name}.pin-tmp").exists(), "a stale temp was left behind"
 
 
+def test_a_baseline_write_that_dies_between_temp_and_replace_leaves_the_old_file(
+    config_dir, baseline_path, monkeypatch
+):
+    """`write_baseline` is the drift guard's file: a kill mid-write leaves the old one whole."""
+    baseline_path.write_bytes(BASELINE_SENTINEL)
+    real_replace = os.replace
+
+    def killed(source, target):
+        if Path(target) == baseline_path:
+            raise OSError("killed between temp and replace")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(osaurus_settings.os, "replace", killed)
+
+    with pytest.raises(OSError):
+        osaurus_settings.write_baseline(baseline_path, config_dir)
+
+    assert baseline_path.read_bytes() == BASELINE_SENTINEL
+    assert not (baseline_path.parent / f"{baseline_path.name}.pin-tmp").exists()
+
+
 # --------------------------------------------------------------------------------------
 # restore
 # --------------------------------------------------------------------------------------

@@ -1,0 +1,16 @@
+# Order: fix the 9 verified Phase 4 review findings; one deliverable, no tangents
+Context: reviews in `.paul/orders/v5-review-4-standards.log` and `v5-review-4-spec.log`; the coordinator verified each against HEAD. Jason approved the fix on 2026-11-03.
+Files you may touch: ohyesmlx/fetch.py, engines.py, server.py, quickbench.py, cli.py, osaurus_settings.py, runtimes.py (the Osaurus app path and the port helper only); tests/test_fetch.py, test_engines.py, test_server.py, test_quickbench.py, test_cli.py, test_osaurus_settings.py, test_runtimes.py; docs/interfaces.md (only lines these fixes make stale). Touch nothing else.
+Fixes:
+1. Every module refusal ends its stream: `fetch._refuse` and `engines.install`'s `refuse` send `done` after `error` (as `quickbench._refuse` does). `install` of an unknown engine becomes a refusal (`error` code `unknown_engine`, or `no_constraints` as its log line already says, then `done`, return False), not a raise; keep its install-log line; check every caller of `install` first. Backstop in `server._run_job`: when the module call returns and the job has no `done`, append one (a guard, not a second contract). Tests: update the pins that expect a lone `error`; add one test driving the REAL `fetch.evict` (tmp cache/ledger, no network) through `POST /jobs` -> stream closes with `error`+`done`, then a second `POST /jobs` is accepted, not 409.
+2. `quickbench.run`: a `restore` that raises after a pin that took effect is handled exactly as one returning False (error `restore_failed` naming the backup dir, `ended: restore_failed`, `best: null`, run stops). Test it.
+3. Every quickbench ending that wrote a summary tells the CLI its path: early endings carry `results_dir` in a terminal event's payload, and `cli._quickbench` prints `summary: <path>` for every ending. Test cancelled and restore_failed.
+4. `osaurus_settings.write_baseline` writes through `_write_atomic`.
+5. One definition of the Osaurus app executable paths (both spellings, `osaurus.app` and `Osaurus.app`), in runtimes.py; engines.py, quickbench.py and runtimes' resident-instance sweep use it. Match by full executable path, never by the name `osaurus` (`osaurus mcp` is Jason's). One comment, consistent with docs/runtimes/osaurus.md §1.2, on which installer gives which spelling.
+6. Delete `quickbench._port_in_use`; the default port probe is `not runtimes._port_is_free(port)` (busy when unknown). The injected seam stays.
+7. One builder for the pinned job-event dict (`seq,type,message,fraction,payload`) in engines.py; fetch, quickbench and server use it.
+8. Delete the first, dead `test_download_and_evict_take_a_repo_name` in tests/test_server.py.
+9. `summary.json` spelled once (a quickbench constant); quickbench and cli use it.
+Red-checks (report each): remove the `done` from `fetch._refuse` -> the real-evict job test fails; make quickbench swallow a raising restore again -> fix 2's test fails.
+Run `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`; must be green (1152 before). Do not commit. Run nothing for real (no runtime, download, server on a real port, or ~/.osaurus).
+Report: per fix, file:line and test names; red-check results; final pytest line; anything you were unsure of.

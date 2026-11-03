@@ -1,0 +1,76 @@
+I'll review the Phase 4 changes against the spec. Let me start by reading the spec files and understanding the scope.
+Shell is blocked in this mode — I'll do the review with read-only tools only. Reading the Phase 4 spec first.
+
+
+Now let me read the Phase 4 plan files (04-01 through 04-03c) in parallel.
+
+
+Now the AUDIT files (applied must-haves are requirements) and the SUMMARY deviations.
+
+Now the SUMMARY files' Deviations/known-gap sections.
+Specs are clear. Now the code — starting with the core Phase 4 files.
+
+
+
+Shapes are pinned. Now the code — server.py first.
+server.py traced. Now quickbench.py — the core of T4.4.
+Now osaurus_settings.py — the pin/restore/recover trio.
+Now cli.py — the `app` and `quickbench` subcommands, shutdown path.
+
+Checking measure.py's `run_cells` signature and the `quick` pin, plus report.py's join guards.
+
+Now recommend.py — Pick.downloaded and measured_here.
+
+Now fetch.py — `downloaded`, per-byte progress, snapshot_dir, evict.
+
+
+
+
+
+
+
+
+
+
+Potential issue: `fetch._refuse` sends `error` without `done`. Let me verify all endings of `download`/`evict`.
+
+
+
+This looks like a real gap. Let me confirm `engines.install`'s refusal endings and its tests.
+Let me verify `report.summarize`'s row keys and `runtimes.RUNTIMES` key names.
+
+
+
+
+
+Final spot-checks: `_release_url` table and build_catalog's `base` writer.
+
+One last check — whether any server test covers a module that emits `error` without `done`.
+Read-only review complete. I ran no git and no tests (blocked in this mode); everything below is traced at HEAD by reading the named files. I changed nothing.
+
+## Defects
+
+**1. A module refusal never ends the job stream and never frees the job slot.**
+`ohyesmlx/fetch.py:427-429` (`_refuse` emits `error`, no `done`) and `ohyesmlx/engines.py:1059-1061` (`refuse`, same) cover every module refusal (`unknown_repo` fetch.py:666, `consent_required`, `busy`, `low_disk` fetch.py:1111, `already_installed` engines.py:1073, `size_mismatch`…). `server.py:629-668` appends `error`+`done` only when a module *raises*; one that returns False leaves the job unterminated, and `_Job.append` (server.py:153-179) frees the slot only on `done`.
+Breaks with `POST /jobs {"kind":"evict","args":{"repo":"org/nope","confirmed":true}}` (or e.g. an install of an installed engine): `GET /jobs/{id}/events` never closes — AC-4 "after the `done` event the server closes the connection" — every later `POST /jobs` is 409 `busy` until restart (AC-3), and shutdown burns the full 120 s wait on a finished thread (AC-6). Violates 04-02 AC-2 "delivered as the job's `error` and `done` events … so a stream always ends" (also interfaces.md:1462-1465). `tests/test_fetch.py:257-265` pins refusals as a lone `error` event, while `tests/test_server.py:781-782,1215-1217` assumes fakes "end with `done`, because that is the modules' contract" — no test crosses the real modules into the job routes. Sub-case: an unknown engine on install raises (engines.py:1024-1033), so its error carries `internal` (server.py:660-664), not AC-2's `unknown_engine`.
+
+**2. A restore that raises is silent and the run still recommends.**
+`quickbench.py:611-640`: with `pinned=True`, a raising `restore` is swallowed (615-618) — only `osaurus.reason` is set; the `restored is False` branch (621-640) that emits `error`, records `restore_failed` and stops the run is not reached. The run proceeds to `ended:"finished"` with `best` non-null (838-840). Input: pin succeeds, then `restore` raises — `OSError` in `_write_atomic` (osaurus_settings.py:174-195, e.g. full disk) or the hand-made `baseline.json`+`baseline.absent` backup whose `_put_back` raises (04-03c Deviations). Then 04-03b AC-3 "a failed restore is an `error` event naming the backup directory, never silent" is unmet, and interfaces.md:1719 ("a … half-restored run … never a recommendation") is contradicted. Tests cover only `restore` returning False (test_quickbench.py:757-767).
+
+**3. `write_baseline` is not atomic.**
+`osaurus_settings.py:155` uses `write_text`; `pin` calls it at 281 (and `osaurus_set_seqs`, scripts/osaurus-pin.sh:65), against 04-03a AC-3 "every config write is atomic (write a temp file … then `os.replace`)" and 04-03c Task 1 "Keep every write atomic". A kill mid-write truncates the baseline at the path `runtimes.Osaurus.check_host_state` reads; `load_baseline` (osaurus_settings.py:131-140) then raises instead of comparing. Restore's put-back does use `_write_atomic` (line 306) — the pin's write does not.
+
+## Scope creep
+None found beyond the recorded deviations.
+
+## Already-known deviations (listed, not re-reported)
+04-01: `app` added to the test_report pin; error shape gained `status`. 04-02: 405 wording; `_macos_major` helper. 04-03a: shell backup moved to `config.phase4-orig/`; pin refuses over a leftover backup. 04-03b: sibling fetch/evict get `cache_dir`+discarding emitter; `record_lab_path` failure raises out of `install`. 04-03c: interfaces.md refreshed by coordinator; hand-made double-marker backup raises. Phase 4.5 items per the order are not reported.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     30    4798467    4648448    43790   96.9%   0.120090
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-4-spec.log
+?? .paul/orders/v5-review-4-spec.md
+?? .paul/orders/v5-review-4-standards.log
+?? .paul/orders/v5-review-4-standards.md

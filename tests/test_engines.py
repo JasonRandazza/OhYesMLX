@@ -166,6 +166,22 @@ def test_each_version_is_the_one_the_installed_files_carry():
     assert {name: status.version for name, status in statuses.items()} == VERSIONS
 
 
+@pytest.mark.parametrize("bundle", ["/Applications/osaurus.app", "/Applications/Osaurus.app"])
+def test_osaurus_is_detected_under_either_bundle_spelling(bundle):
+    """The DMG leaves `osaurus.app` and the cask's artifact is `Osaurus.app`; on a
+    case-sensitive volume only one exists, and both are a real install."""
+    env = FakeEnv(
+        files={f"{bundle}/Contents/Info.plist": app_plist("0.25.29")},
+        dirs={bundle},
+    )
+
+    statuses = {status.name: status for status in detect_all(env)}
+
+    assert statuses["osaurus"].installed is True
+    assert statuses["osaurus"].path == bundle
+    assert statuses["osaurus"].version == "0.25.29"
+
+
 def test_an_unreadable_version_file_leaves_version_none_and_installed_true():
     env = installed_env()
     env.files[f"{OSAURUS_BUNDLE}/Contents/Info.plist"] = PermissionError("denied")
@@ -487,7 +503,7 @@ def command_plan(root, steps):
     )
 
 
-def test_install_without_consent_runs_nothing_and_emits_only_the_refusal(tmp_path):
+def test_install_without_consent_runs_nothing_and_emits_its_refusal_then_done(tmp_path):
     def never(*args, **kwargs):
         raise AssertionError("no side effect may run without consent")
 
@@ -503,34 +519,63 @@ def test_install_without_consent_runs_nothing_and_emits_only_the_refusal(tmp_pat
             "message": events[0]["message"],
             "fraction": None,
             "payload": {"code": "consent_required"},
-        }
+        },
+        {
+            "seq": 2,
+            "type": "done",
+            "message": "install did not start",
+            "fraction": None,
+            "payload": None,
+        },
     ]
     lines = log_lines(tmp_path / "install-log.jsonl")
-    assert [line["type"] for line in lines] == ["error"]
+    assert [line["type"] for line in lines] == ["error", "done"]
     assert lines[0]["code"] == "consent_required"
     assert lines[0]["engine"] == "mlxlm"
     assert lines[0]["confirmed"] is False
 
 
-def test_install_of_a_name_outside_the_five_raises_before_anything_runs(tmp_path):
+def test_install_of_a_name_outside_the_five_refuses_before_anything_runs(tmp_path):
     events = []
 
     def never(*args, **kwargs):
         raise AssertionError("nothing may run for an unknown engine")
 
-    with pytest.raises(ValueError, match="mtplx"):
-        install(
-            "mtplx", True, macos_major=15, run=never, detect=never, open_url=never,
-            hardware=never, sleep=never, emit=events.append,
-            log_path=str(tmp_path / "install-log.jsonl"), lock=never,
-            python="/fake/python", engines_dir=str(tmp_path / "engines"),
-        )
-    assert events == []
+    ok, events, opened, sleeps = do_install(
+        tmp_path, engine="mtplx", run=never, detect=never, open_url=never,
+        hardware=never, sleep=never, lock=never,
+    )
+    assert ok is False
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert events[0]["payload"]["code"] == "unknown_engine"
+    assert "mtplx" in events[0]["message"]
     lines = log_lines(tmp_path / "install-log.jsonl")
-    assert len(lines) == 1
+    assert [line["type"] for line in lines] == ["error", "done"]
     assert lines[0]["engine"] == "mtplx"
     assert lines[0]["code"] == "unknown_engine"
     assert lines[0]["confirmed"] is True
+
+
+def test_a_pip_engine_with_no_constraints_file_refuses_as_no_constraints(tmp_path, monkeypatch):
+    """A known name whose tested build has no committed file is its own code, not internal."""
+    def missing(name, major):
+        raise ValueError(f"no pip constraints file for {name}: expected /nowhere.txt")
+
+    def never(*args, **kwargs):
+        raise AssertionError("nothing may run for a refused plan")
+
+    monkeypatch.setattr(engines, "install_plan", missing)
+
+    ok, events, opened, sleeps = do_install(
+        tmp_path, run=never, detect=never, open_url=never, hardware=never,
+        sleep=never, lock=never,
+    )
+
+    assert ok is False
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert events[0]["payload"]["code"] == "no_constraints"
+    assert "no pip constraints file" in events[0]["message"]
+    assert log_lines(tmp_path / "install-log.jsonl")[0]["code"] == "no_constraints"
 
 
 def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path):
@@ -666,7 +711,7 @@ def test_an_already_installed_engine_is_refused_before_the_lock_or_a_step(tmp_pa
     assert ok is False
     assert run.calls == []
     assert lock.acquired == []
-    assert [event["type"] for event in events] == ["error"]
+    assert [event["type"] for event in events] == ["error", "done"]
     assert events[0]["payload"]["code"] == "already_installed"
     assert log_lines(tmp_path / "install-log.jsonl")[0]["code"] == "already_installed"
 
@@ -679,7 +724,9 @@ def test_a_held_lock_refuses_the_second_install_as_busy(tmp_path):
     assert run.calls == []
     assert lock.acquired == ["mlxlm"]
     assert lock.released == []
-    assert [event["payload"]["code"] for event in events] == ["busy"]
+    assert [
+        event["payload"]["code"] for event in events if event["type"] == "error"
+    ] == ["busy"]
 
 
 def test_a_running_install_releases_its_lock_at_the_end(tmp_path):
@@ -708,7 +755,9 @@ def test_a_known_size_needs_twice_its_estimate_free(tmp_path):
     )
     assert ok is False
     assert opened == []
-    assert [event["payload"]["code"] for event in events] == ["low_disk"]
+    assert [
+        event["payload"]["code"] for event in events if event["type"] == "error"
+    ] == ["low_disk"]
 
     ok, events, opened, sleeps = do_install(
         tmp_path / "enough", engine="osaurus",
@@ -725,7 +774,9 @@ def test_an_unknown_size_falls_back_to_a_two_gib_floor(tmp_path):
         tmp_path, free_bytes=2 * 1024**3 - 1
     )
     assert ok is False
-    assert [event["payload"]["code"] for event in events] == ["low_disk"]
+    assert [
+        event["payload"]["code"] for event in events if event["type"] == "error"
+    ] == ["low_disk"]
 
     run = FakeRun()
     ok, events, opened, sleeps = do_install(tmp_path / "exactly", run=run,
@@ -834,7 +885,7 @@ def test_every_event_appends_one_json_line_with_the_recorded_fields(tmp_path):
     do_install(tmp_path, confirmed=False)
 
     lines = log_lines(tmp_path / "install-log.jsonl")
-    assert [line["type"] for line in lines] == ["progress", "progress", "done", "error"]
+    assert [line["type"] for line in lines] == ["progress", "progress", "done", "error", "done"]
     for line in lines:
         assert set(line) >= {"engine", "ts", "confirmed", "step", "exit_code", "type"}
         assert datetime.fromisoformat(line["ts"]).utcoffset().total_seconds() == 0
@@ -843,13 +894,13 @@ def test_every_event_appends_one_json_line_with_the_recorded_fields(tmp_path):
     assert lines[2]["step"] is None
     assert lines[2]["exit_code"] is None
     assert lines[3]["code"] == "consent_required"
-    assert [line["confirmed"] for line in lines] == [True, True, True, False]
+    assert [line["confirmed"] for line in lines] == [True, True, True, False, False]
 
 
 def test_the_install_log_is_created_under_a_new_parent_directory(tmp_path):
     log_path = tmp_path / "nested" / "deeper" / "install-log.jsonl"
     do_install(tmp_path, confirmed=False, log_path=str(log_path))
-    assert [line["type"] for line in log_lines(log_path)] == ["error"]
+    assert [line["type"] for line in log_lines(log_path)] == ["error", "done"]
 
 
 def test_no_plan_step_is_a_shell_string_and_none_uses_sudo():
@@ -914,7 +965,7 @@ def test_a_url_outside_the_https_allowlist_is_refused_before_the_opener(tmp_path
     )
     assert ok is False
     assert opened == []
-    assert [event["type"] for event in events] == ["error"]
+    assert [event["type"] for event in events] == ["error", "done"]
     assert events[0]["payload"]["code"] == "url_not_allowed"
 
 

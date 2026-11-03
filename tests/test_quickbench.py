@@ -174,10 +174,11 @@ class FakeCache:
 class FakeOsaurus:
     """Pin, restore and recover, recorded in one list so their order can be checked."""
 
-    def __init__(self, *, recover=True, pin_error=None, restore=True, log=None):
+    def __init__(self, *, recover=True, pin_error=None, restore=True, restore_error=None, log=None):
         self.recover_result = recover
         self.pin_error = pin_error
         self.restore_result = restore
+        self.restore_error = restore_error
         self.calls = []
         self.log = log if log is not None else []
 
@@ -196,6 +197,8 @@ class FakeOsaurus:
     def restore(self, **kwargs):
         self.calls.append(("restore", kwargs))
         self.log.append(("restore", kwargs))
+        if self.restore_error is not None:
+            raise OSError(self.restore_error)
         return self.restore_result
 
 
@@ -263,6 +266,7 @@ def a_run(
     recover=True,
     pin_error=None,
     restore=True,
+    restore_error=None,
     loads=(1.0,),
     run_cells=None,
 ):
@@ -270,7 +274,8 @@ def a_run(
     log = []
     cache = FakeCache(downloaded=downloaded, download_result=download_result, log=log)
     fake_osaurus = FakeOsaurus(
-        recover=recover, pin_error=pin_error, restore=restore, log=log
+        recover=recover, pin_error=pin_error, restore=restore,
+        restore_error=restore_error, log=log,
     )
     probe = PortProbe(port_busy)
     events = []
@@ -575,6 +580,14 @@ def test_a_run_without_consent_starts_nothing(tmp_path):
 # --- AC-3: nothing the user owns is changed without consent -----------------------------------
 
 
+def test_the_default_port_probe_asks_runtimes_and_reads_unknown_as_busy(monkeypatch):
+    """One guard, not a second TCP probe: `runtimes._port_is_free`, with its no-answer as busy."""
+    monkeypatch.setattr(runtimes, "_port_is_free", lambda port: port == 8100)
+
+    assert quickbench._port_busy(8100) is False
+    assert quickbench._port_busy(8081) is True
+
+
 def test_an_engine_whose_port_is_in_use_is_skipped_with_quit_first(tmp_path):
     busy = runtimes.RUNTIMES["optiq"].port
     _ok, fakes, summary = a_run(tmp_path, port_busy=(busy,))
@@ -768,6 +781,47 @@ def test_a_restore_that_does_not_verify_ends_the_run_and_names_the_backup(tmp_pa
     assert errors[-1]["payload"]["backup_dir"] == str(tmp_path / "backup")
     assert str(tmp_path / "backup") in errors[-1]["message"]
     assert summary["stage_b"]["cells"] == [], "the run stops after a failed restore"
+
+
+def test_a_restore_that_raises_ends_the_run_exactly_as_a_false_one(tmp_path):
+    """A raise after a pin that took effect is a restore that did not verify, not a log line."""
+    ok, fakes, summary = a_run(
+        tmp_path,
+        engines_list=WITH_OSAURUS,
+        osaurus=True,
+        restore_error="the settings write failed",
+    )
+
+    assert ok is False
+    assert summary["ended"] == "restore_failed"
+    assert summary["osaurus"]["restored"] is False
+    assert summary["best"] is None
+    errors = [event for event in fakes.events if event["type"] == "error"]
+    assert errors[-1]["payload"]["code"] == "restore_failed"
+    assert errors[-1]["payload"]["backup_dir"] == str(tmp_path / "backup")
+    assert str(tmp_path / "backup") in errors[-1]["message"]
+    assert summary["stage_b"]["cells"] == [], "the run stops after a raising restore"
+
+
+def test_a_cancelled_ending_carries_the_summary_path_in_its_terminal_events(tmp_path):
+    _ok, fakes, summary = a_run(tmp_path, cancel_after=0)
+
+    assert [event["type"] for event in fakes.events[-2:]] == ["error", "done"]
+    assert fakes.events[-2]["payload"] == {
+        "code": "cancelled",
+        "results_dir": summary["results_dir"],
+    }
+    assert fakes.events[-1]["payload"] == {"results_dir": summary["results_dir"]}
+
+
+def test_a_restore_failed_ending_carries_the_summary_path_in_its_done(tmp_path):
+    _ok, fakes, summary = a_run(
+        tmp_path, engines_list=WITH_OSAURUS, osaurus=True, restore=False
+    )
+
+    done = fakes.events[-1]
+    assert done["type"] == "done"
+    assert done["payload"] == {"results_dir": summary["results_dir"]}
 
 
 def test_a_pin_that_refuses_skips_osaurus_with_that_reason(tmp_path):

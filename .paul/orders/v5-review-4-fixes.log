@@ -1,0 +1,183 @@
+I'll start by reading the review logs and the current state of the files I may touch.
+
+Now let me read the source files in detail, starting with fetch.py and quickbench.py.
+
+
+Now engines.py — the install refusal path and app path constants.
+
+
+Now server.py's job machinery.
+
+
+
+Now the tests that pin these behaviors.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the full picture. Let me run the baseline suite before changing anything.
+Baseline is 1152 passed. Now I'll implement, starting with the event builder and install refusals in engines.py.
+
+
+Now the event builder and the install refusal path.
+
+Now runtimes.py — the single Osaurus path definition and the sweep.
+Now quickbench.py: the port probe, app paths, event builder, restore handling, summary constant.
+
+
+Now fetch.py — the shared event builder and refusal termination.
+
+
+Now quickbench's restore handling and terminal payloads.
+
+
+
+
+
+
+Now update the pinned tests. First test_fetch.
+
+
+
+
+
+
+
+Now test_server.py: remove the dead duplicate and add the real-module job test.
+
+
+Now edit test_quickbench's fake and add the tests.
+
+
+
+
+
+
+
+
+
+All green at 1162. Now the two mandated red-checks. First: remove the `done` from `fetch._refuse` and watch the real-evict job test fail.
+
+Red-check 1 fails as required (the backstop masks the slot leak, so the test pins the module's own `done`). Restoring it now.
+Second red-check: make quickbench swallow a raising restore again.
+
+Red-check 2 fails exactly as the review described (run reported success). Restoring the fix.
+
+
+
+
+
+Let me add a small check for the new default port probe, then red-check the atomic baseline.
+
+
+
+
+Confirmed. Restoring the atomic write.
+
+
+
+
+
+
+
+
+
+
+
+
+All nine fixes are in and the suite is green. Report:
+
+**Fixes**
+
+1. **Module refusals end their stream** — `ohyesmlx/fetch.py:421-425` (`_refuse` sends `error` then `done` "fetch ended"); `ohyesmlx/engines.py:1055-1058` (`refuse` sends `done` "install did not start"); `ohyesmlx/engines.py:1060-1068` (unknown engine / missing constraints now `error` code `unknown_engine`/`no_constraints` + `done`, return False, no raise; its install-log line is kept through `send`); backstop at `ohyesmlx/server.py:660-663`. Only caller of `install` is `server.py:633/796`. Tests: `test_server.py::test_a_real_evict_refusal_ends_its_stream_and_frees_the_slot` (real `fetch.evict`, tmp cache/ledger, second POST 202), plus updated pins in `test_fetch.py` (consent, disk guard, size mismatch) and `test_engines.py` (consent, unknown engine, no-constraints, already-installed, busy, low disk, URL, all three log-line tests).
+2. **Raising restore = failed restore** — `ohyesmlx/quickbench.py:598-605`: a raise after `pinned` is `restored = False`, so `restore_failed`, backup-dir error, `best: null`, run stops. Test: `test_quickbench.py::test_a_restore_that_raises_ends_the_run_exactly_as_a_false_one`.
+3. **Early endings name the summary** — `ohyesmlx/quickbench.py:828-842` (`results_dir` in the cancelled `error` and both early `done` payloads); `ohyesmlx/cli.py:1027-1048` prints `summary: <dir>/<SUMMARY_NAME>` from any payload. Tests: `test_quickbench.py::test_a_cancelled_ending_carries_the_summary_path_in_its_terminal_events`, `::test_a_restore_failed_ending_carries_the_summary_path_in_its_done`, and `test_cli.py::test_quickbench_prints_the_summary_path_for_an_early_ending[cancelled|restore_failed]`.
+4. **Atomic baseline** — `ohyesmlx/osaurus_settings.py:155-157` writes through `_write_atomic`. Test: `test_osaurus_settings.py::test_a_baseline_write_that_dies_between_temp_and_replace_leaves_the_old_file`.
+5. **One Osaurus path definition** — `ohyesmlx/runtimes.py:127-134` (`OSAURUS_APP_BUNDLES`, `OSAURUS_APP_EXECUTABLES`, one comment); used by `runtimes.py:563` (sweep), `engines.py:479`, `quickbench.py:199`. `OSAURUS_EXECUTABLE` is gone. Tests: `test_engines.py::test_osaurus_is_detected_under_either_bundle_spelling[osaurus.app|Osaurus.app]`; `test_runtimes.py::test_start_refuses_stale_osaurus_app_by_full_executable_path` now parametrised over both.
+6. **Port probe** — `quickbench.py:165-173`: `_port_in_use`/`PROBE_HOST`/`socket` deleted; `_port_busy` is `not runtimes._port_is_free(port)` and is the default at `:439`. Test: `test_quickbench.py::test_the_default_port_probe_asks_runtimes_and_reads_unknown_as_busy`.
+7. **One event builder** — `engines.py:966-978`; used by `engines.py:1042`, `fetch.py:405`, `quickbench.py:411`, `server.py:123`.
+8. **Dead duplicate test deleted** — first `test_download_and_evict_take_a_repo_name` removed; the collected one still runs (`[download|evict]`).
+9. **`summary.json` once** — `quickbench.SUMMARY_NAME` at `quickbench.py:95`, used at `:828`, `:863`, and `cli.py:1048`.
+
+**Red-checks (all reverted and re-run green)**
+- Removed `done` from `fetch._refuse`: `test_a_real_evict_refusal_ends_its_stream_and_frees_the_slot` failed — stream closed on the backstop's "the job ended without a done event", not the module's "fetch ended". This is why the test pins the message.
+- Restored the swallowing `restore` handler: `test_a_restore_that_raises_ends_the_run_exactly_as_a_false_one` failed (`assert True is False` — run finished and would have published `best`).
+- Also red-checked fix 4: `write_text` instead of `_write_atomic` made the new baseline test fail (`DID NOT RAISE OSError`).
+
+**Suite** — baseline `1152 passed`; final: `1164 passed in 44.36s` (`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`). Nothing was run for real; the real-module test uses tmp dirs only. No commit.
+
+**Unsure / noted**
+- The order cites `docs/runtimes/osaurus.md §1.2` for the installer spelling; that note is actually in §1.3, so the comment cites §1.3. Content matches: DMG drag-install = `osaurus.app`, cask artifact = `Osaurus.app`.
+- `docs/runtimes/lab-copies.md` (outside the allowed files) still names `runtimes.OSAURUS_EXECUTABLE`, and `scripts/run_canary.sh` still sweeps only the lowercase path — both now stale relative to the rename; I did not touch them.
+- A quickbench *unexpected raise* writes a summary but re-raises before any terminal event, so no `results_dir` reaches the CLI on that path; the server's `internal` error/`done` owns it. Fix 3's named endings (cancelled, restore_failed) do carry it.
+- The new `done` messages ("fetch ended", "install did not start") were not specified by the order; the real-evict test pins the first so the backstop cannot mask a missing module `done`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    109   15486344   15282816    63393   98.7%   0.114413
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def _port_in_use
+   1 def test_download_and_evict_take_a_repo_name
+   1 def test_install_of_a_name_outside_the_five_raises_before_anything_runs
+   1 def test_install_without_consent_runs_nothing_and_emits_only_the_refusal
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/osaurus_settings.py
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_cli.py
+ M tests/test_engines.py
+ M tests/test_fetch.py
+ M tests/test_osaurus_settings.py
+ M tests/test_quickbench.py
+ M tests/test_runtimes.py
+ M tests/test_server.py
+?? .paul/orders/v5-review-4-fixes.log
+?? .paul/orders/v5-review-4-fixes.md
+?? .paul/orders/v5-review-4-spec.log
+?? .paul/orders/v5-review-4-spec.md
+?? .paul/orders/v5-review-4-standards.log
+?? .paul/orders/v5-review-4-standards.md
+ docs/interfaces.md             |  2 +-
+ ohyesmlx/cli.py                | 18 +++++---
+ ohyesmlx/engines.py            | 71 +++++++++++++++++---------------
+ ohyesmlx/fetch.py              | 12 ++----
+ ohyesmlx/osaurus_settings.py   |  4 +-
+ ohyesmlx/quickbench.py         | 69 ++++++++++++++-----------------
+ ohyesmlx/runtimes.py           | 12 +++++-
+ ohyesmlx/server.py             | 12 +++---
+ tests/test_cli.py              | 42 +++++++++++++++++++
+ tests/test_engines.py          | 93 ++++++++++++++++++++++++++++++++----------
+ tests/test_fetch.py            | 26 ++++++++----
+ tests/test_osaurus_settings.py | 21 ++++++++++
+ tests/test_quickbench.py       | 58 +++++++++++++++++++++++++-
+ tests/test_runtimes.py         |  4 +-
+ tests/test_server.py           | 44 ++++++++++++--------
+ 15 files changed, 342 insertions(+), 146 deletions(-)

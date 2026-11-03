@@ -27,7 +27,7 @@ sweep() {
     h=$(lsof -ti:$p 2>/dev/null | head -1)
     [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
   done
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
+  for h in $(pgrep -f "^/Applications/[oO]saurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
     echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
   done
   sleep 3

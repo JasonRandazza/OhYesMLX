@@ -123,7 +123,15 @@ LOG_HEAD_BYTES = 1024 * 1024
 
 LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
-OSAURUS_EXECUTABLE = "/Applications/osaurus.app/Contents/MacOS/osaurus"
+
+# The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag
+# install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
+# on a case-sensitive volume they are two different files. Matched by full executable path
+# and never by the name `osaurus`: `osaurus mcp` is a user's long-running client (AGENTS.md).
+OSAURUS_APP_BUNDLES = ("/Applications/osaurus.app", "/Applications/Osaurus.app")
+OSAURUS_APP_EXECUTABLES = tuple(
+    os.path.join(bundle, "Contents", "MacOS", "osaurus") for bundle in OSAURUS_APP_BUNDLES
+)
 _RUN_STARTED_PIDS: set[int] = set()
 
 # The two states the cache pin may take. `None` is not a third state: it is the absence of the
@@ -552,7 +560,7 @@ def _resident_osaurus_pids() -> tuple[int, ...]:
     for line in result.stdout.splitlines():
         pid_text, _, argv = line.strip().partition(" ")
         argv0 = argv.split(maxsplit=1)[:1]
-        if pid_text.isdigit() and argv0 and argv0[0] == OSAURUS_EXECUTABLE:
+        if pid_text.isdigit() and argv0 and argv0[0] in OSAURUS_APP_EXECUTABLES:
             pid = int(pid_text)
             if pid not in _RUN_STARTED_PIDS and _process_alive(pid):
                 pids.append(pid)

@@ -15,7 +15,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed, 1152 tests); open: the Phase 4 code review; Phase 4.5 security hardening inserted; Phase 5 not started.
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); open: `/paul:verify` manual smoke; Phase 4.5 security hardening inserted; Phase 5 not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
 Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); 04-01 closed (SUMMARY written). Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-03 — 04-03c: quickbench re-run live, all 5 engines PASS incl. Osaurus 131.3 tok/s, restore byte-exact; hero-model safetensors proven to be the pinned tensors. 2026-11-02: quickbench first live run (Osaurus refused by baseline-path gap). Before: 04-02 unified: jobs + SSE (live scratch download/evict). 04-01b: gpu_cores from ioreg. Before it, 04-01: `ohyesmlx app` guarded loopback API (`1c157b0`).
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [04-03c closed 2026-11-03, Osaurus cell PASS live - next: Phase 4 code review]
+  ✓        ✓        ✓     [Phase 4 code review done 2026-11-03, 9 findings fixed - next: /paul:verify smoke]
 ```
 
 ## Performance Metrics

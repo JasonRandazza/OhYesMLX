@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from xml.parsers.expat import ExpatError
 
 from ohyesmlx.hardware import scan as _scan_hardware
-from ohyesmlx.runtimes import RUNTIMES, VMLX_ENGINE_INIT
+from ohyesmlx.runtimes import OSAURUS_APP_BUNDLES, RUNTIMES, VMLX_ENGINE_INIT
 
 # The five engines of Decision D2, in the registry's own order. MTPLX joins when its
 # branch lands; until then its registry entry is filtered out rather than probed.
@@ -475,11 +475,8 @@ def record_lab_path(engine: str, bin_dir: str, *, path=LAB_PATHS_FILE) -> None:
 
 
 def _detect_osaurus(env) -> tuple[str | None, str | None]:
-    # Both spellings: the DMG installs `osaurus.app`, the cask artifact is
-    # `Osaurus.app`, and on a case-sensitive volume they are two different files.
-    found = _first_existing(
-        env, (f"{_APPLICATIONS}/osaurus.app", f"{_APPLICATIONS}/Osaurus.app")
-    )
+    # Both spellings are `runtimes`' one definition of the app's paths.
+    found = _first_existing(env, OSAURUS_APP_BUNDLES)
     if found is None:
         return None, None
     path = env.realpath(found)
@@ -966,6 +963,21 @@ def _rollback(created: list[str], engines_dir: str, send) -> None:
             send("log", f"rollback could not remove {path}: {error}", payload={"path": path})
 
 
+def _job_event(seq: int, kind: str, message: str, fraction=None, payload=None) -> dict:
+    """The pinned job-event shape (``docs/interfaces.md`` **Job**), built in one place.
+
+    Every module that emits on a job's stream -- ``install``, ``fetch``, ``quickbench`` --
+    and the server's own guard events ask this, so the five keys cannot drift apart.
+    """
+    return {
+        "seq": seq,
+        "type": kind,
+        "message": message,
+        "fraction": fraction,
+        "payload": payload,
+    }
+
+
 def _append_install_log(log_path, *, engine, confirmed, kind, step, exit_code, code) -> None:
     """Append one JSON line for one event; the file is local and append-only (AC-10)."""
     line = {
@@ -1006,14 +1018,15 @@ def install(
 ) -> bool:
     """Install *engine*, but only with consent and never over an existing install.
 
-    Deriving the Plan is the name check: an unknown engine raises ``ValueError``
-    before anything else runs, and no caller-supplied command, argv or URL is ever
-    executed (AC-6), so the Phase 4 localhost API cannot become an arbitrary-command
-    endpoint. After that every refusal emits one ``error`` event with a code and
-    appends it to the local install log, in the order consent -> already installed ->
-    busy -> low disk. Steps then run with the injected interpreter and a hermetic
-    environment, progress follows each one, and ``done`` is last. A failed step
-    removes only what this call created (AC-7).
+    Deriving the Plan is the name check: an unknown engine, and a pip engine whose tested
+    version has no committed constraints file, are refused before anything else runs
+    (``unknown_engine`` and ``no_constraints``), and no caller-supplied command, argv or URL
+    is ever executed (AC-6), so the Phase 4 localhost API cannot become an arbitrary-command
+    endpoint. Every refusal emits one ``error`` event with a code, appends it to the local
+    install log, and ends with ``done``, in the order consent -> already installed -> busy ->
+    low disk. Steps then run with the injected interpreter and a hermetic environment,
+    progress follows each one, and ``done`` is last. A failed step removes only what this
+    call created (AC-7).
 
     *cancel* is probed before each step and before each guided-download poll, never
     while a step runs: a cancelled install takes the same rollback path a failed step
@@ -1021,29 +1034,12 @@ def install(
     progress therefore keeps its own timeout and the installer's rollback still
     applies, which is what lets an abandoned guided wait release the job slot.
     """
-    try:
-        plan = install_plan(engine, macos_major)  # AC-6: an unknown name raises here, first
-    except ValueError:
-        # AC-10: a refused attempt is still an attempt, so it leaves a line before it raises.
-        _append_install_log(
-            log_path, engine=engine, confirmed=confirmed, kind="error", step=None,
-            exit_code=None,
-            code="no_constraints" if engine in ONBOARDING_ENGINES else "unknown_engine",
-        )
-        raise
-
     seq = 0
 
     def send(kind, message, *, fraction=None, payload=None, step=None, exit_code=None):
         nonlocal seq
         seq += 1
-        event = {
-            "seq": seq,
-            "type": kind,
-            "message": message,
-            "fraction": fraction,
-            "payload": payload,
-        }
+        event = _job_event(seq, kind, message, fraction, payload)
         _append_install_log(
             log_path,
             engine=engine,
@@ -1058,7 +1054,18 @@ def install(
 
     def refuse(code, message):
         send("error", message, payload={"code": code})
+        send("done", "install did not start")
         return False
+
+    try:
+        plan = install_plan(engine, macos_major)  # AC-6: an unknown name refuses here, first
+    except ValueError as error:
+        # AC-10: a refused attempt is still an attempt, and the code names which check
+        # refused it: a known pip engine with no constraints file, or a name outside the five.
+        return refuse(
+            "no_constraints" if engine in ONBOARDING_ENGINES else "unknown_engine",
+            str(error),
+        )
 
     def cancelled(created: list[str]) -> bool:
         """The failure path a cancel takes: error, the same rollback, then done."""

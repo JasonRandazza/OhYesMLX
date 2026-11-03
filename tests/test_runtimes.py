@@ -2494,8 +2494,8 @@ def test_start_refuses_when_process_inspection_is_unavailable(rig):
     assert rig.commands == []
 
 
-def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatch):
-    app = "/Applications/osaurus.app/Contents/MacOS/osaurus"
+@pytest.mark.parametrize("app", runtimes.OSAURUS_APP_EXECUTABLES)
+def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatch, app):
     rig.results[("ps", "-axo", "pid=,args=")] = _completed(
         stdout=f"111 {app} --serve\n222 osaurus mcp\n333 /tmp/osaurus\n"
     )

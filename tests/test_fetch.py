@@ -261,11 +261,19 @@ def test_consent_required_opens_nothing(tmp_path):
             "message": f"consent was not given; nothing of {REPO} was downloaded",
             "fraction": None,
             "payload": {"code": "consent_required"},
-        }
+        },
+        {
+            "seq": 2,
+            "type": "done",
+            "message": "fetch ended",
+            "fraction": None,
+            "payload": None,
+        },
     ]
     logged = [json.loads(line) for line in harness.log.read_text().splitlines()]
-    assert logged[-1]["code"] == "consent_required"
-    assert logged[-1]["engine"] == REPO
+    assert [line["type"] for line in logged] == ["error", "done"]
+    assert logged[0]["code"] == "consent_required"
+    assert logged[0]["engine"] == REPO
 
 
 def test_unknown_repo_opens_nothing(tmp_path):
@@ -700,9 +708,9 @@ def test_disk_guard_refuses_before_any_request(tmp_path):
     assert harness.download() is False
 
     assert harness.codes() == ["low_disk"]
-    assert harness.events[-1]["message"] == (
-        "8 bytes free is less than the 22 bytes this download needs"
-    )
+    assert [event for event in harness.events if event["type"] == "error"][-1][
+        "message"
+    ] == "8 bytes free is less than the 22 bytes this download needs"
     assert transport.calls == []
     assert not harness.cache.exists()
     assert not harness.ledger.exists()
@@ -853,9 +861,9 @@ def test_a_body_larger_than_the_catalog_is_refused(tmp_path):
     assert harness.download() is False
 
     assert harness.codes() == ["size_mismatch"]
-    assert harness.events[-1]["message"] == (
-        "weights.safetensors: the server sent more than the 11 bytes the catalog pins"
-    )
+    assert [event for event in harness.events if event["type"] == "error"][-1][
+        "message"
+    ] == "weights.safetensors: the server sent more than the 11 bytes the catalog pins"
     assert len(transport.calls) == 1
     assert not (harness.blobs / SHA).exists()
     assert not (harness.blobs / f"{SHA}.incomplete").exists()

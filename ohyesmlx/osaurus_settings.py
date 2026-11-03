@@ -152,7 +152,9 @@ def write_baseline(
     target = path if path is not None else BASELINE_PATH
     settings = capture_osaurus_settings(config_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({"settings": settings}, indent=2, sort_keys=True) + "\n")
+    _write_atomic(
+        target, (json.dumps({"settings": settings}, indent=2, sort_keys=True) + "\n").encode()
+    )
     return settings
 
 

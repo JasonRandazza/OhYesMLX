@@ -35,7 +35,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import socket
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -92,16 +91,8 @@ DEFAULT_RESULTS_DIR = os.path.join(
 # `runtimes.Osaurus.check_host_state` reads, `osaurus_settings.BASELINE_PATH` by default.
 DEFAULT_BACKUP_DIR = os.path.join(DEFAULT_RESULTS_DIR, "osaurus-backup")
 
-# The loopback every runtime listens on. Spelled here rather than imported from `server`,
-# which imports this module for the job kind.
-PROBE_HOST = "127.0.0.1"
-
-# The two ways the Osaurus app bundle is spelled (docs/runtimes/osaurus.md §1.2): the cask
-# installs `osaurus.app`, the DMG `Osaurus.app`, and on a case-sensitive volume they differ.
-OSAURUS_APP_BINARIES = tuple(
-    os.path.join(engines._APPLICATIONS, bundle, "Contents", "MacOS", "osaurus")
-    for bundle in ("osaurus.app", "Osaurus.app")
-)
+# The one name a quick run's record is written under, in every stamp directory.
+SUMMARY_NAME = "summary.json"
 
 # The one workload each stage measures. `decode` is the shape both axes were always read on:
 # sustained generation after a short prompt, at the pinned 512-token cap.
@@ -171,15 +162,14 @@ def estimate_seconds(cells: int, download_bytes: int) -> int:
     return round(cells * ESTIMATE_PER_CELL_S + download_bytes / DOWNLOAD_BYTES_PER_S)
 
 
-def _port_in_use(port: int) -> bool:
-    """Whether something is listening on *port* on loopback.
+def _port_busy(port: int) -> bool:
+    """Whether something is listening on *port*, asked of `runtimes` rather than re-probed.
 
     A probe, never a stop: an engine whose port answers may be the user's own server, and
-    quickbench skips it rather than ending a process it did not start.
+    quickbench skips it rather than ending a process it did not start. A port that cannot be
+    verified is reported busy, so "unknown" skips the engine instead of starting over it.
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.2)
-        return sock.connect_ex((PROBE_HOST, port)) == 0
+    return not runtimes._port_is_free(port)
 
 
 def _osaurus_app_running(run=subprocess.run) -> bool:
@@ -206,7 +196,7 @@ def _osaurus_app_running(run=subprocess.run) -> bool:
         command = line.strip()
         if any(
             command == binary or command.startswith(binary + " ")
-            for binary in OSAURUS_APP_BINARIES
+            for binary in runtimes.OSAURUS_APP_EXECUTABLES
         ):
             return True
     return False
@@ -413,18 +403,12 @@ def _write_summary(path: pathlib.Path, summary: dict) -> None:
 
 
 def _emitter(emit):
-    """The pinned job-event shape, with this run's own seq."""
+    """The pinned job-event shape, with this run's own seq: `engines`' one builder."""
     state = {"seq": 0}
 
     def send(kind, message, *, fraction=None, payload=None):
         state["seq"] += 1
-        event = {
-            "seq": state["seq"],
-            "type": kind,
-            "message": message,
-            "fraction": fraction,
-            "payload": payload,
-        }
+        event = engines._job_event(state["seq"], kind, message, fraction, payload)
         emit(event)
         return event
 
@@ -452,7 +436,7 @@ def run(
     pin=osaurus_settings.pin,
     restore=osaurus_settings.restore,
     recover=osaurus_settings.recover,
-    port_in_use=_port_in_use,
+    port_in_use=_port_busy,
     osaurus_app_running=_osaurus_app_running,
     load=canary.load,
     clock=time.time,
@@ -463,7 +447,7 @@ def run(
     backup_dir=DEFAULT_BACKUP_DIR,
     baseline_path=osaurus_settings.BASELINE_PATH,
 ) -> bool:
-    """Measure stage A, then stage B, and write ``summary.json``; True when it finished.
+    """Measure stage A, then stage B, and write the summary; True when it finished.
 
     The order is the plan's: consent, the catalog row, the plan (which refuses a repo that is
     not cached), then the cells. Each cell is one ``run_cells`` call against a ``--cells``
@@ -475,8 +459,10 @@ def run(
     with ``osaurus=True``; then ``recover`` runs before its ``pin``, all three are handed the
     application's backup path and the same baseline path -- the drift guard's,
     ``osaurus_settings.BASELINE_PATH`` by default -- and ``restore`` runs in a ``finally`` so a
-    cell that raises still puts the user's settings back. A restore that does not verify ends
-    the run with an ``error`` naming the backup directory and a summary that records it.
+    cell that raises still puts the user's settings back. A restore that does not verify,
+    whether it returns False or raises, ends the run with an ``error`` naming the backup
+    directory and a summary that records it; every ending that wrote a summary carries its
+    ``results_dir`` in a terminal event's payload.
 
     A sibling is downloaded only when it is missing, measured in its own cell, and evicted
     immediately after it, so one extra model at most is on disk. The chosen repo is never
@@ -610,12 +596,15 @@ def run(
             )
         finally:
             if attempted:
+                raised = None
                 try:
                     restored = restore(backup_dir=backup_dir, baseline_path=baseline_path)
                 except Exception as error:
-                    restored = None
-                    if pinned:
-                        summary["osaurus"]["reason"] = str(error)
+                    # A restore that raises is a restore that did not verify: handled exactly
+                    # as one that returned False, so a raise after a pin that took effect
+                    # cannot leave the run measuring on the user's pinned settings.
+                    restored = False if pinned else None
+                    raised = str(error)
                 if restored is True:
                     summary["osaurus"]["restored"] = True
                 elif restored is False:
@@ -623,6 +612,7 @@ def run(
                     message = (
                         "Osaurus's settings were not restored byte-exact; the user's "
                         f"originals are still at {backup_dir}"
+                        + (f" (restore raised: {raised})" if raised else "")
                     )
                     summary["osaurus"]["reason"] = message
                     if pinned:
@@ -838,18 +828,22 @@ def run(
         summary["best"] = (
             _best(summary, started_iso) if summary["ended"] == "finished" else None
         )
-        _write_summary(root / "summary.json", summary)
+        _write_summary(root / SUMMARY_NAME, summary)
 
     if summary["ended"] == "cancelled":
         send(
             "error",
             "quickbench was cancelled; nothing further was measured",
-            payload={"code": "cancelled"},
+            payload={"code": "cancelled", "results_dir": str(root)},
         )
-        send("done", "quickbench cancelled")
+        send("done", "quickbench cancelled", payload={"results_dir": str(root)})
         return False
     if summary["ended"] == "restore_failed":
-        send("done", "quickbench stopped after a failed Osaurus restore")
+        send(
+            "done",
+            "quickbench stopped after a failed Osaurus restore",
+            payload={"results_dir": str(root)},
+        )
         return False
     send("result", "quickbench finished", payload=summary)
     send("done", "quickbench finished")
@@ -869,7 +863,7 @@ def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]:
     root_path = pathlib.Path(root)
     if not root_path.is_dir():
         return {}
-    for path in root_path.glob("*/summary.json"):
+    for path in root_path.glob(f"*/{SUMMARY_NAME}"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):

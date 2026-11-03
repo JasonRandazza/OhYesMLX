@@ -1041,6 +1041,48 @@ def test_quickbench_refuses_a_repo_the_plan_refuses(monkeypatch, capsys):
     assert "download it first" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("ending", ["cancelled", "restore_failed"])
+def test_quickbench_prints_the_summary_path_for_an_early_ending(
+    quick_plan, monkeypatch, capsys, ending
+):
+    """A run that stopped early still wrote its record: the terminal event names it."""
+    from ohyesmlx import quickbench
+
+    results_dir = f"/scratch/quickbench/{ending}"
+
+    def run(repo, **kwargs):
+        if ending == "cancelled":
+            kwargs["emit"](
+                {
+                    "seq": 1,
+                    "type": "error",
+                    "message": "quickbench was cancelled; nothing further was measured",
+                    "fraction": None,
+                    "payload": {"code": "cancelled", "results_dir": results_dir},
+                }
+            )
+        kwargs["emit"](
+            {
+                "seq": 2,
+                "type": "done",
+                "message": f"quickbench {ending}",
+                "fraction": None,
+                "payload": {"results_dir": results_dir},
+            }
+        )
+        return False
+
+    monkeypatch.setattr(quickbench, "plan", lambda *args, **kwargs: quick_plan)
+    monkeypatch.setattr(quickbench, "run", run)
+
+    code = cli.main(["quickbench", "--repo", "org/two-b-stock", "--yes"])
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "best for you" not in out
+    assert f"summary: {results_dir}/summary.json" in out
+
+
 # --- the app subcommand -----------------------------------------------------------------------
 #
 # A real subprocess, because the contract is process-level: one line on stdout, the token on a

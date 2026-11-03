@@ -393,7 +393,7 @@ def _release_lock(path: str) -> None:
 
 
 def _emitter(emit, log_path, *, repo: str, confirmed: bool):
-    """The pinned job-event shape, logged locally before it is emitted.
+    """The pinned job-event shape (`engines._job_event`), logged locally before it is emitted.
 
     The log line is ``engines._append_install_log``'s, asked rather than copied: one
     append-only local JSONL record of what this app did, never uploaded (AC-7).
@@ -402,13 +402,7 @@ def _emitter(emit, log_path, *, repo: str, confirmed: bool):
 
     def send(kind, message, *, fraction=None, payload=None):
         state["seq"] += 1
-        event = {
-            "seq": state["seq"],
-            "type": kind,
-            "message": message,
-            "fraction": fraction,
-            "payload": payload,
-        }
+        event = engines._job_event(state["seq"], kind, message, fraction, payload)
         engines._append_install_log(
             log_path,
             engine=repo,
@@ -425,7 +419,9 @@ def _emitter(emit, log_path, *, repo: str, confirmed: bool):
 
 
 def _refuse(send, code: str, message: str, **payload) -> bool:
+    """One refusal, and the end of its stream: an ``error`` never stands alone."""
     send("error", message, payload={"code": code, **payload})
+    send("done", "fetch ended")
     return False
 
 
