@@ -27,3 +27,9 @@ scratch/
 
 # Knowledge graph (regenerate with graphify)
 graphify-out/
+
+# Phase 4.5: unfixed security finding detail stays local until 045-02 fixes it (045-01 AC-5b)
+.paul/phases/v5-onboarding/045-01-findings-private.md
+# 045-01 worker reports carry unfixed finding detail; committed by 045-02 once fixed (AC-5b)
+.paul/orders/v5-sec-45-server.log
+.paul/orders/v5-sec-45-installers.log
