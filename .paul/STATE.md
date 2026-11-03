@@ -172,7 +172,7 @@ Last session: 2026-11-03 (Claude Opus 5.5 coordinator)
 Stopped at: Phase 4 complete: 04-03c, review fixes, UAT 8/8.
 Next action: plan Phase 4.5 security hardening (PLAN.md scope + PHASE-4-SUMMARY carried items, incl. UAT-001).
 Resume file: `.paul/HANDOFF.md`
-Resume context: **Read `.paul/HANDOFF.md` first**, then this file's Decisions table (134-140).
+Resume context: **Read `.paul/HANDOFF.md` first** (2026-11-03), then this file's Decisions table (134-141) and `PHASE-4-SUMMARY.md`.
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---
