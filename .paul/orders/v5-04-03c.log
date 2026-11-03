@@ -1,0 +1,94 @@
+I'll read the plan spec and the files in scope.
+
+
+
+
+
+I have the full picture. Let me confirm the baseline test count before changing anything.
+Baseline is 1144 green. Now I'll implement the backup-set change in `osaurus_settings.py`.
+
+
+
+
+
+
+
+Now `quickbench.py`.
+
+
+
+
+Now the shell script.
+
+
+Now update `tests/test_osaurus_settings.py` — existing calls gain `baseline_path`, and the new cases go in.
+
+
+
+
+
+Now `tests/test_quickbench.py`.
+
+
+Both modules pass. Now the two red-checks, starting with the baseline copy dropped from `pin`.
+
+Red-check 1 confirmed. Restoring the code and doing red-check 2.
+
+
+
+
+
+Shell script is clean. Running the full suite.
+All green at 1152 (baseline 1144). Let me review the final diff.
+
+
+
+
+Done. Both red-checks reproduced, then reverted.
+
+**AC-1 — baseline joins the backup set**
+- `ohyesmlx/osaurus_settings.py:53-54` — `BASELINE_BACKUP`/`BASELINE_ABSENT`; `:198-204` — `_backups` now includes both; `:270-273` — `pin` copies the baseline (or writes the marker) before `write_baseline` at `:281`; `:285-332` — `_put_back` maps configs → `config_dir` / baseline → `baseline_path`, deletes on the marker, verifies every entry with `filecmp.cmp(shallow=False)`, keeps all backups on any mismatch; `:282`, `:331` — `_log` files include the baseline; `:335-357`, `:360-380` — `restore`/`recover` take `baseline_path` defaulting to `BASELINE_PATH`.
+- Tests: `tests/test_osaurus_settings.py:161` (pin refuses over leftover `baseline.json` or `baseline.absent`, 2 cases), `:225` (byte-exact after a later `write_baseline`), `:253` (absent → pin's baseline deleted), `:300` (tampered baseline → `False`, all three backups kept), `:394` (recover restores all three); log test updated at `:434`.
+
+**AC-2 — quickbench uses the guard's baseline**
+- `ohyesmlx/quickbench.py:89-93` (`DEFAULT_BASELINE_PATH` deleted, reason for the fixed backup path kept), `:464` default is `osaurus_settings.BASELINE_PATH`, `:589/:590/:614` recover, pin and restore receive the same `baseline_path`.
+- Tests: `tests/test_quickbench.py:610` (all three calls get the identical backup and baseline), `:652` (constant gone, default is the guard's), `:658` (real pin/restore on tmp config + tmp baseline; host captured between each pin and restore has `diff_against_baseline(...) == ()`).
+
+**AC-3 — one definition of “put the baseline back”**
+- `scripts/osaurus-pin.sh:1-11` header now says the baseline is backed up and restored with the configs; both `git checkout -- config/osaurus-settings-baseline.json` lines removed. Module docstring pin paragraph updated at `osaurus_settings.py:19-29`.
+
+**Red-checks**
+1. Removed the baseline copy/marker block from `pin` → `test_restore_puts_the_baseline_back_byte_exact_after_a_later_write` failed with `FileNotFoundError: .../backup/baseline.json`; restored.
+2. Passed `pin` `str(baseline_path) + ".pin"` → `test_osaurus_is_recovered_pinned_and_restored_around_its_cell` failed on `baseline_path` for call `pin`; restored.
+
+**Verification**: `bash -n scripts/osaurus-pin.sh` OK; full suite `1152 passed in 43.76s` (baseline 1144, +8 tests). No commit; `quickbench` and `osaurus-pin.sh` were not run for real.
+
+**Notes**
+- `docs/interfaces.md:1568-1570` and `:1624` now describe the old signatures (`restore`/`recover` without `baseline_path`, `run(... baseline_path=DEFAULT_BASELINE_PATH)`). Not touched per “touch nothing else” — the coordinator needs to refresh it.
+- I renamed two existing tests whose names no longer described them (`...both_files...` → `...every_file...`; `...repos_baseline...` → `...default_baseline...`), and the latter now monkeypatches `BASELINE_PATH` to a tmp path instead of reading the real file.
+- `graphify update` deliberately not run (standing context says the coordinator refreshes it).
+- A backup dir holding *both* `baseline.json` and `baseline.absent` can only be hand-made (`pin` refuses over it and never writes both); `_put_back` would raise in that state rather than return `False`. I left it unhandled as unreachable through this module.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     47    4200766    4082688    36499   97.2%   0.051859
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_pin_never_writes_the_repos_baseline_unless_it_is_passed
+   1 def test_restore_puts_both_files_back_byte_exact_and_removes_the_backup
+   1 def test_restore_returns_false_and_keeps_the_backup_when_a_file_is_not_byte_identical
+
+== cc-agent: git status ==
+ M ohyesmlx/osaurus_settings.py
+ M ohyesmlx/quickbench.py
+ M scripts/osaurus-pin.sh
+ M tests/test_osaurus_settings.py
+ M tests/test_quickbench.py
+?? .paul/orders/v5-04-03c.log
+?? .paul/orders/v5-04-03c.md
+ ohyesmlx/osaurus_settings.py   | 129 ++++++++++++++++++--------
+ ohyesmlx/quickbench.py         |  23 ++---
+ scripts/osaurus-pin.sh         |  14 ++-
+ tests/test_osaurus_settings.py | 201 +++++++++++++++++++++++++++++++++++++----
+ tests/test_quickbench.py       |  91 ++++++++++++++++++-
+ 5 files changed, 381 insertions(+), 77 deletions(-)

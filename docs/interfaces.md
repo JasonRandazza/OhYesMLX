@@ -1566,20 +1566,21 @@ quickbench and `scripts/osaurus-pin.sh` share one definition of it.
 
 ```
 pin(config_dir=None, *, backup_dir, baseline_path=None) -> None
-restore(config_dir=None, *, backup_dir) -> bool
-recover(config_dir=None, *, backup_dir) -> bool
+restore(config_dir=None, *, backup_dir, baseline_path=None) -> bool
+recover(config_dir=None, *, backup_dir, baseline_path=None) -> bool
 ```
 
-`pin` copies `server-runtime.json` and `server.json` (`PIN_FILES`) byte-exact into `backup_dir`,
+`pin` copies `server-runtime.json` and `server.json` (`PIN_FILES`) and the baseline at `baseline_path`
+(as `baseline.json`, or a `baseline.absent` marker when there is none; 04-03c) byte-exact into `backup_dir`,
 sets `cache.prefix.enabled = false`, `cache.blockDisk.enabled = false` and
 `modelIdleResidencyPolicy.seconds = 900`, and writes the baseline the drift guard reads to
-`baseline_path` — `BASELINE_PATH` (the repo's `config/`) by default, the harness's default; the
-app passes its own Application Support path. It refuses (`ValueError`) while a backup exists,
+`baseline_path` — `BASELINE_PATH` (the repo's `config/`) by default, the one the drift guard reads;
+quickbench uses it too (04-03c; where a packaged app keeps it is Phase 4.5's call). It refuses (`ValueError`) while a backup exists,
 because overwriting it would destroy the only copy of the user's own settings; recovering first
 is the caller's move. Both configs are parsed before either is replaced, so a malformed file
 leaves its neighbour untouched.
 
-`restore` puts each backed-up file back, returns `True` only when each is byte-identical to its
+`restore` puts each backed-up file back (the baseline to `baseline_path`; the marker deletes the baseline the pin wrote), returns `True` only when each is byte-identical to its
 backup (`filecmp.cmp(shallow=False)`), and removes the backups on success; `False` keeps them so a
 restore that did not take effect can be retried. `recover` is the same restore for a backup a
 crash between pin and restore left behind, and a no-op (`False`, no error) without one — 04-03b
@@ -1621,7 +1622,7 @@ def run(repo, *, confirmed, osaurus=False, models=None, statuses=None, hw=None,
         port_in_use=_port_in_use, osaurus_app_running=_osaurus_app_running,
         load=canary.load, clock=time.time, emit=_print_event, cancel=_never_cancelled,
         cache_dir=None, results_dir=DEFAULT_RESULTS_DIR,
-        backup_dir=DEFAULT_BACKUP_DIR, baseline_path=DEFAULT_BASELINE_PATH) -> bool: ...
+        backup_dir=DEFAULT_BACKUP_DIR, baseline_path=osaurus_settings.BASELINE_PATH) -> bool: ...
 def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]: ...
 def cell_spec(fmt: str, engine: str, artifact_dir: str) -> str: ...
 def estimate_seconds(cells: int, download_bytes: int) -> int: ...

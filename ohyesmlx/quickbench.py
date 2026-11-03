@@ -86,11 +86,11 @@ DEFAULT_RESULTS_DIR = os.path.join(
     engines.DEFAULT_ENV.home, engines._APP_SUPPORT, "quickbench"
 )
 
-# Osaurus's backup and baseline are fixed paths rather than per-run ones: a crash between a
-# pin and its restore leaves the only copy of the user's settings behind, and `recover` can
-# only find it if the next run looks in the same directory.
+# Osaurus's backup is a fixed path rather than a per-run one: a crash between a pin and its
+# restore leaves the only copy of the user's settings behind, and `recover` can only find it if
+# the next run looks in the same directory. The baseline is not: it is the one
+# `runtimes.Osaurus.check_host_state` reads, `osaurus_settings.BASELINE_PATH` by default.
 DEFAULT_BACKUP_DIR = os.path.join(DEFAULT_RESULTS_DIR, "osaurus-backup")
-DEFAULT_BASELINE_PATH = os.path.join(DEFAULT_RESULTS_DIR, "osaurus-baseline.json")
 
 # The loopback every runtime listens on. Spelled here rather than imported from `server`,
 # which imports this module for the job kind.
@@ -461,7 +461,7 @@ def run(
     cache_dir=None,
     results_dir=DEFAULT_RESULTS_DIR,
     backup_dir=DEFAULT_BACKUP_DIR,
-    baseline_path=DEFAULT_BASELINE_PATH,
+    baseline_path=osaurus_settings.BASELINE_PATH,
 ) -> bool:
     """Measure stage A, then stage B, and write ``summary.json``; True when it finished.
 
@@ -472,10 +472,11 @@ def run(
 
     An engine whose port answers, and Osaurus while its app runs, are skipped with a reason
     before anything of theirs is started. Osaurus runs only when the caller confirmed the run
-    with ``osaurus=True``; then ``recover`` runs before its ``pin``, the pin is handed the
-    application's backup and baseline paths, and ``restore`` runs in a ``finally`` so a cell
-    that raises still puts the user's settings back. A restore that does not verify ends the
-    run with an ``error`` naming the backup directory and a summary that records it.
+    with ``osaurus=True``; then ``recover`` runs before its ``pin``, all three are handed the
+    application's backup path and the same baseline path -- the drift guard's,
+    ``osaurus_settings.BASELINE_PATH`` by default -- and ``restore`` runs in a ``finally`` so a
+    cell that raises still puts the user's settings back. A restore that does not verify ends
+    the run with an ``error`` naming the backup directory and a summary that records it.
 
     A sibling is downloaded only when it is missing, measured in its own cell, and evicted
     immediately after it, so one extra model at most is on disk. The chosen repo is never
@@ -585,7 +586,7 @@ def run(
                 attempted = True
                 blocked = None
                 try:
-                    recover(backup_dir=backup_dir)
+                    recover(backup_dir=backup_dir, baseline_path=baseline_path)
                     pin(backup_dir=backup_dir, baseline_path=baseline_path)
                 except Exception as error:
                     blocked = str(error)
@@ -610,7 +611,7 @@ def run(
         finally:
             if attempted:
                 try:
-                    restored = restore(backup_dir=backup_dir)
+                    restored = restore(backup_dir=backup_dir, baseline_path=baseline_path)
                 except Exception as error:
                     restored = None
                     if pinned:

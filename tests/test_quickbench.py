@@ -14,6 +14,7 @@ it said it did.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from ohyesmlx import catalog, engines, fetch, measure, quickbench, runtimes, transport
+from ohyesmlx import (
+    catalog,
+    engines,
+    fetch,
+    measure,
+    osaurus_settings,
+    quickbench,
+    runtimes,
+    transport,
+)
 
 # --- the catalog rows and the engines ---------------------------------------------------------
 
@@ -621,14 +631,89 @@ def test_osaurus_is_recovered_pinned_and_restored_around_its_cell(tmp_path):
     )
     restore = kinds.index("restore")
     assert recover < pin < cell < restore
-    assert fakes.osaurus.calls[1][1]["backup_dir"] == str(tmp_path / "backup")
-    assert fakes.osaurus.calls[1][1]["baseline_path"] == str(tmp_path / "baseline.json")
+    # AC-2: recover, pin and restore are handed the same backup and the same baseline, and the
+    # baseline is the drift guard's -- a pin against another path is a pin the guard never saw.
+    assert [kind for kind, _kwargs in fakes.osaurus.calls] == [
+        "recover",
+        "pin",
+        "restore",
+    ]
+    for kind, kwargs in fakes.osaurus.calls:
+        assert kwargs["backup_dir"] == str(tmp_path / "backup"), kind
+        assert kwargs["baseline_path"] == str(tmp_path / "baseline.json"), kind
     assert summary["osaurus"] == {
         "allowed": True,
         "pinned": True,
         "restored": True,
         "reason": None,
     }
+
+
+def test_quickbench_pins_against_the_drift_guards_baseline_by_default():
+    assert not hasattr(quickbench, "DEFAULT_BASELINE_PATH"), "one baseline path, the guard's"
+    default = inspect.signature(quickbench.run).parameters["baseline_path"].default
+    assert default == osaurus_settings.BASELINE_PATH
+
+
+def test_the_host_pinned_between_pin_and_restore_shows_no_drift(tmp_path):
+    """04-03c's defect: a pin against a path the guard does not read leaves the pinned host
+    (caches off) reading as drift, and the cell is refused. Real pin/restore on tmp paths."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "server.json").write_text(json.dumps({"numberOfThreads": 12}))
+    (config_dir / "server-runtime.json").write_text(
+        json.dumps(
+            {
+                "cache": {
+                    "blockDisk": {"enabled": True},
+                    "prefix": {"enabled": True},
+                }
+            }
+        )
+    )
+    baseline_path = tmp_path / "baseline.json"
+    captured = []
+    cache = FakeCache(downloaded=(CHOSEN.repo,))
+
+    def capture_between_pin_and_restore(_cell, _kwargs):
+        captured.append(
+            osaurus_settings.diff_against_baseline(
+                osaurus_settings.capture_osaurus_settings(config_dir),
+                osaurus_settings.load_baseline(baseline_path),
+            )
+        )
+
+    ok = quickbench.run(
+        CHOSEN.repo,
+        confirmed=True,
+        osaurus=True,
+        models=MODELS,
+        statuses=[an_engine("osaurus")],
+        hw=SimpleNamespace(),
+        run_cells=FakeRunCells(on_call=capture_between_pin_and_restore),
+        download=cache.download,
+        evict=cache.evict,
+        downloaded=cache.downloaded,
+        pin=lambda **kwargs: osaurus_settings.pin(config_dir, **kwargs),
+        restore=lambda **kwargs: osaurus_settings.restore(config_dir, **kwargs),
+        recover=lambda **kwargs: osaurus_settings.recover(config_dir, **kwargs),
+        port_in_use=lambda port: False,
+        osaurus_app_running=lambda: False,
+        load=FakeLoad(),
+        clock=FakeClock(),
+        emit=[].append,
+        cancel=CancelAfter(),
+        cache_dir=str(tmp_path / "cache"),
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(baseline_path),
+    )
+
+    assert ok is True
+    assert len(captured) == 3, "one capture per Osaurus cell, each between its pin and restore"
+    assert all(drift == () for drift in captured), captured
+    assert not (tmp_path / "backup").exists(), "a verified restore left no backup behind"
+    assert not baseline_path.exists(), "the pin's baseline went with the restore"
 
 
 def test_a_cell_that_raises_still_restores_osaurus(tmp_path):

@@ -16,15 +16,17 @@ and the prefix cache are on by default, which is the same class of defect that m
 get ``--no-cache`` pinned; deciding whether they should be off is a separate call this
 module does not make.
 
-**The pin, one definition for the harness and the app.** :func:`pin` copies both files
-byte-exact into ``backup_dir``, applies the run's settings -- ``modelIdleResidencyPolicy.seconds
-= 900`` and both caches off -- and records the baseline the drift guard reads. :func:`restore`
-puts both files back and returns ``True`` only when each is byte-identical to its backup,
-removing the backup on success; :func:`recover` is the same restore for a backup a crash left
-behind, and a no-op without one. Every write here is a temp file in the same directory followed
-by ``os.replace``, so a kill mid-write never leaves a half-written Osaurus config, and the
-backup directory is created ``0700``. The shell runner (``scripts/osaurus-pin.sh``) calls these
-functions rather than carrying its own copy of the edit.
+**The pin, one definition for the harness and the app.** :func:`pin` copies both files and the
+baseline the drift guard reads byte-exact into ``backup_dir`` -- or a ``baseline.absent`` marker
+when no baseline exists, so a restore removes the one the pin wrote instead of leaving a gate
+where there was none -- applies the run's settings (``modelIdleResidencyPolicy.seconds = 900``
+and both caches off), and records the baseline. :func:`restore` puts all three back and returns
+``True`` only when each is byte-identical to its backup, removing the backups on success;
+:func:`recover` is the same restore for a backup a crash left behind, and a no-op without one.
+Every write here is a temp file in the same directory followed by ``os.replace``, so a kill
+mid-write never leaves a half-written file, and the backup directory is created ``0700``. The
+shell runner (``scripts/osaurus-pin.sh``) calls these functions rather than carrying its own
+copy of the edit.
 """
 
 from __future__ import annotations
@@ -44,6 +46,12 @@ BASELINE_PATH = (
 # The two host files `pin` backs up and edits: the caches live in one, the idle residency
 # policy in the other. A backup of one without the other could not restore a host.
 PIN_FILES = ("server-runtime.json", "server.json")
+
+# The baseline belongs to the backup set too: every pin overwrites it, so a copy is what puts
+# the guard's gate back byte-exact. The marker records that there was no baseline to copy, and
+# a restore of it deletes the one the pin wrote rather than leaving a gate where there was none.
+BASELINE_BACKUP = "baseline.json"
+BASELINE_ABSENT = "baseline.absent"
 
 # The backup directory holds copies of the user's own settings, so nobody else gets to read it.
 BACKUP_DIR_MODE = 0o700
@@ -189,7 +197,11 @@ def _write_atomic(target: Path, data: bytes) -> None:
 
 def _backups(backup_dir: Path) -> list[Path]:
     """The backups present in *backup_dir*, in the pin's own file order."""
-    return [path for name in PIN_FILES if (path := backup_dir / name).exists()]
+    return [
+        path
+        for name in (*PIN_FILES, BASELINE_BACKUP, BASELINE_ABSENT)
+        if (path := backup_dir / name).exists()
+    ]
 
 
 def _log(action: str, outcome: str, files: list[Path], backup_dir: Path) -> None:
@@ -216,12 +228,13 @@ def pin(
 ) -> None:
     """Pin Osaurus's measurement-relevant host settings, backing the originals up first.
 
-    Both ``PIN_FILES`` are copied byte-exact into *backup_dir* (created ``0700``, refused if a
-    backup is already there, because overwriting it would destroy the only copy of the user's
-    own settings), then ``cache.prefix.enabled`` and ``cache.blockDisk.enabled`` are set false
-    and ``modelIdleResidencyPolicy.seconds`` to 900, and the baseline the drift guard reads is
-    written to *baseline_path* -- ``BASELINE_PATH`` by default, which is the harness's copy in
-    the repo; the app passes its own.
+    Both ``PIN_FILES`` and the baseline at *baseline_path* are copied byte-exact into
+    *backup_dir* (created ``0700``, refused if a backup is already there, because overwriting it
+    would destroy the only copy of the user's own settings); with no baseline there, a
+    ``baseline.absent`` marker is written instead. Then ``cache.prefix.enabled`` and
+    ``cache.blockDisk.enabled`` are set false and ``modelIdleResidencyPolicy.seconds`` to 900,
+    and the baseline the drift guard reads is written to *baseline_path* -- ``BASELINE_PATH`` by
+    default, which is the harness's copy in the repo; the app passes its own.
 
     Both configs are parsed before either is replaced, so an unreadable file leaves its
     neighbour untouched, and every write is atomic.
@@ -254,6 +267,10 @@ def pin(
     os.chmod(backups, BACKUP_DIR_MODE)
     for source in sources:
         _write_atomic(backups / source.name, source.read_bytes())
+    if baseline.exists():
+        _write_atomic(backups / BASELINE_BACKUP, baseline.read_bytes())
+    else:
+        _write_atomic(backups / BASELINE_ABSENT, b"")
 
     runtime.setdefault("cache", {}).setdefault("prefix", {})["enabled"] = False
     runtime["cache"].setdefault("blockDisk", {})["enabled"] = False
@@ -262,25 +279,46 @@ def pin(
     _write_atomic(sources[1], json.dumps(server, indent=2).encode())
 
     write_baseline(baseline, root)
-    _log("pin", "pinned", sources, backups)
+    _log("pin", "pinned", [*sources, baseline], backups)
 
 
-def _put_back(root: Path, backups: Path, present: list[Path], *, action: str) -> bool:
-    """Copy each backup back, verify it byte-exact, and remove the backups only when they match."""
-    restored = [Path(root) / backup.name for backup in present]
-    for backup, target in zip(present, restored):
+def _put_back(
+    root: Path,
+    backups: Path,
+    present: list[Path],
+    *,
+    baseline: Path,
+    action: str,
+) -> bool:
+    """Copy each backup back, verify it byte-exact, and remove the backups only when they match.
+
+    The two configs go back to *root* and the baseline to *baseline*; a ``baseline.absent``
+    marker deletes the baseline the pin wrote and verifies that it is gone. Every backup is
+    kept on any mismatch, so a retry still has the original bytes.
+    """
+    restored: list[tuple[Path, Path]] = []
+    for backup in present:
+        if backup.name == BASELINE_ABSENT:
+            baseline.unlink(missing_ok=True)
+            restored.append((backup, baseline))
+            continue
+        target = baseline if backup.name == BASELINE_BACKUP else root / backup.name
         _write_atomic(target, backup.read_bytes())
-    mismatched = [
-        target
-        for backup, target in zip(present, restored)
-        if not filecmp.cmp(target, backup, shallow=False)
-    ]
+        restored.append((backup, target))
+    mismatched = []
+    for backup, target in restored:
+        if backup.name == BASELINE_ABSENT:
+            if target.exists():
+                mismatched.append(target)
+        elif not filecmp.cmp(target, backup, shallow=False):
+            mismatched.append(target)
+    files = [target for _backup, target in restored]
     if mismatched:
         _log(
             action,
             "not byte-identical, so the backup is kept: "
             + ", ".join(str(path) for path in mismatched),
-            restored,
+            files,
             backups,
         )
         return False
@@ -290,41 +328,56 @@ def _put_back(root: Path, backups: Path, present: list[Path], *, action: str) ->
         backups.rmdir()
     except OSError:
         pass  # something else is in the directory; the backups themselves are gone
-    _log(action, "restored byte-exact", restored, backups)
+    _log(action, "restored byte-exact", files, backups)
     return True
 
 
-def restore(config_dir: Path | None = None, *, backup_dir: Path) -> bool:
-    """Put both config files back from *backup_dir*; ``True`` only when each is byte-exact.
+def restore(
+    config_dir: Path | None = None,
+    *,
+    backup_dir: Path,
+    baseline_path: Path | None = None,
+) -> bool:
+    """Put every backed-up file back from *backup_dir*; ``True`` only when each is byte-exact.
 
-    ``False`` leaves the backup in place, so a restore that did not take effect can be
-    retried or examined rather than reported as done. A directory holding no backup at all
+    The two configs go back to *config_dir* and the baseline to *baseline_path* --
+    ``BASELINE_PATH`` by default -- with a ``baseline.absent`` marker deleting the baseline the
+    pin wrote. ``False`` leaves the backups in place, so a restore that did not take effect can
+    be retried or examined rather than reported as done. A directory holding no backup at all
     raises: unlike :func:`recover`, a caller that asks to restore has said a backup exists.
     """
     root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
     backups = Path(backup_dir)
+    baseline = Path(baseline_path) if baseline_path is not None else BASELINE_PATH
     present = _backups(backups)
     if not present:
         raise ValueError(
             f"refusing to restore Osaurus settings: {backups} holds no backup to restore"
         )
-    return _put_back(root, backups, present, action="restore")
+    return _put_back(root, backups, present, baseline=baseline, action="restore")
 
 
-def recover(config_dir: Path | None = None, *, backup_dir: Path) -> bool:
+def recover(
+    config_dir: Path | None = None,
+    *,
+    backup_dir: Path,
+    baseline_path: Path | None = None,
+) -> bool:
     """Restore a backup that a crash between pin and restore left behind.
 
-    ``True`` when a leftover backup was put back byte-exact and removed, ``False`` when there
-    was nothing to recover -- the ordinary case, and deliberately not an error: this runs at
-    launch and before a pin. A restore that does not verify keeps the backup and returns
+    ``baseline_path`` is the same one :func:`restore` takes, ``BASELINE_PATH`` by default.
+    ``True`` when every leftover backup was put back byte-exact and removed, ``False`` when
+    there was nothing to recover -- the ordinary case, and deliberately not an error: this runs
+    at launch and before a pin. A restore that does not verify keeps the backup and returns
     ``False`` exactly as :func:`restore` does.
     """
     root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
     backups = Path(backup_dir)
+    baseline = Path(baseline_path) if baseline_path is not None else BASELINE_PATH
     present = _backups(backups)
     if not present:
         return False
-    return _put_back(root, backups, present, action="recover")
+    return _put_back(root, backups, present, baseline=baseline, action="recover")
 
 
 def diff_against_baseline(

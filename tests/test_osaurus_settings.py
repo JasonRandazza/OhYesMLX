@@ -1,4 +1,4 @@
-"""Checks for ``osaurus_settings.pin``, ``restore`` and ``recover`` (plan 04-03a).
+"""Checks for ``osaurus_settings.pin``, ``restore`` and ``recover`` (plans 04-03a, 04-03c).
 
 Every path in this file is a pytest scratch directory. Nothing here reads or writes
 ``~/.osaurus``, and nothing starts a runtime: the pin is exercised against a copy of the two
@@ -42,6 +42,10 @@ CONFIG_RUNTIME = {
     "mtp": {"mode": "auto"},
     "performance": {"compiledDecode": False, "tiedHeadCodec": "q6"},
 }
+
+# A baseline as the guard left it before a pin: not the bytes `write_baseline` produces, so a
+# restore that wrote the pinned baseline again instead of the backup is visible.
+BASELINE_SENTINEL = b'{"settings": {"server.json:numberOfThreads": 12}}\n'
 
 
 @pytest.fixture
@@ -118,14 +122,15 @@ def test_pin_writes_the_baseline_the_drift_guard_reads_to_the_given_path(
     )
 
 
-def test_pin_never_writes_the_repos_baseline_unless_it_is_passed(
-    config_dir, backup_dir, baseline_path
+def test_pin_never_writes_the_default_baseline_unless_it_is_passed(
+    config_dir, backup_dir, baseline_path, tmp_path, monkeypatch
 ):
-    checked_in = osaurus_settings.BASELINE_PATH.read_bytes()
+    default = tmp_path / "default-baseline.json"
+    monkeypatch.setattr(osaurus_settings, "BASELINE_PATH", default)
 
     pin(config_dir, backup_dir, baseline_path)
 
-    assert osaurus_settings.BASELINE_PATH.read_bytes() == checked_in
+    assert not default.exists(), "the pin wrote a baseline nobody passed"
 
 
 def test_the_backup_directory_is_created_0700(config_dir, backup_dir, baseline_path):
@@ -148,6 +153,26 @@ def test_a_second_pin_refuses_rather_than_overwriting_the_users_original(
     assert "already holds a backup" in message
     for name, original in before.items():
         assert (backup_dir / name).read_bytes() == original, "the original was overwritten"
+
+
+@pytest.mark.parametrize(
+    "name", [osaurus_settings.BASELINE_BACKUP, osaurus_settings.BASELINE_ABSENT]
+)
+def test_a_pin_refuses_over_a_leftover_baseline_backup_or_marker(
+    config_dir, backup_dir, baseline_path, name
+):
+    """The baseline backup is part of the set: pinning over it would destroy the only copy of
+    a baseline the user had before the crashed run."""
+    backup_dir.mkdir()
+    (backup_dir / name).write_bytes(b"")
+    before = originals(config_dir)
+
+    with pytest.raises(ValueError) as raised:
+        pin(config_dir, backup_dir, baseline_path)
+
+    assert "already holds a backup" in str(raised.value)
+    assert originals(config_dir) == before
+    assert not baseline_path.exists()
 
 
 def test_a_pin_that_killed_the_write_between_temp_and_replace_leaves_the_files_intact(
@@ -178,20 +203,80 @@ def test_a_pin_that_killed_the_write_between_temp_and_replace_leaves_the_files_i
 # --------------------------------------------------------------------------------------
 
 
-def test_restore_puts_both_files_back_byte_exact_and_removes_the_backup(
+def test_restore_puts_every_file_back_byte_exact_and_removes_the_backup(
     config_dir, backup_dir, baseline_path
 ):
     before = originals(config_dir)
     pin(config_dir, backup_dir, baseline_path)
 
-    assert osaurus_settings.restore(config_dir, backup_dir=backup_dir) is True
+    assert (
+        osaurus_settings.restore(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is True
+    )
 
     for name, original in before.items():
         assert (config_dir / name).read_bytes() == original, name
+    assert not baseline_path.exists(), "a baseline the pin wrote was left behind"
     assert not backup_dir.exists(), "the backup survived a verified restore"
 
 
-def test_restore_returns_false_and_keeps_the_backup_when_a_file_is_not_byte_identical(
+def test_restore_puts_the_baseline_back_byte_exact_after_a_later_write(
+    config_dir, backup_dir, baseline_path
+):
+    """`osaurus_set_seqs` re-records the baseline mid-run; restore must return the pre-pin
+    bytes, not whatever the run last wrote."""
+    before = originals(config_dir)
+    baseline_path.write_bytes(BASELINE_SENTINEL)
+    pin(config_dir, backup_dir, baseline_path)
+    assert (
+        backup_dir / osaurus_settings.BASELINE_BACKUP
+    ).read_bytes() == BASELINE_SENTINEL
+
+    osaurus_settings.write_baseline(baseline_path, config_dir)
+    assert baseline_path.read_bytes() != BASELINE_SENTINEL
+
+    assert (
+        osaurus_settings.restore(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is True
+    )
+
+    for name, original in before.items():
+        assert (config_dir / name).read_bytes() == original, name
+    assert baseline_path.read_bytes() == BASELINE_SENTINEL
+    assert not backup_dir.exists()
+
+
+def test_a_pin_with_no_baseline_restore_leaves_the_guard_ungated(
+    config_dir, backup_dir, baseline_path
+):
+    """No baseline at pin time means no gate to put back: the pin's own baseline is deleted,
+    and the marker is what says so."""
+    before = originals(config_dir)
+    assert not baseline_path.exists()
+
+    pin(config_dir, backup_dir, baseline_path)
+
+    assert (backup_dir / osaurus_settings.BASELINE_ABSENT).exists()
+    assert osaurus_settings.load_baseline(baseline_path) is not None, "the pin writes one"
+
+    assert (
+        osaurus_settings.restore(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is True
+    )
+
+    for name, original in before.items():
+        assert (config_dir / name).read_bytes() == original, name
+    assert not baseline_path.exists(), "the guard is as ungated as it was before the pin"
+    assert not backup_dir.exists()
+
+
+def test_restore_returns_false_and_keeps_every_backup_when_a_file_is_not_byte_identical(
     config_dir, backup_dir, baseline_path, monkeypatch
 ):
     """False is not a failure mode to shrug at: nothing was put back, so the only copy of the
@@ -200,16 +285,55 @@ def test_restore_returns_false_and_keeps_the_backup_when_a_file_is_not_byte_iden
     pin(config_dir, backup_dir, baseline_path)
     monkeypatch.setattr(osaurus_settings, "_write_atomic", lambda target, data: None)
 
-    assert osaurus_settings.restore(config_dir, backup_dir=backup_dir) is False
+    assert (
+        osaurus_settings.restore(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is False
+    )
 
     for name, original in before.items():
         assert not (config_dir / name).read_bytes() == original, "nothing was restored"
         assert (backup_dir / name).read_bytes() == original, name
 
 
-def test_restore_without_a_backup_refuses(config_dir, backup_dir):
+def test_a_baseline_that_does_not_match_after_restore_returns_false_and_keeps_the_backups(
+    config_dir, backup_dir, baseline_path, monkeypatch
+):
+    """The baseline is verified like the configs: one mismatch keeps all three backups, the
+    two configs included, so a retry has the whole set."""
+    before = originals(config_dir)
+    baseline_path.write_bytes(BASELINE_SENTINEL)
+    pin(config_dir, backup_dir, baseline_path)
+    real_write = osaurus_settings._write_atomic
+
+    def skip_the_baseline(target, data):
+        if Path(target) == baseline_path:
+            return
+        real_write(target, data)
+
+    monkeypatch.setattr(osaurus_settings, "_write_atomic", skip_the_baseline)
+
+    assert (
+        osaurus_settings.restore(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is False
+    )
+
+    assert baseline_path.read_bytes() != BASELINE_SENTINEL
+    for name, original in before.items():
+        assert (backup_dir / name).read_bytes() == original, name
+    assert (
+        backup_dir / osaurus_settings.BASELINE_BACKUP
+    ).read_bytes() == BASELINE_SENTINEL
+
+
+def test_restore_without_a_backup_refuses(config_dir, backup_dir, baseline_path):
     with pytest.raises(ValueError) as raised:
-        osaurus_settings.restore(config_dir, backup_dir=backup_dir)
+        osaurus_settings.restore(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
 
     assert str(backup_dir) in str(raised.value)
     assert "no backup" in str(raised.value)
@@ -226,7 +350,14 @@ def test_pin_and_restore_accept_the_strings_the_shell_hands_them(
         str(config_dir), backup_dir=str(backup_dir), baseline_path=str(baseline_path)
     )
     assert osaurus_settings.load_baseline(baseline_path) is not None
-    assert osaurus_settings.restore(str(config_dir), backup_dir=str(backup_dir)) is True
+    assert (
+        osaurus_settings.restore(
+            str(config_dir),
+            backup_dir=str(backup_dir),
+            baseline_path=str(baseline_path),
+        )
+        is True
+    )
 
     for name, original in before.items():
         assert (config_dir / name).read_bytes() == original, name
@@ -248,19 +379,50 @@ def test_recover_restores_a_backup_a_crash_left_behind(
         "modelIdleResidencyPolicy"
     ]["seconds"] == 900
 
-    assert osaurus_settings.recover(config_dir, backup_dir=backup_dir) is True
+    assert (
+        osaurus_settings.recover(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is True
+    )
 
     for name, original in before.items():
         assert (config_dir / name).read_bytes() == original, name
     assert not backup_dir.exists()
 
 
-def test_recover_is_a_no_op_without_a_backup(config_dir, backup_dir):
+def test_recover_restores_the_baseline_with_the_configs(
+    config_dir, backup_dir, baseline_path
+):
+    before = originals(config_dir)
+    baseline_path.write_bytes(BASELINE_SENTINEL)
+    pin(config_dir, backup_dir, baseline_path)
+
+    assert (
+        osaurus_settings.recover(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is True
+    )
+
+    for name, original in before.items():
+        assert (config_dir / name).read_bytes() == original, name
+    assert baseline_path.read_bytes() == BASELINE_SENTINEL
+    assert not backup_dir.exists()
+
+
+def test_recover_is_a_no_op_without_a_backup(config_dir, backup_dir, baseline_path):
     before = originals(config_dir)
 
-    assert osaurus_settings.recover(config_dir, backup_dir=backup_dir) is False
+    assert (
+        osaurus_settings.recover(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is False
+    )
 
     assert originals(config_dir) == before
+    assert not baseline_path.exists()
     assert not backup_dir.exists()
 
 
@@ -272,7 +434,10 @@ def test_recover_is_a_no_op_without_a_backup(config_dir, backup_dir):
 def test_pin_and_restore_each_write_one_json_line_naming_the_files_and_the_outcome(
     config_dir, backup_dir, baseline_path, capsys
 ):
-    files = [str(config_dir / name) for name in osaurus_settings.PIN_FILES]
+    files = [
+        *(str(config_dir / name) for name in osaurus_settings.PIN_FILES),
+        str(baseline_path),
+    ]
 
     pin(config_dir, backup_dir, baseline_path)
     lines = capsys.readouterr().err.strip().splitlines()
@@ -285,7 +450,9 @@ def test_pin_and_restore_each_write_one_json_line_naming_the_files_and_the_outco
         "backup_dir": str(backup_dir),
     }
 
-    osaurus_settings.restore(config_dir, backup_dir=backup_dir)
+    osaurus_settings.restore(
+        config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+    )
     lines = capsys.readouterr().err.strip().splitlines()
     assert len(lines) == 1
     restored = json.loads(lines[0])

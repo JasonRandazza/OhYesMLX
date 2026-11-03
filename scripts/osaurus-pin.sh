@@ -1,14 +1,14 @@
 # Sourced, not run. The Osaurus settings pin for the Phase 4 runners, run_grid_35b.sh now among
-# its callers: `osaurus_settings.pin` copies both ~/.osaurus/config files byte-exact into a backup
-# directory, then
+# its callers: `osaurus_settings.pin` copies both ~/.osaurus/config files and the drift guard's
+# baseline byte-exact into a backup directory, then
 #   modelIdleResidencyPolicy.seconds = 900 (the host's 30 unloads the model inside the 30 s
 #     cooldown, and the drift guard refuses to start against the committed baseline's 900),
 #   cache.prefix.enabled = cache.blockDisk.enabled = false (the other four runtimes prefill cold),
 # the baseline is re-recorded so the guard passes, and afterwards `osaurus_settings.restore` puts
-# both files back and returns true only when each is byte-identical to its backup. 2026-09-25: the
-# Phase 4 night ran without this and every Osaurus cell was N/A. The edit, the copies and the
-# byte-exact check live in ohyesmlx/osaurus_settings.py -- one definition, which quickbench calls
-# too; this file is the shell wrapper around it.
+# all three files back and returns true only when each is byte-identical to its backup.
+# 2026-09-25: the Phase 4 night ran without this and every Osaurus cell was N/A. The edit, the
+# copies and the byte-exact check live in ohyesmlx/osaurus_settings.py -- one definition, which
+# quickbench calls too; this file is the shell wrapper around it.
 # ponytail: copies remain in run_grid.sh / run_grid_moe.sh (they pin idle 900 only and leave the
 # host's caches alone), run_sweep_cache*.sh (there the Osaurus cache IS the varied pin), and
 # run_accuracy_*.sh / run_jang_*.sh / run_sweep_prompt.sh; point them here when next touched.
@@ -26,7 +26,6 @@ osaurus_restore() {
   $PY -c "
 from ohyesmlx import osaurus_settings as s
 s.restore('$CONFIG_DIR', backup_dir='$BACKUP_DIR')" || return 1
-  git checkout -- config/osaurus-settings-baseline.json
 }
 
 osaurus_pin() {
@@ -81,6 +80,5 @@ raise SystemExit(0 if s.restore('$CONFIG_DIR', backup_dir='$BACKUP_DIR') else 1)
   else
     echo "RESTORE FAILED: ~/.osaurus/config differs from $BACKUP_DIR -- copies kept"
   fi
-  git checkout -- config/osaurus-settings-baseline.json
   trap 'echo "ABORTED $(date +%H:%M:%S)"; sweep; exit 130' INT TERM HUP
 }
