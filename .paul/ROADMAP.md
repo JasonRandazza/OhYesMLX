@@ -26,7 +26,7 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 2 | Engines (registry, detect, consented install) | Complete 2026-10-29 |
 | 2.5 | Version stability: lab copies, canary, tested manifest [INSERTED] | Complete 2026-11-02 (reviewed; T2.5.5 done; wizard script open) |
 | 3 | Models (catalog, recommender, fetch) | Complete 2026-11-02 (reviewed) |
-| 4 | Server and quickbench | Built 2026-11-02 (quickbench Osaurus gap and phase review open) |
+| 4 | Server and quickbench | Complete 2026-11-03 (reviewed, UAT 8/8) |
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Planned |
 | 5 | SwiftUI app and packaging | Planned |
 
