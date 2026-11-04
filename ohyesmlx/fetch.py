@@ -48,7 +48,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-from ohyesmlx import catalog, engines
+from ohyesmlx import app_support_dir, catalog, engines
 from ohyesmlx.catalog import Model, disk_needed
 from ohyesmlx.hardware import scan as _scan_hardware
 
@@ -86,8 +86,8 @@ TIMEOUT_S = 60.0
 # AC-11's shape rules live in `catalog`; only this module's Content-Range parser is here.
 _CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
 
-# The app's own Application Support directory, asked of engines rather than restated.
-_APP_SUPPORT = os.path.join(engines.DEFAULT_ENV.home, engines._APP_SUPPORT)
+# The app's own Application Support directory, asked of the package rather than restated.
+_APP_SUPPORT = str(app_support_dir(engines.DEFAULT_ENV.home))
 DEFAULT_LEDGER = os.path.join(_APP_SUPPORT, "fetched.json")
 DEFAULT_LOG = os.path.join(_APP_SUPPORT, "fetch-log.jsonl")
 DEFAULT_LOCK_DIR = os.path.join(_APP_SUPPORT, "locks")

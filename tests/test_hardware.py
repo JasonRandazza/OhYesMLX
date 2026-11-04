@@ -12,7 +12,15 @@ from __future__ import annotations
 import subprocess
 from collections import namedtuple
 
-from ohyesmlx.hardware import _volume_paths, model_budget, scan
+from ohyesmlx.hardware import (
+    IOREG,
+    SW_VERS,
+    SYSCTL,
+    TOOL_TIMEOUT_S,
+    _volume_paths,
+    model_budget,
+    scan,
+)
 
 
 def fake_run(answers):
@@ -49,7 +57,7 @@ def scan_hw(answers):
     return scan(run=fake_run(answers), volume_paths=no_volumes)
 
 
-IOREG_AGX = ("ioreg", "-rc", "AGXAccelerator", "-d1")
+IOREG_AGX = (IOREG, "-rc", "AGXAccelerator", "-d1")
 
 AGX_M2_MAX_30 = """\
 +-o AGXAcceleratorG14X  <class AGXAcceleratorG14X, id 0x10000046d, registered, matched, active, busy 0 (0 ms), retain 9>
@@ -65,10 +73,10 @@ AGX_M2_MAX_30 = """\
 
 
 M2_MAX_64 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M2 Max",
-    ("sysctl", "-n", "hw.memsize"): "68719476736",
-    ("sysctl", "-n", "hw.ncpu"): "12",
-    ("sw_vers", "-productVersion"): "15.4",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Apple M2 Max",
+    (SYSCTL, "-n", "hw.memsize"): "68719476736",
+    (SYSCTL, "-n", "hw.ncpu"): "12",
+    (SW_VERS, "-productVersion"): "15.4",
     IOREG_AGX: AGX_M2_MAX_30,
 }
 
@@ -120,10 +128,10 @@ def test_gpu_cores_is_none_when_ioreg_fails_and_the_other_fields_survive():
 
 
 M1_16 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M1",
-    ("sysctl", "-n", "hw.memsize"): "17179869184",
-    ("sysctl", "-n", "hw.ncpu"): "8",
-    ("sw_vers", "-productVersion"): "15.4",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Apple M1",
+    (SYSCTL, "-n", "hw.memsize"): "17179869184",
+    (SYSCTL, "-n", "hw.ncpu"): "8",
+    (SW_VERS, "-productVersion"): "15.4",
     IOREG_AGX: "",
 }
 
@@ -140,10 +148,10 @@ def test_m1_base_is_base_tier():
 
 
 M3_PRO_36 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M3 Pro",
-    ("sysctl", "-n", "hw.memsize"): "38654705664",
-    ("sysctl", "-n", "hw.ncpu"): "12",
-    ("sw_vers", "-productVersion"): "14.7.1",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Apple M3 Pro",
+    (SYSCTL, "-n", "hw.memsize"): "38654705664",
+    (SYSCTL, "-n", "hw.ncpu"): "12",
+    (SW_VERS, "-productVersion"): "14.7.1",
     IOREG_AGX: "",
 }
 
@@ -159,10 +167,10 @@ def test_m3_pro_is_pro_tier():
 
 
 M4_ULTRA_128 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M4 Ultra",
-    ("sysctl", "-n", "hw.memsize"): "137438953472",
-    ("sysctl", "-n", "hw.ncpu"): "28",
-    ("sw_vers", "-productVersion"): "15.4",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Apple M4 Ultra",
+    (SYSCTL, "-n", "hw.memsize"): "137438953472",
+    (SYSCTL, "-n", "hw.ncpu"): "28",
+    (SW_VERS, "-productVersion"): "15.4",
     IOREG_AGX: "",
 }
 
@@ -177,10 +185,10 @@ def test_m4_ultra_is_ultra_tier():
 
 
 INTEL_16 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz",
-    ("sysctl", "-n", "hw.memsize"): "17179869184",
-    ("sysctl", "-n", "hw.ncpu"): "12",
-    ("sw_vers", "-productVersion"): "10.15.7",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz",
+    (SYSCTL, "-n", "hw.memsize"): "17179869184",
+    (SYSCTL, "-n", "hw.ncpu"): "12",
+    (SW_VERS, "-productVersion"): "10.15.7",
     IOREG_AGX: "",
 }
 
@@ -196,10 +204,10 @@ def test_intel_is_unsupported_and_says_why():
 
 
 M2_4 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M2",
-    ("sysctl", "-n", "hw.memsize"): "4294967296",
-    ("sysctl", "-n", "hw.ncpu"): "8",
-    ("sw_vers", "-productVersion"): "13.6.9",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Apple M2",
+    (SYSCTL, "-n", "hw.memsize"): "4294967296",
+    (SYSCTL, "-n", "hw.ncpu"): "8",
+    (SW_VERS, "-productVersion"): "13.6.9",
     IOREG_AGX: "",
 }
 
@@ -216,10 +224,10 @@ def test_apple_silicon_under_8_gib_is_unsupported():
 
 
 M7_32 = {
-    ("sysctl", "-n", "machdep.cpu.brand_string"): "Apple M7",
-    ("sysctl", "-n", "hw.memsize"): "34359738368",
-    ("sysctl", "-n", "hw.ncpu"): "10",
-    ("sw_vers", "-productVersion"): "27.0",
+    (SYSCTL, "-n", "machdep.cpu.brand_string"): "Apple M7",
+    (SYSCTL, "-n", "hw.memsize"): "34359738368",
+    (SYSCTL, "-n", "hw.ncpu"): "10",
+    (SW_VERS, "-productVersion"): "27.0",
     IOREG_AGX: "",
 }
 
@@ -324,3 +332,45 @@ def test_volume_paths_skips_hidden_and_recovery_system_volumes(tmp_path):
     (tmp_path / "Recovery").mkdir()
     (tmp_path / "Ext").mkdir()
     assert _volume_paths(root=str(tmp_path)) == ["/", str(tmp_path / "Ext")]
+
+
+# --- AC-5: absolute tools and a bounded scan --------------------------------------------------
+
+
+def test_every_tool_is_named_by_absolute_path():
+    assert SYSCTL == "/usr/sbin/sysctl"
+    assert SW_VERS == "/usr/bin/sw_vers"
+    assert IOREG == "/usr/sbin/ioreg"
+
+
+def test_the_scan_calls_every_tool_with_the_ten_second_timeout(monkeypatch):
+    from ohyesmlx import hardware
+
+    calls = []
+
+    class Completed:
+        stdout = "x"
+
+    def fake(argv, **kwargs):
+        calls.append((tuple(argv), kwargs))
+        return Completed()
+
+    monkeypatch.setattr(hardware.subprocess, "run", fake)
+
+    assert hardware._run([SYSCTL, "-n", "hw.ncpu"]) == "x"
+    assert TOOL_TIMEOUT_S == 10
+    assert len(calls) == 1
+    assert calls[0][0] == (SYSCTL, "-n", "hw.ncpu")
+    assert calls[0][1]["timeout"] == TOOL_TIMEOUT_S
+
+
+def test_a_hung_tool_raises_instead_of_hanging_the_scan():
+    def hung(argv):
+        raise subprocess.TimeoutExpired(argv, TOOL_TIMEOUT_S)
+
+    try:
+        scan(run=hung, volume_paths=no_volumes)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise AssertionError("a hung tool was reported as a scan")

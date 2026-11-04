@@ -1472,9 +1472,12 @@ Each event is framed `id: <seq>\ndata: <event JSON>\n\n` in seq order. An unknow
 events replay first, a `Last-Event-ID` request header resumes after that seq (non-integer or negative is
 `400 bad_event_id`, one beyond the last stored seq waits for new events), a `: keepalive` comment is written every 15 s
 while nothing arrives, and the server closes the connection after `done`, so a finished job replays everything and
-closes. A job keeps at most 10,000 events; past that it is ended with `error` payload `{"code": "too_many_events"}` and
-`done`. The stream waits on the job's condition, never on the socket, so a quiet job is not cut off; the socket timeout
-stays set and bounds each write, so a client that stops reading releases its handler thread at the first blocked send.
+closes. A job has at most `MAX_STREAMS_PER_JOB` (4) event streams open at once; a fifth is `429 too_many_streams`,
+the four already open keep streaming, and a slot comes back however a stream ends -- `done`, an exception, a
+disconnect or the write timeout. A job keeps at most 10,000 events; past that it is ended with `error` payload
+`{"code": "too_many_events"}` and `done`. The stream waits on the job's condition, never on the socket, so a quiet
+job is not cut off; the socket timeout stays set and bounds each write, so a client that stops reading releases its
+handler thread at the first blocked send.
 `POST /jobs/{id}/cancel` answers `202` and makes the `cancel` callable the module holds answer True from then on; a
 download stops at its next chunk, an install only between steps and between guided-download polls (never inside a
 running pip step, whose own 900 s timeout and the installer's rollback still apply), a quickbench run only between
@@ -1514,11 +1517,16 @@ is `500 install_plan_failed` naming the engine, and any other module exception i
 exception's message and no traceback. Every JSON response is `Content-Type: application/json; charset=utf-8` with
 `Cache-Control: no-store`, and an event stream is `Content-Type: text/event-stream` with the same `no-store`; no
 `Access-Control-*` header is ever sent, `OPTIONS` included; the handler stays on
-HTTP/1.0, so one request is one connection, handler threads are daemons, and a connection idle for 10 s is closed.
-Each guard refusal writes one JSON line to stderr, `{"refused": code, "method", "path", "time"}` — never a header value
-or the token, and with the query string dropped — while a served GET writes nothing (the access log is silenced); a job
-writes only the start and end lines pinned above, so the client can surface a probe without handling a secret. The
-server dies with its parent: stdin reaching EOF,
+HTTP/1.0, so one request is one connection, handler threads are daemons, a connection idle for 10 s is closed, and
+at most `MAX_HANDLER_THREADS` (32) handlers exist at once: a connection that arrives with every slot held is closed
+with no response and no thread. Each guard refusal writes one JSON line to stderr, `{"refused": code, "method",
+"path", "time"}` — never a header value or the token, with the query string dropped, and with `path` written only
+when it is a served route (`/hardware`, `/engines`, `/recommendations`, `/quickbench/plan`, `/jobs`, or the job path
+pattern) and `<unknown>` otherwise, because a request path is client text too — while a served GET writes nothing
+(the access log is silenced); a job writes only the start and end lines pinned above, so the client can surface a
+probe without handling a secret. `ohyesmlx app` creates its Application Support directory (`ohyesmlx.app_support_dir()`,
+`~/Library/Application Support/OhYesMLX`) `0700` before it serves, and `ohyesmlx quickbench` does the same before a
+confirmed run writes anything. The server dies with its parent: stdin reaching EOF,
 `SIGINT` or `SIGTERM` shuts it down, releases the port and exits 0 — which means `ohyesmlx app </dev/null` exits at
 once by design, because EOF on stdin *is* the parent-death signal. A socket that cannot be bound prints nothing on
 stdout, writes one `{"error": {"code": "bind_failed", "message": str}}` line to stderr and exits 2, so the client can
@@ -1574,8 +1582,9 @@ recover(config_dir=None, *, backup_dir, baseline_path=None) -> bool
 (as `baseline.json`, or a `baseline.absent` marker when there is none; 04-03c) byte-exact into `backup_dir`,
 sets `cache.prefix.enabled = false`, `cache.blockDisk.enabled = false` and
 `modelIdleResidencyPolicy.seconds = 900`, and writes the baseline the drift guard reads to
-`baseline_path` — `BASELINE_PATH` (the repo's `config/`) by default, the one the drift guard reads;
-quickbench uses it too (04-03c; where a packaged app keeps it is Phase 4.5's call). It refuses (`ValueError`) while a backup exists,
+`baseline_path` — `BASELINE_PATH` by default, the one the drift guard reads: `<repo>/config/` in a checkout and
+`<Application Support>/config/` in an installed app (`ohyesmlx.writable_root()` is the one definition of which);
+quickbench uses it too (04-03c). It refuses (`ValueError`) while a backup exists,
 because overwriting it would destroy the only copy of the user's own settings; recovering first
 is the caller's move. Both configs are parsed before either is replaced, so a malformed file
 leaves its neighbour untouched.

@@ -2486,7 +2486,7 @@ def test_start_refuses_a_port_this_run_does_not_own(rig):
 
 
 def test_start_refuses_when_process_inspection_is_unavailable(rig):
-    rig.results[("ps", "-axo", "pid=,args=")] = None
+    rig.results[(runtimes.PS, "-axo", "pid=,args=")] = None
 
     with pytest.raises(RuntimeStartError, match="could not inspect running processes"):
         RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
@@ -2496,7 +2496,7 @@ def test_start_refuses_when_process_inspection_is_unavailable(rig):
 
 @pytest.mark.parametrize("app", runtimes.OSAURUS_APP_EXECUTABLES)
 def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatch, app):
-    rig.results[("ps", "-axo", "pid=,args=")] = _completed(
+    rig.results[(runtimes.PS, "-axo", "pid=,args=")] = _completed(
         stdout=f"111 {app} --serve\n222 osaurus mcp\n333 /tmp/osaurus\n"
     )
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 111)
@@ -2507,11 +2507,11 @@ def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatc
     assert "111" in str(raised.value)
     assert "222" not in str(raised.value)
     assert rig.commands == []
-    assert ("ps", "-axo", "pid=,args=") in rig.ran
+    assert (runtimes.PS, "-axo", "pid=,args=") in rig.ran
 
 
 def test_start_does_not_match_osaurus_mcp_or_other_binary(rig, monkeypatch):
-    rig.results[("ps", "-axo", "pid=,args=")] = _completed(
+    rig.results[(runtimes.PS, "-axo", "pid=,args=")] = _completed(
         stdout="222 osaurus mcp\n333 /tmp/osaurus\n"
     )
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid > 4242)
@@ -2521,6 +2521,23 @@ def test_start_does_not_match_osaurus_mcp_or_other_binary(rig, monkeypatch):
 
     assert handle.model_id == HF_ID
     assert rig.commands
+
+
+def test_resident_osaurus_pids_never_runs_a_ps_found_on_path(tmp_path, monkeypatch):
+    """AC-5: a lab directory or a user's own `ps` on PATH must not be what reads processes."""
+    marker = tmp_path / "fake-ps-ran"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ps"
+    fake.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(runtimes, "_engine_env", lambda: dict(os.environ))
+
+    found = runtimes._resident_osaurus_pids()
+
+    assert isinstance(found, tuple)
+    assert not marker.exists(), "the fake ps on PATH was executed"
 
 
 def test_start_surfaces_cleanup_failure_chained_from_start_error(rig, monkeypatch):

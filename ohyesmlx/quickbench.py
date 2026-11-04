@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 
 from ohyesmlx import (
     __version__,
+    app_support_dir,
     canary,
     catalog,
     cli,
@@ -79,11 +80,9 @@ CAVEAT_B = "formats compared on one engine only"
 BUSY = "this Mac was busy"
 CANCELLED = "the run was cancelled before this cell"
 
-# The one place a quick run's files live. Asked of `engines` rather than restated, the way
+# The one place a quick run's files live. Asked of the package rather than restated, the way
 # `fetch` asks it, so the app's Application Support directory has one spelling.
-DEFAULT_RESULTS_DIR = os.path.join(
-    engines.DEFAULT_ENV.home, engines._APP_SUPPORT, "quickbench"
-)
+DEFAULT_RESULTS_DIR = str(app_support_dir(engines.DEFAULT_ENV.home) / "quickbench")
 
 # Osaurus's backup is a fixed path rather than a per-run one: a crash between a pin and its
 # restore leaves the only copy of the user's settings behind, and `recover` can only find it if
@@ -183,7 +182,7 @@ def _osaurus_app_running(run=subprocess.run) -> bool:
     """
     try:
         completed = run(
-            ["ps", "-axo", "comm="],
+            [runtimes.PS, "-axo", "comm="],
             capture_output=True,
             text=True,
             timeout=10,

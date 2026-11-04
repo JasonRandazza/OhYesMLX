@@ -1381,3 +1381,25 @@ def test_cancel_during_the_guided_poll_ends_within_one_poll(tmp_path):
     assert [event["type"] for event in events] == ["error", "done"]
     assert events[0]["payload"] == {"code": "cancelled"}
     assert opened == ["https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"]
+
+
+# --- plan 045-02a AC-5: the guided-download opener names its tool absolutely ------------------
+
+
+def test_a_guided_download_opens_the_page_with_the_absolute_opener(monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+
+    monkeypatch.setattr(engines.subprocess, "run", run)
+
+    engines._real_open("https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29")
+
+    assert engines.OPEN == "/usr/bin/open"
+    assert calls == [
+        (
+            [engines.OPEN, "https://github.com/osaurus-ai/osaurus/releases/tag/0.25.29"],
+            {"check": False, "stdin": engines.subprocess.DEVNULL},
+        )
+    ]

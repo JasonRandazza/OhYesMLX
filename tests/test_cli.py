@@ -1007,6 +1007,7 @@ def test_quickbench_with_yes_runs_once_with_the_confirmed_flags(
 
     monkeypatch.setattr(quickbench, "plan", lambda *args, **kwargs: quick_plan)
     monkeypatch.setattr(quickbench, "run", run)
+    monkeypatch.setattr(cli, "ensure_app_support", lambda: None)
 
     code = cli.main(
         ["quickbench", "--repo", "org/two-b-stock", "--yes", "--osaurus"]
@@ -1074,6 +1075,7 @@ def test_quickbench_prints_the_summary_path_for_an_early_ending(
 
     monkeypatch.setattr(quickbench, "plan", lambda *args, **kwargs: quick_plan)
     monkeypatch.setattr(quickbench, "run", run)
+    monkeypatch.setattr(cli, "ensure_app_support", lambda: None)
 
     code = cli.main(["quickbench", "--repo", "org/two-b-stock", "--yes"])
 
@@ -1081,6 +1083,24 @@ def test_quickbench_prints_the_summary_path_for_an_early_ending(
     out = capsys.readouterr().out
     assert "best for you" not in out
     assert f"summary: {results_dir}/summary.json" in out
+
+
+def test_quickbench_creates_app_support_before_the_first_write(quick_plan, monkeypatch):
+    """AC-1: `run` is what writes, so the 0700 directory has to exist before it is called."""
+    from ohyesmlx import quickbench
+
+    order = []
+
+    def run(repo, **kwargs):
+        order.append("run")
+        return False
+
+    monkeypatch.setattr(cli, "ensure_app_support", lambda: order.append("support"))
+    monkeypatch.setattr(quickbench, "plan", lambda *args, **kwargs: quick_plan)
+    monkeypatch.setattr(quickbench, "run", run)
+
+    assert cli.main(["quickbench", "--repo", "org/two-b-stock", "--yes"]) == 2
+    assert order == ["support", "run"]
 
 
 # --- the app subcommand -----------------------------------------------------------------------
@@ -1091,8 +1111,12 @@ def test_quickbench_prints_the_summary_path_for_an_early_ending(
 # and the shutdown paths are. No test binds a fixed port and no test leaves a process behind.
 
 
-def run_app(*flags, stdin=subprocess.PIPE):
-    """`python -m ohyesmlx.cli app ...` with the pipes the app uses, from the repo root."""
+def run_app(*flags, stdin=subprocess.PIPE, home=None):
+    """`python -m ohyesmlx.cli app ...` with the pipes the app uses, from the repo root.
+
+    *home* is a scratch home: the app creates its Application Support directory before it
+    serves, and a test must never touch the real one.
+    """
     return subprocess.Popen(
         [sys.executable, "-m", "ohyesmlx.cli", "app", *flags],
         stdin=stdin,
@@ -1100,6 +1124,7 @@ def run_app(*flags, stdin=subprocess.PIPE):
         stderr=subprocess.PIPE,
         text=True,
         cwd=str(ROOT),
+        env=({**os.environ, "HOME": str(home)} if home is not None else None),
     )
 
 
@@ -1123,10 +1148,55 @@ def stop(process) -> None:
     process.stderr.close()
 
 
-def test_the_app_serves_hardware_until_its_stdin_closes():
+def test_the_app_creates_app_support_before_it_serves(monkeypatch, capsys):
+    """AC-1: a job this server accepts writes under Application Support, so the 0700
+    directory exists before the listener is built."""
+    from ohyesmlx import server
+
+    order = []
+
+    class FakeListener:
+        token = "a-token-no-request-reaches"
+        server_address = ("127.0.0.1", 9)
+
+        class jobs:
+            @staticmethod
+            def cancel_and_wait(timeout):
+                order.append("cancel")
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            order.append("close")
+
+        def shutdown(self):
+            order.append("shutdown")
+
+    def make_server(port=0):
+        order.append("make_server")
+        return FakeListener()
+
+    monkeypatch.setattr(cli, "ensure_app_support", lambda: order.append("support"))
+    monkeypatch.setattr(server, "make_server", make_server)
+    monkeypatch.setattr(
+        cli,
+        "signal",
+        SimpleNamespace(SIGTERM=signal.SIGTERM, signal=lambda number, handler: None),
+    )
+
+    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert order[:2] == ["support", "make_server"]
+    assert json.loads(capsys.readouterr().out) == {
+        "port": 9,
+        "token": FakeListener.token,
+    }
+
+
+def test_the_app_serves_hardware_until_its_stdin_closes(tmp_path):
     """AC-1 and AC-7 end to end: one line, an authorised GET against the real read-only scan,
     then stdin EOF, exit 0, nothing else on stdout and the port released."""
-    process = run_app()
+    process = run_app(home=tmp_path)
     try:
         launch = read_launch(process)
 
@@ -1158,9 +1228,9 @@ def test_the_app_serves_hardware_until_its_stdin_closes():
 
 
 @pytest.mark.parametrize("number", (signal.SIGINT, signal.SIGTERM))
-def test_the_app_exits_zero_on_a_signal(number):
+def test_the_app_exits_zero_on_a_signal(tmp_path, number):
     """AC-7's other parent-death paths end in the same clean shutdown and a free port."""
-    process = run_app()
+    process = run_app(home=tmp_path)
     try:
         launch = read_launch(process)
 
@@ -1172,7 +1242,7 @@ def test_the_app_exits_zero_on_a_signal(number):
         stop(process)
 
 
-def test_the_app_started_with_dev_null_exits_at_once_by_design():
+def test_the_app_started_with_dev_null_exits_at_once_by_design(tmp_path):
     """Audit item 9: stdin EOF is the parent-death signal, so `app </dev/null` is not a crash."""
     finished = subprocess.run(
         [sys.executable, "-m", "ohyesmlx.cli", "app"],
@@ -1180,6 +1250,7 @@ def test_the_app_started_with_dev_null_exits_at_once_by_design():
         capture_output=True,
         text=True,
         cwd=str(ROOT),
+        env={**os.environ, "HOME": str(tmp_path)},
         timeout=60,
     )
 
@@ -1188,7 +1259,7 @@ def test_the_app_started_with_dev_null_exits_at_once_by_design():
     assert json.loads(finished.stdout)["port"] > 0
 
 
-def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two():
+def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two(tmp_path):
     """AC-1: nothing on stdout, one stderr error line, exit 2 -- which the app can tell from a
     hang waiting on a launch line that will never come."""
     blocker = socket.socket()
@@ -1202,6 +1273,7 @@ def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two():
             capture_output=True,
             text=True,
             cwd=str(ROOT),
+            env={**os.environ, "HOME": str(tmp_path)},
             timeout=60,
         )
     finally:
@@ -1292,6 +1364,7 @@ def test_shutdown_cancels_a_running_download_and_exits_zero(monkeypatch):
         return listener
 
     monkeypatch.setattr(server, "make_server", make_server)
+    monkeypatch.setattr(cli, "ensure_app_support", lambda: None)
 
     code = cli.main(["app"])
 

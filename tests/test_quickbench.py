@@ -944,3 +944,18 @@ def test_the_summary_the_run_wrote_is_what_latest_reads(tmp_path):
     assert list(found) == [CHOSEN.repo]
     assert found[CHOSEN.repo]["best"]["engine"] == "mlxlm"
     assert found[CHOSEN.repo]["best"]["quick"] is True
+
+
+# --- plan 045-02a AC-5: the Osaurus-app probe names its tool absolutely -----------------------
+
+
+def test_the_osaurus_app_probe_runs_the_absolute_ps():
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        return SimpleNamespace(stdout="")
+
+    assert quickbench._osaurus_app_running(run=run) is False
+    assert runtimes.PS == "/bin/ps"
+    assert calls == [[runtimes.PS, "-axo", "comm="]]

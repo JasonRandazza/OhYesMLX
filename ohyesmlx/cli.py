@@ -25,7 +25,14 @@ import time
 from datetime import date
 from pathlib import Path
 
-from ohyesmlx import __version__, canary, engines, report, token_counter
+from ohyesmlx import (
+    __version__,
+    canary,
+    engines,
+    ensure_app_support,
+    report,
+    token_counter,
+)
 from ohyesmlx.runtimes import CACHE_STATES, KV_QUANTS, MTP_DEPTHS, STREAM_EXPERTS
 
 STUDIES = report.AXES
@@ -1023,6 +1030,10 @@ def _quickbench(args) -> int:
         print("Nothing was started. Pass --yes to run it.")
         return 2
 
+    # The run's own files live under Application Support, and the first of them is written
+    # by `module.run`; create the directory 0700 before anything can land in it.
+    ensure_app_support()
+
     captured: dict = {}
 
     def emit(event):
@@ -1069,6 +1080,10 @@ def _app(args) -> int:
     error there is one stderr line and exit 2, which it can tell from a hang.
     """
     from ohyesmlx import server
+
+    # A job this server accepts writes under Application Support, so the directory exists
+    # 0700 before the first request can be served.
+    ensure_app_support()
 
     try:
         listener = server.make_server(args.port)

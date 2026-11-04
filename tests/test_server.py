@@ -18,6 +18,7 @@ import functools
 import http.client
 import json
 import socket
+import subprocess
 import threading
 import time
 
@@ -1699,3 +1700,168 @@ def test_a_job_response_carries_no_cors_header(launch):
         assert not [
             name for name in headers if name.lower().startswith("access-control-")
         ], code
+
+
+# --- plan 045-02a: the server's own hardening (AC-2 to AC-5) -----------------------------------
+#
+# Each guard is reverted in the plan's red-check; the test named beside it is the one that
+# fails. Nothing here starts a runtime, downloads or touches this Mac's real directories.
+
+
+def test_a_start_log_that_raises_answers_500_and_frees_the_slot(launch, monkeypatch):
+    """AC-2: the slot is claimed before the start line, so a raise there must end the job."""
+    listener = launch(download=scripted(an_event("done", "finished")))
+
+    def broken(record):
+        raise RuntimeError("stderr is gone")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(server, "_log_job", broken)
+        code, _, raw = post_job(listener, DOWNLOAD)
+
+    assert code == 500
+    assert error_of(raw)["code"] == "internal"
+    failed = list(listener.jobs.jobs.values())[0]
+    assert [event["type"] for event in failed.events] == ["error", "done"]
+    assert failed.events[0]["payload"] == {"code": "internal"}
+    assert post_job(listener, DOWNLOAD)[0] == 202, "the failed request kept the slot"
+
+
+def test_a_thread_that_will_not_start_answers_500_and_frees_the_slot(launch, monkeypatch):
+    """AC-2: ``Thread.start`` itself is the other raise before a job thread exists."""
+    listener = launch(download=scripted(an_event("done", "finished")))
+
+    class NoThreads:
+        def __getattr__(self, name):
+            if name == "Thread":
+                def refuse(*args, **kwargs):
+                    raise RuntimeError("the thread would not start")
+                return refuse
+            return getattr(threading, name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(server, "threading", NoThreads())
+        code, _, raw = post_job(listener, DOWNLOAD)
+
+    assert code == 500
+    assert error_of(raw)["code"] == "internal"
+    failed = list(listener.jobs.jobs.values())[0]
+    assert [event["type"] for event in failed.events] == ["error", "done"]
+    assert failed.events[0]["payload"] == {"code": "internal"}
+    assert post_job(listener, DOWNLOAD)[0] == 202, "the failed request kept the slot"
+
+
+def test_the_handler_thread_cap_closes_the_extra_connection_and_releases_at_timeout(launch):
+    """AC-3: a full server closes the next connection at once, and a timeout frees the slot."""
+    listener = launch(timeout=0.5)
+    baseline = threading.active_count()
+    quiet = []
+    try:
+        for _ in range(server.MAX_HANDLER_THREADS):
+            quiet.append(socket.create_connection(listener.server_address, timeout=5))
+        assert wait_until(lambda: listener.handler_slots._value == 0), (
+            "the server did not take one slot per held connection"
+        )
+
+        extra = socket.create_connection(listener.server_address, timeout=5)
+        extra.settimeout(5)
+        assert extra.recv(1) == b"", "the connection beyond the cap was never closed"
+        extra.close()
+        assert threading.active_count() <= baseline + server.MAX_HANDLER_THREADS
+
+        for connection in quiet:
+            assert connection.recv(1) == b"", "a held connection did not time out"
+        assert wait_until(
+            lambda: listener.handler_slots._value == server.MAX_HANDLER_THREADS
+        ), "the handler slots were not released at the socket timeout"
+        assert request(listener, "/hardware", token=TOKEN)[0] == 200
+    finally:
+        for connection in quiet:
+            connection.close()
+
+
+def test_a_fifth_stream_on_one_job_is_429_and_a_freed_slot_admits_another(launch):
+    """AC-3: four streams per job, and the slot returns when one ends by any path."""
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(download=module, keepalive_s=0.05)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert module.started.wait(5)
+    job = listener.jobs.get(job_id)
+
+    streams = []
+    try:
+        for _ in range(server.MAX_STREAMS_PER_JOB):
+            sock = open_stream(listener, job_id)
+            reader = StreamReader(sock)
+            head = reader.read_until(b"\r\n\r\n").decode("latin-1")
+            assert " 200 " in head.splitlines()[0], head
+            streams.append((sock, reader))
+        assert job.streams == server.MAX_STREAMS_PER_JOB
+
+        code, _, raw = send_to(listener, f"/jobs/{job_id}/events", method="GET")
+        assert code == 429
+        assert error_of(raw)["code"] == "too_many_streams"
+
+        for _, reader in streams:
+            block = reader.read_until(b"\n\n").decode("utf-8")
+            assert '"type": "progress"' in block, "a held stream stopped streaming"
+
+        streams[0][0].close()
+        assert wait_until(lambda: job.streams == server.MAX_STREAMS_PER_JOB - 1), (
+            "a disconnected stream did not give its slot back"
+        )
+        replacement = open_stream(listener, job_id)
+        reader = StreamReader(replacement)
+        assert b" 200 " in reader.read_until(b"\r\n\r\n")
+        assert job.streams == server.MAX_STREAMS_PER_JOB
+
+        release.set()
+        assert wait_until(lambda: job.done)
+        assert wait_until(lambda: job.streams == 0), "a finished stream did not give its slot back"
+    finally:
+        for sock, _ in streams:
+            sock.close()
+        release.set()
+
+
+def test_a_refused_unknown_path_is_logged_as_unknown_not_echoed(launch, capsys):
+    """AC-4: a refusal may not write a path the router does not serve -- it is client text."""
+    listener = launch()
+    secret = "a-client-supplied-path-segment"
+
+    code, _, _ = request(listener, f"/{secret}", token=None)
+
+    assert code == 401
+    stderr = capsys.readouterr().err
+    assert secret not in stderr
+    assert json.loads(stderr.splitlines()[0])["path"] == "<unknown>"
+
+
+def test_a_refused_served_job_path_keeps_its_path_in_the_log(launch, capsys):
+    """AC-4: the served routes still name themselves, so a probe leaves a usable trace."""
+    listener = launch()
+
+    code, _, _ = send_to(
+        listener, f"/jobs/{'0' * 16}/events", method="GET", token=None
+    )
+
+    assert code == 401
+    assert json.loads(capsys.readouterr().err.splitlines()[0])["path"] == (
+        f"/jobs/{'0' * 16}/events"
+    )
+
+
+def test_a_hung_hardware_tool_is_500_internal_and_not_a_hang(launch):
+    """AC-5: ``hardware._run`` is bounded, and the timeout surfaces as a 500."""
+    def hung(argv):
+        raise subprocess.TimeoutExpired(argv, hardware.TOOL_TIMEOUT_S)
+
+    listener = launch(scan=functools.partial(hardware.scan, run=hung, volume_paths=lambda: []))
+
+    code, _, raw = request(listener, "/hardware", token=TOKEN)
+
+    assert code == 500
+    error = error_of(raw)
+    assert error["code"] == "internal"
+    assert "timed out" in error["message"].lower() or "timeout" in error["message"].lower()

@@ -15,7 +15,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). Next: plan 045-02 fixes, then 045-03 clean-account smoke. Phase 5 not started.
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). 045-02 split in two (Jason 2026-11-03): `045-02a-PLAN.md` (server + lifecycle: T-02/03/04/05/08/09/10/11) created + audited, APPLY next; 045-02b (installers + fetch: T-01/06/07/12/13/16) next; then 045-03 clean-account smoke. Phase 5 not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
 Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); 04-01 closed (SUMMARY written). Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-03 — 04-03c: quickbench re-run live, all 5 engines PASS incl. Osaurus 131.3 tok/s, restore byte-exact; hero-model safetensors proven to be the pinned tensors. 2026-11-02: quickbench first live run (Osaurus refused by baseline-path gap). Before: 04-02 unified: jobs + SSE (live scratch download/evict). 04-01b: gpu_cores from ioreg. Before it, 04-01: `ohyesmlx app` guarded loopback API (`1c157b0`).
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [045-01 closed 2026-11-03 - next: plan 045-02]
+  ✓        ○        ○     [045-02a planned + audited 2026-11-03, APPLY next]
 ```
 
 ## Performance Metrics
@@ -131,6 +131,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-11-02: Enterprise audit performed on .paul/phases/v5-onboarding/04-03a-PLAN.md. Applied 3 must-have, 2 strongly-recommended upgrades. Deferred 2. Verdict: conditionally acceptable | v5.0 Phase 4 | Osaurus pin gains crash recovery and atomic writes; `quick` absent equals false |
 | 2026-11-02: Enterprise audit performed on .paul/phases/v5-onboarding/04-03b-PLAN.md. Applied 5 must-have, 2 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 Phase 4 | App-installed pip engines were invisible to the runtimes' PATH; `install` now records them in lab-paths.json. Osaurus skipped while its app runs |
 | 2026-11-03: Enterprise audit performed on .paul/phases/v5-onboarding/045-01-PLAN.md. Applied 4 must-have, 4 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 Phase 4.5 | Unfixed findings stay out of the public repo until fixed; probes run on a scratch HOME/HF cache; lab-paths.json is a code-execution asset |
+| 2026-11-03: Enterprise audit performed on .paul/phases/v5-onboarding/045-02a-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 2. Verdict: conditionally acceptable | v5.0 Phase 4.5 | Orphan-engine ledger written after cold_load_s, matched on start time + argv; startup Osaurus recover only when its app is not running |
 | Decision 137: Phase 3 catalog is capped by disk size (~2 GB of weights), downloads use the Hugging Face cache layout, and oMLX's HF-cache scan is recorded not changed | v5.0 2026-11-01 | Jason's call. 3B-class models are in (SmolLM3-3B, Llama-3.2-3B); the two measured larger models are a higher tier; no <=3B MoE exists for MLX. `docs/research/2026-10-30-phase3-models.md`. AGENTS.md oMLX hazard corrected (it also scans the user's HF cache; ids still resolve to the cell's entry). |
 | Decision 138: one download at a time, across repos and processes (03-03 AC-7) | v5.0 2026-11-02 | Jason's call at the Phase 2.5-3 review. The per-repo lock let two models download at once, each checking free disk alone, so together they could overrun `DISK_MARGIN`. `fetch` now takes one `download.lock`; refusal stays `busy`. |
 | Decision 139: adopt Osaurus 0.25.29 and oMLX 0.7.3 as tested builds | v5.0 2026-11-02 | Jason's call. Both auto-updated past their tested builds (0.25.28, 0.7.2). Canary 2026-11-02 12:47-12:57 EST, `scripts/run_canary.sh`, verdicts only, load 1.5-3.2, Osaurus restored byte-exact (`cmp`): Osaurus decode 62.0 -> 63.1 tok/s (+1.8%), TTFT 0.305 -> 0.311 s (+2.0%); oMLX decode 85.4 -> 83.2 (-2.6%), TTFT 0.172 -> 0.176 s (+2.3%); both "no effect on our tables" (5% floor). The manifest's baselines were re-recorded from that same run through `canary.record` (both rows PASS, `runtime_version` equal to the adopted build), not from a second run. Raw: `results/canary/20261102T174716Z-osaurus`, `20261102T175323Z-omlx`. vMLX 1.6.82 is still untested. |
@@ -170,9 +171,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-11-03 (Claude Opus 5.5 coordinator)
-Stopped at: 045-01 unified (threat model; 14 findings approved for 045-02; detail of unfixed mediums in gitignored `045-01-findings-private.md`). Uncommitted.
-Next action: /paul:plan 045-02 from `045-01-SUMMARY.md` (Approved for 045-02) and the private findings file.
-Resume file: `.paul/phases/v5-onboarding/045-01-SUMMARY.md`
+Stopped at: 045-01 committed (`d6bc804`, local; worker logs gitignored until 045-02b); 045-02a-PLAN.md created.
+Next action: /paul:apply .paul/phases/v5-onboarding/045-02a-PLAN.md.
+Resume file: `.paul/phases/v5-onboarding/045-02a-PLAN.md`
 Resume context: **Read `.paul/HANDOFF.md` first** (2026-11-03), then this file's Decisions table (134-141) and `PHASE-4-SUMMARY.md`.
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 

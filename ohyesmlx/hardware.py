@@ -18,6 +18,18 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+from ohyesmlx.sample import SYSCTL
+
+# Every tool this module runs, by absolute path, so a PATH carrying a lab directory or a
+# user's own binary cannot decide what "this Mac" is. `SYSCTL` is `sample`'s definition --
+# the module that used it first -- and the other two are used only here.
+SW_VERS = "/usr/bin/sw_vers"
+IOREG = "/usr/sbin/ioreg"
+
+# A tool that has not answered in this long is hung, not slow: the scan is four short
+# commands, and `/hardware` must answer rather than hold a handler thread forever (T-09).
+TOOL_TIMEOUT_S = 10
+
 # Below 8 GiB there is not enough unified memory for the smallest model in the catalog,
 # so the machine is reported unsupported rather than recommended to (Decision D1).
 MIN_RAM_BYTES = 8 * 1024**3
@@ -43,12 +55,17 @@ class Hardware:
 
 
 def _run(argv: list[str]) -> str:
-    """Run *argv* and return its stdout with surrounding whitespace removed."""
+    """Run *argv* and return its stdout with surrounding whitespace removed.
+
+    *argv* names its tool by absolute path, and the call is bounded by ``TOOL_TIMEOUT_S``:
+    a hung tool raises ``subprocess.TimeoutExpired`` rather than hanging the caller.
+    """
     proc = subprocess.run(
         argv,
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
+        timeout=TOOL_TIMEOUT_S,
         check=True,
     )
     return proc.stdout.strip()
@@ -114,12 +131,12 @@ def _volume_paths(root: str = "/Volumes") -> list[str]:
 
 def scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths) -> Hardware:
     """Describe this Mac through *run* and its volumes through *disk_usage*."""
-    chip = run(["sysctl", "-n", "machdep.cpu.brand_string"])
-    ram_bytes = int(run(["sysctl", "-n", "hw.memsize"]))
-    cpu_cores = int(run(["sysctl", "-n", "hw.ncpu"]))
-    macos = run(["sw_vers", "-productVersion"])
+    chip = run([SYSCTL, "-n", "machdep.cpu.brand_string"])
+    ram_bytes = int(run([SYSCTL, "-n", "hw.memsize"]))
+    cpu_cores = int(run([SYSCTL, "-n", "hw.ncpu"]))
+    macos = run([SW_VERS, "-productVersion"])
     try:
-        ioreg = run(["ioreg", "-rc", "AGXAccelerator", "-d1"])
+        ioreg = run([IOREG, "-rc", "AGXAccelerator", "-d1"])
     except (OSError, subprocess.CalledProcessError):
         ioreg = ""
     family, tier = _chip_identity(chip)

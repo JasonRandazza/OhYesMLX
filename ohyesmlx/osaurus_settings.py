@@ -37,11 +37,13 @@ import os
 import sys
 from pathlib import Path
 
+from ohyesmlx import writable_root
+
 DEFAULT_CONFIG_DIR = Path.home() / ".osaurus" / "config"
 
-BASELINE_PATH = (
-    Path(__file__).resolve().parents[1] / "config" / "osaurus-settings-baseline.json"
-)
+# The drift guard's baseline: beside the package in a checkout, under Application Support in
+# an installed app. `writable_root` is the one definition of which of the two this is.
+BASELINE_PATH = writable_root() / "config" / "osaurus-settings-baseline.json"
 
 # The two host files `pin` backs up and edits: the caches live in one, the idle residency
 # policy in the other. A backup of one without the other could not restore a host.

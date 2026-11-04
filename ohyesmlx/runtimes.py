@@ -79,6 +79,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import writable_root
 from .osaurus_settings import (
     DEFAULT_CONFIG_DIR as OSAURUS_CONFIG_DIR,
     MISSING as OSAURUS_MISSING,
@@ -122,7 +123,11 @@ LOG_TAIL_BYTES = 1024 * 1024
 LOG_HEAD_BYTES = 1024 * 1024
 
 LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
-LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
+# `ps` is the one tool this module and quickbench both call, and both call it by absolute
+# path: a PATH carrying a lab directory or a user's own `ps` must not decide which process
+# list the harness reads (AGENTS.md, plan 045-02a T-09).
+PS = "/bin/ps"
+LOGS_DIR = writable_root() / "results" / "logs"
 
 # The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag
 # install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
@@ -551,7 +556,7 @@ def _process_alive(pid: int) -> bool:
 
 
 def _resident_osaurus_pids() -> tuple[int, ...]:
-    result = _run(("ps", "-axo", "pid=,args="), STOP_TIMEOUT_S)
+    result = _run((PS, "-axo", "pid=,args="), STOP_TIMEOUT_S)
     if result is None:
         raise RuntimeStartError(
             "could not inspect running processes for resident Osaurus app instances"

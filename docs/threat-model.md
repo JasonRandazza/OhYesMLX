@@ -269,15 +269,15 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 |---|---|---|---|---|---|
 | T-01 | CONFIRMED | medium | compromised upstream | installer (pip) | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
 | T-02 | CONFIRMED | medium | same-user / interruption | app lifecycle: interrupted jobs | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
-| T-03 | CONFIRMED | medium | deployment | writable paths | Fix in 045-02, plus checklist P5-6. *Detail withheld until fixed in 045-02.* |
-| T-04 | CONFIRMED | medium | another local account (chained with T-08) | server job registry | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
+| T-03 | CONFIRMED | medium | deployment | writable paths | **Fixed in 045-02a (part A)**, plus checklist P5-6. Detail in 7.4. |
+| T-04 | CONFIRMED | medium | another local account (chained with T-08) | server job registry | **Fixed in 045-02a (part A)**. Detail in 7.4. |
 | T-05 | CONFIRMED | medium | same-user (the Osaurus app) | quickbench Osaurus pin | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
 | T-06 | CONFIRMED | medium | second process | fetch ledger | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
 | T-07 | CONFIRMED | low | same-user | installer environment | Fix in 045-02 (one line), plus checklist P5-3 |
-| T-08 | CONFIRMED | low | any local account / token holder | server threads | Fix in 045-02 |
-| T-09 | CONFIRMED | low | compromised upstream | bare command names | Fix in 045-02, plus checklist P5-9 |
-| T-10 | CONFIRMED | low | another local account (read) | file modes | Fix in 045-02, plus checklist P5-5 |
-| T-11 | CONFIRMED | low | token holder pasting into a URL | refusal log | Fix in 045-02 |
+| T-08 | CONFIRMED | low | any local account / token holder | server threads | **Fixed in 045-02a (part A)**; residual risk in section 9 |
+| T-09 | CONFIRMED | low | compromised upstream | bare command names | **Fixed in 045-02a (part A)**, plus checklist P5-9 |
+| T-10 | CONFIRMED | low | another local account (read) | file modes | **Fixed in 045-02a (part A)**, plus checklist P5-5 |
+| T-11 | CONFIRMED | low | token holder pasting into a URL | refusal log | **Fixed in 045-02a (part A)** |
 | T-12 | CONFIRMED | low | same-user | `lab-paths.json` | Fix in 045-02 (validation) |
 | T-13 | CONFIRMED | low | same-user | `evict` ledger trust | Fix in 045-02 (per-repo containment) |
 | T-14 | CONFIRMED | low | same-user | HF cache symlink races | Accepted, see section 9 |
@@ -290,6 +290,32 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 
 ### 7.4 Low-severity and rejected findings in detail
 
+**T-03, the backend writes inside its own package tree [F4, C-3]. Fixed in 045-02a (part A).**
+
+- `osaurus_settings.BASELINE_PATH` was `<package parent>/config/osaurus-settings-baseline.json`, written by every
+  app-driven pin and restore; `runtimes.LOGS_DIR` was `<package parent>/results/logs`, written by every engine
+  start, and `_spawn` created it outside its `try`, so a read-only tree raised `OSError`, not `RuntimeStartError`.
+- Packaged inside a signed, read-only `.app`, every quickbench cell would have failed, the Osaurus pin would have
+  rewritten both configs and then raised on the baseline write (undone only by the `finally`'s restore), or, if the
+  bundle were writable, the bundle's signature would have been broken.
+- Fix: `ohyesmlx.writable_root()` is the one definition of where the app may write: the repository root when the
+  package runs from a git checkout (so `BASELINE_PATH` and `LOGS_DIR` are byte-identical to before and no harness
+  run, canary or published table moves), otherwise `ohyesmlx.app_support_dir()`. Both constants ask it, and every
+  Application Support path in `engines`, `fetch` and `quickbench` derives from `app_support_dir`. Tests: a
+  read-only, `.git`-less package tree on a scratch home sends a pin round-trip and an engine spawn log only under
+  the scratch Application Support (`tests/test_paths.py`).
+
+**T-04, the job slot could leak for the life of the process [F1, C]. Fixed in 045-02a (part A).**
+
+- `POST /jobs` took the slot with `claim()`, then wrote the start line to stderr and started the job thread with
+  nothing to free the slot if either raised; only a stored terminal event frees it.
+- Triggers: a parent that had closed stderr (`BrokenPipeError`), or thread creation failing. Chained with T-08, any
+  local account could open many idle connections, push the process to its thread limit, make the app's next
+  `POST /jobs` fail at `Thread.start()`, and leave every later job `409 busy` until a restart.
+- Fix: any exception between `claim()` and a running job thread stores `error` (code `internal`) and `done` on the
+  job, which frees the slot, before the 500. Tests: a start-log write that raises and a thread that will not start
+  each answer 500, and the next valid `POST /jobs` is 202.
+
 **T-07, installer environment [S2, C].**
 
 - `_hermetic_env` (`engines.py:870-882`) drops `PYTHONPATH` and `PIP_*`, but pip still reads its config files:
@@ -301,7 +327,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   corrects the worker's claim).
 - Fix: run both steps with `-I`, and run pip with `--isolated`.
 
-**T-08, unbounded threads [F7, C].**
+**T-08, unbounded threads [F7, C]. Fixed in 045-02a (part A):** `MAX_HANDLER_THREADS` (32) slots taken before a handler thread starts (a connection past the cap is closed with no response and no thread), and `MAX_STREAMS_PER_JOB` (4), past which `/events` is `429 too_many_streams`.
 
 - `ThreadingHTTPServer` (`server.py:823`) starts one thread per connection, with no cap.
 - An unauthenticated connection holds a thread for up to `HANDLER_TIMEOUT_S` (10 s). The probe showed 50 idle
@@ -313,7 +339,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - Fix: a bounded semaphore on concurrent handler threads (refusing with a closed connection when full), and a
   per-job stream cap.
 
-**T-09, bare command names [F5, C].**
+**T-09, bare command names [F5, C]. Fixed in 045-02a (part A):** `/bin/ps`, `/usr/sbin/sysctl`, `/usr/bin/sw_vers`, `/usr/sbin/ioreg` and `/usr/bin/open`, each spelled once; `hardware._run` is bounded by `TOOL_TIMEOUT_S` (10 s) and a hung tool makes `/hardware` a 500. `runtimes.LSOF` is still resolved with `shutil.which` on the ambient PATH at import (not the lab-prefixed engine PATH); not part of this finding.
 
 - `_resident_osaurus_pids` runs `ps` by bare name through `_run` (`runtimes.py:554`), on the PATH that
   `_engine_env` prefixes with lab-path venv `bin/` directories (`runtimes.py:470-486`). It then signals the pids
@@ -324,7 +350,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - Fix: absolute paths (`/bin/ps`, `/usr/sbin/sysctl`, `/usr/bin/sw_vers`, `/usr/sbin/ioreg`, `/usr/bin/open`),
   and a timeout on `hardware._run`.
 
-**T-10, file modes [S7, C].**
+**T-10, file modes [S7, C]. Fixed in 045-02a (part A):** `ohyesmlx.ensure_app_support()` creates the directory `0700` or tightens an existing one, called by `ohyesmlx app` and `ohyesmlx quickbench` before their first write.
 
 - Nothing under Application Support or the HF cache is created with an explicit mode, apart from the Osaurus
   backup directory (`0700`) and the lock file (`0644`).
@@ -332,7 +358,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   and `lab-paths.json`. None holds a secret, but together they describe the machine and its use.
 - Fix: create `~/Library/Application Support/OhYesMLX` with `0700`.
 
-**T-11, token in the refusal log [F6].**
+**T-11, token in the refusal log [F6]. Fixed in 045-02a (part A):** the refusal line carries the path only when it is a served route, else `<unknown>`.
 
 - `_log_refusal` drops the query string but logs the path verbatim (`server.py:380`, `386-388`), so a token
   pasted into a path segment reaches stderr.
@@ -437,6 +463,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 | Same-user symlink races in the HF cache (T-14) | Only a process that can already write the user's files can win them. Fixing them fully needs `O_NOFOLLOW`/`openat` handling throughout `fetch`, a large change for no gain against that actor. | Running the backend as a different user from the one that owns the cache |
 | Anyone holding the token can submit consented jobs | By design: the token is the boundary, and the parent app is the only holder | The token reaching any second process |
 | UAT-001 | Section 8 | Users report surprise re-downloads |
+| A local account filling the 32 handler slots (T-08) | Each idle connection is closed by the 10 s handler timeout, so the app's own requests are delayed, not refused for good; the slot leak that made it permanent (T-04) is closed. | The backend serving anything but loopback, or the app needing guaranteed latency |
 
 ## 10. Phase 5 packaging checklist
 

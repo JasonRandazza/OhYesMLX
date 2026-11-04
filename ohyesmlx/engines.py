@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from xml.parsers.expat import ExpatError
 
+from ohyesmlx import app_support_dir
 from ohyesmlx.hardware import scan as _scan_hardware
 from ohyesmlx.runtimes import OSAURUS_APP_BUNDLES, RUNTIMES, VMLX_ENGINE_INIT
 
@@ -322,13 +323,16 @@ def _first_existing(env, paths: tuple[str, ...]) -> str | None:
 
 
 # The app's own Application Support directory: plan 02-02's venvs live in `engines/`
-# under it, and plan 02-03's install log sits beside that.
-_APP_SUPPORT = os.path.join("Library", "Application Support", "OhYesMLX")
+# under it, and plan 02-03's install log sits beside that. Its one definition is
+# `ohyesmlx.app_support_dir`, so `fetch` and `quickbench` ask the same helper.
+def _app_support(home: str) -> str:
+    """The app's Application Support directory for *home*, as the string callers join."""
+    return str(app_support_dir(home))
 
 
 def _engines_dir(home: str) -> str:
     """The one place the app-managed engines directory is derived (detect and install share it)."""
-    return os.path.join(home, _APP_SUPPORT, "engines")
+    return os.path.join(_app_support(home), "engines")
 
 
 def _app_engine_venvs(env, name: str) -> tuple[str, ...]:
@@ -356,7 +360,7 @@ LAB_PATHS_NAME = "lab-paths.json"
 
 def _lab_paths_file(home: str) -> str:
     """The one place the machine-local lab-paths file is derived (detection and start share it)."""
-    return os.path.join(home, _APP_SUPPORT, LAB_PATHS_NAME)
+    return os.path.join(_app_support(home), LAB_PATHS_NAME)
 
 
 def _lab_paths_beside(engines_dir: str) -> str:
@@ -775,7 +779,7 @@ def install_plan(name: str, macos_major: int) -> Plan:
 # (AC-10). The log is plain append-only JSONL under the app's own Application Support
 # directory and is never uploaded (Decision D8); it is not a governance layer.
 DEFAULT_ENGINES_DIR = _engines_dir(DEFAULT_ENV.home)
-DEFAULT_INSTALL_LOG = os.path.join(DEFAULT_ENV.home, _APP_SUPPORT, "install-log.jsonl")
+DEFAULT_INSTALL_LOG = os.path.join(_app_support(DEFAULT_ENV.home), "install-log.jsonl")
 
 # AC-8 bounds: a step that runs longer than this is killed, and the output an event
 # carries is its last four kilobytes so a chatty pip cannot grow the job stream.
@@ -859,8 +863,13 @@ def _real_run(argv: list[str], timeout_s: float, env: dict[str, str]) -> tuple[i
     return proc.returncode, _tail(proc.stdout, proc.stderr)
 
 
+# `open` is the one system tool this module runs by bare name today; an absolute path keeps
+# a PATH entry from choosing which opener a guided install uses.
+OPEN = "/usr/bin/open"
+
+
 def _real_open(url: str) -> None:
-    subprocess.run(["open", url], check=False, stdin=subprocess.DEVNULL)
+    subprocess.run([OPEN, url], check=False, stdin=subprocess.DEVNULL)
 
 
 def _print_event(event: dict) -> None:

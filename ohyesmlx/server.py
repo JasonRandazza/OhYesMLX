@@ -67,6 +67,15 @@ MAX_BODY_BYTES = 4_096
 # AC-6: shutdown cancels a running install or download and waits at most this long for it.
 JOB_SHUTDOWN_WAIT_S = 120.0
 
+# AC-3: one handler thread per connection, from accept to close, and no more than this many at
+# once. A local account opening connections cannot grow the thread count without bound; a
+# connection past the cap is closed before a thread exists for it.
+MAX_HANDLER_THREADS = 32
+
+# AC-3: one job may have at most this many event streams open at once, so four clients cannot
+# each hold a handler thread on the same job; the fifth is refused rather than queued.
+MAX_STREAMS_PER_JOB = 4
+
 # The paths that answer, and the handler each one runs. Anything else is 404, whatever the
 # method -- and this mapping is the only place the set is written down.
 _ENDPOINTS = {
@@ -113,6 +122,7 @@ _ERRORS = {
     "busy": (409, "another job is already running"),
     "unknown_job": (404, "no such job"),
     "bad_event_id": (400, "Last-Event-ID must be a non-negative integer"),
+    "too_many_streams": (429, "a job has at most four event streams"),
     "not_cancellable": (409, "an evict job cannot be cancelled"),
     "job_finished": (409, "the job has already finished"),
 }
@@ -142,6 +152,7 @@ class _Job:
         self.condition = threading.Condition()
         self.done = False
         self.cancel_requested = False
+        self.streams = 0
         self._registry = registry
 
     def append(self, event: dict) -> None:
@@ -180,6 +191,19 @@ class _Job:
     def cancelled(self) -> bool:
         """The callable a module probes; True from the moment ``POST /jobs/{id}/cancel`` lands."""
         return self.cancel_requested
+
+    def open_stream(self) -> bool:
+        """Take one of the job's stream slots, or False when all of them are held (AC-3)."""
+        with self.condition:
+            if self.streams >= MAX_STREAMS_PER_JOB:
+                return False
+            self.streams += 1
+            return True
+
+    def close_stream(self) -> None:
+        """Give a stream slot back, however that stream ended."""
+        with self.condition:
+            self.streams -= 1
 
 
 class _Jobs:
@@ -272,20 +296,34 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _served_path(path: str) -> str:
+    """*path* when the router serves it, else ``<unknown>``: no client text reaches the log.
+
+    The served set is the router's own -- ``_ENDPOINTS`` for the four GETs, ``/jobs`` and
+    ``_JOB_PATH`` for the job routes -- so a new route is added in one place and this check
+    follows it.
+    """
+    if path in _ENDPOINTS or path == "/jobs" or _JOB_PATH.fullmatch(path):
+        return path
+    return "<unknown>"
+
+
 def _log_refusal(code: str, method: str, path: str) -> None:
     """One JSON line per refusal, so a probe from a page leaves a trace and nothing else does.
 
     The fields are the code, the method, the path and the time -- never a header value and
     never the token, so the app can surface the line without handling a secret. The query
     string is dropped with the path it arrived on: it is client text, and a caller that pasted
-    the token into it would otherwise write the token to stderr.
+    the token into it would otherwise write the token to stderr. The path itself is written
+    only when it is a route this server serves; anything else is ``<unknown>``, for the same
+    reason -- a request path is client text too.
     """
     print(
         json.dumps(
             {
                 "refused": code,
                 "method": method,
-                "path": path,
+                "path": _served_path(path),
                 "time": _now(),
             }
         ),
@@ -598,10 +636,24 @@ class _Handler(BaseHTTPRequestHandler):
         if running is not None:
             self._respond("busy", f"job {running.id} is still running")
             return
-        _log_job({"job": job.id, "kind": job.kind, "name": job.name, "time": _now()})
-        threading.Thread(
-            target=self._run_job, args=(job,), daemon=True, name=f"job-{job.id}"
-        ).start()
+        try:
+            _log_job({"job": job.id, "kind": job.kind, "name": job.name, "time": _now()})
+            threading.Thread(
+                target=self._run_job, args=(job,), daemon=True, name=f"job-{job.id}"
+            ).start()
+        except Exception as error:
+            # AC-2: the slot was claimed, so a failure before the thread runs must end the
+            # job here. `append`'s terminal `done` is what frees it.
+            job.append(
+                _event(
+                    "error",
+                    str(error) or "the job could not be started",
+                    {"code": "internal"},
+                )
+            )
+            job.append(_event("done", "the job ended before it started", None))
+            self._respond("internal", str(error))
+            return
         self._write_json(202, {"job_id": job.id})
 
     def _job_body(self) -> bytes | None:
@@ -695,10 +747,17 @@ class _Handler(BaseHTTPRequestHandler):
         last_seq = self._last_event_id()
         if last_seq is None:
             return
+        if not job.open_stream():
+            self._respond("too_many_streams")
+            return
         try:
             self._stream_job(job, last_seq)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             self.close_connection = True
+        finally:
+            # AC-3: the slot comes back whichever way the stream ended -- done, a module that
+            # raised, a client that disconnected, or the write timeout.
+            job.close_stream()
 
     def _last_event_id(self) -> int | None:
         """The ``Last-Event-ID`` to resume after, 0 for the whole stream, or None on a refusal."""
@@ -787,6 +846,40 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _Server(ThreadingHTTPServer):
+    """The listener, with one handler-thread slot taken before each thread starts (AC-3).
+
+    The slot is acquired non-blocking in ``process_request``: when the cap is reached the
+    connection is closed with no response and no thread. Ownership passes to the handler
+    thread the moment ``ThreadingMixIn.process_request`` has started it, and that thread
+    releases the slot in a ``finally`` around every ending -- a normal response, a handler
+    exception, and the socket timeout the base class turns into a closed connection.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.handler_slots = threading.BoundedSemaphore(MAX_HANDLER_THREADS)
+
+    def process_request(self, request, client_address) -> None:
+        if not self.handler_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            # The thread never took ownership of the slot, so this path still owns it.
+            self.handler_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.handler_slots.release()
+
+
 def make_server(
     port: int = 0,
     *,
@@ -820,10 +913,7 @@ def make_server(
     where the exit code 2 and the stderr line belong.
     """
     handler = type("_TimedHandler", (_Handler,), {"timeout": timeout})
-    listener = ThreadingHTTPServer((HOST, port), handler)
-    # ThreadingHTTPServer sets this already; it is the server's stated contract (AC-8), not an
-    # accident of the stdlib, so a shutdown never waits on a handler thread.
-    listener.daemon_threads = True
+    listener = _Server((HOST, port), handler)
     listener.scan = scan
     listener.detect = detect
     listener.load_catalog = load_catalog

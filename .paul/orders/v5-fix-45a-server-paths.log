@@ -1,0 +1,178 @@
+I'll start by reading the spec and the files I'm allowed to touch.
+Now let me look at the paths/tool usages across the modules I may touch.
+Let me read the relevant sections of the remaining modules.
+
+
+Let me record the baseline test count and read the test conventions.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I've got the full picture. Writing the shared writable-root helper first.
+Now the path derivations in engines, fetch, quickbench, osaurus_settings and runtimes.
+
+
+
+Now the CLI calls.
+Now the server fixes (AC-2, AC-3, AC-4).
+
+
+Now AC-5: absolute tool paths and the hardware scan timeout.
+
+
+Now update the hardware tests to the absolute-path argv, and add the timeout checks.
+
+
+
+
+
+
+
+Now the server tests.
+
+Now the CLI tests: keep the real Application Support untouched and assert call order.
+
+
+
+
+
+
+
+Now update `docs/interfaces.md` for the changed contracts.
+
+Let me run the targeted tests first.
+A 404 with a valid token isn't a guard refusal and writes nothing. Fixing the test to be a real refusal.
+
+All green at 1186. Now the red-checks, one guard at a time. First: the AC-2 slot release.
+
+Both AC-2 tests fail as expected. Restoring.
+Now the AC-3 handler-thread cap.
+
+Restoring the handler cap.
+Now the AC-3 per-job stream cap.
+
+Restoring the stream cap.
+Now the AC-4 route filter.
+
+Restoring the route filter.
+Now the AC-5 absolute `ps`.
+
+Restoring the absolute path.
+Now the AC-1 mode guarantee.
+
+Restoring the mode guarantee.
+All guards restored. Running the full suite and verifying the checkout paths.
+
+
+
+Let me strengthen the AC-2 assertions and pin the two remaining call sites.
+
+
+
+
+
+All 1188 pass. Let me collect the exact line numbers for the report.
+Done. All six guards are in place, restored after red-checking, and the suite is green.
+
+## Per fix (file:line → red-then-green tests)
+
+**AC-1 — one writable root (T-03, T-10)**
+- `ohyesmlx/__init__.py:16` `app_support_dir`, `:27` `_is_checkout`, `:32` `writable_root`, `:44` `ensure_app_support` (mkdir + unconditional chmod 0700).
+- Derived: `engines.py:328` (`_app_support`, used by `_engines_dir`/`_lab_paths_file`/`DEFAULT_INSTALL_LOG`), `fetch.py:90`, `quickbench.py:85`, `osaurus_settings.py:46`, `runtimes.py:130`.
+- CLI: `cli.py:1035` (`_quickbench`, before `module.run`), `cli.py:1086` (`_app`, before `make_server`).
+- Tests: `test_paths.py::test_the_checkout_baseline_and_logs_paths_are_byte_identical_to_today`, `::test_without_a_checkout_the_writable_root_is_application_support`, `::test_a_pin_round_trip_without_a_checkout_writes_only_under_application_support`, `::test_an_engine_spawn_log_without_a_checkout_lands_under_application_support`, `::test_ensure_app_support_creates_the_directory_0700`, `::test_ensure_app_support_tightens_a_pre_existing_0755_directory`; `test_cli.py::test_the_app_creates_app_support_before_it_serves`, `::test_quickbench_creates_app_support_before_the_first_write`.
+- In this checkout: `/Users/jrazz/Dev/active/OhYesMLX/config/osaurus-settings-baseline.json` and `/Users/jrazz/Dev/active/OhYesMLX/results/logs` (printed).
+
+**AC-2 — job slot cannot leak (T-04)**
+- `server.py:639-657`: a raise from `_log_job` or `Thread.start` stores `error/internal` + `done` on the claimed job, then answers 500.
+- Tests: `test_server.py::test_a_start_log_that_raises_answers_500_and_frees_the_slot`, `::test_a_thread_that_will_not_start_answers_500_and_frees_the_slot`.
+
+**AC-3 — bounded threads and streams (T-08)**
+- `server.py:73` `MAX_HANDLER_THREADS=32`, `:77` `MAX_STREAMS_PER_JOB=4`, `:125` `too_many_streams` (429), `_Server` at `:849` (semaphore acquired non-blocking in `process_request`, released in `process_request_thread`'s finally), per-job slots at `_Job.open_stream/close_stream` (`:195`) and `_get_job_events` (`:750`).
+- Tests: `test_server.py::test_the_handler_thread_cap_closes_the_extra_connection_and_releases_at_timeout`, `::test_a_fifth_stream_on_one_job_is_429_and_a_freed_slot_admits_another`.
+- `docs/interfaces.md`: both limits and the new code documented.
+
+**AC-4 — refusal log carries no raw path (T-11)**
+- `server.py:299` `_served_path`; reuses `_ENDPOINTS`, `/jobs` and `_JOB_PATH`.
+- Tests: `test_server.py::test_a_refused_unknown_path_is_logged_as_unknown_not_echoed`, `::test_a_refused_served_job_path_keeps_its_path_in_the_log`.
+
+**AC-5 — absolute tools, bounded scan (T-09)**
+- `runtimes.py:129` `PS` (used at `:559` and by `quickbench.py:185`), `hardware.py:26-27` `SW_VERS`/`IOREG`, `:31` `TOOL_TIMEOUT_S=10` (used at `:68`, scan at `:134-139`), `engines.py:868` `OPEN` (used at `:872`). `SYSCTL` stays `sample.py`'s single definition and is imported by hardware.
+- Tests: `test_runtimes.py::test_resident_osaurus_pids_never_runs_a_ps_found_on_path`, `test_hardware.py::test_every_tool_is_named_by_absolute_path`, `::test_the_scan_calls_every_tool_with_the_ten_second_timeout`, `::test_a_hung_tool_raises_instead_of_hanging_the_scan`, `test_server.py::test_a_hung_hardware_tool_is_500_internal_and_not_a_hang`, `test_quickbench.py::test_the_osaurus_app_probe_runs_the_absolute_ps`, `test_engines.py::test_a_guided_download_opens_the_page_with_the_absolute_opener`.
+
+## Red-checks (reverted, observed, restored)
+1. AC-2 error/done store removed → both AC-2 tests fail (`409 busy` on the next POST).
+2. AC-3 semaphore removed → `test_the_handler_thread_cap_closes_the_extra_connection_and_releases_at_timeout` fails ("did not take one slot per held connection").
+3. AC-3 stream cap removed → `test_a_fifth_stream_on_one_job_is_429_and_a_freed_slot_admits_another` fails (`streams == 0`).
+4. AC-4 filter replaced with identity → `test_a_refused_unknown_path_is_logged_as_unknown_not_echoed` fails (token on stderr).
+5. AC-5 `PS = "ps"` → `test_resident_osaurus_pids_never_runs_a_ps_found_on_path` fails (fake executed).
+6. AC-1 mode/chmod removed → both `test_ensure_app_support_*` tests fail (0755 instead of 0700).
+
+## Verification
+- Baseline: `1164 passed` → final: `1188 passed in 45.34s`.
+- No commit made. Only the allowed files changed (`git status` shows the pre-existing `.paul` edits untouched).
+- No runtime, model, download, real port, real `~/.osaurus` or real Application Support was touched; app subprocess tests now run with a scratch `HOME`.
+
+## Unsure / judgement calls
+- `hardware` imports `SYSCTL` from `sample.py` rather than spelling it again; `sample.py` was out of scope and already owned the constant. If you wanted hardware to own it, sample would need editing.
+- The installed-app layout is simulated by pointing `ohyesmlx.__file__` at a read-only tmp package tree, not by a real `pip install`.
+- `_served_path` runs only on guard refusals (the only `_log_refusal` caller); an authorised 404 writes no line at all, so there is nothing to filter there.
+- The handler-cap test waits on `BoundedSemaphore._value` (CPython private) for determinism.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     87   14171694   13947648    79919   98.4%   0.123401
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M ohyesmlx/__init__.py
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/hardware.py
+ M ohyesmlx/osaurus_settings.py
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_cli.py
+ M tests/test_engines.py
+ M tests/test_hardware.py
+ M tests/test_quickbench.py
+ M tests/test_runtimes.py
+ M tests/test_server.py
+?? .paul/orders/v5-fix-45a-lifecycle.md
+?? .paul/orders/v5-fix-45a-server-paths.log
+?? .paul/orders/v5-fix-45a-server-paths.md
+?? .paul/phases/v5-onboarding/045-02a-AUDIT.md
+?? .paul/phases/v5-onboarding/045-02a-PLAN.md
+?? tests/test_paths.py
+ .paul/STATE.md               |  11 +--
+ docs/interfaces.md           |  29 +++++---
+ ohyesmlx/__init__.py         |  48 ++++++++++++-
+ ohyesmlx/cli.py              |  17 ++++-
+ ohyesmlx/engines.py          |  21 ++++--
+ ohyesmlx/fetch.py            |   6 +-
+ ohyesmlx/hardware.py         |  29 ++++++--
+ ohyesmlx/osaurus_settings.py |   8 ++-
+ ohyesmlx/quickbench.py       |   9 ++-
+ ohyesmlx/runtimes.py         |   9 ++-
+ ohyesmlx/server.py           | 110 +++++++++++++++++++++++++---
+ tests/test_cli.py            |  89 ++++++++++++++++++++---
+ tests/test_engines.py        |  22 ++++++
+ tests/test_hardware.py       | 110 ++++++++++++++++++++--------
+ tests/test_quickbench.py     |  15 ++++
+ tests/test_runtimes.py       |  25 +++++--
+ tests/test_server.py         | 166 +++++++++++++++++++++++++++++++++++++++++++
+ 17 files changed, 630 insertions(+), 94 deletions(-)
