@@ -12,6 +12,8 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import signal
+import subprocess
 import sys
 from dataclasses import FrozenInstanceError, fields
 from datetime import datetime
@@ -1403,3 +1405,68 @@ def test_a_guided_download_opens_the_page_with_the_absolute_opener(monkeypatch):
             {"check": False, "stdin": engines.subprocess.DEVNULL},
         )
     ]
+
+
+# --- plan 045-02a AC-6: an install step runs in its own, registered process group ------------
+
+
+class FakeStepProcess:
+    """The `Popen` one install step makes: answers output, or one timeout."""
+
+    def __init__(self, *, times_out=False):
+        self.pid = 9001
+        self.returncode = 0
+        self.times_out = times_out
+        self.communicates = 0
+
+    def communicate(self, timeout=None):
+        self.communicates += 1
+        assert self in engines._RUNNING_STEPS, "the step was not registered while it ran"
+        if self.times_out and self.communicates == 1:
+            raise subprocess.TimeoutExpired(cmd=[], timeout=timeout, output="half ")
+        return ("finished", "")
+
+
+def test_a_step_runs_in_its_own_session_and_leaves_the_registry_empty(monkeypatch):
+    proc = FakeStepProcess()
+    seen = {}
+
+    def popen(argv, **kwargs):
+        seen["argv"], seen["kwargs"] = argv, kwargs
+        return proc
+
+    monkeypatch.setattr(engines.subprocess, "Popen", popen)
+
+    code, output = engines._real_run(["pip", "install", "x"], 5, {"A": "b"})
+
+    assert (code, output) == (0, "finished")
+    assert seen["argv"] == ["pip", "install", "x"]
+    assert seen["kwargs"]["start_new_session"] is True
+    assert seen["kwargs"]["env"] == {"A": "b"}
+    assert engines._RUNNING_STEPS == set()
+
+
+def test_a_step_that_times_out_kills_its_group_and_reports_the_timeout(monkeypatch):
+    proc = FakeStepProcess(times_out=True)
+    killed = []
+    monkeypatch.setattr(engines.subprocess, "Popen", lambda argv, **kwargs: proc)
+    monkeypatch.setattr(engines.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+
+    code, output = engines._real_run(["pip", "install", "x"], 1, {})
+
+    assert code == engines.TIMEOUT_EXIT_CODE
+    assert killed == [(9001, signal.SIGKILL)]
+    assert output == "half "
+    assert engines._RUNNING_STEPS == set()
+
+
+def test_kill_running_steps_kills_every_registered_group(monkeypatch):
+    first, second = FakeStepProcess(), FakeStepProcess()
+    first.pid, second.pid = 9001, 9002
+    monkeypatch.setattr(engines, "_RUNNING_STEPS", {first, second})
+    killed = []
+    monkeypatch.setattr(engines.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+
+    engines.kill_running_steps()
+
+    assert sorted(killed) == [(9001, signal.SIGKILL), (9002, signal.SIGKILL)]

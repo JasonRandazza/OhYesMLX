@@ -72,6 +72,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -128,6 +129,11 @@ LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 # list the harness reads (AGENTS.md, plan 045-02a T-09).
 PS = "/bin/ps"
 LOGS_DIR = writable_root() / "results" / "logs"
+
+# The running-engines ledger: one file per owner process under this directory, so two harness
+# processes never read-modify-write one file. `ohyesmlx app` reads it at launch to stop an
+# engine a dead run left holding a port and its weights (045-02a AC-6).
+RUNNING_ENGINES_DIRNAME = "running-engines"
 
 # The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag
 # install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
@@ -1607,6 +1613,171 @@ def _shutdown(pid: int, port: int, stop_command: tuple[str, ...] = ()) -> None:
     await_port_free(port)
 
 
+def _ledger_path(pid: int | None = None, root=None) -> Path:
+    """The running-engines file for *pid* (default: this process), under *root*."""
+    base = Path(root) if root is not None else writable_root()
+    owner = os.getpid() if pid is None else pid
+    return base / "results" / RUNNING_ENGINES_DIRNAME / f"{owner}.json"
+
+
+def _ledger_entries(path: Path) -> list[dict]:
+    """The entries in one ledger file; an absent or unreadable file holds none."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _write_ledger(path: Path, entries: list[dict]) -> None:
+    """Write *entries* atomically, or remove the file when there are none.
+
+    A temp file in the same directory and ``os.replace``: a reader never sees half a ledger,
+    and a kill between the write and the replace leaves the previous file intact.
+    """
+    if not entries:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump({"entries": entries}, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _process_identity(pid: int) -> tuple[str, str] | None:
+    """``(start time, argv)`` for *pid* as ``ps`` prints them, or ``None`` when unreadable.
+
+    Both halves come from one call so a recovered ledger entry is compared with the process it
+    was recorded from: the start time tells a reused pid from the engine this harness spawned,
+    and the argv tells the user's own identical command from it.
+    """
+    result = _run((PS, "-ww", "-o", "lstart=,args=", "-p", str(pid)), STOP_TIMEOUT_S)
+    if result is None:
+        return None
+    line = (result.stdout or "").strip()
+    if not line:
+        return None
+    fields = line.split(None, 5)
+    if len(fields) < 6:
+        return None
+    return " ".join(fields[:5]), fields[5]
+
+
+def _record_running_engine(pid: int, port: int) -> None:
+    """Record one spawned engine in this process's ledger file.
+
+    Called after ``cold_load_s`` is taken, never between the spawn and readiness: the ``ps``
+    call is part of the ledger, and a measured load time must not contain it. Raises when the
+    entry cannot be recorded; :meth:`Runtime.start` logs that and keeps the start alive.
+    """
+    identity = _process_identity(pid)
+    if identity is None:
+        raise RuntimeStartError(
+            f"could not read the start time and argv of spawned pid {pid}"
+        )
+    lstart, argv = identity
+    path = _ledger_path()
+    entries = [entry for entry in _ledger_entries(path) if entry.get("pid") != pid]
+    entries.append({"pid": pid, "port": port, "argv": argv, "lstart": lstart})
+    _write_ledger(path, entries)
+
+
+def _forget_running_engine(pid: int) -> None:
+    """Drop *pid*'s entry from this process's ledger file, removing the file when empty."""
+    path = _ledger_path()
+    entries = _ledger_entries(path)
+    kept = [entry for entry in entries if entry.get("pid") != pid]
+    if kept == entries:
+        return
+    try:
+        _write_ledger(path, kept)
+    except OSError as error:
+        # A stop that has already released the port does not fail over its ledger line.
+        print(
+            json.dumps(
+                {"error": {"code": "running_engine_ledger", "message": str(error)}}
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _stop_orphan(entry: dict) -> None:
+    """Stop one recorded engine's process group when its recorded identity still matches."""
+    pid = entry.get("pid")
+    lstart = entry.get("lstart")
+    argv = entry.get("argv")
+    if not isinstance(pid, int) or not isinstance(lstart, str) or not isinstance(argv, str):
+        return
+    if not _process_alive(pid):
+        return
+    if _process_identity(pid) != (lstart, argv):
+        # A reused pid, or a command that is not the one this harness spawned: dropped, and
+        # never signalled.
+        return
+    _signal_tree(pid, signal.SIGTERM)
+    if _await_exit(pid, TERM_GRACE_S):
+        return
+    _signal_tree(pid, signal.SIGKILL)
+    if not _await_exit(pid, KILL_GRACE_S):
+        raise RuntimeStopError(
+            f"orphaned engine {pid} is still alive {KILL_GRACE_S:g}s after SIGKILL"
+        )
+
+
+def stop_orphaned_engines(root=None) -> None:
+    """Stop engines a dead harness process left behind, holding a port and its weights.
+
+    The ledger holds one file per owner process under ``<root>/results/running-engines``, so a
+    file whose owner is alive belongs to a grid running from the CLI and is never read or
+    touched. For a dead owner, an entry is stopped only when its pid is alive with the same
+    start time and argv the file recorded: a reused pid, or the user's own identical command
+    started later, is dropped and never signalled. The file is removed once its entries are
+    handled; a stop that did not take effect keeps it and raises, so a later launch can retry.
+    """
+    directory = _ledger_path(root=root).parent
+    try:
+        files = sorted(directory.glob("*.json"))
+    except OSError:
+        return
+    failures: list[str] = []
+    for path in files:
+        owner = path.stem
+        if not owner.isdigit():
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                failures.append(f"could not remove {path}: {error}")
+            continue
+        if _process_alive(int(owner)):
+            continue
+        failed = False
+        for entry in _ledger_entries(path):
+            try:
+                _stop_orphan(entry)
+            except RuntimeStopError as error:
+                failures.append(str(error))
+                failed = True
+        if not failed:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                failures.append(f"could not remove {path}: {error}")
+    if failures:
+        raise RuntimeStopError("; ".join(failures))
+
+
 @dataclass
 class Handle:
     """One running runtime.
@@ -1654,6 +1825,7 @@ class Handle:
         _RUN_STARTED_PIDS.discard(self.pid)
         if self.serving_pid is not None:
             _RUN_STARTED_PIDS.discard(self.serving_pid)
+        _forget_running_engine(self.pid)
         _remove_scratch(self.scratch)
 
 
@@ -2008,13 +2180,26 @@ class Runtime:
         _RUN_STARTED_PIDS.add(pid)
         serving_pid = _serving_pid(pid, self.port)
         _RUN_STARTED_PIDS.add(serving_pid)
+        # AC-6: the ledger entry is written after the load time is taken, so no measured
+        # cold_load_s contains the `ps` call, and a failed write never fails the start.
+        cold_load_s = _now() - started
+        try:
+            _record_running_engine(pid, self.port)
+        except Exception as error:
+            print(
+                json.dumps(
+                    {"error": {"code": "running_engine_ledger", "message": str(error)}}
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
         return Handle(
             pid=pid,
             port=self.port,
             base_url=self.base_url,
             model_id=resolved,
             version=version,
-            cold_load_s=_now() - started,
+            cold_load_s=cold_load_s,
             serving_pid=_serving_pid(pid, self.port),
             stop_command=self.stop_command(),
             scratch=scratch,

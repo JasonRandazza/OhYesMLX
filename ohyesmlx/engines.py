@@ -33,6 +33,7 @@ import pathlib
 import plistlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -847,20 +848,65 @@ def _tail(*streams) -> str:
     return _cap("".join(parts))
 
 
-def _real_run(argv: list[str], timeout_s: float, env: dict[str, str]) -> tuple[int, str]:
-    """Run *argv* -- a list, never a shell string -- and return (code, output tail)."""
+# The pip steps running right now, and the lock that guards the set. A step is added before
+# its output is read and removed however it ends, so the server's kill list never holds a
+# finished process.
+_RUNNING_STEPS: set[subprocess.Popen] = set()
+_RUNNING_STEPS_LOCK = threading.Lock()
+
+
+def _kill_step_group(proc: subprocess.Popen) -> None:
+    """SIGKILL a step's process group; a group already gone is not an error."""
     try:
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout_s,
-            env=env,
-        )
-    except subprocess.TimeoutExpired as expired:
-        return TIMEOUT_EXIT_CODE, _tail(expired.stdout, expired.stderr)
-    return proc.returncode, _tail(proc.stdout, proc.stderr)
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def kill_running_steps() -> None:
+    """Kill every install step still running, by its process group.
+
+    The one caller is the server's shutdown wait: its bound has expired with a job still
+    running, so the installer's own 900 s timeout is the only thing left to stop the step,
+    and the job's rollback runs in its thread once the step returns. Only steps this process
+    started are in the registry, so nothing else is signalled.
+    """
+    with _RUNNING_STEPS_LOCK:
+        steps = list(_RUNNING_STEPS)
+    for proc in steps:
+        _kill_step_group(proc)
+
+
+def _real_run(argv: list[str], timeout_s: float, env: dict[str, str]) -> tuple[int, str]:
+    """Run *argv* -- a list, never a shell string -- and return (code, output tail).
+
+    The step runs in its own session and is registered while it runs, so a server shutting
+    down can end the whole tree a pip step started rather than the one process
+    (:func:`kill_running_steps`). A timeout kills the group, not just the parent, and reports
+    ``TIMEOUT_EXIT_CODE`` with the output the step had produced.
+    """
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    with _RUNNING_STEPS_LOCK:
+        _RUNNING_STEPS.add(proc)
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired as expired:
+            _kill_step_group(proc)
+            proc.communicate()
+            return TIMEOUT_EXIT_CODE, _tail(expired.stdout, expired.stderr)
+        return proc.returncode, _tail(stdout, stderr)
+    finally:
+        with _RUNNING_STEPS_LOCK:
+            _RUNNING_STEPS.discard(proc)
 
 
 # `open` is the one system tool this module runs by bare name today; an absolute path keeps

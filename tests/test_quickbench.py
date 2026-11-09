@@ -710,6 +710,12 @@ def test_the_host_pinned_between_pin_and_restore_shows_no_drift(tmp_path):
         pin=lambda **kwargs: osaurus_settings.pin(config_dir, **kwargs),
         restore=lambda **kwargs: osaurus_settings.restore(config_dir, **kwargs),
         recover=lambda **kwargs: osaurus_settings.recover(config_dir, **kwargs),
+        osaurus_drift=lambda **kwargs: quickbench._osaurus_drift(
+            config_dir=config_dir, **kwargs
+        ),
+        keep_during_run=lambda **kwargs: quickbench._keep_during_run(
+            config_dir=config_dir, **kwargs
+        ),
         port_in_use=lambda port: False,
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
@@ -727,6 +733,238 @@ def test_the_host_pinned_between_pin_and_restore_shows_no_drift(tmp_path):
     assert all(drift == () for drift in captured), captured
     assert not (tmp_path / "backup").exists(), "a verified restore left no backup behind"
     assert not baseline_path.exists(), "the pin's baseline went with the restore"
+
+
+def test_drift_between_pin_and_restore_fails_the_cell_and_keeps_both_copies(tmp_path):
+    """045-02a AC-7: a host that moved under the cell fails it, and both files are kept."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    originals = {
+        "server.json": json.dumps({"numberOfThreads": 12}).encode(),
+        "server-runtime.json": json.dumps(
+            {
+                "cache": {
+                    "blockDisk": {"enabled": True},
+                    "prefix": {"enabled": True},
+                    "defaultMaxKVSize": 4096,
+                }
+            }
+        ).encode(),
+    }
+    for name, data in originals.items():
+        (config_dir / name).write_bytes(data)
+    baseline_path = tmp_path / "baseline.json"
+    during_run_dir = tmp_path / "backup" / "during-run"
+    rewritten = {}
+
+    def rewrite_a_pinned_key(_cell, _kwargs):
+        (config_dir / "server.json").write_text(json.dumps({"numberOfThreads": 4}))
+        (config_dir / "server-runtime.json").write_text(
+            json.dumps(
+                {
+                    "cache": {
+                        "blockDisk": {"enabled": False},
+                        "prefix": {"enabled": False},
+                        "defaultMaxKVSize": 8192,
+                    }
+                }
+            )
+        )
+        for name in osaurus_settings.PIN_FILES:
+            rewritten[name] = (config_dir / name).read_bytes()
+
+    kept_at_restore = []
+
+    def restore(**kwargs):
+        kept_at_restore.append(
+            {
+                name: (during_run_dir / name).read_bytes()
+                for name in osaurus_settings.PIN_FILES
+                if (during_run_dir / name).exists()
+            }
+        )
+        return osaurus_settings.restore(config_dir, **kwargs)
+
+    ok = quickbench.run(
+        CHOSEN.repo,
+        confirmed=True,
+        osaurus=True,
+        models=[CHOSEN],
+        statuses=[an_engine("osaurus")],
+        hw=SimpleNamespace(),
+        run_cells=FakeRunCells(on_call=rewrite_a_pinned_key),
+        downloaded=lambda model, cache_dir=None: True,
+        pin=lambda **kwargs: osaurus_settings.pin(config_dir, **kwargs),
+        restore=restore,
+        recover=lambda **kwargs: osaurus_settings.recover(config_dir, **kwargs),
+        osaurus_drift=lambda **kwargs: quickbench._osaurus_drift(
+            config_dir=config_dir, **kwargs
+        ),
+        keep_during_run=lambda **kwargs: quickbench._keep_during_run(
+            config_dir=config_dir, **kwargs
+        ),
+        port_in_use=lambda port: False,
+        osaurus_app_running=lambda: False,
+        load=FakeLoad(),
+        clock=FakeClock(),
+        emit=[].append,
+        cancel=CancelAfter(),
+        cache_dir=str(tmp_path / "cache"),
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(baseline_path),
+    )
+
+    summary = json.loads(
+        next((tmp_path / "quickbench").glob("*/summary.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    cell = next(
+        cell for cell in summary["stage_a"]["cells"] if cell["engine"] == "osaurus"
+    )
+    assert ok is True
+    assert cell["status"] == "FAIL"
+    assert cell["reason"].startswith("Osaurus changed its settings during the run: ")
+    assert "server.json:numberOfThreads" in cell["reason"]
+    assert "server-runtime.json:cache.defaultMaxKVSize" in cell["reason"]
+    assert (during_run_dir.stat().st_mode & 0o777) == 0o700
+    for name in osaurus_settings.PIN_FILES:
+        assert (during_run_dir / name).read_bytes() == rewritten[name]
+    assert kept_at_restore == [rewritten], "both files were kept before restore ran"
+    assert summary["osaurus"]["during_run"] == str(during_run_dir)
+    # The restore still ran and verified, so the user's originals are back.
+    assert summary["osaurus"]["restored"] is True
+    for name, data in originals.items():
+        assert (config_dir / name).read_bytes() == data
+
+
+def test_no_drift_between_pin_and_restore_passes_and_keeps_nothing(tmp_path):
+    """AC-7's other half: an unchanged host leaves today's behaviour exactly as it was."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "server.json").write_text(json.dumps({"numberOfThreads": 12}))
+    (config_dir / "server-runtime.json").write_text(
+        json.dumps(
+            {
+                "cache": {
+                    "blockDisk": {"enabled": True},
+                    "prefix": {"enabled": True},
+                }
+            }
+        )
+    )
+
+    ok = quickbench.run(
+        CHOSEN.repo,
+        confirmed=True,
+        osaurus=True,
+        models=[CHOSEN],
+        statuses=[an_engine("osaurus")],
+        hw=SimpleNamespace(),
+        run_cells=FakeRunCells(),
+        downloaded=lambda model, cache_dir=None: True,
+        pin=lambda **kwargs: osaurus_settings.pin(config_dir, **kwargs),
+        restore=lambda **kwargs: osaurus_settings.restore(config_dir, **kwargs),
+        recover=lambda **kwargs: osaurus_settings.recover(config_dir, **kwargs),
+        osaurus_drift=lambda **kwargs: quickbench._osaurus_drift(
+            config_dir=config_dir, **kwargs
+        ),
+        keep_during_run=lambda **kwargs: quickbench._keep_during_run(
+            config_dir=config_dir, **kwargs
+        ),
+        port_in_use=lambda port: False,
+        osaurus_app_running=lambda: False,
+        load=FakeLoad(),
+        clock=FakeClock(),
+        emit=[].append,
+        cancel=CancelAfter(),
+        cache_dir=str(tmp_path / "cache"),
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(tmp_path / "baseline.json"),
+    )
+
+    summary = json.loads(
+        next((tmp_path / "quickbench").glob("*/summary.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    cell = next(
+        cell for cell in summary["stage_a"]["cells"] if cell["engine"] == "osaurus"
+    )
+    assert ok is True
+    assert cell["status"] == "PASS"
+    assert "during_run" not in summary["osaurus"]
+    assert not (tmp_path / "backup" / "during-run").exists()
+    assert not (tmp_path / "backup").exists(), "a verified restore left no backup behind"
+
+
+def test_a_drift_check_that_raises_fails_the_cell_and_still_restores(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    originals = {
+        "server.json": json.dumps({"numberOfThreads": 12}).encode(),
+        "server-runtime.json": json.dumps(
+            {
+                "cache": {
+                    "blockDisk": {"enabled": True},
+                    "prefix": {"enabled": True},
+                }
+            }
+        ).encode(),
+    }
+    for name, data in originals.items():
+        (config_dir / name).write_bytes(data)
+
+    def raising_drift(**_kwargs):
+        raise RuntimeError("cannot read the host's settings")
+
+    ok = quickbench.run(
+        CHOSEN.repo,
+        confirmed=True,
+        osaurus=True,
+        models=[CHOSEN],
+        statuses=[an_engine("osaurus")],
+        hw=SimpleNamespace(),
+        run_cells=FakeRunCells(),
+        downloaded=lambda model, cache_dir=None: True,
+        pin=lambda **kwargs: osaurus_settings.pin(config_dir, **kwargs),
+        restore=lambda **kwargs: osaurus_settings.restore(config_dir, **kwargs),
+        recover=lambda **kwargs: osaurus_settings.recover(config_dir, **kwargs),
+        osaurus_drift=raising_drift,
+        keep_during_run=lambda **kwargs: quickbench._keep_during_run(
+            config_dir=config_dir, **kwargs
+        ),
+        port_in_use=lambda port: False,
+        osaurus_app_running=lambda: False,
+        load=FakeLoad(),
+        clock=FakeClock(),
+        emit=[].append,
+        cancel=CancelAfter(),
+        cache_dir=str(tmp_path / "cache"),
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(tmp_path / "baseline.json"),
+    )
+
+    summary = json.loads(
+        next((tmp_path / "quickbench").glob("*/summary.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    cell = next(
+        cell for cell in summary["stage_a"]["cells"] if cell["engine"] == "osaurus"
+    )
+    assert ok is True
+    assert cell["status"] == "FAIL"
+    assert cell["reason"] == "cannot read the host's settings"
+    assert "during_run" not in summary["osaurus"]
+    # Restore still ran and verified, so the user's originals are back.
+    assert summary["osaurus"]["restored"] is True
+    for name, data in originals.items():
+        assert (config_dir / name).read_bytes() == data
+    assert not (tmp_path / "backup").exists()
 
 
 def test_a_cell_that_raises_still_restores_osaurus(tmp_path):

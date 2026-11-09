@@ -268,16 +268,16 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 | Id | Verdict | Severity | Actor | Area | Disposition |
 |---|---|---|---|---|---|
 | T-01 | CONFIRMED | medium | compromised upstream | installer (pip) | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
-| T-02 | CONFIRMED | medium | same-user / interruption | app lifecycle: interrupted jobs | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
-| T-03 | CONFIRMED | medium | deployment | writable paths | **Fixed in 045-02a (part A)**, plus checklist P5-6. Detail in 7.4. |
-| T-04 | CONFIRMED | medium | another local account (chained with T-08) | server job registry | **Fixed in 045-02a (part A)**. Detail in 7.4. |
-| T-05 | CONFIRMED | medium | same-user (the Osaurus app) | quickbench Osaurus pin | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
+| T-02 | CONFIRMED | medium | same-user / interruption | app lifecycle: interrupted jobs | **Fixed in 045-02a (part B)**; (d) withdrawn. Detail in 7.4. |
+| T-03 | CONFIRMED | medium | deployment | writable paths | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-6. Detail in 7.4. |
+| T-04 | CONFIRMED | medium | another local account (chained with T-08) | server job registry | **Fixed in 045-02a (`4b35ef8`)**. Detail in 7.4. |
+| T-05 | CONFIRMED | medium | same-user (the Osaurus app) | quickbench Osaurus pin | **Fixed in 045-02a (part B)**. Detail in 7.4. |
 | T-06 | CONFIRMED | medium | second process | fetch ledger | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
 | T-07 | CONFIRMED | low | same-user | installer environment | Fix in 045-02 (one line), plus checklist P5-3 |
-| T-08 | CONFIRMED | low | any local account / token holder | server threads | **Fixed in 045-02a (part A)**; residual risk in section 9 |
-| T-09 | CONFIRMED | low | compromised upstream | bare command names | **Fixed in 045-02a (part A)**, plus checklist P5-9 |
-| T-10 | CONFIRMED | low | another local account (read) | file modes | **Fixed in 045-02a (part A)**, plus checklist P5-5 |
-| T-11 | CONFIRMED | low | token holder pasting into a URL | refusal log | **Fixed in 045-02a (part A)** |
+| T-08 | CONFIRMED | low | any local account / token holder | server threads | **Fixed in 045-02a (`4b35ef8`)**; residual risk in section 9 |
+| T-09 | CONFIRMED | low | compromised upstream | bare command names | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-9 |
+| T-10 | CONFIRMED | low | another local account (read) | file modes | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-5 |
+| T-11 | CONFIRMED | low | token holder pasting into a URL | refusal log | **Fixed in 045-02a (`4b35ef8`)** |
 | T-12 | CONFIRMED | low | same-user | `lab-paths.json` | Fix in 045-02 (validation) |
 | T-13 | CONFIRMED | low | same-user | `evict` ledger trust | Fix in 045-02 (per-repo containment) |
 | T-14 | CONFIRMED | low | same-user | HF cache symlink races | Accepted, see section 9 |
@@ -290,7 +290,47 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 
 ### 7.4 Low-severity and rejected findings in detail
 
-**T-03, the backend writes inside its own package tree [F4, C-3]. Fixed in 045-02a (part A).**
+**T-02, an interrupted app left the machine in a state nothing reported or recovered [F2, C-1, C-2]. Fixed in 045-02a (part B).**
+
+- A `SIGKILL` of `ohyesmlx app`, or its 120 s shutdown wait expiring during a job, left:
+  - quickbench: the engine server it had spawned (its own session) still holding its port and weights; the next run
+    only skipped that engine.
+  - quickbench with an Osaurus cell: `~/.osaurus/config/server{,-runtime}.json` still pinned (caches off,
+    residency 900 instead of the user's own), the originals only in the quickbench backup directory. `recover` ran
+    only at the start of a later Osaurus cell, never at app launch, so the user's Osaurus could run indefinitely on
+    settings they did not choose.
+  - install: the pip child running on in a daemon thread, with no rollback and no `lab-paths.json` record, and an
+    `install-log.jsonl` with no end line.
+- Fix:
+  - (a) `ohyesmlx app`, after binding and before its launch line, calls `osaurus_settings.recover` with
+    quickbench's backup directory, but only when the Osaurus app is not running (a running app may rewrite the
+    files being put back). It writes `{"recovered": "osaurus", ...}` on stderr, or `{"recovery_pending": "osaurus",
+    ...}` when the app is running and a backup is waiting. A failure is one stderr line and never stops the server.
+  - (b) `runtimes` records each spawned engine (pid, port, `ps` start time and argv) in
+    `<writable_root>/results/running-engines/<owner pid>.json`, written atomically after `cold_load_s` is taken, so
+    no measured load time includes it. At launch `stop_orphaned_engines` reads only files whose owner process is
+    dead, and stops an entry's process group only when its pid is alive with the same start time and argv; a reused
+    pid or a matching command started later is dropped and never signalled.
+  - (c) each pip step runs in its own process group and is registered while it runs; when the shutdown wait
+    expires the server kills those groups and gives the job `JOB_KILL_GRACE_S` (15 s) more for its rollback and
+    `done`.
+  - (d) withdrawn: `.incomplete` download files are fetch's resume state, not residue, so nothing sweeps them.
+- Verified live on a scratch HOME (045-02a SUMMARY): a pinned scratch Osaurus config was recovered byte-exact at
+  app startup, and a recorded `sleep` with matching identity was stopped while one with a wrong start time survived.
+
+**T-05, an Osaurus pin clobbered mid-cell was measured and reported as pinned [F3, C]. Fixed in 045-02a (part B).**
+
+- The Osaurus-app check ran only before the cell. If the app relaunched (its Login Item, or an MCP host starting
+  `osaurus mcp`) and rewrote its config during the cell, the pin's values were gone, the cell measured under the
+  user's settings, and nothing recorded it. `restore` then wrote the backup back and verified against it, so a
+  change the user made mid-run was lost while the log said "restored byte-exact".
+- Fix: after a pinned Osaurus cell and before `restore`, quickbench compares the live config with the baseline the
+  pin wrote. On drift it copies both config files byte-exact into `<backup_dir>/during-run/` (`0700`), names that
+  directory in the summary, fails the cell with "Osaurus changed its settings during the run: " and the drifted
+  keys, and still restores. Residual: when the cell itself raises, the check does not run, so a mid-run change in
+  that path is still overwritten by the restore.
+
+**T-03, the backend writes inside its own package tree [F4, C-3]. Fixed in 045-02a (`4b35ef8`).**
 
 - `osaurus_settings.BASELINE_PATH` was `<package parent>/config/osaurus-settings-baseline.json`, written by every
   app-driven pin and restore; `runtimes.LOGS_DIR` was `<package parent>/results/logs`, written by every engine
@@ -305,7 +345,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   read-only, `.git`-less package tree on a scratch home sends a pin round-trip and an engine spawn log only under
   the scratch Application Support (`tests/test_paths.py`).
 
-**T-04, the job slot could leak for the life of the process [F1, C]. Fixed in 045-02a (part A).**
+**T-04, the job slot could leak for the life of the process [F1, C]. Fixed in 045-02a (`4b35ef8`).**
 
 - `POST /jobs` took the slot with `claim()`, then wrote the start line to stderr and started the job thread with
   nothing to free the slot if either raised; only a stored terminal event frees it.
@@ -327,7 +367,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   corrects the worker's claim).
 - Fix: run both steps with `-I`, and run pip with `--isolated`.
 
-**T-08, unbounded threads [F7, C]. Fixed in 045-02a (part A):** `MAX_HANDLER_THREADS` (32) slots taken before a handler thread starts (a connection past the cap is closed with no response and no thread), and `MAX_STREAMS_PER_JOB` (4), past which `/events` is `429 too_many_streams`.
+**T-08, unbounded threads [F7, C]. Fixed in 045-02a (`4b35ef8`):** `MAX_HANDLER_THREADS` (32) slots taken before a handler thread starts (a connection past the cap is closed with no response and no thread), and `MAX_STREAMS_PER_JOB` (4), past which `/events` is `429 too_many_streams`.
 
 - `ThreadingHTTPServer` (`server.py:823`) starts one thread per connection, with no cap.
 - An unauthenticated connection holds a thread for up to `HANDLER_TIMEOUT_S` (10 s). The probe showed 50 idle
@@ -339,7 +379,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - Fix: a bounded semaphore on concurrent handler threads (refusing with a closed connection when full), and a
   per-job stream cap.
 
-**T-09, bare command names [F5, C]. Fixed in 045-02a (part A):** `/bin/ps`, `/usr/sbin/sysctl`, `/usr/bin/sw_vers`, `/usr/sbin/ioreg` and `/usr/bin/open`, each spelled once; `hardware._run` is bounded by `TOOL_TIMEOUT_S` (10 s) and a hung tool makes `/hardware` a 500. `runtimes.LSOF` is still resolved with `shutil.which` on the ambient PATH at import (not the lab-prefixed engine PATH); not part of this finding.
+**T-09, bare command names [F5, C]. Fixed in 045-02a (`4b35ef8`):** `/bin/ps`, `/usr/sbin/sysctl`, `/usr/bin/sw_vers`, `/usr/sbin/ioreg` and `/usr/bin/open`, each spelled once; `hardware._run` is bounded by `TOOL_TIMEOUT_S` (10 s) and a hung tool makes `/hardware` a 500. `runtimes.LSOF` is still resolved with `shutil.which` on the ambient PATH at import (not the lab-prefixed engine PATH); not part of this finding.
 
 - `_resident_osaurus_pids` runs `ps` by bare name through `_run` (`runtimes.py:554`), on the PATH that
   `_engine_env` prefixes with lab-path venv `bin/` directories (`runtimes.py:470-486`). It then signals the pids
@@ -350,7 +390,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - Fix: absolute paths (`/bin/ps`, `/usr/sbin/sysctl`, `/usr/bin/sw_vers`, `/usr/sbin/ioreg`, `/usr/bin/open`),
   and a timeout on `hardware._run`.
 
-**T-10, file modes [S7, C]. Fixed in 045-02a (part A):** `ohyesmlx.ensure_app_support()` creates the directory `0700` or tightens an existing one, called by `ohyesmlx app` and `ohyesmlx quickbench` before their first write.
+**T-10, file modes [S7, C]. Fixed in 045-02a (`4b35ef8`):** `ohyesmlx.ensure_app_support()` creates the directory `0700` or tightens an existing one, called by `ohyesmlx app` and `ohyesmlx quickbench` before their first write.
 
 - Nothing under Application Support or the HF cache is created with an explicit mode, apart from the Osaurus
   backup directory (`0700`) and the lock file (`0644`).
@@ -358,7 +398,7 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   and `lab-paths.json`. None holds a secret, but together they describe the machine and its use.
 - Fix: create `~/Library/Application Support/OhYesMLX` with `0700`.
 
-**T-11, token in the refusal log [F6]. Fixed in 045-02a (part A):** the refusal line carries the path only when it is a served route, else `<unknown>`.
+**T-11, token in the refusal log [F6]. Fixed in 045-02a (`4b35ef8`):** the refusal line carries the path only when it is a served route, else `<unknown>`.
 
 - `_log_refusal` drops the query string but logs the path verbatim (`server.py:380`, `386-388`), so a token
   pasted into a path segment reaches stderr.

@@ -1656,6 +1656,58 @@ def test_shutdown_does_not_cancel_an_evict_and_waits_for_it(launch):
     assert listener.jobs.get(job_id).done, "an evict was abandoned by the shutdown wait"
 
 
+def test_cancel_and_wait_past_its_bound_kills_the_steps_then_waits_for_done(
+    launch, monkeypatch
+):
+    """045-02a AC-6: the 120 s bound expiring must not leave a pip step running with no
+    rollback -- the step groups are killed, and the job gets JOB_KILL_GRACE_S to finish."""
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(download=module)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert module.started.wait(5)
+
+    killed = []
+    monkeypatch.setattr(server, "JOB_KILL_GRACE_S", 0.5)
+    monkeypatch.setattr(
+        server.engines, "kill_running_steps", lambda: killed.append(time.monotonic())
+    )
+
+    def release_once_killed():
+        deadline = time.monotonic() + 5
+        while not killed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        release.set()
+
+    threading.Thread(target=release_once_killed, daemon=True).start()
+    began = time.monotonic()
+    listener.jobs.cancel_and_wait(0.05)
+    elapsed = time.monotonic() - began
+
+    assert killed, "the bound expired without killing the step still running"
+    assert elapsed >= 0.05, "cancel_and_wait returned before its own bound"
+    assert listener.jobs.get(job_id).done, "the job's rollback and done were not waited for"
+
+
+def test_the_post_kill_wait_is_bounded_by_the_kill_grace(launch, monkeypatch):
+    module = blocking(threading.Event())  # never released
+    listener = launch(download=module)
+    posted_job_id(listener, DOWNLOAD)
+    assert module.started.wait(5)
+
+    killed = []
+    monkeypatch.setattr(server, "JOB_KILL_GRACE_S", 0.1)
+    monkeypatch.setattr(server.engines, "kill_running_steps", lambda: killed.append(1))
+
+    began = time.monotonic()
+    listener.jobs.cancel_and_wait(0.01)
+    elapsed = time.monotonic() - began
+
+    assert killed, "the step was never killed"
+    assert elapsed >= 0.1, "the post-kill wait was shorter than its grace"
+    assert elapsed < 5, "the post-kill wait was not bounded"
+
+
 # --- AC-7: the job routes are behind the 04-01 guard -------------------------------------------
 
 

@@ -1,0 +1,176 @@
+I'll start by reading the spec sections and the files this order touches.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now I'll implement. Starting with `runtimes.py` — the running-engines ledger and startup stop.
+
+
+Now `Runtime.start` and `Handle.stop`.
+
+
+
+
+
+
+
+
+
+
+
+
+The AC-7 implementation breaks a pre-existing test. Let me capture the exact evidence before deciding.
+
+
+Confirmed: the specified drift helper reads the real `~/.osaurus/config` while the existing test pins a tmp config dir, so that test fails (22 drifted keys, cell FAIL, stage B never runs). The order says to report BLOCKED rather than edit it. I'll revert the AC-7 code so the suite stays green and deliver the other fixes.
+
+
+Now I'll add the runtimes tests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the red-checks. First: move the ledger write before the cold-load timestamp.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the BLOCKED report for AC-7, which the order's own test-compatibility rule makes unimplementable as written.
+
+
+
+
+
+
+
+
+
+
+Final state verified: `1208 passed` (baseline was `1188 passed`), only the named files plus `BLOCKED.md` touched, and `results/` was not polluted.
+
+## Report
+
+### Fix 1 — AC-6 Osaurus recovery at launch
+`ohyesmlx/cli.py:1067` (`_recover_startup`) and `:1153` (called after the bind, before the launch line).
+- Tests: `test_the_app_recovers_an_osaurus_backup_before_the_launch_line`, `test_a_running_osaurus_app_leaves_the_backup_for_the_next_launch`, `test_a_recovery_that_raises_is_one_line_and_the_app_still_serves`, `test_a_recovery_that_does_not_verify_is_one_line_and_keeps_the_backup`, `test_an_orphan_stop_that_raises_is_one_line_and_the_app_still_serves` (all in `tests/test_cli.py`).
+- Probe/recover are resolved through `quickbench._osaurus_app_running` / `osaurus_settings.recover` / the two path constants at call time, so tests never touch `~/.osaurus`.
+
+### Fix 2 — AC-6 orphaned engines
+`ohyesmlx/runtimes.py:1616`–`1778` (ledger: `_ledger_path`, `_ledger_entries`, `_write_ledger`, `_process_identity`, `_record_running_engine`, `_forget_running_engine`, `_stop_orphan`, `stop_orphaned_engines`), `:2185`–`2195` (`Runtime.start`: `cold_load_s` local, then ledger, then `Handle`), `:1828` (`Handle.stop`).
+- Tests: `test_the_running_engine_is_recorded_after_the_cold_load_time_is_taken`, `test_a_started_engine_is_recorded_with_its_pid_port_and_identity`, `test_a_ledger_write_failure_does_not_fail_the_start`, `test_a_dead_owners_matching_engine_is_stopped_by_its_process_group`, `test_an_orphan_that_ignores_term_is_killed_after_the_grace`, `test_a_reused_pid_is_dropped_and_never_signalled`, `test_a_matching_pid_with_a_different_argv_is_dropped_and_never_signalled`, `test_a_live_owners_ledger_is_never_read_or_touched`, `test_the_ledger_file_is_replaced_atomically`, `test_the_ledger_file_is_removed_once_its_last_entry_is_gone`.
+
+### Fix 3 — AC-6 pip process group
+`ohyesmlx/engines.py:851`–`909` (`_RUNNING_STEPS`, `_kill_step_group`, `kill_running_steps`, `_real_run`), `ohyesmlx/server.py:73` (`JOB_KILL_GRACE_S`), `:240`–`270` (`cancel_and_wait` + `_wait_for_done`).
+- Tests: `test_a_step_runs_in_its_own_session_and_leaves_the_registry_empty`, `test_a_step_that_times_out_kills_its_group_and_reports_the_timeout`, `test_kill_running_steps_kills_every_registered_group`, `test_cancel_and_wait_past_its_bound_kills_the_steps_then_waits_for_done`, `test_the_post_kill_wait_is_bounded_by_the_kill_grace`.
+
+### Fix 4 — AC-7: BLOCKED (nothing landed; `quickbench.py` is byte-identical)
+See `BLOCKED.md`. The specified default helper reads `capture_osaurus_settings()` from the real `~/.osaurus/config`, while `tests/test_quickbench.py::test_the_host_pinned_between_pin_and_restore_shows_no_drift` pins a **tmp** config dir; on this host that is 22 drifted keys, the Osaurus cell FAILs, stage B never runs, and `assert len(captured) == 3` fails (observed: `assert 1 == 3`). The order forbids editing that test, and there is no way to give the helper the config dir the caller's `pin` used. `BLOCKED.md` names three decisions, including a pre/post-capture variant that keeps every existing test green.
+
+### Fix 5
+No code: nothing here sweeps `.incomplete` files; `fetch.py` is untouched.
+
+### Red-checks (each reverted then restored)
+- Ledger write moved before the `cold_load_s` timestamp → **`test_the_running_engine_is_recorded_after_the_cold_load_time_is_taken` failed** (`4.5 == 1004.5 - 1001.0`).
+- lstart comparison inverted (`!=` → `==`) → **`test_a_dead_owners_matching_engine_is_stopped_by_its_process_group`, `test_a_reused_pid_is_dropped_and_never_signalled`, `test_a_matching_pid_with_a_different_argv_is_dropped_and_never_signalled` failed**.
+- Kill removed from `cancel_and_wait` → **`test_cancel_and_wait_past_its_bound_kills_the_steps_then_waits_for_done`, `test_the_post_kill_wait_is_bounded_by_the_kill_grace` failed**.
+- App-running guard removed (recover always runs) → **`test_a_running_osaurus_app_leaves_the_backup_for_the_next_launch` failed**.
+- Drift check removal: not applicable — AC-7 is not in the tree.
+
+### Final
+`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` → **1208 passed in 45.23s** (baseline: 1188 passed in 44.51s).
+
+### Uncertain / worth knowing
+- When `ps` cannot identify the spawned pid, the ledger entry is skipped with one stderr line rather than recorded with an unverifiable identity — this is also why every existing `Runtime.start` test stays out of the repo's real `results/`.
+- `stop_orphaned_engines` deletes an owner file only when all its entries were handled without a stop failure; a failed stop keeps the file and raises, and `cli._app` logs one line.
+- Not verified: any real start/stop, pip step, server on a real port, real `~/.osaurus` recovery, or the app under a scratch `HOME` — those are the coordinator's live checks.
+- `.paul/orders/v5-fix-45a-lifecycle.log` and `.md` were already untracked; I left them alone and did not commit.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    112   18231799   18006400   105149   98.8%   0.150918
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_cli.py
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+ M tests/test_server.py
+?? .paul/orders/v5-fix-45a-lifecycle.log
+?? .paul/orders/v5-fix-45a-lifecycle.md
+?? BLOCKED.md
+ docs/interfaces.md     |  54 +++++++++++-
+ ohyesmlx/cli.py        |  59 +++++++++++++-
+ ohyesmlx/engines.py    |  70 +++++++++++++---
+ ohyesmlx/runtimes.py   | 187 +++++++++++++++++++++++++++++++++++++++++-
+ ohyesmlx/server.py     |  20 ++++-
+ tests/test_cli.py      | 201 +++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_engines.py  |  67 +++++++++++++++
+ tests/test_runtimes.py | 217 +++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_server.py   |  52 ++++++++++++
+ 9 files changed, 907 insertions(+), 20 deletions(-)

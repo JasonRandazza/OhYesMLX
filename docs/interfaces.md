@@ -1487,10 +1487,12 @@ with a summary), and the stream ends with the module's own cancelled `error`/`do
 `409 job_finished`; an unknown id is `404 unknown_job`.
 Shutdown (stdin EOF, `SIGINT`, `SIGTERM`) cancels a running install, download or quickbench at its next check and
 waits for any
-running job at most 120 s, then exits 0; an evict is waited for, never cancelled. Each job start writes one stderr line
+running job at most 120 s, then exits 0; an evict is waited for, never cancelled. When the 120 s bound expires with
+a job still running, the server kills the process group of every install step still in flight
+(`engines.kill_running_steps()`) and waits at most `JOB_KILL_GRACE_S` (15 s) more for the job's own rollback and its
+`done` (045-02a AC-6). Each job start writes one stderr line
 `{"job": id, "kind": str, "name": str, "time": iso}` and each end one `{"job": id, "ok": bool, "code": str|null,
-"time": iso}` — never a token or a header value. Residual risk: a pip step still running when the 120 s wait expires
-can outlive the server, and the installer's rollback does not run for it; Phase 4.5 owns that.
+"time": iso}` — never a token or a header value.
 A download's in-flight `progress` events carry `fraction` = (bytes of files already finished + bytes
 written so far of the current file) / the model's total bytes and payload
 `{"path": str, "bytes_done": int, "bytes_total": int}` (the same numerator and the model's total, so a
@@ -1628,6 +1630,7 @@ def run(repo, *, confirmed, osaurus=False, models=None, statuses=None, hw=None,
         run_cells=measure.run_cells, download=fetch.download, evict=fetch.evict,
         downloaded=fetch.downloaded, pin=osaurus_settings.pin,
         restore=osaurus_settings.restore, recover=osaurus_settings.recover,
+        osaurus_drift=_osaurus_drift, keep_during_run=_keep_during_run,
         port_in_use=_port_busy, osaurus_app_running=_osaurus_app_running,
         load=canary.load, clock=time.time, emit=_print_event, cancel=_never_cancelled,
         cache_dir=None, results_dir=DEFAULT_RESULTS_DIR,
@@ -1693,7 +1696,14 @@ The run's rules, each one a rule the harness already paid for:
   before any `pin`, both with quickbench's fixed backup directory under Application Support, and
   `restore` runs in a `finally` around the cell. A recover that does not verify leaves the backup in
   place, so `pin` refuses and the cell is skipped with that reason. A restore that does not verify
-  emits an `error` naming the backup directory and ends the run.
+  emits an `error` naming the backup directory and ends the run. After a pinned cell and before its
+  `restore`, `osaurus_drift(baseline_path=baseline_path)` compares the host with the baseline the
+  pin wrote; drift fails the cell with the reason `Osaurus changed its settings during the run: `
+  + `osaurus_settings.describe_drift`, after `keep_during_run(during_run_dir=<backup_dir>/during-run)`
+  copies both `PIN_FILES` byte-exact from the same config directory the check read into a `0700`
+  directory named in the summary as `osaurus.during_run` -- so a change the user made mid-run
+  survives the restore. A check that raises fails the cell with its message. `restore` still runs
+  either way.
 - **Contention is recorded, not refused.** `canary.load()` is read before and after each stage; a
   stage above `canary.LOAD_NOISY` is labelled `this Mac was busy`.
 
@@ -1712,6 +1722,8 @@ ending (finished, cancelled, restore failed, unexpected raise):
   "load": {"stage_a": {"before": float, "after": float, "label": str|null} | null,
            "stage_b": ... | null},
   "osaurus": {"allowed": bool, "pinned": bool, "restored": bool|null, "reason": str|null},
+  # "during_run": str is added to that object only when a mid-cell drift was caught: it is
+  # <backup_dir>/during-run, where both host files were kept byte-exact before the restore
   "stage_a": {"caveat": "engines compared on one format only", "cells": [cell],
               "winner": str|null, "tie": [str], "note": str|null},
   "stage_b": {"caveat": "formats compared on one engine only", "engine": str|null,
@@ -1734,4 +1746,50 @@ ever filled (D5).
 The job kind is the same keystrokes the CLI uses: `ohyesmlx quickbench --repo R --yes [--osaurus]`
 prints the plan and starts nothing without `--yes`; the `quickbench` job kind takes `repo`,
 `confirmed: true` and the bool `osaurus`; `POST /jobs/{id}/cancel` stops it between cells.
+
+## v5.0 plan 045-02a — an interrupted app is recovered at the next launch
+
+Three lifecycle contracts close T-02: a `SIGKILL` of `ohyesmlx app` (or its 120 s shutdown wait expiring) no longer
+leaves an engine holding a port and its weights, a pinned Osaurus whose restore never ran, or a pip step running
+with no rollback.
+
+**The running-engines ledger** (`ohyesmlx/runtimes.py`). `Runtime.start` records one entry per spawned engine —
+`{"pid": int, "port": int, "argv": str, "lstart": str}`, the last two read from
+`/bin/ps -ww -o lstart=,args= -p <pid>` — in `<writable_root()>/results/running-engines/<owner pid>.json`, one
+file per owner process so two harness processes never read-modify-write one file. The write is after `cold_load_s`
+is taken, so no measured load time contains the `ps` call, and its failure is one stderr line
+(`{"error": {"code": "running_engine_ledger", "message": str}}`) that never fails the start. Every write is a temp
+file in the same directory plus `os.replace`; `Handle.stop` drops its own entry and the file goes when its last
+entry does.
+
+```python
+stop_orphaned_engines(root=None) -> None   # root: the writable root, default writable_root()
+```
+
+For each ledger file whose owner pid is dead it stops the process group of every entry whose pid is alive **with the
+same `lstart` and `argv`** (SIGTERM, then SIGKILL after `TERM_GRACE_S`), then deletes the file. An entry whose start
+time or argv differs — a reused pid, or the user's own identical command started later — is dropped and never
+signalled; a file whose owner is still alive belongs to a grid running from the CLI and is never read or touched. A
+stop that does not take effect keeps the file and raises `RuntimeStopError`.
+
+**`ohyesmlx app` startup** (`cli._recover_startup`, after the bind and before the launch line):
+`stop_orphaned_engines()` runs first; then, only while `quickbench._osaurus_app_running()` is False,
+`osaurus_settings.recover(backup_dir=quickbench.DEFAULT_BACKUP_DIR, baseline_path=osaurus_settings.BASELINE_PATH)`
+runs. Each outcome is at most one stderr line and nothing is written to stdout (the launch line stays the only
+stdout line), and none of them can stop the server:
+
+```python
+{"recovered": "osaurus", "backup_dir": str}          # recover returned True
+{"recovery_pending": "osaurus", "backup_dir": str}   # the app is running and a backup is present; left alone
+{"recovery_failed": "osaurus", "backup_dir": str}    # recover returned False with backups still present
+{"error": {"code": "osaurus_recovery_failed", "message": str}}
+{"error": {"code": "orphan_stop_failed", "message": str}}
+```
+
+**An install step's process group** (`engines._real_run`, `engines.kill_running_steps`,
+`server.JOB_KILL_GRACE_S`). Each step runs through `Popen(..., start_new_session=True)` and is registered in a
+module-level, lock-guarded set while it runs; a step that exceeds its own timeout has its process group killed and
+still reports `TIMEOUT_EXIT_CODE` with the output it produced, and the registry is empty however the step ends.
+`kill_running_steps()` kills every registered group — it is what `_Jobs.cancel_and_wait` calls when its bound expires
+(see the shutdown paragraph above).
 

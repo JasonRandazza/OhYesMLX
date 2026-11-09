@@ -67,6 +67,11 @@ MAX_BODY_BYTES = 4_096
 # AC-6: shutdown cancels a running install or download and waits at most this long for it.
 JOB_SHUTDOWN_WAIT_S = 120.0
 
+# AC-6 (045-02a): when that bound expires with the job still running, the server kills the
+# install steps still in flight (their process groups) and waits at most this much longer for
+# the job's own rollback and its `done`.
+JOB_KILL_GRACE_S = 15.0
+
 # AC-3: one handler thread per connection, from accept to close, and no more than this many at
 # once. A local account opening connections cannot grow the thread count without bound; a
 # connection past the cap is closed before a thread exists for it.
@@ -238,8 +243,9 @@ class _Jobs:
         An evict has no cancel flag and is only waited for: it is a handful of unlinks and
         interrupting it would leave a ledger that disagrees with the disk. A quickbench run
         has one and notices it between cells, where its own eviction and Osaurus restore
-        still run. AC-6: the wait is a bound, not a promise -- a pip step can outlive it, and
-        docs/interfaces.md says so.
+        still run. AC-6: the wait is a bound, not a promise; when it expires with the job
+        still running, the install steps still in flight are killed by process group and the
+        job gets ``JOB_KILL_GRACE_S`` more to run its own rollback and store `done`.
         """
         with self.lock:
             job = self.running
@@ -247,13 +253,21 @@ class _Jobs:
             return
         if job.kind in ("install", "download", "quickbench"):
             job.cancel_requested = True
+        if not self._wait_for_done(job, timeout):
+            engines.kill_running_steps()
+            self._wait_for_done(job, JOB_KILL_GRACE_S)
+
+    @staticmethod
+    def _wait_for_done(job: "_Job", timeout: float) -> bool:
+        """Wait at most *timeout* for *job*'s `done`; True when it arrived."""
         deadline = time.monotonic() + timeout
         with job.condition:
             while not job.done:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return
+                    return False
                 job.condition.wait(remaining)
+        return True
 
 
 def _job_code(job: _Job) -> str | None:

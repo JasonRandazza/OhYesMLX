@@ -1060,6 +1060,54 @@ def _quickbench(args) -> int:
     return 0 if ok else 2
 
 
+def _stderr_line(line: dict) -> None:
+    print(json.dumps(line), file=sys.stderr, flush=True)
+
+
+def _recover_startup() -> None:
+    """Recover what a killed launch left behind, before the app serves (045-02a AC-6).
+
+    An engine server this harness spawned survives a ``SIGKILL`` of the app -- it is in its
+    own session -- still holding its port and its weights, and a pin whose restore never ran
+    leaves the user's originals only in quickbench's backup directory. Both are handled
+    here, each ending in at most one stderr line and neither able to stop the server from
+    starting. Osaurus is recovered only while its app is not running: a running app may
+    rewrite the very files being put back, so the backup is left for the next launch or the
+    next Osaurus cell instead.
+    """
+    from ohyesmlx import osaurus_settings, quickbench, runtimes
+
+    try:
+        runtimes.stop_orphaned_engines()
+    except Exception as error:
+        _stderr_line({"error": {"code": "orphan_stop_failed", "message": str(error)}})
+
+    backup_dir = quickbench.DEFAULT_BACKUP_DIR
+    backups = Path(backup_dir)
+    try:
+        app_running = quickbench._osaurus_app_running()
+    except Exception:
+        # The probe reads a failure as the app being present, the same rule a cell uses.
+        app_running = True
+    if app_running:
+        if osaurus_settings._backups(backups):
+            _stderr_line({"recovery_pending": "osaurus", "backup_dir": backup_dir})
+        return
+    try:
+        recovered = osaurus_settings.recover(
+            backup_dir=backup_dir, baseline_path=osaurus_settings.BASELINE_PATH
+        )
+    except Exception as error:
+        _stderr_line(
+            {"error": {"code": "osaurus_recovery_failed", "message": str(error)}}
+        )
+        return
+    if recovered:
+        _stderr_line({"recovered": "osaurus", "backup_dir": backup_dir})
+    elif osaurus_settings._backups(backups):
+        _stderr_line({"recovery_failed": "osaurus", "backup_dir": backup_dir})
+
+
 def _app(args) -> int:
     """``ohyesmlx app``: announce the launch line, then serve until the parent or a signal stops it.
 
@@ -1074,7 +1122,12 @@ def _app(args) -> int:
     through a job wait and ``server_close()`` with exit 0, so the port is released before the
     process is gone. AC-6: a running install or download is cancelled first (at its next step
     boundary) and waited for at most 120 s -- an evict is only waited for -- so a job is never
-    abandoned silently, though a pip step can outlive the wait.
+    abandoned silently, and a step still in flight at that bound has its process group killed
+    and ``JOB_KILL_GRACE_S`` more to run the job's rollback.
+
+    Before the line is printed, and after the socket is bound, :func:`_recover_startup` stops
+    an engine a killed launch left behind and puts back an Osaurus pin whose restore never ran;
+    each outcome is one stderr line and none of them can keep the server from starting.
 
     A port that cannot be bound prints nothing on stdout: the client waits on that line, so an
     error there is one stderr line and exit 2, which it can tell from a hang.
@@ -1094,6 +1147,10 @@ def _app(args) -> int:
             flush=True,
         )
         return 2
+
+    # AC-6: what a killed launch left behind -- orphaned engine servers and a pin whose
+    # restore never ran -- is recovered before the client is told the app is up.
+    _recover_startup()
 
     # Installed before the line is printed, so a signal sent in response to that line -- which
     # is exactly when the client sends one -- lands in the handler rather than in the default

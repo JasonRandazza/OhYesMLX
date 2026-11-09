@@ -1,0 +1,89 @@
+I'll start by reading the plan's AC-7 and the files I'm allowed to touch.
+Now let me look at the existing quickbench tests, especially the one I must edit.
+
+
+I have the full picture. Let me check the docs' quickbench section and any other callers of `quickbench.run`.
+Let me read the interfaces doc section for quickbench in full, and check where `server.py` binds `quickbench.run` (it may enumerate keywords).
+Let me get the baseline test count before touching anything.
+Baseline is 1208 passed. Now I'll write the tests first (red): inject into the existing no-drift test and add the three new ones.
+Now I'll run the quickbench tests to confirm red.
+Red confirmed on all four (unexpected keyword). Now the implementation — the two helpers first.
+Now the `run` signature and its docstring.
+
+Now the `measure_cell` check, after `run_cells` and before the `finally` restore.
+
+Green run for the quickbench module now.
+Green. Now red-check #1: disable the drift call and watch the drift test fail.
+
+
+Red-check #1 confirmed (`PASS` where `FAIL` was expected). Restoring, then red-check #2: move the copy after restore.
+
+
+
+
+
+Red-check #2 confirmed (copy captured restored originals, byte-equality failed). Reverting the temporary patch.
+
+
+Now the interfaces doc — the `run` signature, the Osaurus rule, and the summary shape.
+
+
+
+Now the full suite.
+1211 passed (1208 + 3 new). Let me review my own diff in the three files.
+Let me check the project's lint config and re-read the final `measure_cell` block for correctness.
+All good. Let me capture exact line numbers for the report.
+Done. No commit; nothing real was run.
+
+**Shape chosen:** two injectables (`osaurus_drift=` + `keep_during_run=`), because req. 1 pins `_osaurus_drift(*, baseline_path, config_dir=None) -> str | None`; a single check-and-copy injectable would need a destination parameter that signature does not have. Each default reads `osaurus_settings.DEFAULT_CONFIG_DIR`, so in production both read the same dir the pin edited; tests bind both to the same tmp dir.
+
+**Changed**
+- `ohyesmlx/quickbench.py:204` `_osaurus_drift`: load baseline first (None -> None, so no config read), diff captured settings, `describe_drift` only on drift.
+- `ohyesmlx/quickbench.py:224` `_keep_during_run`: copies `PIN_FILES` byte-exact into `during_run_dir`, `mkdir(parents=True, exist_ok=True)` + `chmod(BACKUP_DIR_MODE)` (0700).
+- `ohyesmlx/quickbench.py:477-478` new `run` keywords; `:636-659` `measure_cell` check after a completed `run_cells` and before the `finally` restore: drift -> copy, `summary["osaurus"]["during_run"]`, FAIL with `"Osaurus changed its settings during the run: " + drift`; a raising check -> FAIL with its message. Restore still runs on every path.
+- `tests/test_quickbench.py:713-718` existing no-drift test now binds both injectables to its tmp `config_dir` (the only existing test edited); new tests at `:738`, `:842`, `:903`.
+- `docs/interfaces.md:1633` run signature, `:1695-1706` Osaurus rule, `:1724-1726` summary `during_run`.
+
+**Red-then-green:** `test_the_host_pinned_between_pin_and_restore_shows_no_drift`, `test_drift_between_pin_and_restore_fails_the_cell_and_keeps_both_copies`, `test_no_drift_between_pin_and_restore_passes_and_keeps_nothing`, `test_a_drift_check_that_raises_fails_the_cell_and_still_restores` — 4 failed (TypeError on the unknown keyword) before, all green after.
+
+**Red-checks (both reverted):**
+- Drift call disabled (`if False and pinned:`): drift test failed `assert 'PASS' == 'FAIL'`.
+- Copy moved after `restore`: drift test failed the byte-equality assertion (`4096` vs `8192` — the copy held the restored originals).
+
+**Final:** `1211 passed in 45.19s` (baseline 1208; +3 new tests). Only `quickbench.py`, `tests/test_quickbench.py` and `docs/interfaces.md` touched by me; part B's uncommitted edits are untouched.
+
+**Unsure / judgement calls:** the check runs only when `run_cells` returns; if `run_cells` raises, the cell is already FAIL with that reason and no mid-run copy is taken (literal AC-7 wording, but a mid-run user change in that path is not kept). The check also runs for stage-B Osaurus cells, not just stage A.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     36    3659201    3533952    36873   96.6%   0.051513
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines.py
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_cli.py
+ M tests/test_engines.py
+ M tests/test_quickbench.py
+ M tests/test_runtimes.py
+ M tests/test_server.py
+?? .paul/orders/v5-fix-45a-drift.log
+?? .paul/orders/v5-fix-45a-drift.md
+?? .paul/orders/v5-fix-45a-lifecycle.log
+?? .paul/orders/v5-fix-45a-lifecycle.md
+ .paul/STATE.md           |   1 +
+ docs/interfaces.md       |  66 ++++++++++++-
+ ohyesmlx/cli.py          |  59 +++++++++++-
+ ohyesmlx/engines.py      |  70 +++++++++++---
+ ohyesmlx/quickbench.py   |  78 +++++++++++++++-
+ ohyesmlx/runtimes.py     | 187 ++++++++++++++++++++++++++++++++++++-
+ ohyesmlx/server.py       |  20 +++-
+ tests/test_cli.py        | 201 +++++++++++++++++++++++++++++++++++++++
+ tests/test_engines.py    |  67 +++++++++++++
+ tests/test_quickbench.py | 238 +++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_runtimes.py   | 217 ++++++++++++++++++++++++++++++++++++++++++
+ tests/test_server.py     |  52 +++++++++++
+ 12 files changed, 1230 insertions(+), 26 deletions(-)

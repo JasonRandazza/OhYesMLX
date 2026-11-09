@@ -3492,3 +3492,220 @@ def test_a_machine_local_lab_path_that_does_not_exist_is_refused_naming_the_engi
             write_lab_manifest(tmp_path, None),
             write_lab_paths_file(tmp_path, {"optiq": str(tmp_path / "gone" / "bin")}),
         )
+
+
+# --------------------------------------------------------------------------------------
+# 045-02a AC-6: the running-engines ledger, and the startup stop of a dead owner's engines
+# --------------------------------------------------------------------------------------
+
+LEDGER_LSTART = "Wed Nov 5 10:00:00 2025"
+LEDGER_ARGV = "python -m mlx_lm.server --model /models/x --port 8081"
+
+
+def write_ledger(root, owner, entries):
+    """One owner's ledger file, in the shape `_write_ledger` produces."""
+    directory = root / "results" / runtimes.RUNNING_ENGINES_DIRNAME
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{owner}.json"
+    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    return path
+
+
+def test_the_running_engine_is_recorded_after_the_cold_load_time_is_taken(rig, monkeypatch):
+    """The ledger write must not sit between spawn and readiness: no measured load time
+    contains its `ps` call (045-02a AC-6)."""
+    order = []
+
+    def now():
+        rig.clock.advance(1.0)
+        value = rig.clock()
+        order.append(("now", value))
+        return value
+
+    monkeypatch.setattr(runtimes, "_now", now)
+    monkeypatch.setattr(
+        runtimes,
+        "_record_running_engine",
+        lambda pid, port: order.append(("ledger", pid)),
+    )
+    rig.spawn_seconds = 2.5
+    rig.inventory = (HF_ID,)
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    writes = [index for index, event in enumerate(order) if event[0] == "ledger"]
+    assert writes, "the start wrote no running-engines entry"
+    before = order[writes[0] - 1]
+    assert before[0] == "now", "a value other than the load-time timestamp preceded the write"
+    started = 1001.0
+    assert handle.cold_load_s == before[1] - started
+
+
+def test_a_started_engine_is_recorded_with_its_pid_port_and_identity(
+    rig, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+    pid = rig.next_pid + 1
+    rig.inventory = (HF_ID,)
+    rig.results[(runtimes.PS, "-ww", "-o", "lstart=,args=", "-p", str(pid))] = _completed(
+        stdout=f"{LEDGER_LSTART} {LEDGER_ARGV}\n"
+    )
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    path = tmp_path / "results" / runtimes.RUNNING_ENGINES_DIRNAME / f"{os.getpid()}.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
+    assert entries == [
+        {"pid": handle.pid, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}
+    ]
+
+    handle.stop()
+
+    assert not path.exists(), "a stopped engine's empty ledger file was left behind"
+
+
+def test_a_ledger_write_failure_does_not_fail_the_start(rig, monkeypatch, capsys):
+    rig.inventory = (HF_ID,)
+    rig.results[(runtimes.PS, "-ww", "-o", "lstart=,args=", "-p", str(rig.next_pid + 1))] = (
+        _completed(stdout=f"{LEDGER_LSTART} {LEDGER_ARGV}\n")
+    )
+
+    def refuse(*args, **kwargs):
+        raise OSError("the ledger is read-only")
+
+    monkeypatch.setattr(runtimes, "_write_ledger", refuse)
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert handle.pid == rig.next_pid
+    line = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert line["error"]["code"] == "running_engine_ledger"
+    assert "read-only" in line["error"]["message"]
+
+
+def test_a_dead_owners_matching_engine_is_stopped_by_its_process_group(tmp_path, monkeypatch):
+    path = write_ledger(
+        tmp_path,
+        999_999,
+        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
+    )
+    signals = []
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
+    )
+    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(runtimes, "_await_exit", lambda pid, timeout: True)
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert signals == [(4242, signal.SIGTERM)]
+    assert not path.exists()
+
+
+def test_an_orphan_that_ignores_term_is_killed_after_the_grace(tmp_path, monkeypatch):
+    write_ledger(
+        tmp_path,
+        999_999,
+        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
+    )
+    signals = []
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
+    )
+    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(runtimes, "_await_exit", lambda pid, timeout: False)
+
+    with pytest.raises(RuntimeStopError):
+        runtimes.stop_orphaned_engines(tmp_path)
+
+    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+
+
+def test_a_reused_pid_is_dropped_and_never_signalled(tmp_path, monkeypatch):
+    path = write_ledger(
+        tmp_path,
+        999_999,
+        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
+    )
+    signals = []
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    # The pid is alive, but its start time is not the one recorded: it is a different process.
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: ("Thu Nov 6 11:00:00 2025", LEDGER_ARGV)
+    )
+    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert signals == [], "a reused pid was signalled"
+    assert not path.exists()
+
+
+def test_a_matching_pid_with_a_different_argv_is_dropped_and_never_signalled(
+    tmp_path, monkeypatch
+):
+    write_ledger(
+        tmp_path,
+        999_999,
+        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
+    )
+    signals = []
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, "sleep 600")
+    )
+    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert signals == [], "the user's own command was signalled"
+
+
+def test_a_live_owners_ledger_is_never_read_or_touched(tmp_path, monkeypatch):
+    path = write_ledger(
+        tmp_path,
+        os.getpid(),
+        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
+    )
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
+
+    def refuse(pid):
+        raise AssertionError("a live owner's ledger was read")
+
+    monkeypatch.setattr(runtimes, "_process_identity", refuse)
+    monkeypatch.setattr(runtimes, "_signal_tree", refuse)
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert path.exists(), "a live owner's ledger file was removed"
+
+
+def test_the_ledger_file_is_replaced_atomically(tmp_path, monkeypatch):
+    target = runtimes._ledger_path(4242, root=tmp_path)
+    seen = []
+    real_replace = os.replace
+
+    def replace(source, destination):
+        seen.append((Path(source), Path(destination)))
+        assert not Path(destination).exists(), "the target was written before the replace"
+        assert json.loads(Path(source).read_text()) == {"entries": [{"pid": 1}]}
+        real_replace(source, destination)
+
+    monkeypatch.setattr(runtimes.os, "replace", replace)
+
+    runtimes._write_ledger(target, [{"pid": 1}])
+
+    assert [destination for _source, destination in seen] == [target]
+    assert json.loads(target.read_text()) == {"entries": [{"pid": 1}]}
+
+
+def test_the_ledger_file_is_removed_once_its_last_entry_is_gone(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+    path = runtimes._ledger_path()
+    runtimes._write_ledger(path, [{"pid": 4242}])
+
+    runtimes._forget_running_engine(4242)
+
+    assert not path.exists()

@@ -24,10 +24,10 @@ string and ``cli.build_cells`` turns it into the selection, exactly as ``canary`
 cell is its own ``run_cells`` call, which is what makes a cancel between cells possible.
 
 Every side effect is an injected parameter: the run loop, the downloader and evictor, the
-downloaded check, Osaurus pin/restore/recover, the port probe, the Osaurus-app probe, the
-load average, the clock, the emitter and the cancel probe. Tests run on scratch directories
-with fakes, so none starts a runtime, downloads a model, reads this Mac's Application
-Support, or touches ``~/.osaurus``.
+downloaded check, Osaurus pin/restore/recover, the mid-run drift check and the copy it keeps,
+the port probe, the Osaurus-app probe, the load average, the clock, the emitter and the
+cancel probe. Tests run on scratch directories with fakes, so none starts a runtime,
+downloads a model, reads this Mac's Application Support, or touches ``~/.osaurus``.
 """
 
 from __future__ import annotations
@@ -199,6 +199,45 @@ def _osaurus_app_running(run=subprocess.run) -> bool:
         ):
             return True
     return False
+
+
+def _osaurus_drift(*, baseline_path, config_dir=None) -> str | None:
+    """The host's drift from the run's baseline since the pin, or None when it has not moved.
+
+    Read after a cell, from the same config directory ``pin`` edited, and compared with the
+    baseline that pin wrote: a host that moved mid-run was measuring a configuration the pin
+    did not reach. A run with no baseline has nothing to compare against and reports no drift;
+    the baseline's absence is `pin`'s business, not this check's.
+    """
+    baseline = osaurus_settings.load_baseline(pathlib.Path(baseline_path))
+    if baseline is None:
+        return None
+    drift = osaurus_settings.diff_against_baseline(
+        osaurus_settings.capture_osaurus_settings(
+            pathlib.Path(config_dir) if config_dir is not None else None
+        ),
+        baseline,
+    )
+    return osaurus_settings.describe_drift(drift) if drift else None
+
+
+def _keep_during_run(*, during_run_dir, config_dir=None) -> None:
+    """Copy the two host files ``pin`` edits into *during_run_dir*, byte-exact.
+
+    The copy is how a change the user made mid-run survives ``restore``: a verified restore
+    puts the pinned originals back, so without it the only bytes left would be the ones the
+    user replaced. The directory is created ``0700``, like the backup itself.
+    """
+    destination = pathlib.Path(during_run_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    os.chmod(destination, osaurus_settings.BACKUP_DIR_MODE)
+    source = (
+        pathlib.Path(config_dir)
+        if config_dir is not None
+        else osaurus_settings.DEFAULT_CONFIG_DIR
+    )
+    for name in osaurus_settings.PIN_FILES:
+        (destination / name).write_bytes((source / name).read_bytes())
 
 
 def _catalog_row(repo: str, models) -> catalog.Model:
@@ -435,6 +474,8 @@ def run(
     pin=osaurus_settings.pin,
     restore=osaurus_settings.restore,
     recover=osaurus_settings.recover,
+    osaurus_drift=_osaurus_drift,
+    keep_during_run=_keep_during_run,
     port_in_use=_port_busy,
     osaurus_app_running=_osaurus_app_running,
     load=canary.load,
@@ -458,7 +499,10 @@ def run(
     with ``osaurus=True``; then ``recover`` runs before its ``pin``, all three are handed the
     application's backup path and the same baseline path -- the drift guard's,
     ``osaurus_settings.BASELINE_PATH`` by default -- and ``restore`` runs in a ``finally`` so a
-    cell that raises still puts the user's settings back. A restore that does not verify,
+    cell that raises still puts the user's settings back. After a pinned cell and before its
+    ``restore``, ``osaurus_drift`` compares the host with that baseline: drift fails the cell,
+    after both host files are kept byte-exact in ``<backup_dir>/during-run`` so a change the
+    user made mid-run survives the restore. A restore that does not verify,
     whether it returns False or raises, ends the run with an ``error`` naming the backup
     directory and a summary that records it; every ending that wrote a summary carries its
     ``results_dir`` in a terminal event's payload.
@@ -589,6 +633,30 @@ def run(
                 quick=True,
                 results_dir=str(cell_dir),
             )
+            if pinned:
+                # AC-7: the host is attested once more after the cell and before the originals
+                # go back. Drift means the numbers were measured against settings the pin did
+                # not reach, so the cell fails -- but the user's current files are kept first,
+                # because a verified restore would otherwise replace the only copy of a change
+                # they made mid-run.
+                try:
+                    drift = osaurus_drift(baseline_path=baseline_path)
+                    if drift is not None:
+                        during_run = pathlib.Path(backup_dir) / "during-run"
+                        keep_during_run(during_run_dir=during_run)
+                        summary["osaurus"]["during_run"] = str(during_run)
+                except Exception as error:
+                    return _cell_record(
+                        engine, fmt, artifact_dir, status="FAIL", reason=str(error)
+                    )
+                if drift is not None:
+                    return _cell_record(
+                        engine,
+                        fmt,
+                        artifact_dir,
+                        status="FAIL",
+                        reason="Osaurus changed its settings during the run: " + drift,
+                    )
         except Exception as error:
             return _cell_record(
                 engine, fmt, artifact_dir, status="FAIL", reason=str(error)

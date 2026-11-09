@@ -1193,6 +1193,207 @@ def test_the_app_creates_app_support_before_it_serves(monkeypatch, capsys):
     }
 
 
+class FakeAppListener:
+    """The listener ``_app`` serves with: the launch line, one serve call, then SIGINT."""
+
+    token = "a-token-no-request-reaches"
+    server_address = ("127.0.0.1", 9)
+
+    def __init__(self, order):
+        self.order = order
+
+    @property
+    def jobs(self):
+        order = self.order
+
+        class Jobs:
+            @staticmethod
+            def cancel_and_wait(timeout):
+                order.append("cancel")
+
+        return Jobs()
+
+    def serve_forever(self):
+        raise KeyboardInterrupt
+
+    def server_close(self):
+        self.order.append("close")
+
+    def shutdown(self):
+        self.order.append("shutdown")
+
+
+def app_with_fake_server(monkeypatch, order):
+    """Patch the app's one external seam and return the listener class a test can rely on."""
+    from ohyesmlx import server
+
+    monkeypatch.setattr(cli, "ensure_app_support", lambda: order.append("support"))
+    monkeypatch.setattr(
+        server,
+        "make_server",
+        lambda port=0: (order.append("make_server"), FakeAppListener(order))[1],
+    )
+    monkeypatch.setattr(
+        cli,
+        "signal",
+        SimpleNamespace(SIGTERM=signal.SIGTERM, signal=lambda number, handler: None),
+    )
+
+
+def stderr_lines(captured):
+    return [json.loads(line) for line in captured.err.splitlines() if line.strip()]
+
+
+def test_the_app_recovers_an_osaurus_backup_before_the_launch_line(
+    monkeypatch, capsys, tmp_path
+):
+    """045-02a AC-6: a pin whose restore never ran is put back at launch, once, on stderr."""
+    from ohyesmlx import osaurus_settings, quickbench, runtimes
+
+    order = []
+    app_with_fake_server(monkeypatch, order)
+    monkeypatch.setattr(runtimes, "stop_orphaned_engines", lambda: order.append("orphans"))
+    monkeypatch.setattr(quickbench, "_osaurus_app_running", lambda: False)
+    monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(tmp_path / "backup"))
+    monkeypatch.setattr(osaurus_settings, "BASELINE_PATH", tmp_path / "baseline.json")
+    monkeypatch.setattr(
+        osaurus_settings,
+        "recover",
+        lambda **kwargs: (order.append(("recover", kwargs)), True)[1],
+    )
+
+    assert cli._app(SimpleNamespace(port=0)) == 0
+
+    captured = capsys.readouterr()
+    assert order[:3] == ["support", "make_server", "orphans"]
+    assert order[3][0] == "recover"
+    assert order[3][1] == {
+        "backup_dir": str(tmp_path / "backup"),
+        "baseline_path": tmp_path / "baseline.json",
+    }
+    assert stderr_lines(captured) == [
+        {"recovered": "osaurus", "backup_dir": str(tmp_path / "backup")}
+    ]
+    assert json.loads(captured.out) == {
+        "port": 9,
+        "token": FakeAppListener.token,
+    }, "the launch line is the only thing on stdout"
+
+
+def test_a_running_osaurus_app_leaves_the_backup_for_the_next_launch(
+    monkeypatch, capsys, tmp_path
+):
+    from ohyesmlx import osaurus_settings, quickbench, runtimes
+
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "server.json").write_text("{}", encoding="utf-8")
+
+    order = []
+    app_with_fake_server(monkeypatch, order)
+    monkeypatch.setattr(runtimes, "stop_orphaned_engines", lambda: None)
+    monkeypatch.setattr(quickbench, "_osaurus_app_running", lambda: True)
+    monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(backup))
+
+    def refuse(**kwargs):
+        raise AssertionError("recover ran while the Osaurus app was up")
+
+    monkeypatch.setattr(osaurus_settings, "recover", refuse)
+
+    assert cli._app(SimpleNamespace(port=0)) == 0
+
+    captured = capsys.readouterr()
+    assert stderr_lines(captured) == [
+        {"recovery_pending": "osaurus", "backup_dir": str(backup)}
+    ]
+    assert (backup / "server.json").exists(), "a pending backup was touched"
+
+
+def test_a_recovery_that_raises_is_one_line_and_the_app_still_serves(
+    monkeypatch, capsys, tmp_path
+):
+    from ohyesmlx import osaurus_settings, quickbench, runtimes
+
+    order = []
+    app_with_fake_server(monkeypatch, order)
+    monkeypatch.setattr(runtimes, "stop_orphaned_engines", lambda: None)
+    monkeypatch.setattr(quickbench, "_osaurus_app_running", lambda: False)
+    monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(tmp_path / "backup"))
+
+    def broken(**kwargs):
+        raise OSError("the baseline is unreadable")
+
+    monkeypatch.setattr(osaurus_settings, "recover", broken)
+
+    assert cli._app(SimpleNamespace(port=0)) == 0
+
+    captured = capsys.readouterr()
+    assert stderr_lines(captured) == [
+        {
+            "error": {
+                "code": "osaurus_recovery_failed",
+                "message": "the baseline is unreadable",
+            }
+        }
+    ]
+    assert json.loads(captured.out)["token"] == FakeAppListener.token
+
+
+def test_a_recovery_that_does_not_verify_is_one_line_and_keeps_the_backup(
+    monkeypatch, capsys, tmp_path
+):
+    from ohyesmlx import osaurus_settings, quickbench, runtimes
+
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "server.json").write_text("{}", encoding="utf-8")
+
+    order = []
+    app_with_fake_server(monkeypatch, order)
+    monkeypatch.setattr(runtimes, "stop_orphaned_engines", lambda: None)
+    monkeypatch.setattr(quickbench, "_osaurus_app_running", lambda: False)
+    monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(backup))
+    monkeypatch.setattr(osaurus_settings, "recover", lambda **kwargs: False)
+
+    assert cli._app(SimpleNamespace(port=0)) == 0
+
+    captured = capsys.readouterr()
+    assert stderr_lines(captured) == [
+        {"recovery_failed": "osaurus", "backup_dir": str(backup)}
+    ]
+    assert (backup / "server.json").exists(), "a backup that did not verify was removed"
+
+
+def test_an_orphan_stop_that_raises_is_one_line_and_the_app_still_serves(
+    monkeypatch, capsys, tmp_path
+):
+    from ohyesmlx import osaurus_settings, quickbench, runtimes
+
+    order = []
+    app_with_fake_server(monkeypatch, order)
+
+    def broken(*args, **kwargs):
+        raise runtimes.RuntimeStopError("orphaned engine 4242 would not die")
+
+    monkeypatch.setattr(runtimes, "stop_orphaned_engines", broken)
+    monkeypatch.setattr(quickbench, "_osaurus_app_running", lambda: False)
+    monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(tmp_path / "backup"))
+    monkeypatch.setattr(osaurus_settings, "recover", lambda **kwargs: False)
+
+    assert cli._app(SimpleNamespace(port=0)) == 0
+
+    captured = capsys.readouterr()
+    assert stderr_lines(captured) == [
+        {
+            "error": {
+                "code": "orphan_stop_failed",
+                "message": "orphaned engine 4242 would not die",
+            }
+        }
+    ]
+    assert json.loads(captured.out)["port"] == 9
+
+
 def test_the_app_serves_hardware_until_its_stdin_closes(tmp_path):
     """AC-1 and AC-7 end to end: one line, an authorised GET against the real read-only scan,
     then stdin EOF, exit 0, nothing else on stdout and the port released."""
