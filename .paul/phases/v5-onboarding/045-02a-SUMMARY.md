@@ -3,8 +3,10 @@ phase: 045-security
 plan: 02a
 type: Summary
 about: "OhYesMLX"
-status: applied
-commits: [4b35ef8, 9bc9388, review-fix]
+status: unified
+completed: 2026-11-09
+duration: "2026-11-04 to 2026-11-09 (APPLY, review, UNIFY)"
+commits: [4b35ef8, 9bc9388, 6c4d616]
 tests: "1164 -> 1222 passed"
 ---
 
@@ -20,6 +22,7 @@ still withheld for 045-02b.
 | Commit | Contents |
 |---|---|
 | `4b35ef8` | Part A (AC-1 to AC-5): writable root, job-slot leak, thread and stream caps, absolute tool paths, `0700` Application Support, refusal log limited to served routes. Threat model: T-03 and T-04 detail published; T-03, T-04 and T-08 to T-11 marked fixed; §9 row added for the thread cap's residual risk. |
+| `6c4d616` | Code-review fixes: Osaurus-shaped orphan stop through `_shutdown` with identity guards, AC-1 reload test, step registration under the lock, one `stderr_json`, `shutdown_abandoned`, tests isolated from the repo's `results/`. |
 | `9bc9388` | Part B (AC-6, AC-7): interrupted-app recovery (Osaurus pin, orphaned engines, pip process groups) and a mid-cell Osaurus drift check. Threat model: T-02 and T-05 detail published and marked fixed; the part A rows carry `4b35ef8`. |
 
 Each commit carries its work orders and worker logs (`.paul/orders/v5-fix-45a-{server-paths,lifecycle,drift}.{md,log}`).
@@ -147,6 +150,10 @@ Every finding was checked against the code before anything was fixed.
 | Spec-(b) non-ledger `*.json` deleted | Valid | Left alone. |
 
 After the fixes, pytest passes 1222 tests and `results/running-engines/` does not exist in the repo.
+
+## Next
+
+045-02b (installers and fetch: T-01, T-06, T-07, T-12, T-13, T-16, plus `runtimes.LSOF` and the `_osaurus_app_running` timeout literal as candidates), then 045-03 (clean-account smoke). Phase 4.5 is not complete.
 
 ## Process gates still owed
 
