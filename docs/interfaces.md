@@ -1490,7 +1490,9 @@ waits for any
 running job at most 120 s, then exits 0; an evict is waited for, never cancelled. When the 120 s bound expires with
 a job still running, the server kills the process group of every install step still in flight
 (`engines.kill_running_steps()`) and waits at most `JOB_KILL_GRACE_S` (15 s) more for the job's own rollback and its
-`done` (045-02a AC-6). Each job start writes one stderr line
+`done` (045-02a AC-6); a job that outlives even that grace is abandoned with one stderr line
+`{"error": {"code": "shutdown_abandoned", "job": id, "kind": str}}`, never silently. Each job start writes one
+stderr line
 `{"job": id, "kind": str, "name": str, "time": iso}` and each end one `{"job": id, "ok": bool, "code": str|null,
 "time": iso}` — never a token or a header value.
 A download's in-flight `progress` events carry `fraction` = (bytes of files already finished + bytes
@@ -1753,24 +1755,30 @@ Three lifecycle contracts close T-02: a `SIGKILL` of `ohyesmlx app` (or its 120 
 leaves an engine holding a port and its weights, a pinned Osaurus whose restore never ran, or a pip step running
 with no rollback.
 
-**The running-engines ledger** (`ohyesmlx/runtimes.py`). `Runtime.start` records one entry per spawned engine —
-`{"pid": int, "port": int, "argv": str, "lstart": str}`, the last two read from
-`/bin/ps -ww -o lstart=,args= -p <pid>` — in `<writable_root()>/results/running-engines/<owner pid>.json`, one
-file per owner process so two harness processes never read-modify-write one file. The write is after `cold_load_s`
-is taken, so no measured load time contains the `ps` call, and its failure is one stderr line
-(`{"error": {"code": "running_engine_ledger", "message": str}}`) that never fails the start. Every write is a temp
-file in the same directory plus `os.replace`; `Handle.stop` drops its own entry and the file goes when its last
-entry does.
+**The running-engines ledger** (`ohyesmlx/runtimes.py`). `Runtime.start` records one entry per started engine —
+`{"pid": int, "lstart": str|null, "argv": str|null, "serving_pid": int, "serving_lstart": str|null,
+"serving_argv": str|null, "port": int, "stop_command": [str, ...]}` — in
+`<writable_root()>/results/running-engines/<owner pid>.json`, one file per owner process so two harness processes
+never read-modify-write one file. Each pid carries its own identity read from `/bin/ps -ww -o lstart=,args= -p <pid>`;
+`serving_pid` is the pid `Runtime.start` already resolved as the one holding the weights, and a launcher that has
+already exited (`osaurus serve` exits once the app is listening) is recorded with a null identity rather than failing
+the start. The write is after `cold_load_s` is taken, so no measured load time contains the `ps` calls, and its
+failure is one stderr line (`{"error": {"code": "running_engine_ledger", "message": str}}`) that never fails the
+start. Every write is a temp file in the same directory plus `os.replace`; `Handle.stop` drops its own entry and the
+file goes when its last entry does.
 
 ```python
 stop_orphaned_engines(root=None) -> None   # root: the writable root, default writable_root()
 ```
 
-For each ledger file whose owner pid is dead it stops the process group of every entry whose pid is alive **with the
-same `lstart` and `argv`** (SIGTERM, then SIGKILL after `TERM_GRACE_S`), then deletes the file. An entry whose start
-time or argv differs — a reused pid, or the user's own identical command started later — is dropped and never
-signalled; a file whose owner is still alive belongs to a grid running from the CLI and is never read or touched. A
-stop that does not take effect keeps the file and raises `RuntimeStopError`.
+For each ledger file whose owner pid is dead — and only `<owner pid>.json` is a ledger; any other file in the
+directory is left alone — it reads the pids listening on the entry's `port` (`lsof -t`) and stops the entry through
+`_shutdown(pid, port, tuple(stop_command))` only when **every** listener is one of the entry's recorded pids with the
+identity recorded for it (the Osaurus shape: the launcher pid is already dead and the app is the listener), or when
+nothing is listening and the spawned pid is alive with its recorded identity. An unreadable port, a stranger
+listening, or an identity that no longer matches — a reused pid, or the user's own identical command started later —
+is dropped and never signalled; a file whose owner is still alive belongs to a grid running from the CLI and is never
+read or touched. A stop that does not take effect keeps the file and raises `RuntimeStopError`.
 
 **`ohyesmlx app` startup** (`cli._recover_startup`, after the bind and before the launch line):
 `stop_orphaned_engines()` runs first; then, only while `quickbench._osaurus_app_running()` is False,
@@ -1788,8 +1796,9 @@ stdout line), and none of them can stop the server:
 
 **An install step's process group** (`engines._real_run`, `engines.kill_running_steps`,
 `server.JOB_KILL_GRACE_S`). Each step runs through `Popen(..., start_new_session=True)` and is registered in a
-module-level, lock-guarded set while it runs; a step that exceeds its own timeout has its process group killed and
-still reports `TIMEOUT_EXIT_CODE` with the output it produced, and the registry is empty however the step ends.
+module-level set under the same lock that covers its spawn, so a kill can neither snapshot the registry between the
+two nor miss a step that has started; the registry is empty however the step ends. A step that exceeds its own
+timeout has its process group killed and still reports `TIMEOUT_EXIT_CODE` with the output it produced.
 `kill_running_steps()` kills every registered group — it is what `_Jobs.cancel_and_wait` calls when its bound expires
 (see the shutdown paragraph above).
 

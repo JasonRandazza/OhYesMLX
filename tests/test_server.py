@@ -1708,6 +1708,35 @@ def test_the_post_kill_wait_is_bounded_by_the_kill_grace(launch, monkeypatch):
     assert elapsed < 5, "the post-kill wait was not bounded"
 
 
+def test_a_job_that_outlives_the_kill_grace_is_abandoned_with_one_stderr_line(
+    launch, monkeypatch, capsys
+):
+    """Std-6 (045-02a review): the second wait expiring is reported, never silent."""
+    module = blocking(threading.Event())  # never released
+    listener = launch(download=module)
+    job = listener.jobs.get(posted_job_id(listener, DOWNLOAD))
+    assert module.started.wait(5)
+
+    monkeypatch.setattr(server, "JOB_KILL_GRACE_S", 0.05)
+    monkeypatch.setattr(server.engines, "kill_running_steps", lambda: None)
+
+    listener.jobs.cancel_and_wait(0.01)
+
+    lines = [
+        json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()
+    ]
+    abandoned = [
+        line
+        for line in lines
+        if isinstance(line, dict)
+        and isinstance(line.get("error"), dict)
+        and line["error"].get("code") == "shutdown_abandoned"
+    ]
+    assert abandoned == [
+        {"error": {"code": "shutdown_abandoned", "job": job.id, "kind": "download"}}
+    ]
+
+
 # --- AC-7: the job routes are behind the 04-01 guard -------------------------------------------
 
 
@@ -1854,6 +1883,9 @@ def test_a_fifth_stream_on_one_job_is_429_and_a_freed_slot_admits_another(launch
         code, _, raw = send_to(listener, f"/jobs/{job_id}/events", method="GET")
         assert code == 429
         assert error_of(raw)["code"] == "too_many_streams"
+        assert error_of(raw)["message"] == (
+            f"a job has at most {server.MAX_STREAMS_PER_JOB} event streams"
+        )
 
         for _, reader in streams:
             block = reader.read_until(b"\n\n").decode("utf-8")

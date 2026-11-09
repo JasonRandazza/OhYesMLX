@@ -1,0 +1,44 @@
+I'll read the changed files and check them against the documented standards.
+
+
+
+
+
+
+Now let me look at the quickbench run/measure_cell area, osaurus_settings, and the new tests.
+Now the tests — I need to check whether any touch the real HOME, `~/.osaurus`, or the repo's `results/`.
+Let me examine the new tests in the changed test files and docs/interfaces.md.
+The order flags tests touching real HOME — let me inspect the `_recover_startup` tests and the quickbench/runtimes ledger tests closely.
+Let me check how `run_app` sets up the environment and what `engines.DEFAULT_ENV.home` resolves to.
+Let me check the quickbench tests for `_osaurus_app_running` and the AC-7 drift tests, plus the runtimes ledger tests.
+
+Let me check the remaining new server tests and the docs/interfaces.md sections.
+One last check for tests writing to real paths, then I'll write the review.
+Review complete. I changed nothing (read-only); I verified by reading every listed hunk in `ohyesmlx/` and the named tests — no git, no test run, per the order.
+
+**Findings**
+
+1. **HARD — `engines.py:902-905` (`_real_run` timeout branch).** The docstring (engines.py:885-886) promises "``TIMEOUT_EXIT_CODE`` with the output the step had produced", but `proc.communicate(timeout=…)` raises `TimeoutExpired` with `.stdout`/`.stderr` `None` on POSIX, and the second `proc.communicate()` (904) drains the killed step's pipes and **discards** them. So `_tail(expired.stdout, expired.stderr)` is always `""`. Concrete input: any pip step exceeding `timeout_s` — its install error event carries an empty output tail. Smell: none (plain defect; violates "never report an unreconciled number" in spirit).
+
+2. **HARD — AGENTS "one definition of everything".** The stderr-JSON-line is built twice verbatim inside `runtimes.py`: `{"error": {"code": "running_engine_ledger", "message": str(error)}}` + `print(json.dumps(...), file=sys.stderr, flush=True)` at `runtimes.py:1707-1713` (`_forget_running_engine`) and `runtimes.py:2188-2195` (`Runtime.start`). The error code lives in two places and will drift. `cli.py:1063 _stderr_line` and `server.py:325-356` are further spellings of the same pattern (order's named smell). Smell: Duplicated Code.
+
+3. **Judgement — `server.py:130` vs `server.py:82`.** `too_many_streams`'s fixed message "a job has at most four event streams" duplicates `MAX_STREAMS_PER_JOB = 4`; changing the constant makes the refusal lie. Same class as `body_too_large`'s hard-coded 4096 (`server.py:65/126`, pre-existing).
+
+4. **Judgement — `quickbench.py:188`.** Literal `timeout=10` in the changed `_osaurus_app_running` hunk: a third spelling of the tool timeout (`hardware.TOOL_TIMEOUT_S = 10`, hardware.py:31, same "hung, not slow" rule; `runtimes` passes `STOP_TIMEOUT_S` to the same `ps`). Smell: Magic Number.
+
+5. **Judgement — `runtimes.py:2181` vs `2203` (`Runtime.start` hunk).** `_serving_pid(pid, self.port)` runs twice; the first feeds only `_RUN_STARTED_PIDS`, the second is `Handle.serving_pid`. The two lsof probes can disagree, so the sweep-exclusion set and the handle can name different pids. Smell: Duplicated Code.
+
+6. **Judgement — `cli.py:1125-1126`.** "a job is never abandoned silently" is false at `server.py:256-258`: the second `_wait_for_done(job, JOB_KILL_GRACE_S)` result is discarded and no line is written at expiry. Concrete state: a quickbench job mid-cell (>135 s) when SIGTERM lands (cancel is observed only between cells) — exit kills the daemon job thread: no end line, summary and in-flight `restore` lost; only the next launch's ledger/backup recovery covers it.
+
+7. **HARD (tests) — `tests/test_cli.py:1400,1434`.** `run_app(home=tmp_path)` spawns a real `ohyesmlx app` whose `_recover_startup` runs `runtimes.stop_orphaned_engines()` (`cli.py:1081`) with the default root `writable_root()` = the checkout — HOME-independent. The subprocess globs and can mutate `<repo>/results/running-engines/`: with a stale ledger (dead owner, live engine pid) a pytest run SIGTERMs that engine and deletes the ledger file. The in-process tests monkeypatch `stop_orphaned_engines` (test_cli.py:1255ff); the subprocess tests cannot and no seam overrides the root. Smell: tests touching the repo's `results/` (the order's checklist item).
+
+No defect in `Runtime.start`'s cold_load_s ordering: the ledger `ps` sits after the timestamp (pinned by test_runtimes.py:3514). Nothing found in `server.py`'s slot/stream/handler-cap logic or `quickbench.py`'s AC-7 block.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     17    2066514    1896832    31698   91.8%   0.108218
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-45a-spec.log
+?? .paul/orders/v5-review-45a-spec.md
+?? .paul/orders/v5-review-45a-standards.log
+?? .paul/orders/v5-review-45a-standards.md

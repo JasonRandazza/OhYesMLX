@@ -31,6 +31,7 @@ from ohyesmlx import (
     engines,
     ensure_app_support,
     report,
+    stderr_json,
     token_counter,
 )
 from ohyesmlx.runtimes import CACHE_STATES, KV_QUANTS, MTP_DEPTHS, STREAM_EXPERTS
@@ -1060,10 +1061,6 @@ def _quickbench(args) -> int:
     return 0 if ok else 2
 
 
-def _stderr_line(line: dict) -> None:
-    print(json.dumps(line), file=sys.stderr, flush=True)
-
-
 def _recover_startup() -> None:
     """Recover what a killed launch left behind, before the app serves (045-02a AC-6).
 
@@ -1080,7 +1077,7 @@ def _recover_startup() -> None:
     try:
         runtimes.stop_orphaned_engines()
     except Exception as error:
-        _stderr_line({"error": {"code": "orphan_stop_failed", "message": str(error)}})
+        stderr_json({"error": {"code": "orphan_stop_failed", "message": str(error)}})
 
     backup_dir = quickbench.DEFAULT_BACKUP_DIR
     backups = Path(backup_dir)
@@ -1091,21 +1088,21 @@ def _recover_startup() -> None:
         app_running = True
     if app_running:
         if osaurus_settings._backups(backups):
-            _stderr_line({"recovery_pending": "osaurus", "backup_dir": backup_dir})
+            stderr_json({"recovery_pending": "osaurus", "backup_dir": backup_dir})
         return
     try:
         recovered = osaurus_settings.recover(
             backup_dir=backup_dir, baseline_path=osaurus_settings.BASELINE_PATH
         )
     except Exception as error:
-        _stderr_line(
+        stderr_json(
             {"error": {"code": "osaurus_recovery_failed", "message": str(error)}}
         )
         return
     if recovered:
-        _stderr_line({"recovered": "osaurus", "backup_dir": backup_dir})
+        stderr_json({"recovered": "osaurus", "backup_dir": backup_dir})
     elif osaurus_settings._backups(backups):
-        _stderr_line({"recovery_failed": "osaurus", "backup_dir": backup_dir})
+        stderr_json({"recovery_failed": "osaurus", "backup_dir": backup_dir})
 
 
 def _app(args) -> int:
@@ -1121,9 +1118,10 @@ def _app(args) -> int:
     ``docs/interfaces.md``). SIGINT and SIGTERM end the same serve loop, and every path leaves
     through a job wait and ``server_close()`` with exit 0, so the port is released before the
     process is gone. AC-6: a running install or download is cancelled first (at its next step
-    boundary) and waited for at most 120 s -- an evict is only waited for -- so a job is never
-    abandoned silently, and a step still in flight at that bound has its process group killed
-    and ``JOB_KILL_GRACE_S`` more to run the job's rollback.
+    boundary) and waited for at most 120 s -- an evict is only waited for -- and a step still
+    in flight at that bound has its process group killed and ``JOB_KILL_GRACE_S`` more to run
+    the job's rollback. A job that outlives even that grace is not silent: the server writes
+    one ``shutdown_abandoned`` stderr line naming its id and kind before the process exits.
 
     Before the line is printed, and after the socket is bound, :func:`_recover_startup` stops
     an engine a killed launch left behind and puts back an Osaurus pin whose restore never ran;

@@ -4,8 +4,8 @@ plan: 02a
 type: Summary
 about: "OhYesMLX"
 status: applied
-commits: [4b35ef8, 9bc9388]
-tests: "1164 -> 1211 passed"
+commits: [4b35ef8, 9bc9388, review-fix]
+tests: "1164 -> 1222 passed"
 ---
 
 # 045-02a SUMMARY: server and lifecycle security fixes
@@ -125,7 +125,30 @@ cache, `~/.osaurus/config` and the repo `config/`, piped to `shasum`) was `9f4af
 T-01, T-06, T-07, T-12, T-13 and T-16 → 045-02b. T-14 accepted. T-15 → Phase 5 checklist. No install, download,
 quickbench or measurement was run live.
 
+## Code review (Standards + Spec) and its fixes
+
+Run on `4b35ef8..9bc9388`. Standards: Command Code `review` (MiMo v2.6 pro). Spec: the `explain` route (MiMo v2.6
+flash) used up its budget and returned no report, so it was re-run on DeepSeek v4.1 flash through `implement` with
+"touch nothing" (git status confirmed nothing was written). Reports: `.paul/orders/v5-review-45a-{standards,spec}.log`.
+Every finding was checked against the code before anything was fixed.
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| Std-1 `_real_run` loses timeout output | **Rejected** | Live: a step past its timeout returned exit 124 with `'early-out\nearly-err\n'`. |
+| Std-2 stderr JSON line built in several places | Valid | `ohyesmlx.stderr_json` is the one definition; `LEDGER_ERROR_CODE` spelled once. |
+| Std-3 `too_many_streams` message hard-codes "four" | Valid | Built from `MAX_STREAMS_PER_JOB`. |
+| Std-4 `timeout=10` literal in `_osaurus_app_running` | Not fixed | Older than this plan; candidate for later. |
+| Std-5 `_serving_pid` called twice in `Runtime.start` | Fixed (worker tangent, accepted) | `Handle.serving_pid` now reuses the value computed right after readiness (the one `_RUN_STARTED_PIDS` already held). The dropped second `lsof` ran after `cold_load_s`, so no timed number moves. |
+| Std-6 shutdown grace expiry is silent | Valid | One `shutdown_abandoned` stderr line; the `_app` docstring is corrected. |
+| Std-7 subprocess app tests run orphan-stop on the repo's `results/` | Valid | All four subprocess app tests launch through a bootstrap that answers the checkout probe False; the two `run_app` tests assert the repo's ledger directory is unchanged. |
+| Spec-1 Osaurus ledger names a launcher that has already exited | Valid, **the real defect** | Entries record the spawned and serving pids with identities, the port and the stop command; stopping goes through `_shutdown`. Coordinator addition: an alive spawned pid must still match its recorded identity, because `_shutdown` signals that pid's group (`test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop`, red-checked). |
+| Spec-2 no test fails if the two paths revert | Valid | Reload test under an installed layout (red-checked: reverting `BASELINE_PATH` fails it). |
+| Spec-3 pip step started before it is registered | Valid | `Popen` and registration under one lock. |
+| Spec-(b) non-ledger `*.json` deleted | Valid | Left alone. |
+
+After the fixes, pytest passes 1222 tests and `results/running-engines/` does not exist in the repo.
+
 ## Process gates still owed
 
-- `code-review` (Standards + Spec) on `4b35ef8..9bc9388` before UNIFY (plan success criteria).
+- ~~`code-review` before UNIFY~~ done (above).
 - `/paul:verify` at the end of Phase 4.5.

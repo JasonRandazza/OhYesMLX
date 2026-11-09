@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 __version__ = "0.3.0"
 
-__all__ = ["__version__", "app_support_dir", "writable_root", "ensure_app_support"]
+__all__ = [
+    "__version__",
+    "app_support_dir",
+    "writable_root",
+    "ensure_app_support",
+    "stderr_json",
+]
 
 # The app's own directory holds engine venvs, the fetch ledger, quickbench summaries and the
 # pinned Osaurus baseline when the package is installed. Nothing in it belongs to another user.
@@ -49,3 +57,8 @@ def ensure_app_support(home=None) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=APP_SUPPORT_MODE)
     path.chmod(APP_SUPPORT_MODE)
     return path
+
+
+def stderr_json(payload: dict) -> None:
+    """Write one JSON line to stderr, flushed: the one definition of a machine-readable line."""
+    print(json.dumps(payload), file=sys.stderr, flush=True)

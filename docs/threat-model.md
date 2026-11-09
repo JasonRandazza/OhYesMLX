@@ -306,11 +306,13 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
     quickbench's backup directory, but only when the Osaurus app is not running (a running app may rewrite the
     files being put back). It writes `{"recovered": "osaurus", ...}` on stderr, or `{"recovery_pending": "osaurus",
     ...}` when the app is running and a backup is waiting. A failure is one stderr line and never stops the server.
-  - (b) `runtimes` records each spawned engine (pid, port, `ps` start time and argv) in
-    `<writable_root>/results/running-engines/<owner pid>.json`, written atomically after `cold_load_s` is taken, so
-    no measured load time includes it. At launch `stop_orphaned_engines` reads only files whose owner process is
-    dead, and stops an entry's process group only when its pid is alive with the same start time and argv; a reused
-    pid or a matching command started later is dropped and never signalled.
+  - (b) `runtimes` records each started engine in `<writable_root>/results/running-engines/<owner pid>.json`,
+    written atomically after `cold_load_s` is taken, so no measured load time includes it: the spawned pid and the
+    serving pid (for Osaurus the launcher exits and the app holds the port), each with its `ps` start time and argv,
+    plus the port and the stop command. At launch `stop_orphaned_engines` reads only files whose owner process is
+    dead. It stops an entry through the harness's own `_shutdown` only when every listener on the port is a recorded
+    process with its recorded identity (or nothing listens and the spawned pid matches), and when a still-alive
+    spawned pid also matches; an unreadable port, a stranger listening, or a reused pid drops the entry unsignalled.
   - (c) each pip step runs in its own process group and is registered while it runs; when the shutdown wait
     expires the server kills those groups and gives the job `JOB_KILL_GRACE_S` (15 s) more for its rollback and
     `done`.

@@ -1111,14 +1111,23 @@ def test_quickbench_creates_app_support_before_the_first_write(quick_plan, monke
 # and the shutdown paths are. No test binds a fixed port and no test leaves a process behind.
 
 
+APP_BOOTSTRAP = (
+    "import ohyesmlx; ohyesmlx._is_checkout = lambda: False; "
+    "from ohyesmlx.cli import main; import sys; raise SystemExit(main(sys.argv[1:]))"
+)
+
+
 def run_app(*flags, stdin=subprocess.PIPE, home=None):
-    """`python -m ohyesmlx.cli app ...` with the pipes the app uses, from the repo root.
+    """`ohyesmlx app ...` with the pipes the app uses, from the repo root.
 
     *home* is a scratch home: the app creates its Application Support directory before it
-    serves, and a test must never touch the real one.
+    serves, and a test must never touch the real one. The bootstrap answers the checkout
+    probe False before `ohyesmlx.cli` is imported, so `writable_root()` is the scratch
+    Application Support and the startup recovery never reads or writes this repo's
+    `results/running-engines/` (Std-7).
     """
     return subprocess.Popen(
-        [sys.executable, "-m", "ohyesmlx.cli", "app", *flags],
+        [sys.executable, "-c", APP_BOOTSTRAP, "app", *flags],
         stdin=stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1126,6 +1135,12 @@ def run_app(*flags, stdin=subprocess.PIPE, home=None):
         cwd=str(ROOT),
         env=({**os.environ, "HOME": str(home)} if home is not None else None),
     )
+
+
+def repo_running_engines():
+    """Whatever this repo's results hold right now: what a test must leave unchanged."""
+    directory = ROOT / "results" / "running-engines"
+    return sorted(directory.glob("*")) if directory.exists() else None
 
 
 def read_launch(process) -> dict:
@@ -1397,6 +1412,7 @@ def test_an_orphan_stop_that_raises_is_one_line_and_the_app_still_serves(
 def test_the_app_serves_hardware_until_its_stdin_closes(tmp_path):
     """AC-1 and AC-7 end to end: one line, an authorised GET against the real read-only scan,
     then stdin EOF, exit 0, nothing else on stdout and the port released."""
+    ledger = repo_running_engines()
     process = run_app(home=tmp_path)
     try:
         launch = read_launch(process)
@@ -1424,6 +1440,9 @@ def test_the_app_serves_hardware_until_its_stdin_closes(tmp_path):
         assert process.stdout.read() == "", "the launch line is the only thing on stdout"
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", launch["port"]), timeout=5)
+        assert repo_running_engines() == ledger, (
+            "the app's startup recovery touched this repo's results/"
+        )
     finally:
         stop(process)
 
@@ -1431,6 +1450,7 @@ def test_the_app_serves_hardware_until_its_stdin_closes(tmp_path):
 @pytest.mark.parametrize("number", (signal.SIGINT, signal.SIGTERM))
 def test_the_app_exits_zero_on_a_signal(tmp_path, number):
     """AC-7's other parent-death paths end in the same clean shutdown and a free port."""
+    ledger = repo_running_engines()
     process = run_app(home=tmp_path)
     try:
         launch = read_launch(process)
@@ -1439,6 +1459,9 @@ def test_the_app_exits_zero_on_a_signal(tmp_path, number):
         assert process.wait(timeout=10) == 0
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", launch["port"]), timeout=5)
+        assert repo_running_engines() == ledger, (
+            "the app's startup recovery touched this repo's results/"
+        )
     finally:
         stop(process)
 
@@ -1446,7 +1469,7 @@ def test_the_app_exits_zero_on_a_signal(tmp_path, number):
 def test_the_app_started_with_dev_null_exits_at_once_by_design(tmp_path):
     """Audit item 9: stdin EOF is the parent-death signal, so `app </dev/null` is not a crash."""
     finished = subprocess.run(
-        [sys.executable, "-m", "ohyesmlx.cli", "app"],
+        [sys.executable, "-c", APP_BOOTSTRAP, "app"],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
@@ -1469,7 +1492,7 @@ def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two(tmp_path):
     port = blocker.getsockname()[1]
     try:
         finished = subprocess.run(
-            [sys.executable, "-m", "ohyesmlx.cli", "app", "--port", str(port)],
+            [sys.executable, "-c", APP_BOOTSTRAP, "app", "--port", str(port)],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

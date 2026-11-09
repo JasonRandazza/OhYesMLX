@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+**Suite:** 1211 passed (`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q -p no:cacheprovider`), matching the SUMMARY.
+
+**(a) Missing/partial:** none. AC-1..AC-8 each have code, tests and the interface/threat-model moves the ACs demand; the AC-7 amendment and the "part B" row labels are accurately described in the SUMMARY.
+
+**(b) Not asked for**
+- Baby. `stop_orphaned_engines` unlinks any non-numeric `*.json` in `results/running-engines/` (`runtimes.py:1757-1762`). AC-6 only says "a file whose owner pid is dead is read"; deleting files that are not ledgers is unasked.
+
+**(c) Implemented but wrong**
+
+1. *AC-6: "it stops engine processes a previous harness process started and left behind … an entry whose pid is alive with the SAME start time and argv has its process group stopped".*
+   `runtimes.py:2187` records the `_spawn` leader `pid`; the survivor is `serving_pid` (`:2181`). `_serving_pid`'s own docstring (`:646`) says `osaurus serve` "starts the app, prints the address it is listening on and exits" — so the entry names a dead launcher. `_stop_orphan` returns at `not _process_alive(pid)` (`runtimes.py:1723`) and never signals: a killed app's Osaurus, the case T-02 exists for, is never stopped. `entry["port"]` is recorded but never read; `_shutdown` finds survivors via `_listener_pids(port)` (`runtimes.py:1595-1612`), the startup path does not mirror it. Every Osaurus start can also emit a `running_engine_ledger` error (`:2188-2195`) when the launcher's identity is already unreadable. `tests/test_runtimes.py:3544` asserts the spawned pid, so the suite blesses it.
+
+2. *AC-1: "`osaurus_settings.BASELINE_PATH` and `runtimes.LOGS_DIR` derive from `writable_root()`".*
+   No test fails if either reverts to `Path(__file__).resolve().parents[1]/…`: the byte-identity test (`tests/test_paths.py:33`) is satisfied by the old expression; the pin round-trip passes its baseline explicitly (`:110`) and the spawn test monkeypatches `runtimes.LOGS_DIR` (`:128`). Those read-only-tree tests stay green with T-03's write-into-the-package behaviour restored.
+
+3. *AC-6: "a step … registered while it runs".*
+   `engines.py:888-898` popens first and registers after; `kill_running_steps` (`engines.py:866`) snapshots the set, so a step started in that window is never killed and can outlive the server at its 900 s timeout — the T-02 failure again.
+
+**Not verified:** read-only, so finding 2 is code-reading rather than a red-check; I did not run an app launch, an Osaurus cell or a live recovery.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     32    3675814    3510272    55024   95.5%   0.068377
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-45a-spec.log
+?? .paul/orders/v5-review-45a-spec.md
+?? .paul/orders/v5-review-45a-standards.log
+?? .paul/orders/v5-review-45a-standards.md

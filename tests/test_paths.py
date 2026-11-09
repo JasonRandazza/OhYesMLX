@@ -9,6 +9,7 @@ Mac's real home: a scratch HOME is one of the inputs.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import stat
@@ -40,6 +41,48 @@ def test_the_checkout_baseline_and_logs_paths_are_byte_identical_to_today():
         str(REPO), "config", "osaurus-settings-baseline.json"
     )
     assert str(runtimes.LOGS_DIR) == os.path.join(str(REPO), "results", "logs")
+
+
+def test_without_a_checkout_both_paths_reload_from_the_writable_root(
+    monkeypatch, tmp_path
+):
+    """AC-1, review 2: neither path is spelled from the package tree.
+
+    Both modules resolve their paths when imported, so a checkout-only assertion cannot tell
+    a `writable_root()` derivation from `Path(__file__).resolve().parents[1]`. They are
+    reloaded here with the checkout probe answering False under a scratch HOME. The module
+    names are restored afterwards -- reloaded with the probe back, then put back as they
+    were -- so the class and registry objects other test modules imported stay identical.
+    """
+    home = tmp_path / "home"
+    app_support = ohyesmlx.app_support_dir(home)
+    settings_before = dict(vars(osaurus_settings))
+    runtimes_before = dict(vars(runtimes))
+    try:
+        with monkeypatch.context() as patch:
+            patch.setenv("HOME", str(home))
+            patch.setattr(ohyesmlx, "_is_checkout", lambda: False)
+            importlib.reload(osaurus_settings)
+            importlib.reload(runtimes)
+            assert osaurus_settings.BASELINE_PATH == (
+                app_support / "config" / "osaurus-settings-baseline.json"
+            )
+            assert runtimes.LOGS_DIR == app_support / "results" / "logs"
+            assert osaurus_settings.BASELINE_PATH.is_relative_to(app_support)
+            assert runtimes.LOGS_DIR.is_relative_to(app_support)
+    finally:
+        importlib.reload(osaurus_settings)
+        importlib.reload(runtimes)
+        vars(osaurus_settings).clear()
+        vars(osaurus_settings).update(settings_before)
+        vars(runtimes).clear()
+        vars(runtimes).update(runtimes_before)
+
+    assert ohyesmlx._is_checkout(), "the checkout probe was left patched"
+    assert osaurus_settings.BASELINE_PATH == (
+        REPO / "config" / "osaurus-settings-baseline.json"
+    )
+    assert runtimes.LOGS_DIR == REPO / "results" / "logs"
 
 
 def test_every_application_support_path_derives_from_the_one_helper():

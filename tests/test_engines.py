@@ -15,6 +15,8 @@ import os
 import signal
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import FrozenInstanceError, fields
 from datetime import datetime
 from pathlib import Path
@@ -1470,3 +1472,67 @@ def test_kill_running_steps_kills_every_registered_group(monkeypatch):
     engines.kill_running_steps()
 
     assert sorted(killed) == [(9001, signal.SIGKILL), (9002, signal.SIGKILL)]
+
+
+def test_the_step_lock_is_held_across_popen_and_the_registration(monkeypatch):
+    """045-02a AC-6, review 3: `kill_running_steps` must never snapshot the registry in the
+    window between a step's spawn and its registration."""
+    seen = {}
+
+    class ProbeStep:
+        pid = 9100
+        returncode = 0
+
+        def __init__(self, *args, **kwargs):
+            seen["lock_held"] = engines._RUNNING_STEPS_LOCK.locked()
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+    monkeypatch.setattr(engines.subprocess, "Popen", ProbeStep)
+
+    code, _output = engines._real_run(["pip", "install", "x"], 5, {})
+
+    assert code == 0
+    assert seen["lock_held"] is True, "the spawn ran outside the registration lock"
+
+
+def test_a_kill_started_while_a_step_is_spawning_waits_for_and_kills_it(monkeypatch):
+    popen_entered = threading.Event()
+    release = threading.Event()
+    killed = []
+
+    class SlowStep:
+        pid = 9101
+        returncode = 0
+
+        def __init__(self, *args, **kwargs):
+            popen_entered.set()
+            release.wait(5)
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+    monkeypatch.setattr(engines.subprocess, "Popen", SlowStep)
+    monkeypatch.setattr(engines, "_RUNNING_STEPS", set())
+    monkeypatch.setattr(engines, "_RUNNING_STEPS_LOCK", threading.Lock())
+    monkeypatch.setattr(engines.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+
+    runner = threading.Thread(
+        target=engines._real_run, args=(["pip", "install", "x"], 5, {})
+    )
+    runner.start()
+    assert popen_entered.wait(5), "the step never started"
+
+    killer = threading.Thread(target=engines.kill_running_steps)
+    killer.start()
+    deadline = time.monotonic() + 1
+    while killer.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert killer.is_alive(), "kill_running_steps snapped the registry before registration"
+
+    release.set()
+    runner.join(5)
+    killer.join(5)
+
+    assert killed == [(9101, signal.SIGKILL)]

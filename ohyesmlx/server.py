@@ -33,14 +33,13 @@ import hmac
 import json
 import re
 import secrets
-import sys
 import threading
 import time
 import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ohyesmlx import catalog, engines, fetch, hardware, quickbench, recommend
+from ohyesmlx import catalog, engines, fetch, hardware, quickbench, recommend, stderr_json
 
 # The only address this server ever binds: never 0.0.0.0 and never ::, so nothing off this
 # machine can reach it and a page's DNS-rebinding request arrives with a foreign Host the guard
@@ -127,7 +126,10 @@ _ERRORS = {
     "busy": (409, "another job is already running"),
     "unknown_job": (404, "no such job"),
     "bad_event_id": (400, "Last-Event-ID must be a non-negative integer"),
-    "too_many_streams": (429, "a job has at most four event streams"),
+    "too_many_streams": (
+        429,
+        f"a job has at most {MAX_STREAMS_PER_JOB} event streams",
+    ),
     "not_cancellable": (409, "an evict job cannot be cancelled"),
     "job_finished": (409, "the job has already finished"),
 }
@@ -245,7 +247,9 @@ class _Jobs:
         has one and notices it between cells, where its own eviction and Osaurus restore
         still run. AC-6: the wait is a bound, not a promise; when it expires with the job
         still running, the install steps still in flight are killed by process group and the
-        job gets ``JOB_KILL_GRACE_S`` more to run its own rollback and store `done`.
+        job gets ``JOB_KILL_GRACE_S`` more to run its own rollback and store `done`. A job
+        that outlives even that grace is abandoned with one ``shutdown_abandoned`` stderr
+        line, never silently.
         """
         with self.lock:
             job = self.running
@@ -255,7 +259,18 @@ class _Jobs:
             job.cancel_requested = True
         if not self._wait_for_done(job, timeout):
             engines.kill_running_steps()
-            self._wait_for_done(job, JOB_KILL_GRACE_S)
+            if not self._wait_for_done(job, JOB_KILL_GRACE_S):
+                # The job owns rollback this process cannot wait for any longer. Say so
+                # rather than let the process exit as if the job had ended.
+                stderr_json(
+                    {
+                        "error": {
+                            "code": "shutdown_abandoned",
+                            "job": job.id,
+                            "kind": job.kind,
+                        }
+                    }
+                )
 
     @staticmethod
     def _wait_for_done(job: "_Job", timeout: float) -> bool:
@@ -332,17 +347,13 @@ def _log_refusal(code: str, method: str, path: str) -> None:
     only when it is a route this server serves; anything else is ``<unknown>``, for the same
     reason -- a request path is client text too.
     """
-    print(
-        json.dumps(
-            {
-                "refused": code,
-                "method": method,
-                "path": _served_path(path),
-                "time": _now(),
-            }
-        ),
-        file=sys.stderr,
-        flush=True,
+    stderr_json(
+        {
+            "refused": code,
+            "method": method,
+            "path": _served_path(path),
+            "time": _now(),
+        }
     )
 
 
@@ -353,7 +364,7 @@ def _log_job(record: dict) -> None:
     ``{"job", "ok", "code", "time"}``; neither carries a token or a header value, so the record
     the app can surface says what ran and how it ended and nothing a secret could hide in.
     """
-    print(json.dumps(record), file=sys.stderr, flush=True)
+    stderr_json(record)
 
 
 class _Handler(BaseHTTPRequestHandler):

@@ -171,6 +171,9 @@ class Rig:
         monkeypatch.setattr(runtimes, "_signal_process", self.signal_process)
         monkeypatch.setattr(runtimes, "_run", self.run)
         monkeypatch.setattr(runtimes, "_log_path", lambda name: self.log_file)
+        # The ledger's directory is a seam too: a start writes there, and no test may write
+        # into this repo's results/ (045-02a review, Std-7).
+        monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
 
     def spawn(self, command, log_path):
         self.commands.append(command)
@@ -3500,6 +3503,8 @@ def test_a_machine_local_lab_path_that_does_not_exist_is_refused_naming_the_engi
 
 LEDGER_LSTART = "Wed Nov 5 10:00:00 2025"
 LEDGER_ARGV = "python -m mlx_lm.server --model /models/x --port 8081"
+OSAURUS_LSTART = "Wed Nov 5 10:00:01 2025"
+OSAURUS_ARGV = "/Applications/osaurus.app/Contents/MacOS/osaurus serve --port 1337"
 
 
 def write_ledger(root, owner, entries):
@@ -3509,6 +3514,22 @@ def write_ledger(root, owner, entries):
     path = directory / f"{owner}.json"
     path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
     return path
+
+
+def ledger_entry(**overrides):
+    """One recorded engine, in the shape `_record_running_engine` writes."""
+    entry = {
+        "pid": 4242,
+        "lstart": LEDGER_LSTART,
+        "argv": LEDGER_ARGV,
+        "serving_pid": 4242,
+        "serving_lstart": LEDGER_LSTART,
+        "serving_argv": LEDGER_ARGV,
+        "port": 8081,
+        "stop_command": [],
+    }
+    entry.update(overrides)
+    return entry
 
 
 def test_the_running_engine_is_recorded_after_the_cold_load_time_is_taken(rig, monkeypatch):
@@ -3526,7 +3547,7 @@ def test_the_running_engine_is_recorded_after_the_cold_load_time_is_taken(rig, m
     monkeypatch.setattr(
         runtimes,
         "_record_running_engine",
-        lambda pid, port: order.append(("ledger", pid)),
+        lambda pid, serving_pid, port, stop_command=(): order.append(("ledger", pid)),
     )
     rig.spawn_seconds = 2.5
     rig.inventory = (HF_ID,)
@@ -3556,12 +3577,54 @@ def test_a_started_engine_is_recorded_with_its_pid_port_and_identity(
     path = tmp_path / "results" / runtimes.RUNNING_ENGINES_DIRNAME / f"{os.getpid()}.json"
     entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
     assert entries == [
-        {"pid": handle.pid, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}
+        {
+            "pid": handle.pid,
+            "lstart": LEDGER_LSTART,
+            "argv": LEDGER_ARGV,
+            "serving_pid": handle.pid,
+            "serving_lstart": LEDGER_LSTART,
+            "serving_argv": LEDGER_ARGV,
+            "port": 8081,
+            "stop_command": [],
+        }
     ]
 
     handle.stop()
 
     assert not path.exists(), "a stopped engine's empty ledger file was left behind"
+
+
+def test_an_osaurus_start_records_the_serving_process_when_the_launcher_is_unreadable(
+    rig, monkeypatch, tmp_path, capsys
+):
+    """AC-6, review 1: the launcher exits before the entry is written. That is not an error;
+    the serving pid, which does have an identity, is what the entry has to carry."""
+    monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+    monkeypatch.setattr(runtimes, "load_baseline", lambda: None)
+    rig.inventory = ("ornith-1.0-35b-jang_4m",)
+    rig.results[listener_probe(1337)] = _completed(stdout=f"{OSAURUS_APP_PID}\n")
+    # No `ps` answer for the spawned launcher: its identity is already unreadable.
+    rig.results[(runtimes.PS, "-ww", "-o", "lstart=,args=", "-p", str(OSAURUS_APP_PID))] = (
+        _completed(stdout=f"{OSAURUS_LSTART} {OSAURUS_ARGV}\n")
+    )
+
+    handle = RUNTIMES["osaurus"].start(ARTIFACT, "ornith-1.0-35b-jang_4m")
+
+    path = tmp_path / "results" / runtimes.RUNNING_ENGINES_DIRNAME / f"{os.getpid()}.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
+    assert entries == [
+        {
+            "pid": handle.pid,
+            "lstart": None,
+            "argv": None,
+            "serving_pid": OSAURUS_APP_PID,
+            "serving_lstart": OSAURUS_LSTART,
+            "serving_argv": OSAURUS_ARGV,
+            "port": 1337,
+            "stop_command": ["osaurus", "stop"],
+        }
+    ]
+    assert capsys.readouterr().err == "", "an unreadable launcher identity was reported"
 
 
 def test_a_ledger_write_failure_does_not_fail_the_start(rig, monkeypatch, capsys):
@@ -3583,103 +3646,246 @@ def test_a_ledger_write_failure_does_not_fail_the_start(rig, monkeypatch, capsys
     assert "read-only" in line["error"]["message"]
 
 
-def test_a_dead_owners_matching_engine_is_stopped_by_its_process_group(tmp_path, monkeypatch):
-    path = write_ledger(
-        tmp_path,
-        999_999,
-        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
-    )
-    signals = []
+def test_a_dead_owners_matching_engine_is_stopped_through_shutdown(tmp_path, monkeypatch):
+    path = write_ledger(tmp_path, 999_999, [ledger_entry()])
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(
         runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
     )
-    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
-    monkeypatch.setattr(runtimes, "_await_exit", lambda pid, timeout: True)
+    monkeypatch.setattr(
+        runtimes,
+        "_shutdown",
+        lambda pid, port, stop_command=(): calls.append((pid, port, stop_command)),
+    )
 
     runtimes.stop_orphaned_engines(tmp_path)
 
-    assert signals == [(4242, signal.SIGTERM)]
+    assert calls == [(4242, 8081, ())]
     assert not path.exists()
 
 
-def test_an_orphan_that_ignores_term_is_killed_after_the_grace(tmp_path, monkeypatch):
-    write_ledger(
+def test_an_osaurus_shaped_entry_with_a_dead_launcher_is_stopped(tmp_path, monkeypatch):
+    """AC-6, review 1: the spawned launcher is dead by the time the ledger is read, and the
+    serving process is the one listening on the recorded port. The listener is the evidence
+    the entry is stopped on."""
+    path = write_ledger(
         tmp_path,
         999_999,
-        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
+        [
+            ledger_entry(
+                lstart=None,
+                argv=None,
+                serving_pid=4243,
+                serving_lstart=OSAURUS_LSTART,
+                serving_argv=OSAURUS_ARGV,
+                port=1337,
+                stop_command=["osaurus", "stop"],
+            )
+        ],
     )
-    signals = []
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (4243,))
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid not in (4242, 999_999))
+    monkeypatch.setattr(
+        runtimes,
+        "_process_identity",
+        lambda pid: (OSAURUS_LSTART, OSAURUS_ARGV) if pid == 4243 else None,
+    )
+    monkeypatch.setattr(
+        runtimes,
+        "_shutdown",
+        lambda pid, port, stop_command=(): calls.append((pid, port, stop_command)),
+    )
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == [(4242, 1337, ("osaurus", "stop"))]
+    assert not path.exists()
+
+
+def test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop(tmp_path, monkeypatch):
+    """Review fix: `_shutdown` signals the spawned pid's group when that pid is alive, so a
+    launcher pid the OS has given to another process drops the entry, matching listener or
+    not."""
+    path = write_ledger(
+        tmp_path,
+        999_999,
+        [
+            ledger_entry(
+                lstart=None,
+                argv=None,
+                serving_pid=4243,
+                serving_lstart=OSAURUS_LSTART,
+                serving_argv=OSAURUS_ARGV,
+                port=1337,
+                stop_command=["osaurus", "stop"],
+            )
+        ],
+    )
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (4243,))
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid != 999_999)
+    monkeypatch.setattr(
+        runtimes,
+        "_process_identity",
+        lambda pid: (OSAURUS_LSTART, OSAURUS_ARGV) if pid == 4243 else ("x", "/bin/stranger"),
+    )
+    monkeypatch.setattr(
+        runtimes,
+        "_shutdown",
+        lambda pid, port, stop_command=(): calls.append((pid, port, stop_command)),
+    )
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == []
+    assert not path.exists()
+
+
+def test_a_stranger_listening_on_the_recorded_port_is_dropped(tmp_path, monkeypatch):
+    path = write_ledger(tmp_path, 999_999, [ledger_entry()])
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (5252,))
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
+    )
+    monkeypatch.setattr(
+        runtimes, "_shutdown", lambda *args, **kwargs: calls.append(args)
+    )
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == [], "a stranger on the port was signalled"
+    assert not path.exists()
+
+
+def test_an_unreadable_port_is_dropped_and_never_signalled(tmp_path, monkeypatch):
+    path = write_ledger(tmp_path, 999_999, [ledger_entry()])
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: None)
+    monkeypatch.setattr(
+        runtimes, "_shutdown", lambda *args, **kwargs: calls.append(args)
+    )
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == [], "an entry whose port could not be read was signalled"
+    assert not path.exists()
+
+
+def test_a_listener_whose_recorded_identity_no_longer_matches_is_dropped(
+    tmp_path, monkeypatch
+):
+    path = write_ledger(
+        tmp_path,
+        999_999,
+        [ledger_entry(serving_pid=4243, port=1337)],
+    )
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (4243,))
+    monkeypatch.setattr(
+        runtimes,
+        "_process_identity",
+        lambda pid: ("Thu Nov 6 11:00:00 2025", LEDGER_ARGV),
+    )
+    monkeypatch.setattr(
+        runtimes, "_shutdown", lambda *args, **kwargs: calls.append(args)
+    )
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == [], "a listener whose identity no longer matched was signalled"
+    assert not path.exists()
+
+
+def test_a_stop_that_does_not_take_effect_keeps_the_ledger_file(tmp_path, monkeypatch):
+    path = write_ledger(tmp_path, 999_999, [ledger_entry()])
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(
         runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
     )
-    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
-    monkeypatch.setattr(runtimes, "_await_exit", lambda pid, timeout: False)
 
-    with pytest.raises(RuntimeStopError):
+    def refuse(pid, port, stop_command=()):
+        raise runtimes.RuntimeStopError(
+            f"orphaned engine {pid} is still alive after SIGKILL"
+        )
+
+    monkeypatch.setattr(runtimes, "_shutdown", refuse)
+
+    with pytest.raises(runtimes.RuntimeStopError):
         runtimes.stop_orphaned_engines(tmp_path)
 
-    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+    assert path.exists(), "a ledger whose stop did not take effect was removed"
 
 
 def test_a_reused_pid_is_dropped_and_never_signalled(tmp_path, monkeypatch):
-    path = write_ledger(
-        tmp_path,
-        999_999,
-        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
-    )
-    signals = []
+    path = write_ledger(tmp_path, 999_999, [ledger_entry()])
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
     # The pid is alive, but its start time is not the one recorded: it is a different process.
     monkeypatch.setattr(
-        runtimes, "_process_identity", lambda pid: ("Thu Nov 6 11:00:00 2025", LEDGER_ARGV)
+        runtimes,
+        "_process_identity",
+        lambda pid: ("Thu Nov 6 11:00:00 2025", LEDGER_ARGV),
     )
-    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(
+        runtimes, "_shutdown", lambda *args, **kwargs: calls.append(args)
+    )
 
     runtimes.stop_orphaned_engines(tmp_path)
 
-    assert signals == [], "a reused pid was signalled"
+    assert calls == [], "a reused pid was signalled"
     assert not path.exists()
 
 
 def test_a_matching_pid_with_a_different_argv_is_dropped_and_never_signalled(
     tmp_path, monkeypatch
 ):
-    write_ledger(
-        tmp_path,
-        999_999,
-        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
-    )
-    signals = []
+    write_ledger(tmp_path, 999_999, [ledger_entry()])
+    calls = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(
         runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, "sleep 600")
     )
-    monkeypatch.setattr(runtimes, "_signal_tree", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(
+        runtimes, "_shutdown", lambda *args, **kwargs: calls.append(args)
+    )
 
     runtimes.stop_orphaned_engines(tmp_path)
 
-    assert signals == [], "the user's own command was signalled"
+    assert calls == [], "the user's own command was signalled"
 
 
 def test_a_live_owners_ledger_is_never_read_or_touched(tmp_path, monkeypatch):
-    path = write_ledger(
-        tmp_path,
-        os.getpid(),
-        [{"pid": 4242, "port": 8081, "argv": LEDGER_ARGV, "lstart": LEDGER_LSTART}],
-    )
+    path = write_ledger(tmp_path, os.getpid(), [ledger_entry()])
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
 
-    def refuse(pid):
+    def refuse(*args, **kwargs):
         raise AssertionError("a live owner's ledger was read")
 
     monkeypatch.setattr(runtimes, "_process_identity", refuse)
-    monkeypatch.setattr(runtimes, "_signal_tree", refuse)
+    monkeypatch.setattr(runtimes, "_shutdown", refuse)
 
     runtimes.stop_orphaned_engines(tmp_path)
 
     assert path.exists(), "a live owner's ledger file was removed"
+
+
+def test_a_json_file_that_is_not_a_ledger_is_left_alone(tmp_path):
+    """AC-6, review (b): only `<owner pid>.json` is a ledger."""
+    directory = tmp_path / "results" / runtimes.RUNNING_ENGINES_DIRNAME
+    directory.mkdir(parents=True)
+    path = directory / "notes.json"
+    path.write_text("{}", encoding="utf-8")
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert path.exists(), "a file that is not a ledger was deleted"
 
 
 def test_the_ledger_file_is_replaced_atomically(tmp_path, monkeypatch):

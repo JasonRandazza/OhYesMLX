@@ -882,19 +882,21 @@ def _real_run(argv: list[str], timeout_s: float, env: dict[str, str]) -> tuple[i
 
     The step runs in its own session and is registered while it runs, so a server shutting
     down can end the whole tree a pip step started rather than the one process
-    (:func:`kill_running_steps`). A timeout kills the group, not just the parent, and reports
-    ``TIMEOUT_EXIT_CODE`` with the output the step had produced.
+    (:func:`kill_running_steps`). The lock spans the spawn and the registration, so a kill
+    that runs while a step is starting either sees it or waits for it and never misses it. A
+    timeout kills the group, not just the parent, and reports ``TIMEOUT_EXIT_CODE`` with the
+    output the step had produced.
     """
-    proc = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
-        text=True,
-        env=env,
-        start_new_session=True,
-    )
     with _RUNNING_STEPS_LOCK:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            env=env,
+            start_new_session=True,
+        )
         _RUNNING_STEPS.add(proc)
     try:
         try:

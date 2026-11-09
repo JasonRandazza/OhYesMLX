@@ -72,7 +72,6 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -80,7 +79,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import writable_root
+from . import stderr_json, writable_root
 from .osaurus_settings import (
     DEFAULT_CONFIG_DIR as OSAURUS_CONFIG_DIR,
     MISSING as OSAURUS_MISSING,
@@ -134,6 +133,10 @@ LOGS_DIR = writable_root() / "results" / "logs"
 # processes never read-modify-write one file. `ohyesmlx app` reads it at launch to stop an
 # engine a dead run left holding a port and its weights (045-02a AC-6).
 RUNNING_ENGINES_DIRNAME = "running-engines"
+
+# The one spelling of the ledger's stderr error code, used by the write on start and by the
+# removal on stop.
+LEDGER_ERROR_CODE = "running_engine_ledger"
 
 # The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag
 # install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
@@ -1674,22 +1677,42 @@ def _process_identity(pid: int) -> tuple[str, str] | None:
     return " ".join(fields[:5]), fields[5]
 
 
-def _record_running_engine(pid: int, port: int) -> None:
+def _record_running_engine(
+    pid: int,
+    serving_pid: int,
+    port: int,
+    stop_command: tuple[str, ...] = (),
+) -> None:
     """Record one spawned engine in this process's ledger file.
 
-    Called after ``cold_load_s`` is taken, never between the spawn and readiness: the ``ps``
-    call is part of the ledger, and a measured load time must not contain it. Raises when the
-    entry cannot be recorded; :meth:`Runtime.start` logs that and keeps the start alive.
+    Both pids are recorded with their own ``ps`` identity: ``osaurus serve`` spawns a
+    launcher that exits once the app is listening, so the pid that can be found again is the
+    serving one, and a launcher whose identity is already unreadable is recorded without an
+    identity rather than failing the start. Called after ``cold_load_s`` is taken, never
+    between the spawn and readiness: the ``ps`` calls are part of the ledger, and a measured
+    load time must not contain them. Raises when the entry cannot be written;
+    :meth:`Runtime.start` logs that and keeps the start alive.
     """
     identity = _process_identity(pid)
-    if identity is None:
-        raise RuntimeStartError(
-            f"could not read the start time and argv of spawned pid {pid}"
-        )
-    lstart, argv = identity
+    serving_identity = identity if serving_pid == pid else _process_identity(serving_pid)
+    lstart, argv = identity if identity is not None else (None, None)
+    serving_lstart, serving_argv = (
+        serving_identity if serving_identity is not None else (None, None)
+    )
     path = _ledger_path()
     entries = [entry for entry in _ledger_entries(path) if entry.get("pid") != pid]
-    entries.append({"pid": pid, "port": port, "argv": argv, "lstart": lstart})
+    entries.append(
+        {
+            "pid": pid,
+            "lstart": lstart,
+            "argv": argv,
+            "serving_pid": serving_pid,
+            "serving_lstart": serving_lstart,
+            "serving_argv": serving_argv,
+            "port": port,
+            "stop_command": list(stop_command),
+        }
+    )
     _write_ledger(path, entries)
 
 
@@ -1704,36 +1727,66 @@ def _forget_running_engine(pid: int) -> None:
         _write_ledger(path, kept)
     except OSError as error:
         # A stop that has already released the port does not fail over its ledger line.
-        print(
-            json.dumps(
-                {"error": {"code": "running_engine_ledger", "message": str(error)}}
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
+        stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
+
+
+def _recorded_identity(entry: dict, pid: int) -> tuple[str, str] | None:
+    """The identity *entry* recorded for *pid*, or ``None`` when it recorded none."""
+    if entry.get("pid") == pid:
+        lstart, argv = entry.get("lstart"), entry.get("argv")
+    elif entry.get("serving_pid") == pid:
+        lstart, argv = entry.get("serving_lstart"), entry.get("serving_argv")
+    else:
+        return None
+    if isinstance(lstart, str) and isinstance(argv, str):
+        return lstart, argv
+    return None
 
 
 def _stop_orphan(entry: dict) -> None:
-    """Stop one recorded engine's process group when its recorded identity still matches."""
+    """Stop one dead owner's engine through :func:`_shutdown`, or drop the entry.
+
+    A listener is the process holding the port now. The entry is stopped only when every
+    listener is one of its recorded pids with the identity recorded for it -- the Osaurus
+    shape, where the launcher pid is already dead and the app is the listener -- or when
+    nothing is listening and the spawned pid is alive with its recorded identity. Anything
+    else (an unreadable port, a stranger listening, an identity that no longer matches) is
+    dropped and never signalled. No TERM/KILL ladder is written here: ``_shutdown`` is the
+    one definition of stopping.
+    """
     pid = entry.get("pid")
-    lstart = entry.get("lstart")
-    argv = entry.get("argv")
-    if not isinstance(pid, int) or not isinstance(lstart, str) or not isinstance(argv, str):
+    port = entry.get("port")
+    if not isinstance(pid, int) or not isinstance(port, int):
         return
-    if not _process_alive(pid):
+    stop_command = entry.get("stop_command")
+    command = (
+        tuple(stop_command)
+        if isinstance(stop_command, list)
+        and all(isinstance(part, str) for part in stop_command)
+        else ()
+    )
+    listeners = _listener_pids(port)
+    if listeners is None:
         return
-    if _process_identity(pid) != (lstart, argv):
-        # A reused pid, or a command that is not the one this harness spawned: dropped, and
-        # never signalled.
-        return
-    _signal_tree(pid, signal.SIGTERM)
-    if _await_exit(pid, TERM_GRACE_S):
-        return
-    _signal_tree(pid, signal.SIGKILL)
-    if not _await_exit(pid, KILL_GRACE_S):
-        raise RuntimeStopError(
-            f"orphaned engine {pid} is still alive {KILL_GRACE_S:g}s after SIGKILL"
-        )
+    if listeners:
+        # `_shutdown` signals the spawned pid's group whenever that pid is alive, so a live
+        # launcher pid must still be the recorded process: a reused pid is a stranger.
+        launcher = _recorded_identity(entry, pid)
+        if _process_alive(pid) and (
+            launcher is None or _process_identity(pid) != launcher
+        ):
+            return
+        for listener in listeners:
+            identity = _recorded_identity(entry, listener)
+            if identity is None or _process_identity(listener) != identity:
+                return
+    else:
+        identity = _recorded_identity(entry, pid)
+        if identity is None or not _process_alive(pid):
+            return
+        if _process_identity(pid) != identity:
+            return
+    _shutdown(pid, port, command)
 
 
 def stop_orphaned_engines(root=None) -> None:
@@ -1741,10 +1794,13 @@ def stop_orphaned_engines(root=None) -> None:
 
     The ledger holds one file per owner process under ``<root>/results/running-engines``, so a
     file whose owner is alive belongs to a grid running from the CLI and is never read or
-    touched. For a dead owner, an entry is stopped only when its pid is alive with the same
-    start time and argv the file recorded: a reused pid, or the user's own identical command
-    started later, is dropped and never signalled. The file is removed once its entries are
-    handled; a stop that did not take effect keeps it and raises, so a later launch can retry.
+    touched. Only ``<owner pid>.json`` is a ledger; any other file in the directory is left
+    alone. For a dead owner, an entry is stopped only when the port's listeners are the pids
+    it recorded, with the identities it recorded, or -- when nothing is listening -- when the
+    spawned pid is alive with its recorded identity: a reused pid, the user's own identical
+    command started later, or a stranger on the port is dropped and never signalled. The file
+    is removed once its entries are handled; a stop that did not take effect keeps it and
+    raises, so a later launch can retry.
     """
     directory = _ledger_path(root=root).parent
     try:
@@ -1755,10 +1811,6 @@ def stop_orphaned_engines(root=None) -> None:
     for path in files:
         owner = path.stem
         if not owner.isdigit():
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as error:
-                failures.append(f"could not remove {path}: {error}")
             continue
         if _process_alive(int(owner)):
             continue
@@ -2181,18 +2233,13 @@ class Runtime:
         serving_pid = _serving_pid(pid, self.port)
         _RUN_STARTED_PIDS.add(serving_pid)
         # AC-6: the ledger entry is written after the load time is taken, so no measured
-        # cold_load_s contains the `ps` call, and a failed write never fails the start.
+        # cold_load_s contains the `ps` calls, and a failed write never fails the start.
         cold_load_s = _now() - started
+        stop_command = self.stop_command()
         try:
-            _record_running_engine(pid, self.port)
+            _record_running_engine(pid, serving_pid, self.port, stop_command)
         except Exception as error:
-            print(
-                json.dumps(
-                    {"error": {"code": "running_engine_ledger", "message": str(error)}}
-                ),
-                file=sys.stderr,
-                flush=True,
-            )
+            stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
         return Handle(
             pid=pid,
             port=self.port,
@@ -2200,8 +2247,8 @@ class Runtime:
             model_id=resolved,
             version=version,
             cold_load_s=cold_load_s,
-            serving_pid=_serving_pid(pid, self.port),
-            stop_command=self.stop_command(),
+            serving_pid=serving_pid,
+            stop_command=stop_command,
             scratch=scratch,
             api_key=self.api_key(),
             log_path=str(log_path),
