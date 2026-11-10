@@ -1,0 +1,213 @@
+I'll start by reading the plan, the threat model, and the files I'm allowed to touch.
+Now let me read the modules I'll be changing and the constraints files.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Baseline is 1222 passed. Now I'll write fix 1's red tests first — `atomic_write_text` — in `tests/test_engines.py`.
+
+
+
+
+
+Now fix 2's test file — red first, since `scripts/hash_freeze.py` doesn't exist yet.
+
+
+
+
+
+
+
+
+
+
+
+Now fix 4/5/6 tests. First, the existing argv assertions in `tests/test_engines.py`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now the implementation in `engines.py`.
+
+Now `record_lab_path` — the check and the atomic write.
+
+Now the validator, placed with the constraints constants, and the `install_plan` call.
+
+
+Now `_venv_root` and `runtimes._engine_env`.
+
+
+
+The fake runner needs to model what a real `-m venv` call does — create the directory.
+
+
+
+
+
+
+Now the docs. Let me look at the tail of `docs/interfaces.md`.
+
+
+
+
+
+
+
+Full suite green at 1261. Now the red-checks, one guard at a time. First, the hash validator.
+
+
+
+
+Red-check 2: remove `--only-binary`.
+
+
+
+
+
+
+
+
+
+The red-check may have created a path under the real Application Support, because `_relocate` depends on `_venv_root`. Let me check before anything else.
+The red-check leaked an empty directory into the real Application Support. It's mine (created 08:55 today, empty); I'll remove it with `rmdir`, which refuses anything non-empty.
+
+
+
+
+
+Red-check 4: `check_lab_dir` at each call site. First `record_lab_path`.
+
+
+
+
+
+
+Red-check 5: `atomic_write_text`'s cleanup.
+
+
+
+
+
+
+
+
+
+Let me sanity-check the late-upload detector on real metadata (the runs printed no `LATE UPLOADS`).
+
+
+
+
+
+
+
+
+
+
+
+All three ACs are implemented, tested, and the suite is green. Report:
+
+## What changed (file:line)
+
+**1. `atomic_write_text`** — `ohyesmlx/__init__.py:65` (+ `__all__`, `os`/`tempfile` imports). `mkstemp(dir=target.parent, prefix=name+".")` → UTF-8 write → flush → `fsync` → `os.replace`; temp unlinked on any exception, which re-raises; parent created.
+Green tests: `tests/test_engines.py:822 test_atomic_write_text_writes_the_file_and_leaves_no_temp_behind`, `:831 test_a_failed_atomic_write_leaves_the_old_file_byte_identical`. Red: both failed with `AttributeError: module 'ohyesmlx' has no attribute 'atomic_write_text'` before it existed.
+
+**2. `scripts/hash_freeze.py`** (new, stdlib only; `main(argv, fetch_json=_fetch_json)` at `:145`, `_require_pypi` `:53`, `parse_freeze` `:81`, `_digests` `:104`, `_late_files` `:119`, `_render` `:133`, single `atomic_write_text` write `:191`). Refuses non-`https://pypi.org/` URLs, default SSL context, keeps header + one `# hashes: … <ISO date>` line (replaced on re-run, so it is idempotent), prints yanked pins and `LATE UPLOADS`, exits non-zero naming any unresolved pin and writes nothing.
+`tests/test_hash_freeze.py` (9 tests): `test_hashes_are_every_listed_file_sorted_under_each_pin`, `test_the_pin_set_is_identical_before_and_after_hashing`, `test_a_second_run_replaces_the_hash_header_instead_of_adding_one`, `test_a_pin_with_no_files_exits_non_zero_and_leaves_the_file_byte_identical`, `test_a_failed_fetch_is_named_and_writes_nothing`, `test_a_yanked_pin_is_printed_as_a_warning`, `test_a_file_uploaded_more_than_a_week_late_is_flagged`, `test_a_file_exactly_seven_days_after_the_first_is_not_late`, `test_only_https_pypi_org_urls_are_fetched`. Red: collection error `FileNotFoundError: …/scripts/hash_freeze.py`.
+
+**3. Step 3, run for both files** (`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -I scripts/hash_freeze.py <file>`), output verbatim:
+```
+$ … -I scripts/hash_freeze.py ohyesmlx/constraints/mlxlm-0.31.3.txt
+EXIT=0
+```
+```
+$ … -I scripts/hash_freeze.py ohyesmlx/constraints/optiq-0.5.13.txt
+EXIT=0
+```
+No `LATE UPLOADS` heading and no yanked warning in either — nothing printed. Pin sets identical to `HEAD` (mlxlm 35 pins, optiq 71); 573 and 1539 `--hash=sha256:` lines written.
+
+**4. Install argv + validator** — `engines.py:777 _command_plan` (venv step `:795`; pip step `:806-817`: `-I -m pip install --isolated --no-input --disable-pip-version-check --require-hashes --only-binary :all: -r <file>`); `_check_hashed_requirements` `:720`, called from `install_plan` `:851`; patterns `:699-703`; continuation joiner `:706`.
+Tests (green): updated `test_mlxlm_plan_…`, `test_optiq_plan_…`, `test_two_steps_run_in_order_…`, `test_the_bundled_python_…`; new `tests/test_engines.py:359` committed-files test, `:381` refusals (7 cases: no hash, second pin no hash, `--index-url`, `-r other.txt`, `foo>=1`, `--trusted-host` after a hash, `-e .`), `:394` accept multi-hash, `:422` unhashed real file → `no_constraints`. Red: `_check_hashed_requirements` missing → `AttributeError`; argv assertions failed on the old list.
+
+**5. `_venv_root`** — `engines.py:1049`, searches for `-m`+`venv` anywhere. `_hermetic_env` untouched. Tests: `:418` (5 cases, with/without `-I`), `:786 test_over_the_real_plan_a_failed_pip_step_rolls_back_and_a_success_records` (real plan; also asserts nothing is created at the plan's own root). Red: `[argv1]` case failed.
+
+**6. `check_lab_dir`** — `engines.py:387`; `record_lab_path` calls it at `:498` before reading/writing and writes via `atomic_write_text` at `:501`; `runtimes.py:482` imports it, `:499` calls it after the unchanged "nothing at" refusal and re-raises as `RuntimeStartError`. `detect_all` untouched. Tests: `test_engines.py:862` (relative/file/0775/0757), `:882` (0755 writes), `:893` (other uid); `test_runtimes.py:3507` (4 cases), `:3528` (0755 prefixes), `:3541` (other uid). Read-only on this host: both real lab dirs printed `passes:` (`~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin`, `…/engines/optiq-0.5.13/bin`).
+
+**7. Docs** — `docs/interfaces.md:1807` new section (argv, validator, `check_lab_dir`) plus the `record_lab_path` paragraph at `:1620`; `docs/runtimes/lab-copies.md` install block (155-160), freeze = `pip freeze --all` then `hash_freeze.py` (192-200), hashing paragraph (207-215).
+
+## Red-checks (each reverted, run, restored)
+- Validator no-op → 8 failed: 7 × `test_the_hashed_requirements_validator_refuses_anything_but_hashed_pins[*]` + `test_an_unhashed_constraints_file_refuses_the_install_as_no_constraints`.
+- `--only-binary :all:` removed → 3 failed: both plan tests + `test_two_steps_run_in_order_…`.
+- `-I` removed from the venv step → 3 failed: both plan tests + `test_the_bundled_python_…`.
+- `_venv_root` back to fixed indices (with `-I` kept) → `test_over_the_real_plan_…` failed on `the venv was never created outside the injected engines dir` (the failing install's venv survived), plus `test_a_successful_pip_install_…` and the `[argv1]` unit case.
+- `check_lab_dir` removed at `record_lab_path` → 5 failed (4 parametrized + ownership).
+- `check_lab_dir` removed at `_engine_env` → 5 failed.
+- `atomic_write_text` cleanup removed → `test_a_failed_atomic_write…` failed with the leftover `lab-paths.json.kb7bxjhn` temp.
+
+## Final run
+`1261 passed in 49.06s` (baseline `1222 passed in 46.48s`; 39 new tests). Not committed.
+
+## pip `--isolated` source read
+The test venv has no pip (`ModuleNotFoundError`). I read pip **26.2.1** in `/Users/jrazz/.local/share/ohyesmlx/mlx-lm-0.31.3/lib/python3.14/site-packages/pip/` (the version both constraints files pin): `cli/cmdoptions.py:214-223` defines `--isolated`; `cli/main.py:84` passes it to the command; `configuration.py:120-127` skips `_load_environment_vars()` when isolated; `configuration.py:354-360` loads USER config only when not isolated, while GLOBAL/SITE always load and `PIP_CONFIG_FILE` is still read from the environment — which `_hermetic_env` drops. This matches the plan's SCOPE LIMITS note.
+
+## Things I was unsure of / did not verify
+- **An out-of-repo write happened and was undone.** My first `_venv_root` red-check made the fake create `<real Application Support>/OhYesMLX/engines/mlxlm-0.31.3/bin` (empty), because `_relocate` depends on `_venv_root`. I removed it with `rmdir` (empty-only); the real `optiq-0.5.13` venv, `lab-paths.json` (Oct 30 mtime), `install-log.jsonl` (Oct 30) and `fetched.json` (Nov 3) were not written. I then made `do_install` pin `DEFAULT_ENV.home` to `tmp_path` so no install test can leave the scratch tree even when the code under test breaks, and gave `FakeRun` the one real side effect of `-m venv` (`<root>/bin`).
+- No pip install, runtime, or live install was run; the hashes are PyPI's own metadata, not independently `curl`+`shasum`-checked (that is the plan's Task 2 step).
+- `hash_freeze.py` joins `\` continuations with its own 10-line helper, and `engines._check_hashed_requirements` has another; putting it in `__init__.py` was outside "add `atomic_write_text` only".
+- Names I chose (not specified): `_check_hashed_requirements`, `_HASHED_PIN`, `_PIN_ONLY`, `_requirement_lines`, `_require_pypi`; `main` treats `argv` as `sys.argv[1:]`.
+- The late threshold is strict `>` 7 days (exactly 7 is not late — tested). Extra read-only metadata fetches for numpy/pygame/tokenizers confirmed real upload spans are 0 days, so empty `LATE UPLOADS` is plausible.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    134   20391301   20172800    81992   98.9%   0.142489
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/runtimes/lab-copies.md
+ M ohyesmlx/__init__.py
+ M ohyesmlx/constraints/mlxlm-0.31.3.txt
+ M ohyesmlx/constraints/optiq-0.5.13.txt
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+?? .paul/orders/v5-fix-45b-fetch.md
+?? .paul/orders/v5-fix-45b-installers.log
+?? .paul/orders/v5-fix-45b-installers.md
+?? scripts/hash_freeze.py
+?? tests/test_hash_freeze.py
+ docs/interfaces.md                    |   43 +-
+ docs/runtimes/lab-copies.md           |   39 +-
+ ohyesmlx/__init__.py                  |   25 +
+ ohyesmlx/constraints/mlxlm-0.31.3.txt |  644 ++++++++++++-
+ ohyesmlx/constraints/optiq-0.5.13.txt | 1682 +++++++++++++++++++++++++++++++--
+ ohyesmlx/engines.py                   |  137 ++-
+ ohyesmlx/runtimes.py                  |   10 +-
+ tests/test_engines.py                 |  280 +++++-
+ tests/test_runtimes.py                |   60 ++
+ 9 files changed, 2760 insertions(+), 160 deletions(-)

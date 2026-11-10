@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -3495,6 +3496,65 @@ def test_a_machine_local_lab_path_that_does_not_exist_is_refused_naming_the_engi
             write_lab_manifest(tmp_path, None),
             write_lab_paths_file(tmp_path, {"optiq": str(tmp_path / "gone" / "bin")}),
         )
+
+
+# 045-02b AC-3: `_engine_env` is where a lab path becomes the front of PATH, so a path that
+# is not an absolute directory this user owns with no group- or other-write is refused at
+# the start (the "nothing at" wording above is the separate, earlier refusal).
+
+
+@pytest.mark.parametrize("kind", ["relative", "file", "group-writable", "other-writable"])
+def test_a_lab_path_that_must_not_join_path_is_refused_at_start(tmp_path, monkeypatch, kind):
+    if kind == "relative":
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "relative-bin").mkdir()
+        lab = "relative-bin"
+    elif kind == "file":
+        target = tmp_path / "lab-bin"
+        target.write_text("not a directory", encoding="utf-8")
+        lab = str(target)
+    else:
+        target = tmp_path / "lab-bin"
+        target.mkdir()
+        target.chmod(0o775 if kind == "group-writable" else 0o757)
+        lab = str(target)
+
+    with pytest.raises(RuntimeStartError, match="lab path") as raised:
+        runtimes._engine_env(write_lab_manifest(tmp_path, lab), tmp_path / "no-lab-paths.json")
+
+    assert lab in str(raised.value)
+
+
+def test_a_lab_path_nobody_else_can_write_is_still_prefixed(tmp_path, monkeypatch):
+    lab = tmp_path / "mlx-lm-0.31.3" / "bin"
+    lab.mkdir(parents=True)
+    lab.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    env = runtimes._engine_env(
+        write_lab_manifest(tmp_path, str(lab)), tmp_path / "no-lab-paths.json"
+    )
+
+    assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
+
+
+def test_a_lab_path_owned_by_another_user_is_refused_at_start(tmp_path, monkeypatch):
+    from ohyesmlx import engines
+
+    lab = tmp_path / "bin"
+    lab.mkdir()
+    real_stat = os.stat
+
+    def another_owner(target, *args, **kwargs):
+        info = real_stat(target, *args, **kwargs)
+        if os.fspath(target) == str(lab):
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid + 1)
+        return info
+
+    monkeypatch.setattr(engines.os, "stat", another_owner)
+
+    with pytest.raises(RuntimeStartError, match="owned"):
+        runtimes._engine_env(write_lab_manifest(tmp_path, str(lab)), tmp_path / "no-lab-paths.json")
 
 
 # --------------------------------------------------------------------------------------

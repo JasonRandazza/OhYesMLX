@@ -153,20 +153,27 @@ Both pip engines install the same way, and the installer pins both the package a
 set:
 
 ```sh
-{python} -m venv ~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>
-~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>/bin/python -m pip install \
-    --no-input --disable-pip-version-check <distribution>==<manifest version> \
-    -c ohyesmlx/constraints/<name>-<manifest version>.txt
+{python} -I -m venv ~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>
+~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>/bin/python -I -m pip install \
+    --isolated --no-input --disable-pip-version-check --require-hashes \
+    --only-binary :all: -r ohyesmlx/constraints/<name>-<manifest version>.txt
 ```
 
 (`engines._command_plan`, VERIFIED in the tree; `<python>` must be 3.11 or later — stock
 `/usr/bin/python3` is 3.9.6 on this macOS, research §3.3 VERIFIED.) The two steps are the
 installer's own `Plan`, and the install step applies the committed constraints file, so the
-harness's "install" and this document's "freeze" are the same operation. The clean-install sizes
-were measured by running exactly these commands on 2026-10-29 (research §8, VERIFIED): mlx-lm 472 MB
-and OptiQ 612 MB per venv, with wall times of 177 s and 104 s. The older figures in research §3.2
-and §4.2 (846 MB, 434 MB) came from environments that were not clean and are superseded by §8 for
-planning disk.
+harness's "install" and this document's "freeze" are the same operation. `-I` and `--isolated`
+keep the user's Python and pip environments out of both steps, and the requirements file names
+every package, so no `pkg==ver` token appears on the command line. `--require-hashes` makes the
+file's hashes the pin, and `--only-binary :all:` is its other half: hash-checking mode does not
+cover the build dependencies pip fetches to build an sdist, and building one runs its code. One
+exception is named in `engines._SOURCE_BUILDS`: OptiQ's install adds `--no-binary pygame`, because
+pygame 2.6.1 ships no CPython 3.14 wheel and mlx-optiq 0.5.13 requires it (for its game command
+only); the 3.14 lab copy built it from source the same way (Jason, 2026-11-10). The
+clean-install sizes were measured by running these two steps on 2026-10-29, before the hash flags
+were added (research §8, VERIFIED): mlx-lm 472 MB and OptiQ 612 MB per venv, with wall times of
+177 s and 104 s. The older figures in research §3.2 and §4.2 (846 MB, 434 MB) came from
+environments that were not clean and are superseded by §8 for planning disk.
 
 **The constraints file is the other half of the pin.** A package pin alone does not pin the build:
 the two lab venvs had already drifted apart at the same engine versions (mlx 0.32.4 vs 0.32.2,
@@ -176,7 +183,11 @@ pip resolved a server whose chat endpoint answered HTTP 404 (2026-10-30,
 definition of the file's name, one per pip engine per tested version:
 `ohyesmlx/constraints/<name>-<TESTED_VERSIONS[name]>.txt`. `engines.install_plan` refuses with
 `ValueError` naming that path when it is missing, so a version bump without a new freeze fails
-before a venv is created.
+before a venv is created — and refuses with `ValueError` naming the file and the line when any
+requirement in it carries no hashes (`engines._check_hashed_requirements`), because the install
+step runs pip with `--require-hashes`. A version pin without a hash is not a pin against a
+compromised maintainer: PyPI never replaces an uploaded file, but a maintainer account can add a
+new one to an existing version, and a version-only pin would take it.
 
 **Freezing a venv into its constraints file.** The header is the three comment lines both committed
 files carry — engine-version, venv root, interpreter — and the body is the venv's whole freeze:
@@ -188,12 +199,23 @@ files carry — engine-version, venv root, interpreter — and the body is the v
   printf '# Interpreter: Python <X.Y.Z> (<arch>)\n'
   <venv>/bin/python -m pip freeze --all
 } > ohyesmlx/constraints/<name>-<version>.txt
+python -I scripts/hash_freeze.py ohyesmlx/constraints/<name>-<version>.txt
 ```
 
 `--all` is not optional: without it `pip freeze` omits the toolchain (`pip` itself), and the freeze
 would describe a different environment from the one that runs the server. Freeze the venv that was
 just installed from the manifest's version, and commit the file in the same commit as the version it
 names.
+
+The second command is the hashing step (`scripts/hash_freeze.py`), and it is not optional either:
+it rewrites the freeze in place so each pin is followed by one `--hash=sha256:` line per file
+`https://pypi.org/pypi/<name>/<version>/json` lists, adds the `# hashes: ...` header line naming
+the source and date, and leaves every `name==version` pair exactly as `pip freeze` wrote it. It
+fetches metadata only, writes nothing unless every pin resolved, and exits non-zero naming any pin
+PyPI has no file for. It prints — and the reviewer records — a yanked pin, and under `LATE UPLOADS`
+every file uploaded more than seven days after that version's first file: a file added to an
+existing version is the attack the hashes exist to catch, so a late one is reviewed rather than
+trusted blindly (a new-ABI wheel is often late for good reasons).
 
 The venv root names are the ones `engines._app_engine_venvs` derives — `engines/<name>-<version>`
 with a bare `engines/<name>` as the second candidate — so detection, install and this document

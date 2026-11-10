@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 __version__ = "0.3.0"
@@ -13,6 +15,7 @@ __all__ = [
     "app_support_dir",
     "writable_root",
     "ensure_app_support",
+    "atomic_write_text",
     "stderr_json",
 ]
 
@@ -57,6 +60,28 @@ def ensure_app_support(home=None) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=APP_SUPPORT_MODE)
     path.chmod(APP_SUPPORT_MODE)
     return path
+
+
+def atomic_write_text(path, text: str) -> None:
+    """Write *text* to *path* so a reader sees either the old file or the whole new one.
+
+    One temp file in the target's own directory -- a different filesystem would make the
+    replace a copy -- written, flushed and fsynced before :func:`os.replace` swaps it in.
+    Any failure removes the temp file and re-raises, so a crashed write leaves the previous
+    file byte-identical and no residue beside it. A missing parent directory is created.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def stderr_json(payload: dict) -> None:

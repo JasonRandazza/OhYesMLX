@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import ohyesmlx
 from ohyesmlx import engines
 from ohyesmlx.engines import EngineLocks, Plan, Step, detect_all, install, install_plan
 from ohyesmlx.runtimes import RUNTIMES
@@ -277,16 +278,20 @@ def test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version():
     assert plan.kind == "command"
     assert plan.source_url == "https://pypi.org/project/mlx-lm/"
     assert [step.command for step in plan.steps] == [
-        ["{python}", "-m", "venv", venv],
+        ["{python}", "-I", "-m", "venv", venv],
         [
             f"{venv}/bin/python",
+            "-I",
             "-m",
             "pip",
             "install",
+            "--isolated",
             "--no-input",
             "--disable-pip-version-check",
-            "mlx-lm==0.31.3",
-            "-c",
+            "--require-hashes",
+            "--only-binary",
+            ":all:",
+            "-r",
             str(CONSTRAINTS / "mlxlm-0.31.3.txt"),
         ],
     ]
@@ -300,25 +305,34 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
     assert plan.kind == "command"
     assert plan.source_url == "https://pypi.org/project/mlx-optiq/"
     assert [step.command for step in plan.steps] == [
-        ["{python}", "-m", "venv", venv],
+        ["{python}", "-I", "-m", "venv", venv],
         [
             f"{venv}/bin/python",
+            "-I",
             "-m",
             "pip",
             "install",
+            "--isolated",
             "--no-input",
             "--disable-pip-version-check",
-            "mlx-optiq==0.5.13",
-            # The constraints file pins mlx-lm for OptiQ, because OptiQ serves through
-            # mlx_lm.server and does not pin it: unpinned, pip resolved mlx-lm 0.32.2 and
-            # every chat request answered HTTP 404 (2026-10-30 lab copy).
-            "-c",
+            "--require-hashes",
+            "--only-binary",
+            ":all:",
+            # The one source build (engines._SOURCE_BUILDS): pygame has no CPython 3.14
+            # wheel, and mlx-optiq requires it. Everything else stays wheel-only.
+            "--no-binary",
+            "pygame",
+            # The requirements file names both packages: OptiQ's own pin and mlx-lm's,
+            # because OptiQ serves through mlx_lm.server and does not pin it: unpinned, pip
+            # resolved mlx-lm 0.32.2 and every chat request answered HTTP 404 (2026-10-30
+            # lab copy). The argv carries no `pkg==ver` token at all.
+            "-r",
             str(CONSTRAINTS / "optiq-0.5.13.txt"),
         ],
     ]
     install_argv = plan.steps[1].command
     assert (CONSTRAINTS / "optiq-0.5.13.txt").is_file()
-    assert [token for token in install_argv if token.startswith("mlx-lm==")] == []
+    assert [token for token in install_argv if "==" in token] == []
 
 
 def test_a_tested_version_without_a_constraints_file_raises_before_a_plan_exists(monkeypatch):
@@ -336,6 +350,97 @@ def test_every_pip_engine_has_a_constraints_file_for_its_tested_version():
             f"{name} {engines.TESTED_VERSIONS[name]} has no constraints file at {path}; "
             "freeze the lab venv (docs/runtimes/lab-copies.md §4) with the bump"
         )
+
+
+# 045-02b AC-1/AC-2: the install installs only hash-verified files, from a file whose
+# every line is a pin plus its hashes, and neither step reads the user's Python or pip
+# environment. `engines._check_hashed_requirements` is the one validator; the argv below is
+# the one plan.
+
+HASH = "0123456789abcdef" * 4
+
+
+def test_the_committed_constraints_files_are_fully_hashed_and_pin_their_own_engine():
+    for name, package in engines._PIP_PACKAGES.items():
+        path = engines.constraints_path(name)
+        engines._check_hashed_requirements(path)
+        pin = f"{package}=={engines.TESTED_VERSIONS[name]}"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert f"{pin} \\" in lines, f"{path} does not pin {pin}"
+        assert sum(1 for line in lines if line.startswith("    --hash=sha256:")) >= 1
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ("mlx-lm==0.31.3\n", "carries no hashes"),
+        ("mlx-lm==0.31.3 \\\n    --hash=sha256:" + HASH + "\nother==1.0\n", "carries no hashes"),
+        ("--index-url https://evil.example/simple\n", "--index-url"),
+        ("-r other.txt\n", "-r other.txt"),
+        ("foo>=1\n", "foo>=1"),
+        ("foo==1.0 \\\n    --hash=sha256:" + HASH + " --trusted-host evil.example\n", "--trusted-host"),
+        ("-e .\n", "-e ."),
+    ],
+)
+def test_the_hashed_requirements_validator_refuses_anything_but_hashed_pins(
+    tmp_path, body, expected
+):
+    path = tmp_path / "constraints.txt"
+    path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(ValueError) as raised:
+        engines._check_hashed_requirements(path)
+
+    assert str(path) in str(raised.value)
+    assert expected in str(raised.value)
+
+
+def test_the_hashed_requirements_validator_accepts_a_pin_with_several_hashes(tmp_path):
+    path = tmp_path / "constraints.txt"
+    path.write_text(
+        "# a header comment\n"
+        "\n"
+        "mlx-lm==0.31.3 \\\n"
+        f"    --hash=sha256:{HASH} \\\n"
+        f"    --hash=sha256:{'f' * 64}\n",
+        encoding="utf-8",
+    )
+
+    engines._check_hashed_requirements(path)
+
+
+@pytest.mark.parametrize(
+    "argv, expected",
+    [
+        (["python", "-m", "venv", "/lab/root"], "/lab/root"),
+        (["/usr/bin/python3", "-I", "-m", "venv", "/lab/root"], "/lab/root"),
+        (["/lab/root/bin/python", "-I", "-m", "pip", "install", "-r", "x"], None),
+        (["python", "-m", "venv"], None),
+        ([], None),
+    ],
+)
+def test_venv_root_finds_the_venv_step_wherever_the_isolated_flag_sits(argv, expected):
+    assert engines._venv_root(argv) == expected
+
+
+def test_an_unhashed_constraints_file_refuses_the_install_as_no_constraints(tmp_path, monkeypatch):
+    unhashed = tmp_path / "mlxlm-0.31.3.txt"
+    unhashed.write_text("mlx-lm==0.31.3\n", encoding="utf-8")
+    monkeypatch.setattr(engines, "constraints_path", lambda name: unhashed)
+
+    def never(*args, **kwargs):
+        raise AssertionError("nothing may run for a refused plan")
+
+    ok, events, opened, sleeps = do_install(
+        tmp_path, run=never, detect=never, open_url=never, hardware=never,
+        sleep=never, lock=never,
+    )
+
+    assert ok is False
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert events[0]["payload"]["code"] == "no_constraints"
+    assert "carries no hashes" in events[0]["message"]
+    assert str(unhashed) in events[0]["message"]
 
 
 def test_omlx_asset_and_size_follow_the_macos_generation():
@@ -414,7 +519,12 @@ def test_omlx_guided_step_tells_the_user_to_skip_release_candidates():
 
 
 class FakeRun:
-    """The subprocess seam: records each call and replays the given results."""
+    """The subprocess seam: records each call and replays the given results.
+
+    A successful ``-m venv`` call leaves the directory a real one would create -- unless the
+    call's ``on_call`` already put something there -- because the rollback and the lab-path
+    record both read what the venv step left.
+    """
 
     def __init__(self, results=None, on_call=None):
         self.calls = []
@@ -423,9 +533,13 @@ class FakeRun:
 
     def __call__(self, argv, timeout, env):
         self.calls.append({"argv": list(argv), "timeout": timeout, "env": dict(env)})
+        result = self.results.pop(0) if self.results else (0, "")
         if self.on_call is not None:
             self.on_call(argv)
-        return self.results.pop(0) if self.results else (0, "")
+        root = engines._venv_root(argv)
+        if result[0] == 0 and root is not None and not os.path.lexists(root):
+            (Path(root) / "bin").mkdir(parents=True, exist_ok=True)
+        return result
 
 
 class FakeDetect:
@@ -473,7 +587,12 @@ def log_lines(path):
 
 def do_install(tmp_path, engine="mlxlm", confirmed=True, *, run=None, detect=None,
                open_url=None, free_bytes=500 * 1024**3, lock=None, **overrides):
-    """Call install with every side effect faked; return what the fakes observed."""
+    """Call install with every side effect faked; return what the fakes observed.
+
+    The plan's own engines directory is derived from ``DEFAULT_ENV.home``, so it is pointed
+    at the scratch tree too: a fake runner can then never leave the venv it pretends to
+    create anywhere but under *tmp_path*, even if the code that finds the venv root breaks.
+    """
     events = []
     opened = []
     sleeps = []
@@ -492,7 +611,12 @@ def do_install(tmp_path, engine="mlxlm", confirmed=True, *, run=None, detect=Non
         timeout_s=900,
     )
     kwargs.update(overrides)
-    ok = install(engine, confirmed, **kwargs)
+    previous_home = engines.DEFAULT_ENV.home
+    engines.DEFAULT_ENV.home = str(tmp_path / "home")
+    try:
+        ok = install(engine, confirmed, **kwargs)
+    finally:
+        engines.DEFAULT_ENV.home = previous_home
     return ok, events, opened, sleeps
 
 
@@ -588,16 +712,20 @@ def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path)
     ok, events, opened, sleeps = do_install(tmp_path, run=run)
     assert ok is True
     assert [call["argv"] for call in run.calls] == [
-        ["/fake/python", "-m", "venv", venv],
+        ["/fake/python", "-I", "-m", "venv", venv],
         [
             f"{venv}/bin/python",
+            "-I",
             "-m",
             "pip",
             "install",
+            "--isolated",
             "--no-input",
             "--disable-pip-version-check",
-            "mlx-lm==0.31.3",
-            "-c",
+            "--require-hashes",
+            "--only-binary",
+            ":all:",
+            "-r",
             str(CONSTRAINTS / "mlxlm-0.31.3.txt"),
         ],
     ]
@@ -620,8 +748,8 @@ def test_a_successful_pip_install_records_its_venv_bin_and_engine_env_prefixes_i
     from ohyesmlx import runtimes
 
     def create_venv(argv):
-        if argv[1:3] == ["-m", "venv"]:
-            (Path(argv[3]) / "bin").mkdir(parents=True, exist_ok=True)
+        if engines._venv_root(argv) is not None:
+            (Path(engines._venv_root(argv)) / "bin").mkdir(parents=True, exist_ok=True)
 
     ok, events, _opened, _sleeps = do_install(
         tmp_path, engine="optiq", run=FakeRun(on_call=create_venv)
@@ -659,12 +787,129 @@ def test_a_failed_pip_install_records_no_lab_path_and_keeps_the_others(tmp_path)
     }
 
 
+def test_over_the_real_plan_a_failed_pip_step_rolls_back_and_a_success_records(tmp_path):
+    """The `-I` in the venv step must not hide the venv from rollback or `record_lab_path`.
+
+    The plan is the one `install_plan` derives, not a hand-built one, and `do_install` puts
+    the plan's own engines directory under *tmp_path* as well: the venv root has to be found
+    by `_venv_root` searching the argv and then relocated into the injected engines dir, so a
+    root left at the plan's own location is exactly the regression this checks.
+    """
+    root = tmp_path / "engines" / f"mlxlm-{engines.TESTED_VERSIONS['mlxlm']}"
+    plan_root = Path(
+        engines._app_engine_venvs(SimpleNamespace(home=str(tmp_path / "home")), "mlxlm")[0]
+    )
+
+    def create_venv(argv):
+        if "venv" in argv:
+            (Path(argv[-1]) / "bin").mkdir(parents=True, exist_ok=True)
+
+    failed, _events, _opened, _sleeps = do_install(
+        tmp_path, run=FakeRun([(0, "venv made"), (1, "hash mismatch")], on_call=create_venv)
+    )
+    assert failed is False
+    assert not root.exists(), "the venv the failed install created is rolled back"
+    assert not plan_root.exists(), "the venv was never created outside the injected engines dir"
+    assert not (tmp_path / "lab-paths.json").exists()
+
+    succeeded, _events, _opened, _sleeps = do_install(tmp_path, run=FakeRun(on_call=create_venv))
+    assert succeeded is True
+    assert root.is_dir()
+    assert not plan_root.exists()
+    assert json.loads((tmp_path / "lab-paths.json").read_text()) == {"mlxlm": str(root / "bin")}
+
+
+# 045-02b AC-3: `ohyesmlx.atomic_write_text` is the one writer `record_lab_path` uses, so
+# a kill mid-write leaves the previous file whole and no temp file beside it.
+
+
+def test_atomic_write_text_writes_the_file_and_leaves_no_temp_behind(tmp_path):
+    target = tmp_path / "missing-parent" / "lab-paths.json"
+
+    ohyesmlx.atomic_write_text(target, '{"mlxlm": "/lab/bin"}\n')
+
+    assert target.read_text(encoding="utf-8") == '{"mlxlm": "/lab/bin"}\n'
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_a_failed_atomic_write_leaves_the_old_file_byte_identical(tmp_path, monkeypatch):
+    target = tmp_path / "lab-paths.json"
+    target.write_bytes(b'{"mlxlm": "/before/bin"}\n')
+
+    def refuse_replace(source, destination):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ohyesmlx.os, "replace", refuse_replace)
+
+    with pytest.raises(OSError, match="disk full"):
+        ohyesmlx.atomic_write_text(target, '{"mlxlm": "/after/bin"}\n')
+
+    assert target.read_bytes() == b'{"mlxlm": "/before/bin"}\n'
+    assert list(tmp_path.iterdir()) == [target]
+
+
 @pytest.mark.parametrize("name", ["osaurus", "omlx", "vmlx"])
 def test_record_lab_path_refuses_an_app_engine_and_writes_nothing(tmp_path, name):
     path = tmp_path / "lab-paths.json"
 
     with pytest.raises(ValueError, match="app engines are archived"):
         engines.record_lab_path(name, "/lab/bin", path=path)
+
+    assert not path.exists()
+
+
+# 045-02b AC-3: a lab path becomes the front of PATH for every engine start, so the writer
+# refuses one that is not an absolute directory this user owns with no group- or other-write.
+
+
+@pytest.mark.parametrize("kind", ["relative", "file", "group-writable", "other-writable"])
+def test_record_lab_path_refuses_a_directory_that_must_not_join_path(tmp_path, kind):
+    path = tmp_path / "lab-paths.json"
+    if kind == "relative":
+        bin_dir = "relative-bin"
+        (tmp_path / "relative-bin").mkdir()
+    elif kind == "file":
+        (tmp_path / "a-file").write_text("not a directory", encoding="utf-8")
+        bin_dir = str(tmp_path / "a-file")
+    else:
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin").chmod(0o775 if kind == "group-writable" else 0o757)
+        bin_dir = str(tmp_path / "bin")
+
+    with pytest.raises(ValueError) as raised:
+        engines.record_lab_path("mlxlm", bin_dir, path=path)
+
+    assert bin_dir in str(raised.value)
+    assert not path.exists()
+
+
+def test_record_lab_path_writes_for_a_lab_dir_nobody_else_can_write(tmp_path):
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    bin_dir.chmod(0o755)
+    path = tmp_path / "lab-paths.json"
+
+    engines.record_lab_path("mlxlm", str(bin_dir), path=path)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"mlxlm": str(bin_dir)}
+
+
+def test_record_lab_path_refuses_a_lab_dir_owned_by_another_user(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    path = tmp_path / "lab-paths.json"
+    real_stat = os.stat
+
+    def another_owner(target, *args, **kwargs):
+        info = real_stat(target, *args, **kwargs)
+        if os.fspath(target) == str(bin_dir):
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid + 1)
+        return info
+
+    monkeypatch.setattr(engines.os, "stat", another_owner)
+
+    with pytest.raises(ValueError, match="owned"):
+        engines.record_lab_path("mlxlm", str(bin_dir), path=path)
 
     assert not path.exists()
 
@@ -698,6 +943,7 @@ def test_the_bundled_python_is_the_one_the_plan_creates_the_venv_with(tmp_path):
     do_install(tmp_path, run=run, python="/bundle/OhYesMLX/bin/python3")
     assert run.calls[0]["argv"] == [
         "/bundle/OhYesMLX/bin/python3",
+        "-I",
         "-m",
         "venv",
         f"{tmp_path}/engines/mlxlm-0.31.3",

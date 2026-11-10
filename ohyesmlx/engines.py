@@ -34,6 +34,7 @@ import plistlib
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -43,7 +44,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from xml.parsers.expat import ExpatError
 
-from ohyesmlx import app_support_dir
+from ohyesmlx import app_support_dir, atomic_write_text
 from ohyesmlx.hardware import scan as _scan_hardware
 from ohyesmlx.runtimes import OSAURUS_APP_BUNDLES, RUNTIMES, VMLX_ENGINE_INIT
 
@@ -383,6 +384,32 @@ LAB_PATHS_FILE = _lab_paths_file(DEFAULT_ENV.home)
 LAB_ENGINES = ("mlxlm", "optiq")
 
 
+def check_lab_dir(path: str) -> None:
+    """Refuse *path* unless it is an absolute directory this user owns and others cannot write.
+
+    A lab path becomes the front of PATH for every engine start (``runtimes._engine_env``)
+    and is written into the machine-local file by :func:`record_lab_path`, so a directory
+    another account or group can write is a directory that picks which ``mlx_lm.server``
+    the harness runs. ``os.stat`` follows symlinks on purpose: the directory the process
+    will actually read is the one that must be private, not the link that names it.
+    """
+    if not os.path.isabs(path):
+        raise ValueError(f"{path}: a lab path must be absolute")
+    try:
+        info = os.stat(path)
+    except OSError as error:
+        raise ValueError(f"{path}: a lab path must be a directory: {error}") from error
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError(f"{path}: a lab path must be a directory")
+    if info.st_uid != os.geteuid():
+        raise ValueError(
+            f"{path}: a lab path must be owned by this user (uid {os.geteuid()}), "
+            f"not uid {info.st_uid}"
+        )
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError(f"{path}: a lab path must not be group- or other-writable")
+
+
 def lab_paths(path=LAB_PATHS_FILE, *, read=None) -> dict[str, str]:
     """The machine-local lab paths at *path*, keyed by engine; ``{}`` when there is no file.
 
@@ -445,8 +472,13 @@ def record_lab_path(engine: str, bin_dir: str, *, path=LAB_PATHS_FILE) -> None:
 
     Read, replace, write: every other engine's entry is kept, and *engine*'s is replaced only
     by an install of the version the manifest pins (:func:`install_plan` pins
-    ``TESTED_VERSIONS``). The write is a temp file in the same directory followed by
-    ``os.replace``, so a kill mid-write leaves the previous file whole.
+    ``TESTED_VERSIONS``). The write is ``ohyesmlx.atomic_write_text`` -- a temp file in the
+    same directory followed by ``os.replace`` -- so a kill mid-write leaves the previous
+    file whole and no temp file behind.
+
+    *bin_dir* is refused by :func:`check_lab_dir` before the file is even read: it becomes
+    the front of PATH for every engine start, so a directory this user does not own, or one
+    another account can write, is refused here as it is at the start.
 
     A file this function cannot read is refused by :func:`lab_paths` rather than overwritten,
     and an engine outside :data:`LAB_ENGINES` is refused here for the same reason that reader
@@ -463,20 +495,10 @@ def record_lab_path(engine: str, bin_dir: str, *, path=LAB_PATHS_FILE) -> None:
             f"refusing to record a lab path for {engine}: {bin_dir!r} is not a non-empty "
             "directory"
         )
+    check_lab_dir(bin_dir)
     entries = lab_paths(path)
     entries[engine] = bin_dir
-    target = pathlib.Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".tmp")
-    try:
-        with open(temporary, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(entries, indent=2, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, json.dumps(entries, indent=2, sort_keys=True) + "\n")
 
 
 def _detect_osaurus(env) -> tuple[str | None, str | None]:
@@ -670,6 +692,58 @@ def constraints_path(engine: str) -> pathlib.Path:
     return CONSTRAINTS_DIR / f"{engine}-{TESTED_VERSIONS[engine]}.txt"
 
 
+# A requirements line the installer may hand pip: a pin and nothing else, followed by one or
+# more sha256 hashes. Everything else -- `--index-url`, `--extra-index-url`, `--trusted-host`,
+# `-f`, `-r`, `-c`, `-e` -- is refused below, because a requirements file can carry all of
+# them and the installer's file is one it wrote rather than one it reads from the user.
+_HASHED_PIN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9._+!-]*"
+    r"(?:\s+--hash=sha256:[0-9a-f]{64})+$"
+)
+_PIN_ONLY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9._+!-]*$")
+
+
+def _requirement_lines(text: str):
+    """The file's requirement lines, with ``\\`` continuations joined and comments dropped."""
+    pending = ""
+    for line in text.splitlines():
+        line = (pending + " " + line.strip() if pending else line).strip()
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1].rstrip()
+            continue
+        if not line or line.startswith("#"):
+            continue
+        yield line
+
+
+def _check_hashed_requirements(path) -> None:
+    """Refuse *path* unless every requirement is a ``name==version`` pin with its hashes.
+
+    One validator for the one thing that makes the install's ``--require-hashes`` mean
+    something: every line is a pin, every pin carries a hash for every file it may install,
+    and no line is a pip option. A pin without a hash is named as such; anything else is
+    named as the line it is. Both messages name the file, because the caller's next step is
+    to regenerate it (``scripts/hash_freeze.py``), not to guess which of two files it read.
+    """
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    for line in _requirement_lines(text):
+        if _HASHED_PIN.match(line):
+            continue
+        token = line.split()[0]
+        if _PIN_ONLY.match(token) and "--hash=" not in line:
+            raise ValueError(
+                f"{path}: the requirement {token!r} carries no hashes; the installer runs "
+                "pip with --require-hashes, so the pin must be followed by a "
+                "--hash=sha256:<hex> line for every file (scripts/hash_freeze.py writes them)"
+            )
+        raise ValueError(
+            f"{path}: {line!r} is not a name==version pin followed by "
+            "--hash=sha256:<64 hex> lines; option lines (--index-url, -r, -e, ...) are "
+            "refused"
+        )
+
+
 def _guided_plan(name: str, macos_major: int) -> Plan:
     generation = 0 if macos_major < 26 else 1
     return Plan(
@@ -700,6 +774,14 @@ def _guided_plan(name: str, macos_major: int) -> Plan:
     )
 
 
+# The packages an engine's install may build from source, by engine: the only exception to
+# `--only-binary :all:`, whose build tools pip fetches without hash checks. The pinned pygame
+# (the latest release) ships no CPython 3.14 wheel, and the tested mlx-optiq requires it for
+# `optiq/game/play.py` only, not for serving; the measured 3.14 lab copy built it from source
+# the same way. Jason's call, 2026-11-10 (045-02b). Remove an entry once a wheel exists.
+_SOURCE_BUILDS = {"optiq": ("pygame",)}
+
+
 def _command_plan(name: str) -> Plan:
     version = TESTED_VERSIONS[name]
     package = _PIP_PACKAGES[name]
@@ -716,20 +798,32 @@ def _command_plan(name: str) -> Plan:
             Step(
                 id="create-venv",
                 label=f"Create a Python 3.11+ virtual environment at {root}.",
-                command=["{python}", "-m", "venv", root],
+                # -I: the user's site-packages and PYTHON* variables must not shape the
+                # interpreter that builds every later start command (T-07).
+                command=["{python}", "-I", "-m", "venv", root],
             ),
             Step(
                 id="install",
                 label=f"Install {package} {version}, the version this harness measured.",
+                # --isolated: no user pip config or PIP_* variable chooses the index (T-07).
+                # --require-hashes/--only-binary: the file names the package and every
+                # dependency, and pip may take only files whose hash it lists. Building an
+                # sdist is not covered by hash-checking and runs its code, so sdists are out,
+                # except the ones _SOURCE_BUILDS names.
                 command=[
                     os.path.join(root, "bin", "python"),
+                    "-I",
                     "-m",
                     "pip",
                     "install",
+                    "--isolated",
                     "--no-input",
                     "--disable-pip-version-check",
-                    f"{package}=={version}",
-                    "-c",
+                    "--require-hashes",
+                    "--only-binary",
+                    ":all:",
+                    *[token for package in _SOURCE_BUILDS.get(name, ()) for token in ("--no-binary", package)],
+                    "-r",
                     str(constraints_path(name)),
                 ],
             ),
@@ -746,7 +840,9 @@ def install_plan(name: str, macos_major: int) -> Plan:
     the app's engines dir and install into it (Decision D2). A pip engine's plan is
     refused with ``ValueError`` naming the expected file when the tested version has no
     committed constraints file, because a package pin without its freeze installs a
-    build nobody measured.
+    build nobody measured, and with ``ValueError`` naming the file and the line when any
+    requirement in it carries no hashes (:func:`_check_hashed_requirements`), because
+    ``--require-hashes`` would refuse that line only after the venv was created.
 
     ``{python}`` in the first command is a placeholder: 02-03 substitutes the
     interpreter it picked, so the plan does not choose one here.
@@ -762,6 +858,7 @@ def install_plan(name: str, macos_major: int) -> Plan:
                 f"no pip constraints file for {name} {TESTED_VERSIONS[name]}: "
                 f"expected {constraints}"
             )
+        _check_hashed_requirements(constraints)
         return _command_plan(name)
     return _guided_plan(name, macos_major)
 
@@ -960,9 +1057,15 @@ def _url_allowed(url: str) -> bool:
 
 
 def _venv_root(argv: list[str]) -> str | None:
-    """The directory a ``-m venv`` command creates, or None for any other command."""
-    if len(argv) >= 4 and argv[1:3] == ["-m", "venv"]:
-        return argv[3]
+    """The directory a ``-m venv`` command creates, or None for any other command.
+
+    Found by searching the argv for ``-m venv``, not read at fixed indices: the venv step
+    runs its interpreter with ``-I``, and both the rollback of a failed install and the
+    lab-path record of a successful one follow this answer.
+    """
+    for index, token in enumerate(argv):
+        if token == "-m" and argv[index + 1 : index + 2] == ["venv"]:
+            return argv[index + 2] if index + 2 < len(argv) else None
     return None
 
 

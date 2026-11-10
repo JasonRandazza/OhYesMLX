@@ -463,7 +463,9 @@ def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
 
     A lab path that is not there is refused, naming the engine, rather than skipped: whichever
     source named it says this build lives here, and falling back to the global install would
-    measure a build nothing vouched for and record it under the pinned version. Engines with
+    measure a build nothing vouched for and record it under the pinned version. A lab path
+    that is there but is not a private directory is refused the same way, by
+    ``engines.check_lab_dir``: PATH decides which binary every start reaches. Engines with
     no lab path add nothing, so a machine with neither source set leaves every command
     byte-identical to the one recorded before the manifest existed.
 
@@ -477,7 +479,7 @@ def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
     ``engines`` imports ``RUNTIMES`` from this module, and only this function needs the
     manifest, so a function-scoped import is where the cycle stops.
     """
-    from .engines import lab_paths, load_manifest
+    from .engines import check_lab_dir, lab_paths, load_manifest
 
     manifest = load_manifest() if manifest_path is None else load_manifest(manifest_path)
     local = lab_paths() if lab_paths_path is None else lab_paths(lab_paths_path)
@@ -493,6 +495,10 @@ def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
                 f"nothing at {resolved}. Refusing to start {name} from whatever the global "
                 "install is instead."
             )
+        try:
+            check_lab_dir(resolved)
+        except ValueError as error:
+            raise RuntimeStartError(str(error)) from error
         prefixes.append(resolved)
     env = dict(os.environ)
     if prefixes:

@@ -1617,7 +1617,9 @@ entry every mlx-lm and OptiQ cell on a Mac that installed through the app fails 
 is written beside the `engines_dir` the call was handed (`engines._lab_paths_beside`), so a scratch
 engines directory keeps its own file. Every other engine's entry is kept, and the engine's own is
 replaced only by an install of the version the manifest pins. A failed step writes nothing; an
-app engine is refused (`ValueError`), like the reader refuses one.
+app engine is refused (`ValueError`), like the reader refuses one. *bin_dir* is refused by
+`engines.check_lab_dir` before the file is read or written (045-02b, below), and the write is
+`ohyesmlx.atomic_write_text`.
 
 **`GET /quickbench/plan?repo=R`** (AC-1). The plan below, as the app shows it before the click.
 `repo` is the only query parameter; a missing or repeated one is `400 bad_args`, and the module's
@@ -1802,3 +1804,45 @@ timeout has its process group killed and still reports `TIMEOUT_EXIT_CODE` with 
 `kill_running_steps()` kills every registered group — it is what `_Jobs.cancel_and_wait` calls when its bound expires
 (see the shutdown paragraph above).
 
+## v5.0 plan 045-02b — hash-pinned installs and a validated lab path
+
+**A pip engine's install argv** (`engines._command_plan`, AC-1 and AC-2). Both steps run their
+interpreter with `-I`, so neither reads the user's site-packages or `PYTHON*` variables; the pip
+step also runs `--isolated`, so no user pip config and no `PIP_*` variable chooses the index. The
+requirements file names every package: no `pkg==ver` token is passed on the command line.
+
+```sh
+{python} -I -m venv <Application Support>/OhYesMLX/engines/<name>-<TESTED_VERSIONS[name]>
+<root>/bin/python -I -m pip install --isolated --no-input --disable-pip-version-check \
+    --require-hashes --only-binary :all: -r <ohyesmlx/constraints/<name>-<version>.txt>
+```
+
+`--require-hashes` makes the file the pin: a line without a hash is refused by pip, and a hash the
+file does not list is refused for the file it names. `--only-binary :all:` is required with it,
+because hash-checking mode does not cover the PEP 517 build dependencies pip fetches to build an
+sdist, and building an sdist runs its code. The one exception is `engines._SOURCE_BUILDS`
+(`{"optiq": ("pygame",)}`), appended after `:all:` as `--no-binary pygame`: pygame 2.6.1 has no
+CPython 3.14 wheel and mlx-optiq 0.5.13 requires it; its build tools are not hash-checked
+(Jason, 2026-11-10). (`--isolated` still loads the global and site pip
+config; they need admin to write, and a rerouted index cannot pass the hashes.)
+
+**`engines._check_hashed_requirements(path) -> None`** (AC-1). One validator, called by
+`install_plan` beside the missing-file check, so `install` refuses a file with no hashes exactly
+as it refuses a missing one (`ValueError`, reported as `error` code `no_constraints`). Every
+non-blank, non-comment logical line — `\` continuations joined — must be exactly
+`name==version` followed by one or more `--hash=sha256:<64 lowercase hex>` tokens and nothing
+else. A pin with no hash is refused with a message saying it "carries no hashes"; anything else
+— `--index-url`, `--extra-index-url`, `--trusted-host`, `-f`, `-r`, `-c`, `-e` — is refused naming
+the line. Each message names the file, because the fix is to regenerate it with
+`scripts/hash_freeze.py` (a stdlib maintenance script beside `scripts/`, not a package surface:
+`<freeze-file>` in, the same file out with every `urls[].digests.sha256` PyPI lists for each pin,
+sorted, plus one header line naming the source and date).
+
+**`engines.check_lab_dir(path) -> None`** (AC-3). One definition of what may become the front of
+PATH, called by `runtimes._engine_env` after `expanduser` and after its "nothing at" refusal
+(which keeps its wording), and by `record_lab_path` before it reads or writes. It raises
+`ValueError` naming the path and the reason unless the path is absolute, `os.stat` (following
+symlinks) is a directory, `st_uid == os.geteuid()`, and
+`st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0`. A failure at start is a `RuntimeStartError`
+carrying that message; `detect_all` is unchanged and only reports (`ValueError` there is a
+configuration defect, never a reason to fall back to the global install).

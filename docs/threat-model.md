@@ -267,18 +267,18 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 
 | Id | Verdict | Severity | Actor | Area | Disposition |
 |---|---|---|---|---|---|
-| T-01 | CONFIRMED | medium | compromised upstream | installer (pip) | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
+| T-01 | CONFIRMED | medium | compromised upstream | installer (pip) | **Fixed in 045-02b (part A)**, plus checklist P5-12. Detail in 7.4. |
 | T-02 | CONFIRMED | medium | same-user / interruption | app lifecycle: interrupted jobs | **Fixed in 045-02a (part B)**; (d) withdrawn. Detail in 7.4. |
 | T-03 | CONFIRMED | medium | deployment | writable paths | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-6. Detail in 7.4. |
 | T-04 | CONFIRMED | medium | another local account (chained with T-08) | server job registry | **Fixed in 045-02a (`4b35ef8`)**. Detail in 7.4. |
 | T-05 | CONFIRMED | medium | same-user (the Osaurus app) | quickbench Osaurus pin | **Fixed in 045-02a (part B)**. Detail in 7.4. |
 | T-06 | CONFIRMED | medium | second process | fetch ledger | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
-| T-07 | CONFIRMED | low | same-user | installer environment | Fix in 045-02 (one line), plus checklist P5-3 |
+| T-07 | CONFIRMED | low | same-user | installer environment | **Fixed in 045-02b (part A)**, plus checklist P5-3 |
 | T-08 | CONFIRMED | low | any local account / token holder | server threads | **Fixed in 045-02a (`4b35ef8`)**; residual risk in section 9 |
 | T-09 | CONFIRMED | low | compromised upstream | bare command names | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-9 |
 | T-10 | CONFIRMED | low | another local account (read) | file modes | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-5 |
 | T-11 | CONFIRMED | low | token holder pasting into a URL | refusal log | **Fixed in 045-02a (`4b35ef8`)** |
-| T-12 | CONFIRMED | low | same-user | `lab-paths.json` | Fix in 045-02 (validation) |
+| T-12 | CONFIRMED | low | same-user | `lab-paths.json` | **Fixed in 045-02b (part A)** |
 | T-13 | CONFIRMED | low | same-user | `evict` ledger trust | Fix in 045-02 (per-repo containment) |
 | T-14 | CONFIRMED | low | same-user | HF cache symlink races | Accepted, see section 9 |
 | T-15 | CONFIRMED | low | second app instance | install lock | Checklist P5-7 |
@@ -289,6 +289,28 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 | R-04 | REJECTED | — | — | `PYTHONHTTPSVERIFY=0` in the environment | Same-user only, and content is hash-gated |
 
 ### 7.4 Low-severity and rejected findings in detail
+
+**T-01, pip installs were pinned by version, not by hash [S1, C]. Fixed in 045-02b (part A).**
+
+- The install step was `pip install <pkg>==<ver> -c constraints/<engine>-<ver>.txt` (`engines.py`
+  `_command_plan`), and both constraints files held `==` pins only, with no `--hash` line.
+- Actor: compromised upstream. PyPI files cannot be replaced, but a maintainer of any of the ~100 pinned
+  packages (or someone who has taken over their account) can add a new file to an existing version: another
+  wheel tag, or an sdist where none existed. pip would take it and run it at install (an sdist build) or at the
+  first engine start. TLS blocks spoofing. The worker rated it high; it is medium because it needs an account
+  compromise, and every pip user has the same exposure.
+- Fix: each `constraints/<engine>-<version>.txt` is now a full requirements file. Every pin carries a hash for
+  every file PyPI listed for that version when it was frozen (`scripts/hash_freeze.py`, from
+  `https://pypi.org/pypi/<name>/<version>/json`; the script also prints files uploaded more than 7 days after
+  their version's first file, for review). The install runs `-I -m pip install --isolated --require-hashes
+  --only-binary :all: -r <file>`. `engines._check_hashed_requirements` refuses a file with an unhashed pin or
+  any option line (`--index-url`, `-r`, `-e`, ...) as `no_constraints`. `--only-binary` is part of the fix,
+  because hash-checking mode does not cover the PEP 517 build dependencies of an sdist.
+- One named exception, `engines._SOURCE_BUILDS` (`--no-binary pygame` for OptiQ): pygame 2.6.1 ships no CPython
+  3.14 wheel, and mlx-optiq 0.5.13 requires it for its game command only. Its build tools are not hash-checked;
+  the measured lab copy was built the same way. Jason's call, 2026-11-10. See section 9.
+- Verified live on a scratch HOME (045-02b SUMMARY): both engines install from the hashes. With every mlx hash
+  altered, pip refuses (`THESE PACKAGES DO NOT MATCH THE HASHES`) and installs nothing.
 
 **T-02, an interrupted app left the machine in a state nothing reported or recovered [F2, C-1, C-2]. Fixed in 045-02a (part B).**
 
@@ -367,7 +389,10 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - The `-m venv` step runs `sys.executable` without `-I`, so it loads the user's site-packages. The venv's own
   Python is not affected: `include-system-site-packages = false` disables the user site inside a venv (this
   corrects the worker's claim).
-- Fix: run both steps with `-I`, and run pip with `--isolated`.
+- Fix: run both steps with `-I`, and run pip with `--isolated`. **Fixed in 045-02b (part A).** `_venv_root` now
+  finds `-m venv` anywhere in the argv, since the `-I` would otherwise have silently broken rollback and the
+  lab-path record. Verified live: a user `pip.conf` with `index-url = http://127.0.0.1:9/simple` is listed by
+  `pip config list` without `--isolated` and ignored with it, and the install succeeds.
 
 **T-08, unbounded threads [F7, C]. Fixed in 045-02a (`4b35ef8`):** `MAX_HANDLER_THREADS` (32) slots taken before a handler thread starts (a connection past the cap is closed with no response and no thread), and `MAX_STREAMS_PER_JOB` (4), past which `/events` is `429 too_many_streams`.
 
@@ -416,6 +441,9 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   absolute path to an existing directory that is owned by the user and is not group- or world-writable.
 - `record_lab_path`'s fixed `.tmp` name (`engines.py:465`) can collide across two processes. Use
   `tempfile.mkstemp` in the same directory.
+- **Fixed in 045-02b (part A):** `engines.check_lab_dir` (absolute, a directory, owned by this user, no group or
+  other write) is called by `runtimes._engine_env` before a lab directory goes on PATH, and by `record_lab_path`
+  before it writes. Writes go through `ohyesmlx.atomic_write_text` (`mkstemp` + `os.replace`).
 
 **T-13, `evict` ledger trust [S4].**
 
@@ -505,6 +533,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 | Same-user symlink races in the HF cache (T-14) | Only a process that can already write the user's files can win them. Fixing them fully needs `O_NOFOLLOW`/`openat` handling throughout `fetch`, a large change for no gain against that actor. | Running the backend as a different user from the one that owns the cache |
 | Anyone holding the token can submit consented jobs | By design: the token is the boundary, and the parent app is the only holder | The token reaching any second process |
 | UAT-001 | Section 8 | Users report surprise re-downloads |
+| pygame built from source in the OptiQ install (T-01) | pygame 2.6.1 has no CPython 3.14 wheel and mlx-optiq 0.5.13 requires it. One named exception (`engines._SOURCE_BUILDS`); its build tools are fetched without hash checks. The measured lab copy was built the same way. | A pygame wheel for the bundled Python, or an OptiQ release that drops the dependency |
 | A local account filling the 32 handler slots (T-08) | Each idle connection is closed by the 10 s handler timeout, so the app's own requests are delayed, not refused for good; the slot leak that made it permanent (T-04) is closed. | The backend serving anything but loopback, or the app needing guaranteed latency |
 
 ## 10. Phase 5 packaging checklist
