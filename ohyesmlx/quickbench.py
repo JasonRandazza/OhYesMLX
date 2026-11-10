@@ -548,6 +548,9 @@ def run(
         "actual_s": None,
         "ended": "running",
         "results_dir": str(root),
+        # An eviction the fetch layer refused (`busy`, or any other refusal) is a fact about
+        # what this run left on disk, so it is recorded rather than dropped (AC-4).
+        "not_evicted": [],
         # The harness revision every run header carries, asked of the module that writes it
         # rather than hashed a second time here.
         "harness": {
@@ -584,6 +587,15 @@ def run(
             message,
             fraction=(done / planned if planned else 1.0),
             payload=payload,
+        )
+
+    def note_not_evicted(name):
+        """Record one eviction the fetch layer refused, where the summary can be read."""
+        summary["not_evicted"].append(name)
+        send(
+            "log",
+            f"{name} was not evicted; it is still in the fetch ledger",
+            payload={"repo": name},
         )
 
     def record_load(stage, before, after):
@@ -833,7 +845,10 @@ def run(
                     finally:
                         if fetched:
                             try:
-                                evict(sibling.repo, True, cache_dir=cache_dir, emit=_discard)
+                                if not evict(
+                                    sibling.repo, True, cache_dir=cache_dir, emit=_discard
+                                ):
+                                    note_not_evicted(sibling.repo)
                             finally:
                                 outstanding.discard(sibling.repo)
                     if restore_failure:
@@ -848,7 +863,8 @@ def run(
     finally:
         for leftover in sorted(outstanding):
             try:
-                evict(leftover, True, cache_dir=cache_dir, emit=_discard)
+                if not evict(leftover, True, cache_dir=cache_dir, emit=_discard):
+                    note_not_evicted(leftover)
             except Exception as error:
                 send(
                     "log",

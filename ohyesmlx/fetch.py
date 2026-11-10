@@ -48,7 +48,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-from ohyesmlx import app_support_dir, catalog, engines
+from ohyesmlx import app_support_dir, atomic_write_text, catalog, engines
 from ohyesmlx.catalog import Model, disk_needed
 from ohyesmlx.hardware import scan as _scan_hardware
 
@@ -176,6 +176,12 @@ def _check_inside(repo: str, destination: str, container: str) -> None:
         raise ValueError(f"{repo}: {destination!r} resolves outside {container!r}")
 
 
+def _repo_dir(root: str, repo: str) -> str:
+    """The one directory a repo owns in the hub cache: ``models--<org>--<name>``."""
+    org, name = repo.split("/")
+    return os.path.join(root, f"models--{org}--{name}")
+
+
 def plan(model: Model, cache_dir: str | None = None) -> Planned:
     """Where *model* would land under *cache_dir*, with every name checked (AC-11).
 
@@ -191,8 +197,7 @@ def plan(model: Model, cache_dir: str | None = None) -> Planned:
         raise ValueError(f"{repo}: revision {model.revision!r} is not a 40-hex commit")
 
     root = cache_dir or default_cache_dir()
-    org, name = repo.split("/")
-    repo_dir = os.path.join(root, f"models--{org}--{name}")
+    repo_dir = _repo_dir(root, repo)
     blobs_dir = os.path.join(repo_dir, "blobs")
     snapshot_dir = os.path.join(repo_dir, "snapshots", model.revision)
     refs_dir = os.path.join(repo_dir, "refs")
@@ -319,13 +324,7 @@ def _ledger_load(path, *, missing_ok: bool) -> dict:
 
 def _ledger_save(path, payload: dict) -> None:
     """Write the ledger atomically: a reader never sees half a file."""
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    temporary = f"{path}.tmp"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    os.replace(temporary, path)
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +537,13 @@ def _inside(path: str, root: str) -> bool:
         return False
 
 
+def _link_conflicts(link: str, blob: str) -> bool:
+    """Whether an existing *link* is not the symlink to *blob* a download would write."""
+    if not os.path.lexists(link):
+        return False
+    return not (os.path.islink(link) and os.path.realpath(link) == os.path.realpath(blob))
+
+
 def _partial_size(path: str) -> int:
     try:
         return os.path.getsize(path)
@@ -746,6 +752,14 @@ def _download(
     present: dict[str, bool] = {}
     for planned_file in planned.files:
         blob = planned_file.blob
+        if _link_conflicts(planned_file.link, blob):
+            return _refuse(
+                send,
+                "integrity_failed",
+                f"{planned_file.link} already exists and does not point at "
+                f"{blob}; nothing was overwritten",
+                path=planned_file.link,
+            )
         if os.path.islink(blob):
             return _refuse(
                 send,
@@ -812,11 +826,7 @@ def _download(
                     "bad_name",
                     f"{planned_file.link} resolves outside {planned.snapshot_dir}",
                 )
-            if os.path.lexists(planned_file.link):
-                if os.path.islink(planned_file.link) and os.path.realpath(
-                    planned_file.link
-                ) == os.path.realpath(planned_file.blob):
-                    continue
+            if _link_conflicts(planned_file.link, planned_file.blob):
                 return _refuse(
                     send,
                     "integrity_failed",
@@ -824,6 +834,8 @@ def _download(
                     f"{planned_file.blob}; nothing was overwritten",
                     path=planned_file.link,
                 )
+            if os.path.lexists(planned_file.link):
+                continue
             os.symlink(os.path.relpath(planned_file.blob, parent), planned_file.link)
             created["links"].append(planned_file.link)
         make_dirs(planned.refs_dir, planned.repo_dir)
@@ -1147,13 +1159,16 @@ def evict(
     cache_dir: str | None = None,
     ledger_path=DEFAULT_LEDGER,
     log_path=DEFAULT_LOG,
+    lock_dir=DEFAULT_LOCK_DIR,
     emit=_print_event,
 ) -> bool:
     """Remove exactly the paths the ledger records for *repo* (AC-8).
 
     A repo the ledger does not list is refused, and a ledger that cannot be read makes
     this refuse everything: an eviction that guessed would be the one operation in this
-    app capable of deleting a file nobody asked it to touch.
+    app capable of deleting a file nobody asked it to touch. The ledger is read and
+    rewritten under the same lock a download holds, so two processes cannot interleave
+    read-modify-write and lose an entry (AC-4).
     """
     send = _emitter(emit, log_path, repo=repo, confirmed=confirmed)
 
@@ -1164,88 +1179,98 @@ def evict(
     if not isinstance(repo, str) or not catalog._REPO.match(repo):
         return _refuse(send, "bad_name", f"repo {repo!r} is not an org/name id")
 
-    try:
-        ledger = _ledger_load(ledger_path, missing_ok=False)
-    except LedgerError as error:
-        return _refuse(send, "ledger_unreadable", str(error))
-
-    entry = ledger["repos"].get(repo)
-    if entry is None:
+    lock_path = os.path.join(lock_dir, LOCK_NAME)
+    if not _acquire_lock(lock_path):
         return _refuse(
-            send, "unknown_repo", f"{repo} is not in the fetch ledger; nothing was removed"
+            send, "busy", "a download or eviction is running; nothing was removed"
         )
 
-    root = cache_dir or default_cache_dir()
-    for key in _LEDGER_LISTS:
-        for path in entry[key]:
-            if not _inside(path, root):
-                return _refuse(
-                    send,
-                    "ledger_unreadable",
-                    f"the fetch ledger lists {path}, which resolves outside {root}; "
-                    "nothing was removed",
-                )
-
-    removed: list[str] = []
-    kept: list[str] = []
-
-    # Links first: the reference scan below then reads the cache without them.
-    for path in entry["created_links"]:
-        if not (os.path.islink(path) or os.path.lexists(path)):
-            continue
-        try:
-            os.remove(path)
-            removed.append(path)
-        except OSError as error:
-            kept.append(path)
-            send("log", f"could not remove {path}: {error}")
-
-    referenced = _referenced_blobs(root)
-    for path in entry["created_blobs"]:
-        residue = path + ".incomplete"
-        if _inside(residue, root) and os.path.lexists(residue):
-            _remove(residue)
-            removed.append(residue)
-        if not os.path.exists(path):
-            continue
-        if os.path.realpath(path) in referenced:
-            kept.append(path)
-            send("log", f"keeping {path}: a snapshot elsewhere still references it")
-            continue
-        try:
-            os.remove(path)
-            removed.append(path)
-        except OSError as error:
-            kept.append(path)
-            send("log", f"could not remove {path}: {error}")
-
-    # Directories deepest-first, and only when their creation path is now empty.
-    for path in reversed(entry["created_dirs"]):
-        if not os.path.isdir(path):
-            continue
-        try:
-            os.rmdir(path)
-            removed.append(path)
-        except OSError:
-            kept.append(path)
-            send("log", f"keeping {path}: it is not empty")
-
-    kept_set = set(kept)
-    for key in _LEDGER_LISTS:
-        entry[key] = [path for path in entry[key] if path in kept_set]
-    if any(entry[key] for key in _LEDGER_LISTS):
-        ledger["repos"][repo] = entry
-    else:
-        del ledger["repos"][repo]
     try:
-        _ledger_save(ledger_path, ledger)
-    except OSError as error:
-        send("log", f"the fetch ledger {ledger_path} was not written: {error}")
+        try:
+            ledger = _ledger_load(ledger_path, missing_ok=False)
+        except LedgerError as error:
+            return _refuse(send, "ledger_unreadable", str(error))
 
-    send(
-        "result",
-        f"removed {len(removed)} paths for {repo}",
-        payload={"repo": repo, "removed": removed, "kept": kept},
-    )
-    send("done", "eviction finished")
-    return True
+        entry = ledger["repos"].get(repo)
+        if entry is None:
+            return _refuse(
+                send, "unknown_repo", f"{repo} is not in the fetch ledger; nothing was removed"
+            )
+
+        root = cache_dir or default_cache_dir()
+        repo_root = _repo_dir(root, repo)
+        for key in _LEDGER_LISTS:
+            for path in entry[key]:
+                if not _inside(path, repo_root):
+                    return _refuse(
+                        send,
+                        "ledger_unreadable",
+                        f"the fetch ledger lists {path}, which resolves outside "
+                        f"{repo_root}; nothing was removed",
+                    )
+
+        removed: list[str] = []
+        kept: list[str] = []
+
+        # Links first: the reference scan below then reads the cache without them.
+        for path in entry["created_links"]:
+            if not (os.path.islink(path) or os.path.lexists(path)):
+                continue
+            try:
+                os.remove(path)
+                removed.append(path)
+            except OSError as error:
+                kept.append(path)
+                send("log", f"could not remove {path}: {error}")
+
+        referenced = _referenced_blobs(root)
+        for path in entry["created_blobs"]:
+            residue = path + ".incomplete"
+            if _inside(residue, repo_root) and os.path.lexists(residue):
+                _remove(residue)
+                removed.append(residue)
+            if not os.path.exists(path):
+                continue
+            if os.path.realpath(path) in referenced:
+                kept.append(path)
+                send("log", f"keeping {path}: a snapshot elsewhere still references it")
+                continue
+            try:
+                os.remove(path)
+                removed.append(path)
+            except OSError as error:
+                kept.append(path)
+                send("log", f"could not remove {path}: {error}")
+
+        # Directories deepest-first, and only when their creation path is now empty.
+        for path in reversed(entry["created_dirs"]):
+            if not os.path.isdir(path):
+                continue
+            try:
+                os.rmdir(path)
+                removed.append(path)
+            except OSError:
+                kept.append(path)
+                send("log", f"keeping {path}: it is not empty")
+
+        kept_set = set(kept)
+        for key in _LEDGER_LISTS:
+            entry[key] = [path for path in entry[key] if path in kept_set]
+        if any(entry[key] for key in _LEDGER_LISTS):
+            ledger["repos"][repo] = entry
+        else:
+            del ledger["repos"][repo]
+        try:
+            _ledger_save(ledger_path, ledger)
+        except OSError as error:
+            send("log", f"the fetch ledger {ledger_path} was not written: {error}")
+
+        send(
+            "result",
+            f"removed {len(removed)} paths for {repo}",
+            payload={"repo": repo, "removed": removed, "kept": kept},
+        )
+        send("done", "eviction finished")
+        return True
+    finally:
+        _release_lock(lock_path)

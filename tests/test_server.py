@@ -1224,6 +1224,7 @@ def test_a_real_evict_refusal_ends_its_stream_and_frees_the_slot(launch, tmp_pat
         cache_dir=str(tmp_path / "cache"),
         ledger_path=str(ledger),
         log_path=str(tmp_path / "fetch-log.jsonl"),
+        lock_dir=str(tmp_path / "locks"),
     )
     listener = launch(evict=real_evict)
     payload = {"kind": "evict", "args": {"repo": "org/nope", "confirmed": True}}

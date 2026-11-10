@@ -272,17 +272,17 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 | T-03 | CONFIRMED | medium | deployment | writable paths | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-6. Detail in 7.4. |
 | T-04 | CONFIRMED | medium | another local account (chained with T-08) | server job registry | **Fixed in 045-02a (`4b35ef8`)**. Detail in 7.4. |
 | T-05 | CONFIRMED | medium | same-user (the Osaurus app) | quickbench Osaurus pin | **Fixed in 045-02a (part B)**. Detail in 7.4. |
-| T-06 | CONFIRMED | medium | second process | fetch ledger | Fix in 045-02. *Detail withheld until fixed in 045-02.* |
+| T-06 | CONFIRMED | medium | second process | fetch ledger | **Fixed in 045-02b (part B)**. Detail in 7.4. |
 | T-07 | CONFIRMED | low | same-user | installer environment | **Fixed in 045-02b (part A)**, plus checklist P5-3 |
 | T-08 | CONFIRMED | low | any local account / token holder | server threads | **Fixed in 045-02a (`4b35ef8`)**; residual risk in section 9 |
 | T-09 | CONFIRMED | low | compromised upstream | bare command names | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-9 |
 | T-10 | CONFIRMED | low | another local account (read) | file modes | **Fixed in 045-02a (`4b35ef8`)**, plus checklist P5-5 |
 | T-11 | CONFIRMED | low | token holder pasting into a URL | refusal log | **Fixed in 045-02a (`4b35ef8`)** |
 | T-12 | CONFIRMED | low | same-user | `lab-paths.json` | **Fixed in 045-02b (part A)** |
-| T-13 | CONFIRMED | low | same-user | `evict` ledger trust | Fix in 045-02 (per-repo containment) |
+| T-13 | CONFIRMED | low | same-user | `evict` ledger trust | **Fixed in 045-02b (part B)** |
 | T-14 | CONFIRMED | low | same-user | HF cache symlink races | Accepted, see section 9 |
 | T-15 | CONFIRMED | low | second app instance | install lock | Checklist P5-7 |
-| T-16 | CONFIRMED | low | none (cost only) | fetch snapshot conflict | Fix in 045-02 |
+| T-16 | CONFIRMED | low | none (cost only) | fetch snapshot conflict | **Fixed in 045-02b (part B)** |
 | R-01 | REJECTED | — | — | `_REPO` admits `.`/`..` | No traversal, see below |
 | R-02 | REJECTED | — | — | guard bypass candidates | None found, see below |
 | R-03 | REJECTED | — | — | TLS verification under a bundled Python | Fails closed; checklist P5-4 |
@@ -311,6 +311,24 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   the measured lab copy was built the same way. Jason's call, 2026-11-10. See section 9.
 - Verified live on a scratch HOME (045-02b SUMMARY): both engines install from the hashes. With every mlx hash
   altered, pip refuses (`THESE PACKAGES DO NOT MATCH THE HASHES`) and installs nothing.
+
+**T-06, `evict` took no lock, so it could race a download over the ledger [S5]. Fixed in 045-02b (part B).**
+
+- `fetch.evict` (`fetch.py:1143-1251` at review) read and rewrote `fetched.json` without `download.lock`;
+  `fetch.download` holds it (`fetch.py:348-372`, Decision 138). The server runs one job at a time, but a
+  quickbench run (CLI) and the app, or two app instances, are two processes. Interleaved read-modify-write of the
+  ledger (fixed `.tmp` name, `fetch.py:325`) loses entries: paths become unevictable, or an evict removes what a
+  download just wrote.
+- Actor: a second process of the same user (a second app instance, or a CLI command beside the app). Medium by
+  section 3: the server's one-job-at-a-time rule does not reach a second process.
+- Fix: `evict` takes the same `download.lock` with `_acquire_lock` after its consent and name checks and before
+  it reads the ledger, refuses `busy` ("a download or eviction is running; nothing was removed") when it cannot,
+  and releases the lock in a `finally`. `_ledger_save` now writes through `ohyesmlx.atomic_write_text`, whose
+  `mkstemp` name no longer collides across processes.
+- Verified on a scratch cache (045-02b SUMMARY, check A): a lock file naming a live pid produced the `busy`
+  error event, and `cmp` showed the ledger byte-identical before and after. Tests: a live lock holder gets
+  `busy` with every listed path untouched, and the lock is released after a normal evict and after one that
+  raises.
 
 **T-02, an interrupted app left the machine in a state nothing reported or recovered [F2, C-1, C-2]. Fixed in 045-02a (part B).**
 
@@ -450,6 +468,13 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - `evict` checks each ledger path only against the whole cache root (`fetch.py:1178-1187`). A tampered ledger
   can name any file under `HF_HUB_CACHE`, and that check is degenerate if the variable names a volume root.
 - Fix: require each path to resolve inside that repo's own `models--org--name` directory.
+- **Fixed in 045-02b (part B):** `_repo_dir(root, repo)` (`<root>/models--<org>--<name>`) is the one helper
+  `plan` and `evict` both use, and the `.incomplete` residue check uses the repo directory too. A ledger path
+  that resolves in another repo's directory, at the cache root, or outside the cache refuses
+  `ledger_unreadable` before anything is removed. Tests cover all three. On this checkout the real
+  `fetched.json` does not pass: its one entry lists 60 paths under two `/private/tmp/...` scratch caches
+  (`qb-hfcache`, `hf`) from 2026-11-03 scratch-cache runs, which the old whole-cache-root check refused as
+  well, so no real download became unevictable (045-02b SUMMARY, check B).
 
 **T-14, symlink races in the HF cache [S6].**
 
@@ -473,6 +498,10 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
 - The blobs are recorded in the ledger in the `finally` (`fetch.py:680-682`), so they are evictable. The cost is
   a wasted multi-GB transfer, not a safety failure.
 - Fix: run the same check in the pre-transfer pass.
+- **Fixed in 045-02b (part B):** `_link_conflicts(link, blob)` is the one decision both the pre-transfer pass
+  and `link_all` use, so a snapshot link that exists and does not resolve to its blob refuses
+  `integrity_failed` before the first request (a fake opener records zero calls), and no blob is fetched.
+  Nothing is overwritten; the already-present path behaves as before.
 
 **R-01, `_REPO` admits `.` and `..` (`catalog.py:75`).** There is no traversal:
 
@@ -510,7 +539,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 | Per-job stream-reader cap | 04-02 audit #1 | T-08, fixed in 045-02 |
 | The Osaurus app rewriting its config mid-run | 04-03a audit #1 | T-05, fixed in 045-02 |
 | A user's own Osaurus edit made during a run is overwritten by restore | 04-03a audit #2 | T-05: the fix keeps the user's current files as a second backup |
-| fetch's post-transfer snapshot-conflict check | PHASE-4-SUMMARY | T-16, fixed in 045-02 |
+| fetch's post-transfer snapshot-conflict check | PHASE-4-SUMMARY | T-16, **fixed in 045-02b (part B)** |
 | The Osaurus baseline's location in a packaged app | PHASE-4-SUMMARY, `docs/interfaces.md` | T-03, fixed in 045-02, plus P5-6 |
 | The Swift client never logging the token | 04-01 audit #1 | Checklist P5-1 and P5-2 |
 | UAT-001: `fetch.downloaded` compares sizes | 04-UAT | **ACCEPTED** (Jason, 2026-11-03). A size mismatch reads as "not ours". Only files rewritten outside the downloader hit it. The Phase 5 copy says "re-download" (P5-11). |
@@ -535,6 +564,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 | UAT-001 | Section 8 | Users report surprise re-downloads |
 | pygame built from source in the OptiQ install (T-01) | pygame 2.6.1 has no CPython 3.14 wheel and mlx-optiq 0.5.13 requires it. One named exception (`engines._SOURCE_BUILDS`); its build tools are fetched without hash checks. The measured lab copy was built the same way. | A pygame wheel for the bundled Python, or an OptiQ release that drops the dependency |
 | A local account filling the 32 handler slots (T-08) | Each idle connection is closed by the 10 s handler timeout, so the app's own requests are delayed, not refused for good; the slot leak that made it permanent (T-04) is closed. | The backend serving anything but loopback, or the app needing guaranteed latency |
+| `_acquire_lock`'s stale-lock reclaim is check-then-remove, so two processes that both find a dead owner at the same instant can both proceed (T-06) | Winning it needs a crash plus a two-process race at the same instant. | More than one backend per user is ever supported (checklist P5-7) |
 
 ## 10. Phase 5 packaging checklist
 

@@ -1,0 +1,103 @@
+I'll start by reading the files I'm allowed to touch and the context I need.
+
+Now let me check the commit message for `a031ad4`, the fetch module state, and the relevant log files.
+
+Let me read the fetch ledger/lock internals so my scratch checks match the real shapes.
+
+
+
+
+Let me read the part A and part B worker logs for the evidence the summary must cite.
+Now I'll update `docs/threat-model.md` — the three §7.3 rows first.
+
+Now the §9 accepted-risk row and the carried-items table row.
+Now the `.gitignore` block and the private file.
+Now the token scan over the four logs, exactly as specified.
+Now scratch check A (AC-4) — a live lock holder must make `evict` refuse `busy` and leave the ledger untouched.
+Check B (AC-5), read-only against the real ledger.
+The real ledger reports `all-inside=False` — I need to see which paths fail before deciding what that means.
+Check B fails on the real ledger — before writing anything, I need to establish whether part B caused this or whether those paths were already outside the old boundary.
+Before drafting the summary, let me run the project's test command to confirm the count from this working tree.
+
+Now I'll draft the SUMMARY in the shape of `045-02a-SUMMARY.md`.
+Let me verify the final diffs and confirm the suite did not touch the real lock directory.
+The §7.4 T-13 bullet I wrote claims the real ledger passes — check B says otherwise. I'm correcting it to the observed result.
+The coordinator's fix holds: the real lock directory's mtime is unchanged across that test. I'll record that evidence in the SUMMARY.
+I need to see exactly which 43-character strings the token scan matched, not just the lines.
+Both matches are exactly-43-character test names. Let me make the SUMMARY precise and soften the cache-run attribution to what the paths show.
+Final verification: gitignore no longer covers the review logs, the private file is gone, and one last full-suite run.
+
+A few wording fixes in the SUMMARY for precision.
+
+Done. No commit made.
+
+**Files changed (only the four named):**
+- `docs/threat-model.md` — §7.3 T-06/T-13/T-16 marked fixed; new T-06 §7.4 section (T-01 shape, with actor and scratch verification); fixed bullets on T-13 (`_repo_dir`) and T-16 (`_link_conflicts`); §8 carried-items T-16 row marked part B; §9 reclaim-race row added.
+- `.gitignore` — the three ignore patterns removed, plus the two now-stale comment lines above them.
+- `.paul/phases/v5-onboarding/045-01-findings-private.md` — deleted (only T-06 remained).
+- `.paul/phases/v5-onboarding/045-02b-SUMMARY.md` — new, 045-02a shape, AC-1…7, commits, 1222→1272, live installs, pygame decision, deviations, Deferred.
+
+**Step 3 — token scan (verbatim):**
+```
+.paul/orders/v5-fix-45b-fetch.log:75:- Tests: `test_evict_refuses_a_ledger_path_outside_that_repos_own_directory[another_repo|cache_root|outside]`; the real-download entry still evicts in full via the existing `test_evict_removes_exactly_the_ledger_paths`.
+.paul/orders/v5-fix-45b-fetch.log:80:- Tests: `test_a_snapshot_link_pointing_elsewhere_is_refused_before_any_request`, `test_a_regular_file_where_the_snapshot_link_belongs_is_refused_before_any_request`; the already-present path is the unchanged `test_a_fully_present_model_makes_no_request`.
+EXIT=0
+```
+The exact matches are `test_evict_removes_exactly_the_ledger_paths` and `test_a_fully_present_model_makes_no_request` — 43-char test names, false positives. The two 045-01 logs and the close-out log have no hits; part A's log also scanned clean (`EXIT=1`).
+
+**Step 4 — check A (verbatim):**
+```
+{'seq': 1, 'type': 'error', 'message': 'a download or eviction is running; nothing was removed', 'fraction': None, 'payload': {'code': 'busy'}}
+{'seq': 2, 'type': 'done', 'message': 'fetch ended', 'fraction': None, 'payload': None}
+evict returned False
+lock still held by sleep pid 57336
+cmp: ledger byte-identical
+scratch removed: /private/tmp/commandcode-501/-Users-jrazz-Dev-active-OhYesMLX/78d2f196-a914-4e71-80d1-6355903f089c/scratchpad/checkA.WZYuaA
+```
+
+**Step 5 — check B (verbatim):**
+```
+mlx-community/Qwen3.5-2B-4bit  paths=60  all-inside=False  repo_dir=/Users/jrazz/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit
+```
+Supporting read: `paths=60 inside-repo=0 inside-old-root=0 still-on-disk=16`, ledger mtime `2026-11-03 12:12:55`.
+
+**Things I was unsure of / findings:**
+- **The real ledger does not pass AC-5's host check.** Its 60 paths were written under two `/private/tmp/.../scratchpad/{qb-hfcache,hf}` cache roots by a 2026-11-03 run that took a scratch `cache_dir` and the default ledger. It fails the new per-repo check **and** the old whole-cache-root check (0/60 both), so part B makes nothing newly unevictable. Recorded as `PASS (code); the host-ledger clause did not accept` in the SUMMARY and in T-13; cleaning it is a coordinator decision since it means writing the real ledger.
+- The order's "§7.4 PHASE-4 carried-items table" is actually §8; the T-16 row matching `fixed in 045-02` was marked there.
+- I removed the two orphaned comments with the three `.gitignore` patterns; leaving them would describe files no longer ignored.
+- Not verified here: the plan's independent hash re-run/diff and three-wheel `curl`+`shasum`; the SUMMARY says so rather than claiming them.
+
+**Verification:** `1272 passed in 47.06s` (baseline 1222; part A 1261). The real locks directory mtime is unchanged across the full run and the evict server test (`1794320828` before/after); `git check-ignore` exits 1 for the two review logs; the private file is absent. No `.py` file was edited.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     32    3720856    3547904    44590   95.4%   0.063341
+
+== cc-agent: git status ==
+ M .gitignore
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M docs/runtimes/lab-copies.md
+ M docs/threat-model.md
+ M ohyesmlx/fetch.py
+ M ohyesmlx/quickbench.py
+ M tests/test_fetch.py
+ M tests/test_quickbench.py
+ M tests/test_server.py
+?? .paul/orders/v5-fix-45b-closeout.log
+?? .paul/orders/v5-fix-45b-closeout.md
+?? .paul/orders/v5-fix-45b-fetch.log
+?? .paul/orders/v5-fix-45b-fetch.md
+?? .paul/orders/v5-sec-45-installers.log
+?? .paul/orders/v5-sec-45-server.log
+?? .paul/phases/v5-onboarding/045-02b-SUMMARY.md
+ .gitignore                  |   6 --
+ .paul/STATE.md              |   2 +
+ docs/interfaces.md          |   6 +-
+ docs/runtimes/lab-copies.md |   6 +-
+ docs/threat-model.md        |  38 +++++++-
+ ohyesmlx/fetch.py           | 211 +++++++++++++++++++++++++-------------------
+ ohyesmlx/quickbench.py      |  20 ++++-
+ tests/test_fetch.py         | 155 ++++++++++++++++++++++++++++++++
+ tests/test_quickbench.py    |  55 +++++++++++-
+ tests/test_server.py        |   1 +
+ 10 files changed, 390 insertions(+), 110 deletions(-)

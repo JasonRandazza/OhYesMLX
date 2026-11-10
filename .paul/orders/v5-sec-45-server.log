@@ -1,0 +1,59 @@
+I'll read the named files at HEAD and review against the nine questions.
+Now the osaurus settings module and the CLI app lifecycle pieces.
+Now the CLI app lifecycle and parser pieces.
+
+
+Now I'll check the module-side handling of job names and the pip step (Q2, Q5), plus bare command names (Q9).
+
+
+Two targeted checks left: where runtime/install logs are written (Q8) and the `sysctl` call's environment (Q9), plus the interfaces doc's v5.0 contract.
+
+One last spot-check on `fetch.download`'s name handling to close Q2.
+Review complete. Read-only: I changed nothing and wrote no files. I read `ohyesmlx/server.py`, `quickbench.py`, `osaurus_settings.py`, `cli.py` (`_app`/`_stop`/`_stop_at_eof`/app parser), the named `runtimes.py` functions, `docs/interfaces.md` v5.0, plus `engines.py`/`fetch.py`/`hardware.py` slices needed to close Q2/Q5/Q9. Findings below; per-question dispositions after.
+
+## Findings
+
+| id | file:line | actor | impact | severity |
+|----|-----------|-------|--------|----------|
+| F1 | server.py:597-605 | token holder / parent app | The job slot leaks permanently if anything raises between `jobs.claim()` (597) and `Thread.start()` (602-604): `_log_job` (601) writes to the parent's stderr pipe — a closed pipe raises `BrokenPipeError`, swallowed by `_route_job_create`'s `except Exception` (427-428) after the claim — and only `_Job.append`'s terminal path calls `finished` (173). Every later `POST /jobs` is `409 busy` for the process's life, with the job registered but never started. Thread-start failure under exhaustion hits the same hole. | medium |
+| F2 | server.py:659-663, cli.py:1098; quickbench.py:566-630, 782-831; engines.py:1104 | same-user (SIGKILL / wait expiry) | Known that a pip step can outlive the 120 s wait; the state it leaves: (a) the in-flight cell's runtime survives detached (`start_new_session`, runtimes.py:524) holding its port and weights — nothing stops it; the next run only skips that engine ("quit X first", quickbench.py:382); (b) with an Osaurus cell in flight, `~/.osaurus/config/{server-runtime,server}.json` stay pinned (caches off, residency 900 vs the user's 30), the user's only originals sit in `DEFAULT_BACKUP_DIR`, and the baseline sits in `config/` — nothing recovers it at launch (`_app` never calls `recover`; interfaces.md:1587 says "may"), only a later `osaurus:true` quickbench cell (quickbench.py:575); a run with `osaurus:false` skips past recovery; (c) a fetched sibling stays downloaded (eviction is in the dead thread's finally) or leaves `blobs/*.incomplete`; (d) `summary.json` is absent, possibly a stray `.tmp` (quickbench.py:393); (e) the orphaned pip child runs on with no rollback (engines.py:1073) and no `record_lab_path`, so a venv may exist that `_engine_env` won't vouch for; `install-log.jsonl` has no end line. | medium |
+| F3 | quickbench.py:375-379, 601-630; osaurus_settings.py:280-283, 315 | same-user (Osaurus app relaunched mid-cell) | The app check runs only at cell start. If the app (its Login Item relaunches it; `osaurus mcp`) rewrites the two config files mid-cell, `pin`'s edits are silently clobbered — the cell measures settings the pin did not hold and nothing records it — and `restore` then overwrites the user's concurrent change while `filecmp` (osaurus_settings.py:315) verifies against the *backup*, so it reports "restored byte-exact" and the user's new setting is silently lost. | medium |
+| F4 | runtimes.py:125, 515; osaurus_settings.py:42-44 (via quickbench.py:448) | deployment (read-only bundle) | Two repo-relative writes reachable from `ohyesmlx app`: every cell's runtime log writes `<repo>/results/logs/` (`_spawn` mkdirs/writes outside its try — a read-only fs raises `OSError`, not `RuntimeStartError`), and the app-driven pin writes the baseline to `<repo>/config/osaurus-settings-baseline.json` (quickbench's default; interfaces.md:1577 defers the packaged location to this phase). In a read-only bundle every runtime cell FAILs and the Osaurus cell is always skipped; the pin attempt rewrites both configs before the baseline write raises, undone only by the finally's restore. | medium |
+| F5 | runtimes.py:554 via 486, 500 | compromised upstream (post-install) | Bare `ps` in `_resident_osaurus_pids` resolves on the `_engine_env` PATH that lab bin dirs are prefixed to. A pip-installed lab venv whose wheel ships a console script named `ps` executes on every stale-Osaurus sweep — including sweeps of runs that never start that engine. (`sysctl` hardware.py:117-119 and `open` engines.py:863 run on the ambient PATH; `lsof` is pinned absolute at runtimes.py:124.) | medium |
+| F6 | server.py:380, 386-388 | token holder / same-user log reader | The refusal log strips the query string but logs the path verbatim; a token pasted into a path segment (e.g. `curl http://127.0.0.1:PORT/$TOKEN`) is written to stderr and any log keeping it. Token otherwise clean: not in argv/env/files, not in module inputs or exception texts; `_spawn` children can't inherit the token's stdout pipe (runtimes.py:516-525). | low |
+| F7 | server.py:823 | web page (unauth.) / token holder | `ThreadingHTTPServer` is unbounded: unauthenticated connections hold a thread up to 10 s each (server.py:54), and `/events` streams are unlimited per job (one apiece for the job's life). DoS only. | low |
+
+## Per-question dispositions
+
+1. **Guard bypass: none found.** All seven `do_*` route through `_guarded`; TRACE/CONNECT get the base class's 501 without reaching a module (`log_message` silenced). Absolute-form targets 404 after the guard; duplicate Host/Authorization take the first value, which must itself pass; chunked POST lacks `Content-Length` → 413 before any body read; HTTP/1.0 closes per response, so no smuggling.
+2. **Body/arg validation: none found.** Closed key set, `confirmed is True`, flags JSON bool (server.py:243-268), body ≤ 4096; `macos_major` is server-derived. Modules re-validate the name (engines.py:1061; fetch.py:660-664, 1164-1187; quickbench.py:205-210); argv lists, no shell strings.
+3. **Slot exhaustion: F1.** Otherwise the single slot frees exactly at `done`.
+4. **Thread exhaustion: F7.**
+5. **Shutdown leftovers: F2** (per-order state report).
+6. **Token leaks: F6** only.
+7. **Pin/restore: F3** (crash recovery: F2b — deferred to the next `osaurus:true` cell, no launch-time recover).
+8. **Repo writes: F4** — `results/logs/` and `config/osaurus-settings-baseline.json`; nothing else under the repo.
+9. **Bare names: F5** for the lab-prefixed PATH; `sysctl`/`open` are ambient-PATH only.
+
+Not verified: no tests run (read-only, and a run would not exercise these paths anyway); `measure.run_cells`'s mid-cell stop path taken on trust from quickbench/runtimes' comments, not read; `fetch`'s kill-mid-download residue inferred from the ledger code only.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro      7     411059     303616    18901   73.9%   0.064275
+
+== cc-agent: git status ==
+ M .gitignore
+ M .paul/ROADMAP.md
+ M .paul/STATE.md
+ M .paul/phases/v5-onboarding/PLAN.md
+?? .paul/orders/v5-sec-45-installers.log
+?? .paul/orders/v5-sec-45-installers.md
+?? .paul/orders/v5-sec-45-server.log
+?? .paul/orders/v5-sec-45-server.md
+?? .paul/phases/v5-onboarding/045-01-AUDIT.md
+?? .paul/phases/v5-onboarding/045-01-PLAN.md
+?? docs/threat-model.md
+ .gitignore                         |  3 +++
+ .paul/ROADMAP.md                   |  2 +-
+ .paul/STATE.md                     | 11 ++++++-----
+ .paul/phases/v5-onboarding/PLAN.md |  1 +
+ 4 files changed, 11 insertions(+), 6 deletions(-)

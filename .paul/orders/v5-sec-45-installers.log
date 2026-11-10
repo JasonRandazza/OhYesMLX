@@ -1,0 +1,54 @@
+I'll read the named modules at HEAD to review the install and download surfaces.
+Now the catalog, hardware, recommend, constraints and the runtimes `_engine_env`.
+Now the constraints files, manifest, hardware, recommend, and the rest of `_engine_env`.
+Shell is blocked here, so I'll read the constraints and manifest with the file tools.
+
+Constraints confirmed: `==` pins only, no `--hash` entries. Now the two remaining named modules.
+Read-only review complete; no files changed. Verified by reading `engines.py`, `fetch.py`, `catalog.py`, `constraints/*.txt`, `engines-tested.json`, `runtimes.py:433-504`, `hardware.py`, `recommend.py` at HEAD.
+
+## Findings
+
+| id | file:line | actor | impact | severity |
+|---|---|---|---|---|
+| S1 | engines.py:719-729; constraints/mlxlm-0.31.3.txt:4-38, optiq-0.5.13.txt:4-74 | compromised/spoofed upstream | `pip install pkg==ver -c …` pins names+versions only — no `--require-hashes`, constraints carry no `--hash` lines. A same-version artifact swapped at the index installs and runs as the user at install (sdist) or first engine start, undetected. The fetch side hash-pins; the pip side does not | high |
+| S2 | engines.py:870-882, 714, 720-721 | same-user process | `_hermetic_env` drops only PYTHONPATH/PIP_*: pip still reads config files (`~/Library/Application Support/pip/pip.conf`, `~/.config/pip/pip.conf`, `/etc/pip.conf`) since `--isolated` is absent; `index-url`/`extra-index-url` there reroutes the install (accepted, see S1). PYTHONHOME and user site-packages reach the venv python (no `-I`/`-s`) | medium |
+| S3 | engines.py:426-429, 456-459, 461-471; runtimes.py:475-486 | same-user process | lab-paths.json values are non-empty strings only (no absolute/ownership/containment check) and become the PATH prefix for every engine start and helper command; one-line tamper makes the next start/canary run `<dir>/mlx_lm.server` or `<dir>/optiq` as the user. `record_lab_path` is read-modify-write on a fixed `.tmp` name (465-471) racing concurrent installs — the lock is per-engine | medium |
+| S4 | fetch.py:1178-1187, 1193-1220, 284-317, 144-149 | same-user process | tampered `fetched.json`: evict checks paths only against the whole cache root (not the repo's own dir), removes `created_links` unconditionally and unreferenced `created_blobs` → deletes any file under whatever `HF_HUB_CACHE` names (a volume root makes the check degenerate) | medium |
+| S5 | fetch.py:1143-1151, 320-328 | same-user process / second job | evict acquires no lock while download holds `download.lock`; concurrent evict+download race the read-modify-write of fetched.json (fixed `.tmp` name) → silently lost ledger entries (paths become unevictable) or eviction of files a download just wrote | medium |
+| S6 | fetch.py:867-873→1025, 815-827, 830-832 | same-user process | TOCTOU: `.incomplete` islink-checked then opened ("ab"/"wb") — a swapped symlink makes the transfer write/append through to any user-writable path; the link `lexists`→`symlink` window raises an uncaught FileExistsError (stream ends with no error/done event); ref_path `lexists`→`open("w")` follows a planted symlink and truncates its target | medium |
+| S7 | fetch.py:325-326, 355; engines.py:467, 995 | another local account (read) | files/dirs created at umask defaults (0644/0755; lock explicitly 0644), no chmod anywhere: blobs, fetched.json, install/fetch logs, lab-paths.json world-readable wherever the parent chain is traversable | low |
+| S8 | engines.py:802-823, 1097-1107 | second same-user process | `EngineLocks` is `threading.Lock` (in-process only, unlike fetch's O_EXCL file lock): two OS processes install the same engine into one venv directory concurrently | medium |
+
+## Per question
+
+1. **S1+S2.** argv is a list, never a shell (`_real_run` engines.py:846-859); interpreter is `sys.executable` for `-m venv`, then the new venv's python for pip; env strips `PIP_*`/`PYTHONPATH` but not pip config files, PYTHONHOME or user site. Constraints: `==` pins only, no hashes.
+2. **S3.** Writing lab-paths.json puts any directory first on PATH for every engine start and helper command; values are validated as non-empty strings only.
+3. **None found.** Per-hop guard (fetch.py:433-439) plus the post-landing URL check (915-922); https-only, suffix-anchored host test (152-168) defeats userinfo and host-suffix tricks; file:// unreachable. Certificate verification is ssl's default — a bundled Python with no CA bundle fails closed; `PYTHONHTTPSVERIFY=0` (in-process, not stripped) would disable it, but sha256/git_oid verification still gates content.
+4. **None found.** `.`/`..` repo segments stay inside one `models--{org}--{name}` component (fetch.py:195); `check_path` (catalog.py:138-157) blocks `..`/absolute/backslash/NUL; blob keys are hex (fetch.py:207-215). A `..` repo id only bends the URL path within huggingface.co and bytes are hash-checked.
+5. **S6, S5, S7.** (`_acquire_lock` O_CREAT|O_EXCL is symlink-safe; evict's realpath pre-pass holds except same-user swaps mid-removal.)
+6. **S4.**
+7. **S6** (the link/ref race part).
+8. **S7.**
+9. **None found.** engines.py:945-954 realpath+commonpath refuses escape, removals don't follow symlinks (956-961); only a same-user swap window remains.
+10. **S2.** No `-I`/`-s`/`-E`; PYTHONHOME and user site-packages reach the pip interpreter; PYTHONSTARTUP is inert for `-m`.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro      6     313274     209536    13718   66.9%   0.057815
+
+== cc-agent: git status ==
+ M .gitignore
+ M .paul/ROADMAP.md
+ M .paul/STATE.md
+ M .paul/phases/v5-onboarding/PLAN.md
+?? .paul/orders/v5-sec-45-installers.log
+?? .paul/orders/v5-sec-45-installers.md
+?? .paul/orders/v5-sec-45-server.log
+?? .paul/orders/v5-sec-45-server.md
+?? .paul/phases/v5-onboarding/045-01-AUDIT.md
+?? .paul/phases/v5-onboarding/045-01-PLAN.md
+?? docs/threat-model.md
+ .gitignore                         |  3 +++
+ .paul/ROADMAP.md                   |  2 +-
+ .paul/STATE.md                     | 11 ++++++-----
+ .paul/phases/v5-onboarding/PLAN.md |  1 +
+ 4 files changed, 11 insertions(+), 6 deletions(-)

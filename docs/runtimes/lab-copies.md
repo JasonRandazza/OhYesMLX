@@ -529,7 +529,11 @@ record: the 2026-09-16 grid published a 40.6% drift that was contention, not a r
    never the committed manifest. For a pip engine, freeze the new venv with
    `<venv>/bin/python -m pip freeze --all`, prefixed by the three header lines §4 shows, into
    `ohyesmlx/constraints/<name>-<new>.txt`: **a bump is not done until its constraints file is
-   committed**, and `install_plan` refuses the install until it exists.
+   committed**, and `install_plan` refuses the install until it exists. Then hash it with
+   `scripts/hash_freeze.py`, and check every package `engines._SOURCE_BUILDS` names for this
+   engine: if the freeze's version of it now ships a wheel for the interpreter the installer uses,
+   delete the entry so the engine installs wheels-only like the others (pygame for OptiQ, added
+   2026-11-10; STATE Deferred Issues tracks it).
 10. **Rows from different builds never share a table.** A row records `runtime_version`; the join
     guard refuses to join across builds, and this is a rule about tables, not only about joins.
     If a table must show both, they are two columns that each name their build.

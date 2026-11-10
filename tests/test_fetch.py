@@ -25,6 +25,26 @@ WEIGHTS = b"hello world"
 CONFIG = b'{"a":1}'
 
 
+@pytest.fixture(autouse=True)
+def _no_real_lock_dir(monkeypatch):
+    """AC-4: no fetch test reaches the real lock directory.
+
+    Every ``download`` and ``evict`` a test calls passes a scratch ``lock_dir``. An
+    acquisition that does not fails the test here instead of writing under Application
+    Support.
+    """
+    real = fetch.DEFAULT_LOCK_DIR
+    acquire = fetch._acquire_lock
+
+    def guarded(path):
+        assert os.path.dirname(str(path)) != real, (
+            f"a test reached the real lock directory {real}"
+        )
+        return acquire(path)
+
+    monkeypatch.setattr(fetch, "_acquire_lock", guarded)
+
+
 def git_oid(body):
     """The git blob id of *body*: sha1 over ``"blob <len>\\0" + bytes``."""
     return hashlib.sha1(b"blob %d\x00" % len(body) + body).hexdigest()
@@ -208,6 +228,7 @@ class Harness:
             cache_dir=str(self.cache),
             ledger_path=str(self.ledger),
             log_path=str(self.log),
+            lock_dir=str(self.locks),
             emit=self.events.append,
         )
         kwargs.update(overrides)
@@ -832,6 +853,50 @@ def test_an_existing_non_lfs_blob_of_the_right_size_but_wrong_bytes_is_refused(t
     assert transport.calls == []
 
 
+def test_a_snapshot_link_pointing_elsewhere_is_refused_before_any_request(tmp_path):
+    """AC-6: the conflict ``link_all`` refuses is found before a byte is requested, so a
+    multi-GB transfer is not spent on a download that cannot become visible."""
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    transport = serve({"weights.safetensors": WEIGHTS})
+    harness = Harness(tmp_path, [model], transport)
+    elsewhere = harness.repo_dir / "user-file.bin"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_bytes(b"the user's own bytes")
+    link = harness.snapshot / "weights.safetensors"
+    link.parent.mkdir(parents=True)
+    os.symlink(elsewhere, link)
+    blob = harness.blobs / SHA
+
+    assert harness.download() is False
+
+    assert harness.codes() == ["integrity_failed"]
+    error = next(event for event in harness.events if event["type"] == "error")
+    assert error["message"] == (
+        f"{link} already exists and does not point at {blob}; nothing was overwritten"
+    )
+    assert transport.calls == []
+    assert not blob.exists()
+    assert link.read_bytes() == b"the user's own bytes"
+
+
+def test_a_regular_file_where_the_snapshot_link_belongs_is_refused_before_any_request(
+    tmp_path,
+):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    transport = serve({"weights.safetensors": WEIGHTS})
+    harness = Harness(tmp_path, [model], transport)
+    link = harness.snapshot / "weights.safetensors"
+    link.parent.mkdir(parents=True)
+    link.write_bytes(b"not a link")
+
+    assert harness.download() is False
+
+    assert harness.codes() == ["integrity_failed"]
+    assert transport.calls == []
+    assert not (harness.blobs / SHA).exists()
+    assert link.read_bytes() == b"not a link"
+
+
 # ---------------------------------------------------------------------------
 # 9. Bounded writes
 # ---------------------------------------------------------------------------
@@ -1188,6 +1253,96 @@ def test_evict_refuses_a_ledger_path_that_resolves_outside_the_cache(tmp_path):
     assert harness.codes() == ["ledger_unreadable"]
     assert outside.read_text() == "keep me"
     assert os.path.islink(escape)
+
+
+@pytest.mark.parametrize("where", ["another_repo", "cache_root", "outside"])
+def test_evict_refuses_a_ledger_path_outside_that_repos_own_directory(tmp_path, where):
+    """AC-5: the whole cache root was too wide a boundary. A path in another repo's
+    directory, at the root itself, or outside the cache refuses the eviction before
+    anything is removed."""
+    harness = Harness(tmp_path, [make_model(TWO_FILES)], serve({}))
+    legit = harness.blobs / SHA
+    legit.parent.mkdir(parents=True)
+    legit.write_bytes(WEIGHTS)
+    if where == "another_repo":
+        stray = harness.cache / "models--other--thing" / "blobs" / "x"
+    elif where == "cache_root":
+        stray = harness.cache / "notes.txt"
+    else:
+        stray = tmp_path / "outside.txt"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_bytes(b"keep me")
+    harness.ledger.parent.mkdir(parents=True, exist_ok=True)
+    harness.ledger.write_text(
+        json.dumps(
+            {
+                "repos": {
+                    REPO: {
+                        "revision": REV,
+                        "time": 1.0,
+                        "bytes": 1,
+                        "created_blobs": [str(legit), str(stray)],
+                        "created_links": [],
+                        "created_dirs": [],
+                    }
+                }
+            }
+        )
+    )
+
+    assert harness.evict() is False
+
+    assert harness.codes() == ["ledger_unreadable"]
+    assert harness.events[0]["message"].endswith("nothing was removed")
+    assert legit.read_bytes() == WEIGHTS, "nothing was removed, not even the listed legit path"
+    assert stray.read_bytes() == b"keep me"
+
+
+def test_a_live_lock_holder_makes_evict_busy_and_removes_nothing(tmp_path):
+    """AC-4: evict writes the fetch ledger, so it takes the download lock like a download
+    does, and a live holder is refused rather than raced."""
+    harness = downloaded(tmp_path)
+    (harness.locks / fetch.LOCK_NAME).write_text(str(os.getpid()))
+    ledger_before = harness.ledger.read_bytes()
+    listed = [
+        harness.blobs / SHA,
+        harness.blobs / GIT,
+        harness.snapshot / "weights.safetensors",
+        harness.snapshot / "config.json",
+        harness.ref,
+    ]
+
+    assert harness.evict() is False
+
+    assert harness.codes() == ["busy"]
+    assert harness.events[0]["message"] == (
+        "a download or eviction is running; nothing was removed"
+    )
+    assert harness.ledger.read_bytes() == ledger_before
+    for path in listed:
+        assert path.exists(), path
+
+
+def test_the_evict_lock_is_released_after_a_normal_evict(tmp_path):
+    harness = downloaded(tmp_path)
+
+    assert harness.evict() is True
+
+    assert not (harness.locks / fetch.LOCK_NAME).exists()
+
+
+def test_the_evict_lock_is_released_when_an_evict_raises(tmp_path, monkeypatch):
+    harness = downloaded(tmp_path)
+
+    def boom(_cache_dir):
+        raise RuntimeError("the reference scan failed")
+
+    monkeypatch.setattr(fetch, "_referenced_blobs", boom)
+
+    with pytest.raises(RuntimeError):
+        harness.evict()
+
+    assert not (harness.locks / fetch.LOCK_NAME).exists()
 
 
 def test_a_second_evict_refuses_the_repo_as_unlisted(tmp_path):

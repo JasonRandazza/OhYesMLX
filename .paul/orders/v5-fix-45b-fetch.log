@@ -1,0 +1,111 @@
+I'll read the plan, threat model section, and the files I'm allowed to touch.
+The interfaces read capped out; I'll read the remaining files and the threat model.
+
+
+
+
+
+
+Baseline is 1261 passing. Let me check the server test that uses the real `fetch.evict`.
+
+
+
+I have what I need for `fetch.py`. Let me look at quickbench's `send`/`_discard` and the interfaces doc's fetch/quickbench sections.
+
+Now I'll write the red tests first, starting with `tests/test_fetch.py` — the guard fixture, a scratch `lock_dir` for every evict, and the AC-4/5/6 cases.
+
+
+Now I'll run the fetch tests to confirm they fail for the right reasons.
+
+Tests are red. Now I'll implement `fetch.py`: the repo-dir helper, atomic ledger write, the eviction lock, per-repo containment, and the pre-transfer link check.
+
+
+Now the evict lock and per-repo containment.
+
+
+
+The helper replaced the old `continue`; I'll skip creating a link that already resolves correctly.
+
+Fetch tests are green. Now the quickbench red tests.
+
+
+
+
+Now the interface doc: `busy` for evict and the new summary key.
+
+Before the full suite, I'll snapshot the real lock directory so I can report whether any test touches it.
+
+
+Full suite is green at 1272. Now the four red-checks, one guard at a time. First, the evict lock.
+
+
+
+
+
+
+
+
+
+
+All red-checks pass and the suite is green. Let me review the final diff.
+
+
+
+
+
+All four guards red-check clean and the suite is green. Here is the report.
+
+## What changed
+
+**AC-4 (T-06) — evict runs under the download lock**
+- `ohyesmlx/fetch.py:1155,1162` — `evict(..., lock_dir=DEFAULT_LOCK_DIR)`.
+- `ohyesmlx/fetch.py:1182-1186` — after consent and repo-name checks, before the ledger is read: `_acquire_lock(os.path.join(lock_dir, LOCK_NAME))`; `False` → `busy`, "a download or eviction is running; nothing was removed". Released at `:1276` in `finally`.
+- `ohyesmlx/fetch.py:325-327` — `_ledger_save` now writes through `ohyesmlx.atomic_write_text`.
+- `tests/test_fetch.py:28` — autouse `_no_real_lock_dir` fixture; `Harness.evict` passes a tmp `lock_dir` (`:231`).
+- Tests: `test_a_live_lock_holder_makes_evict_busy_and_removes_nothing`, `test_the_evict_lock_is_released_after_a_normal_evict`, `test_the_evict_lock_is_released_when_an_evict_raises`.
+- Red: reverting the acquire guard failed `test_a_live_lock_holder_makes_evict_busy_and_removes_nothing`.
+
+**AC-4 — quickbench keeps the eviction result**
+- `ohyesmlx/quickbench.py:553` — `summary["not_evicted"]` (empty list); `:592` helper logs one event naming the repo; `:848-851` sibling `finally`; `:866-867` outstanding sweep.
+- Tests: `test_a_refused_sibling_eviction_is_logged_and_recorded`, `test_nothing_not_evicted_leaves_an_empty_list`, `test_a_refused_sweep_eviction_is_logged_and_recorded`.
+- Red: reverting both return checks failed the two `refused_*` tests on `not_evicted`.
+
+**AC-5 (T-13) — per-repo containment**
+- `ohyesmlx/fetch.py:179` `_repo_dir(root, repo)`; used by `plan` (`:200`) and `evict` (`:1201`). Containment at `:1204`, residue check at `:1229` now use the repo directory.
+- Tests: `test_evict_refuses_a_ledger_path_outside_that_repos_own_directory[another_repo|cache_root|outside]`; the real-download entry still evicts in full via the existing `test_evict_removes_exactly_the_ledger_paths`.
+- Red: `[another_repo]` and `[cache_root]` failed with the old root check (`[outside]` remained caught by the old check, as expected).
+
+**AC-6 (T-16) — conflict found before transfer**
+- `ohyesmlx/fetch.py:540` `_link_conflicts(link, blob)`; used in the `present` pass at `:755` and by `link_all` at `:829` (identical message to today's).
+- Tests: `test_a_snapshot_link_pointing_elsewhere_is_refused_before_any_request`, `test_a_regular_file_where_the_snapshot_link_belongs_is_refused_before_any_request`; the already-present path is the unchanged `test_a_fully_present_model_makes_no_request`.
+- Red: both failed with one request recorded (`transport.calls` non-empty).
+
+**Docs** — `docs/interfaces.md:1465-1467` (`busy` for evict), `:1725-1726` (`not_evicted` in the summary).
+
+## Verification
+`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` → **1272 passed in 46.02s**. Baseline before my changes: **1261 passed** (11 new tests). No commit made; no download, model, server or real cache/ledger touched.
+
+## SCOPE NOTE — one test in a file I may not touch reaches the real lock dir
+`tests/test_server.py:1217-1227` (`test_a_real_evict_refusal_ends_its_stream_and_frees_the_slot`) builds `functools.partial(fetch.evict, cache_dir=…, ledger_path=…, log_path=…)` **without** `lock_dir`, so it acquires `download.lock` in the real `~/Library/Application Support/OhYesMLX/locks` and removes it. Evidence: that directory's mtime moved from `Nov 3 12:12:01` to `Nov 10 09:24:56` across the suite runs; it is still empty and no lock file remains. This conflicts with the order's "every existing test that calls `evict` passes a tmp `lock_dir`" and its "no test reaches the real lock directory", because `tests/test_server.py` is not in my allowed file list. One-line fix outside my scope: add `lock_dir=str(tmp_path / "locks")` to that partial. Within `tests/test_fetch.py` the autouse guard makes any such reach a test failure. Nothing else in the suite touches it.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     56    8695109    8513152    53269   97.9%   0.084794
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M docs/interfaces.md
+ M docs/runtimes/lab-copies.md
+ M ohyesmlx/fetch.py
+ M ohyesmlx/quickbench.py
+ M tests/test_fetch.py
+ M tests/test_quickbench.py
+?? .paul/orders/v5-fix-45b-fetch.log
+?? .paul/orders/v5-fix-45b-fetch.md
+ .paul/STATE.md              |   2 +
+ docs/interfaces.md          |   6 +-
+ docs/runtimes/lab-copies.md |   6 +-
+ ohyesmlx/fetch.py           | 211 +++++++++++++++++++++++++-------------------
+ ohyesmlx/quickbench.py      |  20 ++++-
+ tests/test_fetch.py         | 155 ++++++++++++++++++++++++++++++++
+ tests/test_quickbench.py    |  55 +++++++++++-
+ 7 files changed, 355 insertions(+), 100 deletions(-)

@@ -1462,7 +1462,9 @@ is the client's statement that its UI showed this action and the user chose it; 
 Phase 5 sends it only from a user gesture. The server validates no engine name, repo id, version, path or disk number
 itself: an unknown name is the module's own refusal (`unknown_engine`, `unknown_repo`), delivered as the job's `error`
 and `done` events, and a module that raises still ends the stream with `error` payload `{"code": "internal"}` and
-`done`, continuing the job's seq. A non-JSON Content-Type is `415 unsupported_media_type`; a missing, non-integer or
+`done`, continuing the job's seq. An `evict` refuses `busy` while a download or another eviction holds
+`download.lock` -- the ledger it rewrites is the one a download also writes -- and nothing is removed
+(045-02b AC-4). A non-JSON Content-Type is `415 unsupported_media_type`; a missing, non-integer or
 over-4096 `Content-Length` is `413 body_too_large` and the body is never read; invalid JSON is `400 bad_json`. One job
 runs at a time: a second `POST /jobs` is `409 busy` naming the running job's id, and the slot frees the moment its
 `done` event is stored. Jobs are not persisted; they live as long as the process.
@@ -1721,6 +1723,8 @@ ending (finished, cancelled, restore failed, unexpected raise):
   "plan": <QuickPlan as JSON>, "estimate_s": int, "actual_s": float,
   "ended": "finished" | "cancelled" | "restore_failed" | "error",
   "results_dir": str,                      # the stamp directory
+  "not_evicted": [str],                    # siblings the fetch layer refused to evict (`busy` or
+                                           # any other refusal): empty when none failed
   "harness": {"version": str, "source_sha256": str},
   "engines": [{"name": str, "version": str|null, "tested": bool}],   # stage A's engines
   "load": {"stage_a": {"before": float, "after": float, "label": str|null} | null,

@@ -147,11 +147,12 @@ class FakeRunCells:
 class FakeCache:
     """The downloader, evictor and downloaded check, recording every call in order."""
 
-    def __init__(self, downloaded=(), download_result=True, log=None):
+    def __init__(self, downloaded=(), download_result=True, evict_result=True, log=None):
         self.repos = set(downloaded)
         self.downloads = []
         self.evicts = []
         self.download_result = download_result
+        self.evict_result = evict_result
         self.log = log if log is not None else []
         self.cache_dirs = []
 
@@ -168,7 +169,7 @@ class FakeCache:
         self.cache_dirs.append(cache_dir)
         self.evicts.append(repo)
         self.log.append(("evict", repo))
-        return True
+        return self.evict_result
 
 
 class FakeOsaurus:
@@ -260,6 +261,7 @@ def a_run(
     osaurus=False,
     confirmed=True,
     download_result=True,
+    evict_result=True,
     port_busy=(),
     app_running=False,
     cancel_after=None,
@@ -272,7 +274,12 @@ def a_run(
 ):
     """Run quickbench against scratch directories with every side effect faked."""
     log = []
-    cache = FakeCache(downloaded=downloaded, download_result=download_result, log=log)
+    cache = FakeCache(
+        downloaded=downloaded,
+        download_result=download_result,
+        evict_result=evict_result,
+        log=log,
+    )
     fake_osaurus = FakeOsaurus(
         recover=recover, pin_error=pin_error, restore=restore,
         restore_error=restore_error, log=log,
@@ -517,6 +524,48 @@ def test_an_already_downloaded_sibling_is_neither_downloaded_nor_evicted(tmp_pat
 
     assert fakes.cache.downloads == []
     assert fakes.cache.evicts == []
+
+
+def test_a_refused_sibling_eviction_is_logged_and_recorded(tmp_path):
+    """AC-4: a `busy` (or any) evict refusal is a fact about what this run left on disk,
+    not a return value to discard."""
+    ok, fakes, summary = a_run(tmp_path, evict_result=False)
+
+    assert ok is True
+    assert fakes.cache.evicts == [SIBLING.repo, SIBLING_2.repo]
+    assert summary["not_evicted"] == [SIBLING.repo, SIBLING_2.repo]
+    for sibling in (SIBLING, SIBLING_2):
+        events = [
+            event
+            for event in fakes.events
+            if event["type"] == "log" and event["payload"] == {"repo": sibling.repo}
+        ]
+        assert len(events) == 1, "one log event names the repo that was not evicted"
+
+
+def test_nothing_not_evicted_leaves_an_empty_list(tmp_path):
+    _ok, _fakes, summary = a_run(tmp_path)
+
+    assert summary["not_evicted"] == []
+
+
+def test_a_refused_sweep_eviction_is_logged_and_recorded(tmp_path):
+    """The `outstanding` sweep's evict refuses too: the repo stays named in the summary
+    rather than vanishing with the run."""
+    ok, fakes, summary = a_run(
+        tmp_path, downloaded=(CHOSEN.repo,), cancel_after=3, evict_result=False
+    )
+
+    assert ok is False
+    assert summary["ended"] == "cancelled"
+    assert fakes.cache.evicts == [SIBLING.repo], "the sweep, not the per-cell finally"
+    assert summary["not_evicted"] == [SIBLING.repo]
+    events = [
+        event
+        for event in fakes.events
+        if event["type"] == "log" and event["payload"] == {"repo": SIBLING.repo}
+    ]
+    assert len(events) == 1
 
 
 def test_the_chosen_repo_is_never_downloaded_or_evicted(tmp_path):

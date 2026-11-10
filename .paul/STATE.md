@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ○        ○     [045-02b plan created + audited 2026-11-10, awaiting approval]
+  ✓        ✓        ○     [045-02b APPLY complete 2026-11-10 - next: code-review, then UNIFY]
 ```
 
 ## Performance Metrics
@@ -133,6 +133,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-11-03: Enterprise audit performed on .paul/phases/v5-onboarding/045-01-PLAN.md. Applied 4 must-have, 4 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 Phase 4.5 | Unfixed findings stay out of the public repo until fixed; probes run on a scratch HOME/HF cache; lab-paths.json is a code-execution asset |
 | 2026-11-03: Enterprise audit performed on .paul/phases/v5-onboarding/045-02a-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 2. Verdict: conditionally acceptable | v5.0 Phase 4.5 | Orphan-engine ledger written after cold_load_s, matched on start time + argv; startup Osaurus recover only when its app is not running |
 | 2026-11-10: Enterprise audit performed on .paul/phases/v5-onboarding/045-02b-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 4. Verdict: conditionally acceptable | v5.0 Phase 4.5 | pip step gains `--only-binary :all:` (hash mode skips sdist build deps); late-uploaded files reviewed before trusting a freeze; live install proves real Application Support untouched |
+| 2026-11-10: OptiQ install exempts pygame from `--only-binary :all:` (`engines._SOURCE_BUILDS`) | v5.0 Phase 4.5 | Jason's call at a 045-02b BLOCKED: pygame 2.6.1 has no cp314 wheel and mlx-optiq 0.5.13 requires it (game command only); built from source as the lab copy was; build tools unhashed, recorded in threat-model §9 |
 | 2026-11-09: 045-02a AC-7 drift check is an injectable `run()` keyword; one existing quickbench test (`test_the_host_pinned_between_pin_and_restore_shows_no_drift`) is edited to inject it at its tmp config dir | v5.0 Phase 4.5 | Jason's call at a BLOCKED from the part-B worker: the plan's 'existing tests unmodified' and 'live config vs pinned baseline' could not both hold, because that test pins a tmp config dir while the default check reads the real ~/.osaurus. No test reads the real Osaurus settings. |
 | Decision 137: Phase 3 catalog is capped by disk size (~2 GB of weights), downloads use the Hugging Face cache layout, and oMLX's HF-cache scan is recorded not changed | v5.0 2026-11-01 | Jason's call. 3B-class models are in (SmolLM3-3B, Llama-3.2-3B); the two measured larger models are a higher tier; no <=3B MoE exists for MLX. `docs/research/2026-10-30-phase3-models.md`. AGENTS.md oMLX hazard corrected (it also scans the user's HF cache; ids still resolve to the cell's entry). |
 | Decision 138: one download at a time, across repos and processes (03-03 AC-7) | v5.0 2026-11-02 | Jason's call at the Phase 2.5-3 review. The per-repo lock let two models download at once, each checking free disk alone, so together they could overrun `DISK_MARGIN`. `fetch` now takes one `download.lock`; refusal stays `busy`. |
@@ -149,6 +150,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Issue | Origin | Effort | Revisit |
 |-------|--------|--------|---------|
 | README.md needs a full rewrite, including a lineage/acknowledgement section naming LMRE as the predecessor and linking its archived repo (`JasonRandazza/local-model-runtime-evaluation-harness`) | Docs 2026-10-09 | M | Jason's call: address the README as a whole, not piecemeal. The lineage wording to draw on is in the Deep Wiki charter record (`OhYesMLX Charter and Origin - 2026-09-14`) |
+| pygame has no CPython 3.14 wheel, so the OptiQ install builds it from source (`engines._SOURCE_BUILDS`, the one exception to `--only-binary :all:`) | 045-02b 2026-11-10 | S | Check about monthly, and at every OptiQ bump: `curl -s https://pypi.org/pypi/pygame/json \| python3 -c "import json,sys;d=json.load(sys.stdin);print(d['info']['version'],any('cp314' in u['filename'] and 'macosx' in u['filename'] and 'arm64' in u['filename'] for u in d['urls']))"`. Last checked 2026-11-10: 2.6.1, False. When True: bump pygame in `constraints/optiq-<ver>.txt` (or confirm the pinned version gained the wheel), re-run `scripts/hash_freeze.py`, delete the `_SOURCE_BUILDS` entry, update the OptiQ argv test and threat-model §9, live-install on a scratch HOME. Then delete this row |
 | Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | Low urgency: 238 GiB free, both hero models on disk. Worth doing only if disk tightens again |
 | Eight pre-`first_request_workload_id` run dirs cannot be loaded | Phase 5 | S | `load_run` refuses them by line number rather than defaulting the field. A schema migration, only if those columns are ever wanted |
 | Osaurus pin copies remain in run_grid.sh / run_grid_moe.sh / run_sweep_cache*.sh / run_accuracy_* / run_jang_* / run_sweep_prompt.sh | v3.1 2026-09-25 | S | Their semantics differ (idle-900 only, or the cache is the varied pin); listed in `scripts/osaurus-pin.sh`. Consolidate only where identical |
@@ -173,9 +175,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Session Continuity
 
 Last session: 2026-11-10 (Claude Opus 5.5 coordinator)
-Stopped at: 045-02b PLAN created (T-01/06/07/12/13/16; two orders, installers then fetch). Private findings file holds only T-01 and T-06 (gitignored).
-Next action: /paul:apply .paul/phases/v5-onboarding/045-02b-PLAN.md (audited 2026-11-10, `045-02b-AUDIT.md`). Still-open candidates not in 045-02b: `runtimes.LSOF` via which, `_osaurus_app_running` timeout literal.
-Resume file: `.paul/phases/v5-onboarding/045-02b-PLAN.md`
+Stopped at: 045-02b APPLY complete (part A `a031ad4`, part B + disclosure in the next commit; 1272 tests; private findings file deleted, 045-01 logs published).
+Next action: code-review (Standards + Spec) on `de67093..HEAD` via Command Code, then /paul:unify 045-02b. Open for Jason: the real fetch ledger's one entry (`mlx-community/Qwen3.5-2B-4bit`) lists 60 paths under 2026-11-03 scratch cache roots, so it was already unevictable before 045-02b; clean it or leave it. Still-open candidates not in 045-02b: `runtimes.LSOF` via which, `_osaurus_app_running` timeout literal.
+Resume file: `.paul/phases/v5-onboarding/045-02b-SUMMARY.md`
 Resume context: 045-02a SUMMARY (Known gaps, code-review table), threat-model §7.3 rows for T-01/T-06/T-07/T-12/T-13/T-16, and the private findings file.
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
