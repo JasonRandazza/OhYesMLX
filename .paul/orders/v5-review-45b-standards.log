@@ -1,0 +1,47 @@
+I'll review the 045-02b changes. First let me get the actual diffs for commits a031ad4 and fb4e61c against base de67093.
+Shell is blocked in this session — the order's "you cannot run git" is literal. I'll read the named files at HEAD directly and review the named hunks.
+
+Now the new script and the constraints files.
+Now the runtime-side change (`_engine_env`) and fetch/quickbench hunks. Let me read those.
+
+Now fetch.py — the eviction, link conflict, and ledger hunks.
+
+
+
+
+Now quickbench's eviction hunk.
+
+Now the summary's deviations (to avoid re-flagging deliberate calls) and the tests' environment hygiene.
+A few test spots need a closer look — especially `engines._real_open` in test_engines.py:1647 and the `_engine_env` tests.
+
+
+Two final checks: test_hash_freeze's network hygiene and the manifest fixture shape.
+Read-only review complete — I changed nothing (shell is blocked in this session, so I read the files at HEAD and attribute hunks to the order's changed-file list; no `git diff`, no suite run).
+
+**Hard — AGENTS.md "one definition of everything" ("a second copy gets deleted"):**
+- Continuation joiner duplicated: `engines.py:706-717 _requirement_lines` vs `scripts/hash_freeze.py:67-78 _logical_lines`, and they already disagree. Input: a constraints file whose only line is `pkg==1.0 \` — engines drops the pending line (no flush at EOF), so `_check_hashed_requirements` sees zero requirements and passes a dangling pin silently; hash_freeze:77-78 yields it as a pin and hashes it. Validator and regenerator read the same file differently. (SUMMARY "Deviations" notes the duplication; the drift is not noted.)
+- Pin regex spelled three times: `engines.py:699-702` (`_HASHED_PIN` embeds it), `engines.py:703` (`_PIN_ONLY`), `scripts/hash_freeze.py:50` (`_PIN`). Identical grammar today — three places to drift.
+
+**Documented standard ("each rationale written once; callers point at it"), judgement on severity:**
+- "App engines are archived, not run from a lab path": `engines.py:380-383`, again 453-457, again in `record_lab_path`'s docstring 483-485 and raise 487-492.
+- `atomic_write_text`'s temp-file/os.replace rationale restated at `engines.py:475-477` (defined `__init__.py:65-72`); `check_lab_dir`'s "front of PATH" rationale restated at `engines.py:479-481` and `runtimes.py:467-468`.
+
+**Defects:**
+- `quickbench.py:847-853`: per-cell `evict` is unguarded; the leftover sweep at 866-873 catches `Exception`. Trigger: evict raises (e.g. OSError from `engines.py:1155`'s bare `open` on an unwritable log path). The run dies (860-862), the inner finally discards the repo from `outstanding`, and `note_not_evicted` never runs — `not_evicted` omits a sibling still on disk and in the ledger, the fact AC-4 requires recorded. `download` (808-813) is wrapped; no test covers a raising evictor (only `evict_result=False`).
+- `engines.py:1220-1228`: every `install_plan` ValueError maps to code `no_constraints`, but since T-01 `_check_hashed_requirements` (720-744) also raises ValueError. Trigger: one unhashed pin in the constraints file → error code `no_constraints` though the file exists; comment 1223-1224 claims the code "names which check refused it".
+- `runtimes.py:488`: `entry["lab_path"]` raises KeyError on a manifest entry without that key, which `load_manifest` accepts as optional (`engines.py:107-110`). Trigger: `engines-tested.json` entry `{"version": ...}` with no `lab_path` — every start crashes instead of "no lab path".
+
+**Smell — Duplicated Code (judgement):** `fetch.py:755-762`'s `_link_conflicts` refusal is verbatim repeated at 829-836.
+
+**Tests:** new tests are hermetic (scratch HOME/cache/locks; `test_hash_freeze.py` injects `fetch_json`). Out of scope but flagging: `tests/test_runtimes.py:3375` calls `_engine_env` without `lab_paths_path`, reading the real `~/Library/Application Support/OhYesMLX/lab-paths.json`.
+
+No runtime start command or measured-behaviour change found: `_engine_env` prefixes PATH only when a lab path is set; argv unchanged.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     18    1251825    1059840    30448   84.7%   0.113819
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-45b-spec.log
+?? .paul/orders/v5-review-45b-spec.md
+?? .paul/orders/v5-review-45b-standards.log
+?? .paul/orders/v5-review-45b-standards.md

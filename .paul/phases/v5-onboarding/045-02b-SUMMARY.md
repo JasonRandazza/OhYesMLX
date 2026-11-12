@@ -197,3 +197,58 @@ B, UNIFY, `graphify update .` and `/paul:verify` are still owed.
 
 `1222` at the start (045-02a's end) -> `1261` after part A (39 new) -> `1272` after part B (11 new),
 `1272 passed in 47.06s` on the final close-out run. The close-out changes only Markdown and `.gitignore`.
+
+## Code review
+
+Fixes for the two reviews of `a031ad4` + `fb4e61c` (`v5-review-45b-standards.log`,
+`v5-review-45b-spec.log`), applied 2026-11-12. Every numbered item is listed; nothing else changed.
+TDD, red test first, for each behavioural change.
+
+| # | Item | Change | Test(s) |
+|---|---|---|---|
+| 1 | One joiner, one pin grammar | `engines.py:695-718`: `_PIN` is the single `name==version` fragment; `_PIN_ONLY` and `_HASHED_PIN` are built from it. `_requirement_lines` flushes a pending `\` line at EOF, so a file ending `pkg==1.0 \` is seen and refused as unhashed. `scripts/hash_freeze.py` imports `_requirement_lines` and `_PIN_ONLY` (`:38-42`) and `parse_freeze` (`:68-91`) uses them; `_logical_lines` and `_PIN` are deleted. | `test_engines.py:398` `test_a_file_ending_in_a_continuation_is_refused_as_unhashed` (2 cases); `test_hash_freeze.py:253` `test_a_trailing_continuation_at_eof_is_still_a_pin`; the 9 existing hash_freeze tests stay green. |
+| 2 | A raising per-cell evictor | `quickbench.py:845-861`: the per-cell `evict` is wrapped like the leftover sweep's — the exception is caught, one `log` event names the repo, and the repo is appended to `summary["not_evicted"]` before `outstanding` drops it. | `test_quickbench.py:553` `test_an_evictor_that_raises_is_logged_and_recorded`. |
+| 3 | `install`'s comment | `engines.py:1225-1228`: comment now says a missing constraints file and an unhashed one are both `no_constraints` (AC-1). No code change. | Existing `test_engines.py:437` `test_an_unhashed_constraints_file_refuses_the_install_as_no_constraints` already asserts the code. |
+| 4 | One `_link_conflicts` refusal text | `fetch.py:566` `_link_refusal(planned_file)` is the one message; used by the pre-transfer pass (`:784`) and `link_all` (`:857`). | `test_fetch.py:862-863` asserts the exact text on the pre-transfer refusal. |
+| 5 | Rationale written once | `engines.py`: `record_lab_path`'s docstring points at `ohyesmlx.atomic_write_text` and `check_lab_dir` instead of restating them (`:473-481`), and its app-engine raise no longer restates the archival reason (`:483-487`); `lab_paths`'s docstring points at `LAB_ENGINES` (`:425-426`). "Archived" is explained once, at `LAB_ENGINES` (`:380-383`). One exception below. | `test_engines.py:866` (match string updated to the new refusal). |
+| 6 | Global lock-dir guard; no real lab-paths file | New `tests/conftest.py`: the autouse `_no_real_lock_dir` fixture applies to every module and compares `os.path.realpath(os.path.dirname(...))`; the copy in `tests/test_fetch.py` is deleted. `tests/test_runtimes.py:3375` now passes `tmp_path / "no-lab-paths.json"`. | `test_fetch.py:29` `test_the_lock_dir_guard_fires_on_the_real_directory`. |
+| 7 | `runtimes.py` `entry["lab_path"]` KeyError | **Fixed by the coordinator** (Jason, 2026-11-11): pre-existing, but it would crash every engine start the first time a manifest entry omits the optional key (MTPLX, Phase 5). Now `entry.get("lab_path")`. | `test_a_manifest_entry_without_a_lab_path_key_means_no_lab_path` (red before, green after) |
+| 8 | Ledger follows cache | `fetch.py:152` `ledger_for(cache_dir)`: `DEFAULT_LEDGER` for None or the default cache (realpath), else `<realpath(cache_dir)>.ohyesmlx-fetched.json`. `download` (`:686`) and `evict` (`:1202`) default `ledger_path=None` and resolve it; an explicit path is honoured. `docs/interfaces.md:1854-1861` has the paragraph. | `test_fetch.py:1356` `test_a_non_default_cache_writes_its_own_sibling_ledger`, `:1375` `test_the_default_cache_uses_the_apps_ledger`, `:1386` `test_evict_on_a_scratch_cache_reads_the_sibling_ledger`. |
+
+### Red-checks (reverted, run, restored)
+
+- **Item 1.** EOF flush removed -> `test_a_file_ending_in_a_continuation_is_refused_as_unhashed` (both
+  cases) and `test_a_trailing_continuation_at_eof_is_still_a_pin` failed (validator passed the dangling
+  pin; hash_freeze parsed zero pins). Restored, green.
+- **Item 2.** Inner try/except removed -> `test_an_evictor_that_raises_is_logged_and_recorded` failed with
+  `OSError: the log path is not writable` out of `evict`. Restored, green.
+- **Item 6.** `monkeypatch.setattr(fetch, "_acquire_lock", guarded)` disabled in `conftest.py` -> the guard
+  test failed `DID NOT RAISE AssertionError` and `download.lock` appeared under a scratch `HOME`
+  (`.commandcode` scratchpad, `HOME=<scratch>` so `DEFAULT_LOCK_DIR` was scratch). Restored; the test
+  passes and no locks directory is created. The real lock directory was never reachable in this check.
+- **Item 8.** `ledger_for` reverted to `return DEFAULT_LEDGER` for every cache ->
+  `test_a_non_default_cache_writes_its_own_sibling_ledger` and
+  `test_evict_on_a_scratch_cache_reads_the_sibling_ledger` failed (`FileNotFoundError` on the sibling; the
+  download had written the monkeypatched `DEFAULT_LEDGER` instead). `test_the_default_cache_uses_the_apps_ledger`
+  still passed, as expected. Restored, green.
+
+### Notes
+
+- **The one "archived" restatement left** is the `lab_paths` refusal text
+  (`test-visible` at `engines.py:454-457`): `docs/runtimes/lab-copies.md:116` quotes that sentence as the
+  contract, and that file is outside this order's allowlist. Changing the message would have left a stale
+  quote in a file I could not touch, so the message stays and the archival rationale lives in both
+  `LAB_ENGINES` and that published refusal. A follow-up that may touch the doc can move it fully.
+- Items 3, 4 and 5 are non-behavioural (a comment, an extraction that preserves the asserted text, and
+  docstrings), so none of the three has a red-check; no test can fail for them without contriving one.
+- No module, subcommand or dependency. No download, network, real HOME, Application Support, ledger, lock
+  directory or HF cache was touched: the new fetch tests run on `tmp_path` with a fake transport, and the
+  red-check for item 6 ran under a scratch `HOME`.
+- Final: `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` -> `1280 passed in 46.43s`
+  (1272 before; 8 new). Four full runs on the final code: three `1280 passed` and one
+  (`1279 passed, 1 failed`) in which
+  `tests/test_server.py::test_the_handler_thread_cap_closes_the_extra_connection_and_releases_at_timeout`
+  failed. That test is a 0.5 s wall-clock/32-socket concurrency check and touches nothing this order changed;
+  it passed 20/20 repetitions alone, passed with all of `test_server.py`, and passed in the three clean full
+  runs, so it is a load-sensitive flake rather than a regression — but I did not prove that. Nothing committed.
+

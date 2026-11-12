@@ -845,10 +845,18 @@ def run(
                     finally:
                         if fetched:
                             try:
-                                if not evict(
-                                    sibling.repo, True, cache_dir=cache_dir, emit=_discard
-                                ):
-                                    note_not_evicted(sibling.repo)
+                                try:
+                                    if not evict(
+                                        sibling.repo, True, cache_dir=cache_dir, emit=_discard
+                                    ):
+                                        note_not_evicted(sibling.repo)
+                                except Exception as error:
+                                    send(
+                                        "log",
+                                        f"could not evict {sibling.repo}: {error}",
+                                        payload={"repo": sibling.repo},
+                                    )
+                                    summary["not_evicted"].append(sibling.repo)
                             finally:
                                 outstanding.discard(sibling.repo)
                     if restore_failure:

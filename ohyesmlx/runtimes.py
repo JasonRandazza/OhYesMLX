@@ -485,7 +485,7 @@ def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
     local = lab_paths() if lab_paths_path is None else lab_paths(lab_paths_path)
     prefixes = []
     for name, entry in manifest.items():
-        lab_path = local.get(name, entry["lab_path"])
+        lab_path = local.get(name, entry.get("lab_path"))
         if lab_path is None:
             continue
         resolved = os.path.expanduser(lab_path)

@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import re
 import ssl
 import sys
 import urllib.request
@@ -37,6 +36,10 @@ from datetime import date, datetime, timedelta
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from ohyesmlx import atomic_write_text  # noqa: E402  (after the repo root joins sys.path)
+from ohyesmlx.engines import (  # noqa: E402  (the one joiner and pin grammar)
+    _PIN_ONLY,
+    _requirement_lines,
+)
 
 PYPI_ROOT = "https://pypi.org/"
 PYPI_JSON = PYPI_ROOT + "pypi/{name}/{version}/json"
@@ -46,8 +49,6 @@ HASHES_HEADER = (
     HASHES_PREFIX
     + "every file PyPI lists for each pin, https://pypi.org/pypi/<name>/<version>/json, {date}"
 )
-
-_PIN = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[A-Za-z0-9][A-Za-z0-9._+!-]*)$")
 
 
 def _require_pypi(url: str) -> None:
@@ -64,39 +65,28 @@ def _fetch_json(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _logical_lines(text: str):
-    """The file's lines with ``\\`` continuations joined, so a hashed pin reads as one line."""
-    pending = ""
-    for line in text.splitlines():
-        line = pending + " " + line.strip() if pending else line
-        pending = ""
-        if line.rstrip().endswith("\\"):
-            pending = line.rstrip()[:-1].rstrip()
-            continue
-        yield line
-    if pending:
-        yield pending
-
-
 def parse_freeze(text: str) -> tuple[list[str], list[tuple[str, str]]]:
     """The header comment lines and the ``(name, version)`` pins, in file order.
 
     Hash lines are ignored, so the script rewrites its own output rather than only a bare
-    ``pip freeze``.
+    ``pip freeze``. The joined logical lines and the pin grammar are
+    ``engines._requirement_lines`` and ``engines._PIN_ONLY``, so the file this script writes
+    is the file the installer's validator reads.
     """
     header = []
-    pins = []
-    for line in _logical_lines(text):
+    for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#"):
-            if not pins:
-                header.append(stripped)
-            continue
         if not stripped:
             continue
-        match = _PIN.match(stripped.split()[0])
+        if not stripped.startswith("#"):
+            break
+        header.append(stripped)
+    pins = []
+    for line in _requirement_lines(text):
+        token = line.split()[0]
+        match = _PIN_ONLY.match(token)
         if match is None:
-            raise ValueError(f"{stripped.split()[0]!r} is not a name==version pin")
+            raise ValueError(f"{token!r} is not a name==version pin")
         pins.append((match["name"], match["version"]))
     return header, pins
 

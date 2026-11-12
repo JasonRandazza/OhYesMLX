@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -25,24 +26,11 @@ WEIGHTS = b"hello world"
 CONFIG = b'{"a":1}'
 
 
-@pytest.fixture(autouse=True)
-def _no_real_lock_dir(monkeypatch):
-    """AC-4: no fetch test reaches the real lock directory.
-
-    Every ``download`` and ``evict`` a test calls passes a scratch ``lock_dir``. An
-    acquisition that does not fails the test here instead of writing under Application
-    Support.
-    """
-    real = fetch.DEFAULT_LOCK_DIR
-    acquire = fetch._acquire_lock
-
-    def guarded(path):
-        assert os.path.dirname(str(path)) != real, (
-            f"a test reached the real lock directory {real}"
-        )
-        return acquire(path)
-
-    monkeypatch.setattr(fetch, "_acquire_lock", guarded)
+def test_the_lock_dir_guard_fires_on_the_real_directory():
+    """AC-4's guard is the suite-wide fixture in ``tests/conftest.py``; this proves it
+    refuses the real path rather than merely being installed."""
+    with pytest.raises(AssertionError, match="real lock directory"):
+        fetch._acquire_lock(os.path.join(fetch.DEFAULT_LOCK_DIR, fetch.LOCK_NAME))
 
 
 def git_oid(body):
@@ -1353,6 +1341,64 @@ def test_a_second_evict_refuses_the_repo_as_unlisted(tmp_path):
     assert harness.evict() is False
 
     assert harness.codes() == ["unknown_repo"]
+
+
+# ---------------------------------------------------------------------------
+# 13b. The ledger follows the cache (045-02b review)
+# ---------------------------------------------------------------------------
+
+
+def sibling_ledger(harness):
+    """The ledger a non-default cache owns: a sibling of the cache directory."""
+    return os.path.realpath(str(harness.cache)) + ".ohyesmlx-fetched.json"
+
+
+def test_a_non_default_cache_writes_its_own_sibling_ledger(tmp_path, monkeypatch):
+    """A scratch cache with no ``ledger_path`` records what it fetched beside itself, and
+    this Mac's ledger is left byte-identical."""
+    real = tmp_path / "app-support" / "fetched.json"
+    real.parent.mkdir()
+    real.write_text('{"repos": {}}\n', encoding="utf-8")
+    monkeypatch.setattr(fetch, "DEFAULT_LEDGER", str(real))
+    transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
+    harness = Harness(tmp_path, [make_model(TWO_FILES)], transport)
+
+    assert harness.download(ledger_path=None) is True
+
+    sibling = sibling_ledger(harness)
+    assert os.path.dirname(sibling) == os.path.dirname(os.path.realpath(str(harness.cache)))
+    entry = json.loads(pathlib.Path(sibling).read_text(encoding="utf-8"))["repos"][REPO]
+    assert entry["created_blobs"] == [str(harness.blobs / SHA), str(harness.blobs / GIT)]
+    assert real.read_text(encoding="utf-8") == '{"repos": {}}\n'
+
+
+def test_the_default_cache_uses_the_apps_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    linked = tmp_path / "linked-cache"
+    os.symlink(fetch.default_cache_dir(), linked)
+
+    assert fetch.ledger_for(None) == fetch.DEFAULT_LEDGER
+    assert fetch.ledger_for(fetch.default_cache_dir()) == fetch.DEFAULT_LEDGER
+    assert fetch.ledger_for(str(linked)) == fetch.DEFAULT_LEDGER
+
+
+def test_evict_on_a_scratch_cache_reads_the_sibling_ledger(tmp_path, monkeypatch):
+    real = tmp_path / "app-support" / "fetched.json"
+    real.parent.mkdir()
+    real.write_text('{"repos": {}}\n', encoding="utf-8")
+    monkeypatch.setattr(fetch, "DEFAULT_LEDGER", str(real))
+    transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
+    harness = Harness(tmp_path, [make_model(TWO_FILES)], transport)
+    assert harness.download(ledger_path=None) is True
+    harness.events.clear()
+
+    assert harness.evict(ledger_path=None) is True
+
+    assert not harness.repo_dir.exists()
+    sibling = sibling_ledger(harness)
+    assert json.loads(pathlib.Path(sibling).read_text(encoding="utf-8"))["repos"] == {}
+    assert real.read_text(encoding="utf-8") == '{"repos": {}}\n'
 
 
 # ---------------------------------------------------------------------------

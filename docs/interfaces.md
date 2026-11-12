@@ -1850,3 +1850,12 @@ symlinks) is a directory, `st_uid == os.geteuid()`, and
 `st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0`. A failure at start is a `RuntimeStartError`
 carrying that message; `detect_all` is unchanged and only reports (`ValueError` there is a
 configuration defect, never a reason to fall back to the global install).
+
+**`fetch.ledger_for(cache_dir) -> str`** (045-02b review). The one answer to which ledger a
+download or eviction writes. It is `DEFAULT_LEDGER` (`<app support>/fetched.json`) when
+`cache_dir` is None or resolves (`os.path.realpath`) to `fetch.default_cache_dir()`; any
+other cache gets `<realpath(cache_dir)>.ohyesmlx-fetched.json`, a sibling of the cache and
+never a path inside it. `fetch.download` and `fetch.evict` take `ledger_path=None` and use
+this answer, so a run against a scratch or per-run cache records what it fetched beside
+that cache instead of writing scratch paths into this Mac's ledger; an explicit
+`ledger_path` is honoured exactly as before.

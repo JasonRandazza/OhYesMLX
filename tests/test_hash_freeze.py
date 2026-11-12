@@ -250,6 +250,15 @@ def test_a_file_exactly_seven_days_after_the_first_is_not_late(tmp_path, capsys)
     assert "LATE UPLOADS" not in capsys.readouterr().out
 
 
+def test_a_trailing_continuation_at_eof_is_still_a_pin():
+    """The regenerator and the installer's validator share ``engines._requirement_lines``,
+    so a pin whose continuation runs to EOF is a pin to both rather than a line the join
+    dropped. The validator then refuses it as unhashed (test_engines)."""
+    _header, pins = hash_freeze.parse_freeze("# a header\nAlpha==1.0.0 \\")
+
+    assert pins == [("Alpha", "1.0.0")]
+
+
 def test_only_https_pypi_org_urls_are_fetched():
     with pytest.raises(ValueError, match="https://pypi.org/"):
         hash_freeze._require_pypi("https://example.com/pypi/Alpha/1.0.0/json")

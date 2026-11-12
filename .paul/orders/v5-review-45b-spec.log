@@ -1,0 +1,41 @@
+I'll review the spec and the changed code. Let me start by reading the plan, summary, and threat model sections.
+Now let me read the actual code changes. Let me look at the key files.
+Let me read the core implementation sections in detail.
+Now let me examine the fetch.py changes (part B) — the evict lock, repo containment, and snapshot conflict logic.
+
+
+Now let me read the evict function and its lock handling.
+
+Let me look at the new tests and the quickbench changes to verify they test what they claim.
+
+Let me read the snapshot-conflict and evict containment/busy tests to check they exercise the claimed paths.
+Let me check the quickbench changes and the `_engine_env` lab-dir guard in runtimes.py.
+
+Let me read the hash_freeze.py script to verify AC-1's tooling requirements.
+Let me verify the `atomic_write_text` implementation and the hash_freeze tests.
+Let me verify the AC-2 rollback/record test exists and check `_LEDGER_LISTS` and the constraints files.
+Let me examine the autouse fixture that guards against touching the real lock directory, and the test_server.py evict test.
+Let me verify the AC-2 rollback test, the install argv assertion, and the threat-model §9 rows (AC-7).
+Let me check whether the autouse fixture is global (conftest) or module-scoped, and verify the threat-model AC-7 deliverables.
+Let me read the full autouse fixture to confirm its delegation and scope.
+Let me confirm `_venv_root` searches the argv rather than using fixed indices (AC-2).
+I've completed my read-only review of commits a031ad4 and fb4e61c against AC-1..AC-7. I read `engines.py`, `fetch.py`, `runtimes.py`, `quickbench.py`, `__init__.py`, `scripts/hash_freeze.py`, the constraints files, the new tests, and `docs/threat-model.md` §7/§8/§9.
+
+**Finding (1) — (a) partial / (c) a test that does not back its claim: AC-4's lock-dir guard is module-scoped, not global.**
+
+AC-4: *"no test reaches the real lock directory: every fetch test that calls `evict` passes a tmp `lock_dir` (a test or fixture fails if `DEFAULT_LOCK_DIR` is touched)"*.
+
+The enforcement is `tests/test_fetch.py:28-45`, an `autouse` fixture `_no_real_lock_dir`. Autouse fixtures in a test module apply only to that module, and there is no `tests/conftest.py` (glob found none). So the guard fires only for tests in `test_fetch.py`. `tests/test_server.py:1222-1227` calls the real `fetch.evict` and is outside that scope: it reaches the real `DEFAULT_LOCK_DIR` unless it passes `lock_dir` itself. It currently does (`lock_dir=str(tmp_path / "locks")`, the coordinator's manual patch per SUMMARY Deviation 4) — but only by convention, not by the guard. The concrete state that breaks the AC's property is exactly the pre-patch one Deviation 4 records: with the fixture active, `test_a_real_evict_refusal_ends_its_stream_and_frees_the_slot` wrote `download.lock` under real Application Support across suite runs and the fixture did not fail. A regression (dropping that `lock_dir=`, or any new non-`test_fetch` test calling `fetch.evict`/`download` without one) silently reopens it. Related, same fixture: line 40 compares `os.path.dirname(str(path)) != real` textually, so a `lock_dir` spelled via a symlink/`..` path to the real dir also evades it. AC-4's outcome (no test reaches the real dir today) is met; the guard it names is not global.
+
+**No other findings.** AC-1 argv/validator/hash_freeze (incl. pin-set-unchanged and late-upload reporting), AC-2 `-I`/`_venv_root`-searches-argv/rollback-record, AC-3 `check_lab_dir`/`atomic_write_text`, AC-5 `_repo_dir`+`realpath` containment (not bypassable by symlink/`..`), AC-6 `_link_conflicts` in both pre-transfer and `link_all` (zero-request refusal tested), and AC-7 threat-model rows/§9 reclaim-race row are all implemented as specified. No scope creep. The `_SOURCE_BUILDS` `--no-binary pygame` is the approved amendment and the SUMMARY describes it accurately (build tools unhashed is the recorded §9 gap), so I did not report it.
+
+**Changed:** nothing (read-only reviewer; wrote no files). **Verified:** by reading the changed source and tests directly; cross-checked the SUMMARY "Deviations" against the code (only the fixture-scope gap above is not covered by a deviation) and confirmed §7.3/§7.4/§9 deliverables present.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     23    1673259    1564288    35204   93.5%   0.083661
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-45b-spec.log
+?? .paul/orders/v5-review-45b-spec.md
+?? .paul/orders/v5-review-45b-standards.log
+?? .paul/orders/v5-review-45b-standards.md

@@ -1,0 +1,166 @@
+NOTE: Thu 02:20 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll start by reading the review reports, plan, and the files in scope.
+Now let me read the code files in scope.
+Now the fetch and quickbench files.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now I'll run the baseline suite to confirm the starting count.
+
+
+
+
+
+
+
+
+Now I'll implement. Starting with `engines.py`: one pin grammar, the EOF flush, the comment fix, and the rationale pointers.
+
+
+
+Now `scripts/hash_freeze.py` uses the shared joiner and pin grammar.
+
+Now `fetch.py`: the ledger follows the cache, and the link-conflict refusal has one text.
+
+
+Now the single link-conflict refusal text.
+
+
+Now quickbench: a raising evictor is contained and recorded.
+Now the suite-wide guard in a new `tests/conftest.py`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+All green at 1280. Now the red-checks, one at a time. First item 1 — remove the EOF flush.
+
+
+Item 2 — remove quickbench's exception catch.
+
+
+Item 6 — disable the suite guard, and run under a scratch `HOME` so nothing real is reachable.
+
+
+
+
+Item 8 — revert `ledger_for` to the old single-ledger answer.
+
+
+All four red-checks done. Re-running the full suite and checking the tree.
+
+
+
+
+
+
+
+
+One test failed in that run — let me check whether it's the known timing-sensitive handler test or something I caused.
+
+
+
+
+
+One full run had a flake in an unrelated timing test. Recording that honestly in the SUMMARY.
+
+
+All eight items are in. Final report:
+
+**1. One joiner, one pin grammar.** `engines.py:695-718` — `_PIN` is the single `name==version` fragment, `_PIN_ONLY`/`_HASHED_PIN` built from it; `_requirement_lines` flushes a trailing `\` at EOF. `hash_freeze.py:38-42,68-91` imports both; `_logical_lines`/`_PIN` deleted. Tests: `test_a_file_ending_in_a_continuation_is_refused_as_unhashed` (2 cases), `test_a_trailing_continuation_at_eof_is_still_a_pin`; 9 existing hash_freeze tests green.
+
+**2. Raising per-cell evictor.** `quickbench.py:845-861` catches like the sweep, logs one repo-naming event, appends to `not_evicted`. Test: `test_an_evictor_that_raises_is_logged_and_recorded`.
+
+**3. Comment.** `engines.py:1225-1228` now says missing and unhashed both report `no_constraints`. No code change.
+
+**4.** `fetch.py:566` `_link_refusal`, used at `:785` and `:858`; asserted by `test_fetch.py:862-863`.
+
+**5.** `engines.py:473-481` points at `atomic_write_text`/`check_lab_dir`; both app-engine docstrings/raise point at `LAB_ENGINES`. One exception: the `lab_paths` refusal text stays because `docs/runtimes/lab-copies.md:116` quotes it and is outside the allowlist.
+
+**6.** New `tests/conftest.py` autouse guard, realpath comparison, applies to every module; `test_runtimes.py:3375` passes a tmp `lab_paths_path`. Test: `test_the_lock_dir_guard_fires_on_the_real_directory`.
+
+**7.** Rejected/deferred in the SUMMARY: pre-existing `runtimes.py` KeyError.
+
+**8.** `fetch.py:152` `ledger_for`; `download`/`evict` take `ledger_path=None` (`:686`, `:1202`); `docs/interfaces.md:1854-1861`. Tests: three at `test_fetch.py:1356/1375/1386`.
+
+**Red-checks:** item 1 → 3 failed; item 2 → OSError escaped; item 6 → DID NOT RAISE, lock file appeared under a scratch `HOME` (real dir never reachable); item 8 → 2 failed, default test still passed. All restored.
+
+**Final:** `1280 passed in 46.43s` (baseline 1272). One full run flaked on the unrelated 0.5 s `test_server` thread-cap test; it passed 20/20 alone and 99/99 in its module. Not committed.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    104   17237216   17011328    57592   98.7%   0.238945
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def _logical_lines
+
+== cc-agent: git status ==
+ M .paul/phases/v5-onboarding/045-02b-SUMMARY.md
+ M docs/interfaces.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/quickbench.py
+ M scripts/hash_freeze.py
+ M tests/test_engines.py
+ M tests/test_fetch.py
+ M tests/test_hash_freeze.py
+ M tests/test_quickbench.py
+ M tests/test_runtimes.py
+?? .paul/orders/v5-fix-45b-review.log
+?? .paul/orders/v5-fix-45b-review.md
+?? .paul/orders/v5-review-45b-spec.log
+?? .paul/orders/v5-review-45b-spec.md
+?? .paul/orders/v5-review-45b-standards.log
+?? .paul/orders/v5-review-45b-standards.md
+?? tests/conftest.py
+ .paul/phases/v5-onboarding/045-02b-SUMMARY.md | 55 ++++++++++++++++++
+ docs/interfaces.md                            |  9 +++
+ ohyesmlx/engines.py                           | 42 +++++++-------
+ ohyesmlx/fetch.py                             | 46 ++++++++++++---
+ ohyesmlx/quickbench.py                        | 16 ++++--
+ scripts/hash_freeze.py                        | 42 ++++++--------
+ tests/test_engines.py                         | 13 ++++-
+ tests/test_fetch.py                           | 82 +++++++++++++++++++++------
+ tests/test_hash_freeze.py                     |  9 +++
+ tests/test_quickbench.py                      | 28 ++++++++-
+ tests/test_runtimes.py                        |  2 +-
+ 11 files changed, 266 insertions(+), 78 deletions(-)

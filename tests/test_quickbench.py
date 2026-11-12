@@ -147,12 +147,15 @@ class FakeRunCells:
 class FakeCache:
     """The downloader, evictor and downloaded check, recording every call in order."""
 
-    def __init__(self, downloaded=(), download_result=True, evict_result=True, log=None):
+    def __init__(
+        self, downloaded=(), download_result=True, evict_result=True, evict_error=None, log=None
+    ):
         self.repos = set(downloaded)
         self.downloads = []
         self.evicts = []
         self.download_result = download_result
         self.evict_result = evict_result
+        self.evict_error = evict_error
         self.log = log if log is not None else []
         self.cache_dirs = []
 
@@ -169,6 +172,8 @@ class FakeCache:
         self.cache_dirs.append(cache_dir)
         self.evicts.append(repo)
         self.log.append(("evict", repo))
+        if self.evict_error is not None:
+            raise self.evict_error
         return self.evict_result
 
 
@@ -262,6 +267,7 @@ def a_run(
     confirmed=True,
     download_result=True,
     evict_result=True,
+    evict_error=None,
     port_busy=(),
     app_running=False,
     cancel_after=None,
@@ -278,6 +284,7 @@ def a_run(
         downloaded=downloaded,
         download_result=download_result,
         evict_result=evict_result,
+        evict_error=evict_error,
         log=log,
     )
     fake_osaurus = FakeOsaurus(
@@ -541,6 +548,25 @@ def test_a_refused_sibling_eviction_is_logged_and_recorded(tmp_path):
             if event["type"] == "log" and event["payload"] == {"repo": sibling.repo}
         ]
         assert len(events) == 1, "one log event names the repo that was not evicted"
+
+
+def test_an_evictor_that_raises_is_logged_and_recorded(tmp_path):
+    """An eviction that raises is a repo still on disk, not a reason to end the run: the
+    catch is the leftover sweep's (one log event naming the repo) and the repo is recorded."""
+    ok, fakes, summary = a_run(tmp_path, evict_error=OSError("the log path is not writable"))
+
+    assert ok is True
+    assert summary["ended"] == "finished"
+    assert fakes.cache.evicts == [SIBLING.repo, SIBLING_2.repo]
+    assert summary["not_evicted"] == [SIBLING.repo, SIBLING_2.repo]
+    for sibling in (SIBLING, SIBLING_2):
+        events = [
+            event
+            for event in fakes.events
+            if event["type"] == "log" and event["payload"] == {"repo": sibling.repo}
+        ]
+        assert len(events) == 1, "one log event names the repo whose eviction raised"
+        assert "the log path is not writable" in events[0]["message"]
 
 
 def test_nothing_not_evicted_leaves_an_empty_list(tmp_path):

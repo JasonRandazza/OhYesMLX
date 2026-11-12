@@ -149,6 +149,25 @@ def default_cache_dir(env=None) -> str:
     return os.path.join(home, ".cache", "huggingface", "hub")
 
 
+def ledger_for(cache_dir: str | None) -> str:
+    """The ledger that follows *cache_dir*: the app's own, or a sibling of an injected cache.
+
+    ``download`` and ``evict`` ask this when their ``ledger_path`` is None. No cache at all,
+    or the cache :func:`default_cache_dir` names, is this Mac's ``DEFAULT_LEDGER``. Any other
+    cache gets ``<realpath(cache_dir)>.ohyesmlx-fetched.json`` beside it -- never inside it,
+    because the ledger lists paths under the cache and a ledger file in there would be read
+    as one of them. A run against a scratch or per-run cache therefore records what it
+    fetched somewhere that run owns, instead of naming paths this Mac's cache does not hold
+    in the app's own ledger.
+    """
+    if cache_dir is None:
+        return DEFAULT_LEDGER
+    resolved = os.path.realpath(cache_dir)
+    if resolved == os.path.realpath(default_cache_dir()):
+        return DEFAULT_LEDGER
+    return resolved + ".ohyesmlx-fetched.json"
+
+
 def host_allowed(host: str | None) -> bool:
     """Whether *host* is huggingface.co, hf.co, or a subdomain of either."""
     if not host:
@@ -544,6 +563,14 @@ def _link_conflicts(link: str, blob: str) -> bool:
     return not (os.path.islink(link) and os.path.realpath(link) == os.path.realpath(blob))
 
 
+def _link_refusal(planned_file: PlannedFile) -> str:
+    """The one refusal text for a snapshot link that is not the blob a download writes."""
+    return (
+        f"{planned_file.link} already exists and does not point at "
+        f"{planned_file.blob}; nothing was overwritten"
+    )
+
+
 def _partial_size(path: str) -> int:
     try:
         return os.path.getsize(path)
@@ -638,7 +665,7 @@ def download(
     *,
     models=None,
     cache_dir: str | None = None,
-    ledger_path=DEFAULT_LEDGER,
+    ledger_path=None,
     log_path=DEFAULT_LOG,
     lock_dir=DEFAULT_LOCK_DIR,
     open_url=_real_open,
@@ -653,8 +680,10 @@ def download(
     The order of the guards is the order the refusals mean: consent, then a catalog id,
     then the name shapes, then the cross-process lock, then the ledger, then "already
     present", then disk. Nothing is opened before consent, and no byte is requested
-    before the disk guard has accepted.
+    before the disk guard has accepted. *ledger_path* defaults to :func:`ledger_for`'s
+    answer for *cache_dir*; an explicit path is used as given.
     """
+    ledger_path = ledger_for(cache_dir) if ledger_path is None else ledger_path
     send = _emitter(emit, log_path, repo=repo, confirmed=confirmed)
 
     if not confirmed:
@@ -756,8 +785,7 @@ def _download(
             return _refuse(
                 send,
                 "integrity_failed",
-                f"{planned_file.link} already exists and does not point at "
-                f"{blob}; nothing was overwritten",
+                _link_refusal(planned_file),
                 path=planned_file.link,
             )
         if os.path.islink(blob):
@@ -830,8 +858,7 @@ def _download(
                 return _refuse(
                     send,
                     "integrity_failed",
-                    f"{planned_file.link} already exists and does not point at "
-                    f"{planned_file.blob}; nothing was overwritten",
+                    _link_refusal(planned_file),
                     path=planned_file.link,
                 )
             if os.path.lexists(planned_file.link):
@@ -1157,7 +1184,7 @@ def evict(
     confirmed: bool,
     *,
     cache_dir: str | None = None,
-    ledger_path=DEFAULT_LEDGER,
+    ledger_path=None,
     log_path=DEFAULT_LOG,
     lock_dir=DEFAULT_LOCK_DIR,
     emit=_print_event,
@@ -1168,8 +1195,11 @@ def evict(
     this refuse everything: an eviction that guessed would be the one operation in this
     app capable of deleting a file nobody asked it to touch. The ledger is read and
     rewritten under the same lock a download holds, so two processes cannot interleave
-    read-modify-write and lose an entry (AC-4).
+    read-modify-write and lose an entry (AC-4). *ledger_path* defaults to
+    :func:`ledger_for`'s answer for *cache_dir*, so an eviction reads the ledger its
+    download wrote; an explicit path is used as given.
     """
+    ledger_path = ledger_for(cache_dir) if ledger_path is None else ledger_path
     send = _emitter(emit, log_path, repo=repo, confirmed=confirmed)
 
     if not confirmed:

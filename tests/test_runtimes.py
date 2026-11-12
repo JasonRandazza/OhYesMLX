@@ -3369,10 +3369,22 @@ def test_a_manifest_with_no_lab_paths_adds_nothing_to_path(tmp_path, monkeypatch
     )
 
 
+def test_a_manifest_entry_without_a_lab_path_key_means_no_lab_path(tmp_path, monkeypatch):
+    # load_manifest accepts `lab_path` as optional, so an entry that omits it must start
+    # like `lab_path: null`, not raise KeyError on every engine start.
+    path = write_lab_manifest(tmp_path, None)
+    payload = json.loads(path.read_text())
+    for entry in payload.values():
+        del entry["lab_path"]
+    path.write_text(json.dumps(payload))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert runtimes._engine_env(path, tmp_path / "no-lab-paths.json")["PATH"] == "/usr/bin:/bin"
+
+
 def test_a_lab_path_that_does_not_exist_is_refused_naming_the_engine(tmp_path):
     missing = str(tmp_path / "gone" / "bin")
     with pytest.raises(RuntimeStartError, match="mlxlm"):
-        runtimes._engine_env(write_lab_manifest(tmp_path, missing))
+        runtimes._engine_env(write_lab_manifest(tmp_path, missing), tmp_path / "no-lab-paths.json")
 
 
 def test_spawn_hands_the_engine_env_to_the_process(monkeypatch, tmp_path):

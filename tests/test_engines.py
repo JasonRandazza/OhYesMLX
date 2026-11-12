@@ -395,6 +395,17 @@ def test_the_hashed_requirements_validator_refuses_anything_but_hashed_pins(
     assert expected in str(raised.value)
 
 
+@pytest.mark.parametrize("body", ["mlx-lm==0.31.3 \\", "mlx-lm==0.31.3 \\\n"])
+def test_a_file_ending_in_a_continuation_is_refused_as_unhashed(tmp_path, body):
+    """A ``\\`` that runs to EOF still carries its pin: dropping it would read the file as
+    having nothing to check, and pip would install from it under --require-hashes."""
+    path = tmp_path / "constraints.txt"
+    path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="carries no hashes"):
+        engines._check_hashed_requirements(path)
+
+
 def test_the_hashed_requirements_validator_accepts_a_pin_with_several_hashes(tmp_path):
     path = tmp_path / "constraints.txt"
     path.write_text(
@@ -852,7 +863,7 @@ def test_a_failed_atomic_write_leaves_the_old_file_byte_identical(tmp_path, monk
 def test_record_lab_path_refuses_an_app_engine_and_writes_nothing(tmp_path, name):
     path = tmp_path / "lab-paths.json"
 
-    with pytest.raises(ValueError, match="app engines are archived"):
+    with pytest.raises(ValueError, match="only mlxlm, optiq install into a bin directory"):
         engines.record_lab_path(name, "/lab/bin", path=path)
 
     assert not path.exists()

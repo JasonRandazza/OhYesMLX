@@ -423,7 +423,7 @@ def lab_paths(path=LAB_PATHS_FILE, *, read=None) -> dict[str, str]:
     entry at fault, because the alternatives are both worse than stopping -- an unknown key
     is a path nobody would read, and a file half-understood would measure a global install
     under a pinned version's label. The three app engines are refused with their own
-    message: their tested builds are archived, not run from a lab path (:data:`LAB_ENGINES`).
+    message (:data:`LAB_ENGINES`).
 
     *read* is how the caller supplies text -- ``pathlib`` by default, and the detection below
     hands in its ``env`` so the same file is checked against a fixture filesystem.
@@ -472,23 +472,18 @@ def record_lab_path(engine: str, bin_dir: str, *, path=LAB_PATHS_FILE) -> None:
 
     Read, replace, write: every other engine's entry is kept, and *engine*'s is replaced only
     by an install of the version the manifest pins (:func:`install_plan` pins
-    ``TESTED_VERSIONS``). The write is ``ohyesmlx.atomic_write_text`` -- a temp file in the
-    same directory followed by ``os.replace`` -- so a kill mid-write leaves the previous
-    file whole and no temp file behind.
+    ``TESTED_VERSIONS``). The write is :func:`ohyesmlx.atomic_write_text`.
 
-    *bin_dir* is refused by :func:`check_lab_dir` before the file is even read: it becomes
-    the front of PATH for every engine start, so a directory this user does not own, or one
-    another account can write, is refused here as it is at the start.
+    *bin_dir* is refused by :func:`check_lab_dir` before the file is even read.
 
     A file this function cannot read is refused by :func:`lab_paths` rather than overwritten,
     and an engine outside :data:`LAB_ENGINES` is refused here for the same reason that reader
-    refuses one: the app engines are archived, not run from a bin directory.
+    refuses one.
     """
     if engine not in LAB_ENGINES:
         raise ValueError(
             f"refusing to record a lab path for {engine!r}: only {', '.join(LAB_ENGINES)} "
-            "install into a bin directory, and the app engines are archived rather than run "
-            "from one"
+            "install into a bin directory"
         )
     if not isinstance(bin_dir, str) or not bin_dir:
         raise ValueError(
@@ -695,16 +690,21 @@ def constraints_path(engine: str) -> pathlib.Path:
 # A requirements line the installer may hand pip: a pin and nothing else, followed by one or
 # more sha256 hashes. Everything else -- `--index-url`, `--extra-index-url`, `--trusted-host`,
 # `-f`, `-r`, `-c`, `-e` -- is refused below, because a requirements file can carry all of
-# them and the installer's file is one it wrote rather than one it reads from the user.
-_HASHED_PIN = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9._+!-]*"
-    r"(?:\s+--hash=sha256:[0-9a-f]{64})+$"
-)
-_PIN_ONLY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9._+!-]*$")
+# them and the installer's file is one it wrote rather than one it reads from the user. The
+# pin grammar is written once; the two patterns below and `scripts/hash_freeze.py` ask it.
+_PIN = r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[A-Za-z0-9][A-Za-z0-9._+!-]*)"
+_PIN_ONLY = re.compile(rf"^{_PIN}$")
+_HASHED_PIN = re.compile(rf"^{_PIN}(?:\s+--hash=sha256:[0-9a-f]{{64}})+$")
 
 
 def _requirement_lines(text: str):
-    """The file's requirement lines, with ``\\`` continuations joined and comments dropped."""
+    """The file's requirement lines, with ``\\`` continuations joined and comments dropped.
+
+    A continuation that runs to EOF is flushed as its own line: a file whose last line is
+    ``pkg==1.0 \\`` is a pin with no hashes, and dropping the pending line would read it as
+    a file with nothing to check. ``scripts/hash_freeze.py`` joins with this same function,
+    so the validator and the regenerator cannot disagree about what the file says.
+    """
     pending = ""
     for line in text.splitlines():
         line = (pending + " " + line.strip() if pending else line).strip()
@@ -715,6 +715,8 @@ def _requirement_lines(text: str):
         if not line or line.startswith("#"):
             continue
         yield line
+    if pending and not pending.startswith("#"):
+        yield pending
 
 
 def _check_hashed_requirements(path) -> None:
@@ -1220,8 +1222,10 @@ def install(
     try:
         plan = install_plan(engine, macos_major)  # AC-6: an unknown name refuses here, first
     except ValueError as error:
-        # AC-10: a refused attempt is still an attempt, and the code names which check
-        # refused it: a known pip engine with no constraints file, or a name outside the five.
+        # AC-10: a refused attempt is still an attempt. A known pip engine reports
+        # `no_constraints` whichever check refused it: the constraints file is missing, or it
+        # is there and a requirement in it carries no hashes (AC-1). Either way there is no
+        # constraints file this installer may use. A name outside the five is unknown.
         return refuse(
             "no_constraints" if engine in ONBOARDING_ENGINES else "unknown_engine",
             str(error),
