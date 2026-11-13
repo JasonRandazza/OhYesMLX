@@ -1,0 +1,544 @@
+<title>OhYesMLX Comps</title>
+<style id="tokens">
+/* OhYesMLX tokens. Names map 1:1 to SwiftUI.
+   Colours: ship the system semantic colour named in the comment; hex/rgba here are
+   render approximations of the macOS 26 defaults so the comps can be drawn. */
+:root{
+  /* colour roles, light */
+  --color-accent:#007AFF;                    /* Color.accentColor (follows System Settings accent) */
+  --color-accent-foreground:#FFFFFF;         /* .white on .borderedProminent */
+  --color-window-background:#ECECEC;         /* Color(nsColor: .windowBackgroundColor) */
+  --color-control-background:#FFFFFF;        /* Color(nsColor: .controlBackgroundColor) */
+  --color-sidebar-background:#E3E3E6;        /* NavigationSplitView sidebar material (.sidebar) */
+  --color-text-background:rgba(0,0,0,.035);  /* Color(nsColor: .textBackgroundColor) inset, mono blocks */
+  --color-label:rgba(0,0,0,.85);             /* .primary */
+  --color-secondary-label:rgba(0,0,0,.56);   /* .secondary */
+  --color-tertiary-label:rgba(0,0,0,.32);    /* .tertiary */
+  --color-separator:rgba(0,0,0,.1);          /* Divider() / .separatorColor */
+  --color-fill:rgba(0,0,0,.07);              /* .quaternary fill: meter tracks */
+  --color-selection:rgba(0,0,0,.08);         /* unemphasized sidebar selection */
+  --color-scrim:rgba(0,0,0,.18);             /* behind .sheet */
+  --color-green:#28CD41;                     /* Color.green  status glyphs only, never text */
+  --color-orange:#FF9500;                    /* Color.orange status glyphs only */
+  --color-red:#FF3B30;                       /* Color.red    status glyphs only */
+
+  /* type: macOS text styles */
+  --font-system:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;  /* .system */
+  --font-mono:ui-monospace,"SF Mono",Menlo,monospace;                                        /* .monospaced, figures */
+  --text-large-title:400 26px/32px var(--font-system);   /* .largeTitle */
+  --text-title:400 22px/28px var(--font-system);         /* .title */
+  --text-title2:400 17px/22px var(--font-system);        /* .title2 */
+  --text-title3:400 15px/20px var(--font-system);        /* .title3 */
+  --text-headline:600 13px/16px var(--font-system);      /* .headline */
+  --text-body:400 13px/18px var(--font-system);          /* .body */
+  --text-callout:400 12px/16px var(--font-system);       /* .callout */
+  --text-subheadline:400 11px/14px var(--font-system);   /* .subheadline */
+  --text-caption:400 10px/13px var(--font-system);       /* .caption */
+
+  /* spacing: 4pt grid; .padding(n) / VStack(spacing:) */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px;
+
+  /* radii */
+  --radius-control:6px;   /* .buttonBorderShape(.roundedRectangle) regular */
+  --radius-group:10px;    /* Form(.grouped) section / GroupBox */
+  --radius-sheet:12px;    /* .sheet */
+  --radius-window:12px;   /* window corner, drawn only in comps */
+
+  /* sizes */
+  --size-window-width:1100px; --size-window-height:720px;
+  --size-sidebar:220px;   /* .navigationSplitViewColumnWidth(220) */
+  --size-toolbar:52px;    /* unified toolbar */
+  --size-meter:6px;       /* ProgressView(.linear) / Gauge track */
+}
+.dark{
+  --color-accent:#0A84FF;
+  --color-window-background:#2A2A2C;
+  --color-control-background:#1E1E1E;
+  --color-sidebar-background:#232325;
+  --color-text-background:rgba(255,255,255,.05);
+  --color-label:rgba(255,255,255,.88);
+  --color-secondary-label:rgba(255,255,255,.58);
+  --color-tertiary-label:rgba(255,255,255,.3);
+  --color-separator:rgba(255,255,255,.1);
+  --color-fill:rgba(255,255,255,.1);
+  --color-selection:rgba(255,255,255,.1);
+  --color-scrim:rgba(0,0,0,.4);
+  --color-green:#32D74B; --color-orange:#FF9F0A; --color-red:#FF453A;
+  color-scheme:dark;
+}
+</style>
+<style>
+/* comp page (presentation only) */
+body{background:oklch(0.9 0.004 260);color:rgba(0,0,0,.85);font:var(--text-body);padding:var(--space-10) var(--space-6)}
+.page{max-width:1100px;margin:0 auto}
+.page-h{margin-bottom:var(--space-8)}
+.page-h h1{font:600 26px/32px var(--font-system);margin:0 0 var(--space-2)}
+.page-h p{margin:0;max-width:62ch;color:rgba(0,0,0,.62)}
+.toc{display:flex;flex-wrap:wrap;gap:var(--space-1) var(--space-4);margin-top:var(--space-4);font:var(--text-callout)}
+.toc a{color:rgba(0,0,0,.7)}
+.comp{margin:0 0 var(--space-10);overflow-x:auto;padding-bottom:var(--space-2)}
+.comp>figcaption{font:var(--text-headline);margin-bottom:var(--space-3);color:rgba(0,0,0,.7)}
+.comp>figcaption b{font-family:var(--font-mono);margin-right:var(--space-2)}
+.comp>figcaption span{font-weight:400;color:rgba(0,0,0,.5);margin-left:var(--space-2)}
+
+/* window */
+.win{position:relative;width:var(--size-window-width);height:var(--size-window-height);border-radius:var(--radius-window);overflow:hidden;
+  background:var(--color-control-background);color:var(--color-label);font:var(--text-body);
+  box-shadow:0 0 0 .5px rgba(0,0,0,.25),0 22px 48px rgba(0,0,0,.22);display:grid;grid-template-columns:var(--size-sidebar) 1fr}
+.win.bare{display:block;background:var(--color-window-background)}
+.lights{display:flex;gap:8px;padding:19px 20px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#FF5F57;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.15)}
+.lights i:nth-child(2){background:#FEBC2E}.lights i:nth-child(3){background:#28C840}
+.side{background:var(--color-sidebar-background);border-right:1px solid var(--color-separator);display:flex;flex-direction:column}
+.side-label{font:600 11px/14px var(--font-system);color:var(--color-tertiary-label);padding:var(--space-2) var(--space-5) var(--space-1)}
+.side nav{padding:0 var(--space-3)}
+.side a{display:flex;align-items:center;gap:var(--space-2);height:28px;padding:0 var(--space-2);border-radius:var(--radius-control);color:var(--color-label);text-decoration:none}
+.side a svg{width:16px;height:16px;color:var(--color-secondary-label)}
+.side a.on{background:var(--color-selection);font-weight:600}
+.side a.locked{color:var(--color-tertiary-label)}.side a.locked svg{color:var(--color-tertiary-label)}
+.side a .done{margin-left:auto;width:14px;height:14px;color:var(--color-secondary-label)}
+.side-foot{margin-top:auto;padding:var(--space-4) var(--space-5);font:var(--text-subheadline);color:var(--color-secondary-label)}
+.main{display:flex;flex-direction:column;min-width:0;background:var(--color-window-background)}
+.bar{height:var(--size-toolbar);flex:none;display:flex;align-items:center;gap:var(--space-3);padding:0 var(--space-4) 0 var(--space-6);border-bottom:1px solid var(--color-separator)}
+.bar .t{display:flex;flex-direction:column}
+.bar .t b{font:var(--text-headline)}.bar .t span{font:var(--text-subheadline);color:var(--color-secondary-label)}
+.bar .tools{margin-left:auto;display:flex;gap:var(--space-2);align-items:center}
+.content{flex:1;overflow:hidden;padding:var(--space-6) var(--space-8)}
+.col{max-width:720px}
+
+/* text */
+.lede{font:var(--text-title3);margin:0 0 var(--space-6);max-width:60ch}
+.sec-h{font:var(--text-headline);margin:var(--space-6) 0 var(--space-2);display:flex;align-items:baseline;gap:var(--space-2)}
+.sec-h:first-child{margin-top:0}
+.sec-h small{font:var(--text-callout);color:var(--color-secondary-label)}
+.muted{color:var(--color-secondary-label)}
+.cap{font:var(--text-callout);color:var(--color-secondary-label);margin:var(--space-2) 0 0}
+.fig{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.est{font:var(--text-subheadline);color:var(--color-secondary-label);border:1px solid var(--color-separator);border-radius:4px;padding:0 5px;white-space:nowrap}
+.meas{font:var(--text-subheadline);color:var(--color-label);border:1px solid var(--color-secondary-label);border-radius:4px;padding:0 5px;white-space:nowrap}
+
+/* grouped form */
+.group{background:var(--color-control-background);border-radius:var(--radius-group);box-shadow:0 0 0 .5px var(--color-separator)}
+.row{display:flex;align-items:center;gap:var(--space-3);min-height:36px;padding:var(--space-2) var(--space-4)}
+.row+.row{border-top:1px solid var(--color-separator)}
+.row .k{width:160px;flex:none;color:var(--color-secondary-label)}
+.row .grow{flex:1;min-width:0}
+.row .name{font-weight:600}
+.row .sub{font:var(--text-callout);color:var(--color-secondary-label);margin-top:2px}
+.row .end{margin-left:auto;display:flex;align-items:center;gap:var(--space-3);flex:none}
+
+/* controls */
+.btn{font:var(--text-body);height:24px;padding:0 var(--space-3);border-radius:var(--radius-control);border:0;background:var(--color-control-background);color:var(--color-label);
+  box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 .5px 1.5px rgba(0,0,0,.12);display:inline-flex;align-items:center;gap:6px;cursor:default;white-space:nowrap}
+.dark .btn{background:rgba(255,255,255,.14);box-shadow:0 0 0 .5px rgba(255,255,255,.08)}
+.btn:hover{background:oklch(0.95 0 0)}.dark .btn:hover{background:rgba(255,255,255,.2)}
+.btn.lg{height:28px;padding:0 var(--space-4)}
+.btn.primary{background:var(--color-accent);color:var(--color-accent-foreground);box-shadow:0 .5px 1.5px rgba(0,0,0,.2)}
+.btn.primary:hover{background:oklch(0.52 0.2 258)}
+.btn:focus-visible{outline:3px solid color-mix(in oklch,var(--color-accent) 50%,transparent);outline-offset:1px}
+.btn[disabled]{opacity:.4}
+.btn svg{width:13px;height:13px}
+.link{color:var(--color-accent);text-decoration:none}
+.actions{display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-6)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
+.dot.g{background:var(--color-green)}.dot.o{background:var(--color-orange)}.dot.r{background:var(--color-red)}
+.dot.n{box-shadow:inset 0 0 0 1.5px var(--color-tertiary-label)}
+.status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.tag{font:600 10px/13px var(--font-system);color:var(--color-secondary-label);background:var(--color-fill);border-radius:4px;padding:2px 6px;white-space:nowrap}
+.meter{height:var(--size-meter);border-radius:3px;background:var(--color-fill);overflow:hidden;display:flex}
+.meter i{display:block;height:100%;background:var(--color-accent)}
+.meter i.soft{background:var(--color-tertiary-label)}
+.switch{width:26px;height:15px;border-radius:8px;background:var(--color-accent);position:relative;flex:none}
+.switch::after{content:"";position:absolute;right:1.5px;top:1.5px;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 .5px 1px rgba(0,0,0,.3)}
+.mono{font:12px/17px var(--font-mono);background:var(--color-text-background);border-radius:var(--radius-control);padding:var(--space-3) var(--space-4);margin:0;white-space:pre;overflow:hidden;box-shadow:inset 0 0 0 .5px var(--color-separator)}
+.spinner{width:20px;height:20px;border-radius:50%;border:2.5px solid var(--color-fill);border-top-color:var(--color-secondary-label);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation-duration:3s}}
+.ico{width:16px;height:16px;flex:none;color:var(--color-secondary-label)}
+
+/* bare (pre-app) screens */
+.center{position:absolute;inset:52px 0 0;display:flex;align-items:center;justify-content:center}
+.center .box{max-width:520px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:var(--space-3)}
+.center .box.left{align-items:stretch;text-align:left;max-width:640px}
+.center h2{font:600 17px/22px var(--font-system);margin:0}
+.center p{margin:0}
+
+/* banner */
+.banner{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-6);background:var(--color-control-background);border-bottom:1px solid var(--color-separator);flex:none}
+.banner .grow{flex:1}
+
+/* sheet */
+.scrim{position:absolute;inset:0;background:var(--color-scrim);display:flex;justify-content:center;align-items:flex-start;padding-top:var(--size-toolbar)}
+.sheet{width:520px;background:var(--color-window-background);border-radius:var(--radius-sheet);box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 18px 40px rgba(0,0,0,.28);padding:var(--space-6)}
+.sheet h3{font:600 15px/20px var(--font-system);margin:0 0 var(--space-1)}
+.sheet ol{margin:var(--space-3) 0 0;padding:0;list-style:none;counter-reset:s}
+.sheet li{counter-increment:s;display:grid;grid-template-columns:20px 1fr;gap:2px var(--space-2);margin-bottom:var(--space-3)}
+.sheet li::before{content:counter(s);font:var(--text-callout);color:var(--color-secondary-label);font-family:var(--font-mono)}
+.sheet li .mono{grid-column:2;padding:var(--space-2) var(--space-3);font-size:11px;line-height:15px}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-4);margin:var(--space-4) 0 0;font:var(--text-callout)}
+.facts dt{color:var(--color-secondary-label)}.facts dd{margin:0}
+
+/* results table */
+table.cells{width:100%;border-collapse:collapse;background:var(--color-control-background);border-radius:var(--radius-group);box-shadow:0 0 0 .5px var(--color-separator);overflow:hidden}
+.cells th{font:600 11px/14px var(--font-system);color:var(--color-secondary-label);text-align:left;padding:var(--space-2) var(--space-4);border-bottom:1px solid var(--color-separator)}
+.cells td{padding:7px var(--space-4);border-top:1px solid var(--color-separator);vertical-align:middle}
+.cells tr:nth-child(2) td{border-top:0}
+.cells .n{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;width:110px}
+.cells th.n{font-family:var(--font-system)}
+.cells .why{font:var(--text-callout);color:var(--color-secondary-label)}
+.cells tr.win-row td{background:var(--color-selection)}
+.best{display:flex;align-items:flex-end;gap:var(--space-6);padding:var(--space-5) var(--space-6);background:var(--color-control-background);border-radius:var(--radius-group);box-shadow:0 0 0 .5px var(--color-separator);margin-bottom:var(--space-6)}
+.best .label{font:var(--text-callout);color:var(--color-secondary-label)}
+.best .what{font:var(--text-title);margin-top:2px}
+.best .num{margin-left:auto;text-align:right}
+.best .num b{font:500 34px/38px var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.best .num span{font:var(--text-title3);color:var(--color-secondary-label);margin-left:4px}
+
+/* tokens section */
+.tok{background:#fff;border-radius:12px;padding:var(--space-8);box-shadow:0 0 0 .5px rgba(0,0,0,.15)}
+.tok h2{font:600 22px/28px var(--font-system);margin:0 0 var(--space-2)}
+.tok h3{font:var(--text-headline);margin:var(--space-6) 0 var(--space-2)}
+.tok p{margin:0 0 var(--space-4);max-width:70ch;color:rgba(0,0,0,.62)}
+.tok .scroll{overflow-x:auto}
+.tok table{border-collapse:collapse;width:100%;font:var(--text-callout)}
+.tok td,.tok th{text-align:left;padding:6px var(--space-3);border-top:1px solid rgba(0,0,0,.08);vertical-align:top}
+.tok code{font:11px/15px var(--font-mono)}
+.tok pre{font:11px/16px var(--font-mono);background:rgba(0,0,0,.035);border-radius:8px;padding:var(--space-4);overflow-x:auto;margin:0}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.2);margin-right:6px}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-mac" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="11" rx="1.5"/><path d="M1.5 19h21"/></symbol>
+  <symbol id="i-engines" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="3.5" width="17" height="5" rx="1.2"/><rect x="3.5" y="9.5" width="17" height="5" rx="1.2"/><rect x="3.5" y="15.5" width="17" height="5" rx="1.2"/></symbol>
+  <symbol id="i-models" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="i-bench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3.5 17a8.5 8.5 0 1117 0"/><path d="M12 17l4.2-5"/></symbol>
+  <symbol id="i-results" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="12" width="3.4" height="8" rx=".8"/><rect x="10.3" y="7" width="3.4" height="13" rx=".8"/><rect x="16.6" y="4" width="3.4" height="16" rx=".8"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.2l2.8 2.8L16.2 9.5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3.5L21.5 20h-19z"/><path d="M12 10v4.5M12 17.2v.01"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></symbol>
+</svg>
+
+<div class="page">
+<header class="page-h" data-od-id="page-header">
+  <h1>OhYesMLX: static comps</h1>
+  <p>Native macOS (SwiftUI, NavigationSplitView), window 1100 × 720. Light mode first; one dark frame of Results. Every figure is tagged <i>estimated</i> or <i>measured on this Mac</i>. Tokens at the bottom map 1:1 to SwiftUI.</p>
+  <nav class="toc">
+    <a href="#c1a">1a Launching</a><a href="#c1b">1b Couldn't start</a><a href="#c2">2 Unsupported Mac</a><a href="#c3">3 Your Mac</a>
+    <a href="#c4a">4a Engines</a><a href="#c4b">4b Install consent</a><a href="#c4c">4c Busy</a><a href="#c5">5 Models</a>
+    <a href="#c6a">6a Benchmark plan</a><a href="#c6b">6b Benchmark running</a><a href="#c7a">7a Results</a><a href="#c7b">7b Results, dark</a><a href="#c8">8 Interrupted banner</a><a href="#tokens">Tokens</a>
+  </nav>
+</header>
+
+<!-- 1a -->
+<figure class="comp" id="c1a"><figcaption><b>1a</b>Launching<span>shown while the bundled Python helper starts</span></figcaption>
+<div class="win bare" data-od-id="screen-launching">
+  <div class="center"><div class="box">
+    <div class="spinner" role="progressbar" aria-label="Starting"></div>
+    <p data-od-id="launching-text">Starting OhYesMLX's engine checker…</p>
+    <p class="cap" style="margin:0">This usually takes a few seconds.</p>
+  </div></div>
+</div></figure>
+
+<!-- 1b -->
+<figure class="comp" id="c1b"><figcaption><b>1b</b>Couldn't start<span>backend exited before it was ready</span></figcaption>
+<div class="win bare" data-od-id="screen-start-failed">
+  <div class="center"><div class="box left">
+    <h2 data-od-id="start-failed-title">OhYesMLX couldn't start its engine checker</h2>
+    <p class="muted">The checker is a small helper that runs alongside this app. It stopped before it was ready. These are the last lines it printed:</p>
+    <pre class="mono" data-od-id="start-failed-stderr">Traceback (most recent call last):
+  File "ohyesmlx_backend/server.py", line 41, in &lt;module&gt;
+    sock.bind(("127.0.0.1", 47821))
+OSError: [Errno 48] Address already in use
+helper exited with status 1 after 0.8 s</pre>
+    <p class="cap">Nothing on your Mac was changed.</p>
+    <div class="actions" style="margin-top:var(--space-2)">
+      <button class="btn lg" data-od-id="start-failed-copy">Copy Details</button>
+      <button class="btn lg primary" data-od-id="start-failed-retry">Try Again</button>
+    </div>
+  </div></div>
+</div></figure>
+
+<!-- 2 -->
+<figure class="comp" id="c2"><figcaption><b>2</b>Unsupported Mac<span>terminal state, no way past</span></figcaption>
+<div class="win bare" data-od-id="screen-unsupported">
+  <div class="center"><div class="box">
+    <svg class="ico" style="width:40px;height:40px"><use href="#i-chip"/></svg>
+    <h2 data-od-id="unsupported-title">This Mac is not Apple silicon</h2>
+    <p>It has an Intel Core i9 processor. Every engine OhYesMLX sets up is built on Apple's MLX, which runs only on Apple silicon (M1 or later).</p>
+    <p class="muted">No setting, download or update changes this, so OhYesMLX can't continue on this Mac.</p>
+    <p class="cap"><a class="link" href="#c2">Which Macs have Apple silicon?</a></p>
+    <div class="actions"><button class="btn lg primary" data-od-id="unsupported-quit">Quit OhYesMLX</button></div>
+  </div></div>
+</div></figure>
+
+<!-- 3 -->
+<figure class="comp" id="c3"><figcaption><b>3</b>Welcome + Your Mac<span>first screen after a good launch</span></figcaption>
+<div class="win" id="w-mac" data-step="mac" data-sub="Step 1 of 5" data-od-id="screen-your-mac">
+  <div class="tools"><button class="btn">Scan Again</button></div>
+  <div class="col">
+    <p class="lede">Welcome to OhYesMLX. It sets up local AI on this Mac and measures what runs fastest here. This is what it found. Nothing on your Mac has been changed.</p>
+    <h3 class="sec-h">This Mac</h3>
+    <div class="group" data-od-id="mac-specs">
+      <div class="row"><span class="k">Chip</span><span>Apple M2 Max</span></div>
+      <div class="row"><span class="k">Processor</span><span><span class="fig">12</span> CPU cores, <span class="fig">30</span> GPU cores</span></div>
+      <div class="row"><span class="k">Memory</span><span><span class="fig">64 GB</span> unified</span></div>
+      <div class="row"><span class="k">Free disk</span><span class="fig">40.4 GB</span></div>
+      <div class="row"><span class="k">macOS</span><span class="fig">27.2.1</span></div>
+    </div>
+    <h3 class="sec-h">Room for models <span class="est">estimated</span></h3>
+    <div class="group" data-od-id="mac-room">
+      <div class="row" style="display:block;padding:var(--space-4)">
+        <p style="margin:0 0 var(--space-3);font:var(--text-title3)">About <span class="fig">46 GB</span> is available for model weights</p>
+        <div class="meter" style="height:8px" role="img" aria-label="46 of 64 GB for models"><i style="width:71.9%"></i><i class="soft" style="width:28.1%;opacity:.5"></i></div>
+        <div style="display:flex;justify-content:space-between;margin-top:var(--space-2);font:var(--text-callout)" class="muted"><span>Models <span class="fig">46 GB</span></span><span>macOS and your apps <span class="fig">18 GB</span></span></div>
+        <p class="cap">Worked out from <span class="fig">64 GB</span> of unified memory. It is a planning figure, not a measurement; what fits in practice depends on what else is open.</p>
+      </div>
+    </div>
+    <div class="actions"><button class="btn lg primary">Continue to Engines</button></div>
+  </div>
+</div></figure>
+
+<!-- 4a -->
+<figure class="comp" id="c4a"><figcaption><b>4a</b>Engines<span>all five found</span></figcaption>
+<div class="win" data-step="engines" data-sub="Step 2 of 5" data-done="mac" data-od-id="screen-engines">
+  <div class="tools"><span class="cap" style="margin:0">Checked just now</span><button class="btn" data-od-id="engines-check-again">Check Again</button></div>
+  <div class="col">
+    <p class="lede">Engines are the programs that run models. OhYesMLX found all five on this Mac.</p>
+    <div class="group" data-od-id="engine-list">
+      <div class="row" data-od-id="engine-mlx-lm"><div class="grow"><span class="name">mlx-lm</span> <span class="fig muted">0.31.3</span><div class="sub">Apple's own MLX tools for running language models. Normally used from Terminal; OhYesMLX drives it for you.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row" data-od-id="engine-osaurus"><div class="grow"><span class="name">Osaurus</span> <span class="fig muted">0.25.33</span><div class="sub">A Mac app that serves local models to other apps.</div></div><div class="end"><span class="status"><span class="dot o"></span>Installed, newer than we tested</span></div></div>
+      <div class="row" data-od-id="engine-omlx"><div class="grow"><span class="name">oMLX</span> <span class="fig muted">0.7.3</span><div class="sub">A local model server built on MLX.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row" data-od-id="engine-optiq"><div class="grow"><span class="name">OptiQ</span> <span class="fig muted">0.5.13</span><div class="sub">An MLX runtime focused on compressed model formats.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row" data-od-id="engine-vmlx"><div class="grow"><span class="name">vMLX</span> <span class="fig muted">1.6.82</span><div class="sub">A Mac app for running and serving MLX models.</div></div><div class="end"><span class="status"><span class="dot n"></span>Installed, untested</span></div></div>
+    </div>
+    <p class="cap">Tested means OhYesMLX has been checked against that exact version. Untested engines still run in the benchmark, and their results say so.</p>
+    <div class="actions"><button class="btn lg primary">Continue to Models</button></div>
+  </div>
+</div></figure>
+
+<!-- 4b -->
+<figure class="comp" id="c4b"><figcaption><b>4b</b>Engines: install consent sheet<span>a Mac with two engines missing; Install pressed on OptiQ</span></figcaption>
+<div class="win" data-step="engines" data-sub="Step 2 of 5" data-done="mac" data-od-id="screen-engines-install">
+  <div class="tools"><span class="cap" style="margin:0">Checked just now</span><button class="btn">Check Again</button></div>
+  <div class="col">
+    <p class="lede">Engines are the programs that run models. Three are on this Mac. Installing the others is optional.</p>
+    <div class="group">
+      <div class="row"><div class="grow"><span class="name">mlx-lm</span> <span class="fig muted">0.31.3</span><div class="sub">Apple's own MLX tools for running language models.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row" data-od-id="engine-osaurus-missing"><div class="grow"><span class="name">Osaurus</span><div class="sub">Not installed. Install opens the official download page, then checks again.</div></div><div class="end"><button class="btn">Install…</button></div></div>
+      <div class="row"><div class="grow"><span class="name">oMLX</span> <span class="fig muted">0.7.3</span><div class="sub">A local model server built on MLX.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row" data-od-id="engine-optiq-missing"><div class="grow"><span class="name">OptiQ</span><div class="sub">Not installed. Tested version: <span class="fig">0.5.13</span></div></div><div class="end"><button class="btn">Install…</button></div></div>
+      <div class="row"><div class="grow"><span class="name">vMLX</span> <span class="fig muted">1.6.82</span><div class="sub">A Mac app for running and serving MLX models.</div></div><div class="end"><span class="status"><span class="dot n"></span>Installed, untested</span></div></div>
+    </div>
+  </div>
+  <div class="scrim"><div class="sheet" role="dialog" aria-labelledby="sheet-t" data-od-id="install-sheet">
+    <h3 id="sheet-t">Install OptiQ 0.5.13?</h3>
+    <p class="muted" style="margin:0">OhYesMLX will run exactly these steps. Nothing else on your Mac changes.</p>
+    <ol>
+      <li><span>Make a private Python environment for OptiQ</span><pre class="mono">python3 -m venv ~/Library/Application\ Support/OhYesMLX/engines/optiq</pre></li>
+      <li><span>Install OptiQ into it</span><pre class="mono">pip install "mlx-optiq==0.5.13"</pre></li>
+      <li><span>Check that it starts</span><pre class="mono">optiq --version</pre></li>
+    </ol>
+    <dl class="facts">
+      <dt>Download</dt><dd class="fig">about 310 MB</dd>
+      <dt>On disk after</dt><dd class="fig">about 0.9 GB</dd>
+      <dt>Needs admin password</dt><dd>No</dd>
+      <dt>Undo</dt><dd>Remove it from Engines at any time.</dd>
+    </dl>
+    <div class="actions"><button class="btn lg">Cancel</button><button class="btn lg primary" data-od-id="install-sheet-confirm">Install</button></div>
+  </div></div>
+</div></figure>
+
+<!-- 4c -->
+<figure class="comp" id="c4c"><figcaption><b>4c</b>Engines: busy<span>a download is running, so installs wait</span></figcaption>
+<div class="win" data-step="engines" data-sub="Step 2 of 5" data-done="mac" data-od-id="screen-engines-busy">
+  <div class="tools"><span class="cap" style="margin:0">Checked just now</span><button class="btn">Check Again</button></div>
+  <div class="col">
+    <p class="lede">Engines are the programs that run models. Three are on this Mac. Installing the others is optional.</p>
+    <div class="group">
+      <div class="row"><div class="grow"><span class="name">mlx-lm</span> <span class="fig muted">0.31.3</span><div class="sub">Apple's own MLX tools for running language models.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row"><div class="grow"><span class="name">Osaurus</span><div class="sub">Not installed. Install opens the official download page, then checks again.</div></div><div class="end"><span class="cap" style="margin:0">Busy: download Qwen3.5 2B is running</span><button class="btn" disabled>Install…</button></div></div>
+      <div class="row"><div class="grow"><span class="name">oMLX</span> <span class="fig muted">0.7.3</span><div class="sub">A local model server built on MLX.</div></div><div class="end"><span class="status"><span class="dot g"></span>Installed, tested</span></div></div>
+      <div class="row"><div class="grow"><span class="name">OptiQ</span><div class="sub">Not installed. Tested version: <span class="fig">0.5.13</span></div></div><div class="end"><span class="cap" style="margin:0">Busy: download Qwen3.5 2B is running</span><button class="btn" disabled>Install…</button></div></div>
+      <div class="row"><div class="grow"><span class="name">vMLX</span> <span class="fig muted">1.6.82</span><div class="sub">A Mac app for running and serving MLX models.</div></div><div class="end"><span class="status"><span class="dot n"></span>Installed, untested</span></div></div>
+    </div>
+    <p class="cap">One job runs at a time. Installs are available again when the download finishes or is cancelled in Models.</p>
+  </div>
+</div></figure>
+
+<!-- 5 -->
+<figure class="comp" id="c5"><figcaption><b>5</b>Models<span>recommendations, a download in progress, a low-disk refusal</span></figcaption>
+<div class="win" data-step="models" data-sub="Step 3 of 5" data-done="mac,engines" data-od-id="screen-models">
+  <div class="tools">
+    <div style="width:200px" data-od-id="disk-meter"><div style="display:flex;justify-content:space-between;font:var(--text-subheadline)"><span>Free disk</span><span class="fig">40.4 GB</span></div><div class="meter" style="margin-top:3px"><i class="soft" style="width:2%"></i></div><div style="font:var(--text-caption)" class="muted"><span class="fig">0.8 GB</span> set aside for the download in progress</div></div>
+  </div>
+  <div class="col" style="max-width:none">
+    <p class="lede">Picked for <span class="fig">64 GB</span> of memory. Fit is estimated from each model's size. Speed is only known after the benchmark.</p>
+    <div class="group" data-od-id="model-list">
+      <div class="row" data-od-id="model-qwen35-2b"><div class="grow"><span class="tag">Start here</span> <span class="name">Qwen3.5 2B</span> <span class="muted">mlx 4-bit</span> <span class="status" style="margin-left:var(--space-2)"><span class="dot g"></span>Comfortable</span> <span class="est">estimated</span>
+        <div class="sub">Fits with about <span class="fig">44.6 GB</span> of memory to spare; <span class="fig">1.4 GB</span> download. The benchmark uses this one.</div></div>
+        <div class="end" style="width:250px"><div style="flex:1"><div class="meter" role="progressbar" aria-valuenow="42" aria-valuemin="0" aria-valuemax="100"><i style="width:42%"></i></div><div style="font:var(--text-caption);margin-top:3px" class="muted"><span class="fig">42%</span> · <span class="fig">0.59 of 1.40 GB</span></div></div><button class="btn">Cancel</button></div></div>
+      <div class="row" data-od-id="model-qwen35-9b"><div class="grow"><span class="tag">Start here</span> <span class="name">Qwen3.5 9B</span> <span class="muted">mlx 4-bit</span> <span class="status" style="margin-left:var(--space-2)"><span class="dot g"></span>Comfortable</span> <span class="est">estimated</span>
+        <div class="sub">Fits with about <span class="fig">40.7 GB</span> of memory to spare; <span class="fig">5.3 GB</span> download.</div></div><div class="end"><button class="btn">Download</button></div></div>
+      <div class="row" data-od-id="model-gemma3-27b"><div class="grow"><span class="tag">Start here</span> <span class="name">Gemma 3 27B</span> <span class="muted">mlx 4-bit</span> <span class="status" style="margin-left:var(--space-2)"><span class="dot g"></span>Comfortable</span> <span class="est">estimated</span>
+        <div class="sub">Fits with about <span class="fig">30.3 GB</span> of memory to spare; <span class="fig">15.7 GB</span> download.</div></div><div class="end"><button class="btn">Download</button></div></div>
+      <div class="row" data-od-id="model-qwen3-32b"><div class="grow"><span class="name">Qwen3 32B</span> <span class="muted">mlx 4-bit</span> <span class="status" style="margin-left:var(--space-2)"><span class="dot g"></span>Comfortable</span> <span class="est">estimated</span>
+        <div class="sub">Fits with about <span class="fig">27.6 GB</span> of memory to spare; <span class="fig">18.4 GB</span> download.</div></div><div class="end"><button class="btn">Download</button></div></div>
+      <div class="row" data-od-id="model-llama33-70b"><div class="grow"><span class="name">Llama 3.3 70B</span> <span class="muted">mlx 4-bit</span> <span class="status" style="margin-left:var(--space-2)"><span class="dot o"></span>Tight</span> <span class="est">estimated</span>
+        <div class="sub">Fits with about <span class="fig">6.1 GB</span> of memory to spare; <span class="fig">39.9 GB</span> download. Close other apps while it runs.</div>
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-top:var(--space-2)" data-od-id="model-llama33-refusal"><svg class="ico" style="color:var(--color-orange)"><use href="#i-warn"/></svg><span>Not enough free disk: free <span class="fig">0.3 GB</span> more and try again</span></div>
+        <div class="sub" style="margin-left:24px">Needs <span class="fig">39.9 GB</span>; <span class="fig">40.4 GB</span> is free and <span class="fig">0.8 GB</span> of it is set aside for Qwen3.5 2B.</div></div>
+        <div class="end"><button class="btn">Download</button></div></div>
+    </div>
+    <div class="actions"><button class="btn lg primary">Continue to Benchmark</button></div>
+  </div>
+</div></figure>
+
+<!-- 6a -->
+<figure class="comp" id="c6a"><figcaption><b>6a</b>Benchmark: the plan<span>shown before anything runs</span></figcaption>
+<div class="win" data-step="bench" data-sub="Step 4 of 5" data-done="mac,engines,models" data-od-id="screen-benchmark-plan">
+  <div class="col">
+    <p class="lede">This is the plan. Nothing runs until you press Start. Every cell uses Qwen3.5 2B so only one thing changes at a time.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5)">
+      <div><h3 class="sec-h">Stage A: engines <small>format fixed at mlx 4-bit</small></h3>
+        <div class="group" data-od-id="plan-stage-a">
+          <div class="row"><span class="grow">mlx-lm</span><span class="fig muted">0.31.3</span></div>
+          <div class="row"><span class="grow">Osaurus <span class="tag">untested build</span></span><span class="fig muted">0.25.33</span></div>
+          <div class="row"><span class="grow">oMLX</span><span class="fig muted">0.7.3</span></div>
+          <div class="row"><span class="grow">OptiQ</span><span class="fig muted">0.5.13</span></div>
+          <div class="row"><span class="grow">vMLX <span class="tag">untested build</span></span><span class="fig muted">1.6.82</span></div>
+        </div></div>
+      <div><h3 class="sec-h">Stage B: formats <small>on the Stage A winner</small></h3>
+        <div class="group" data-od-id="plan-stage-b">
+          <div class="row"><span class="grow">mlx 4-bit</span><span class="muted">already on disk</span></div>
+          <div class="row"><span class="grow">oQ4</span><span class="muted">one extra download, <span class="fig">1.8 GB</span></span></div>
+        </div>
+        <h3 class="sec-h">Before you start</h3>
+        <div class="group">
+          <div class="row"><span class="k">Time</span><span>about <span class="fig">11 min</span> <span class="est">estimated</span></span></div>
+          <div class="row"><span class="k">Downloads</span><span class="fig">1.8 GB</span></div>
+          <div class="row"><span class="k">Free disk after</span><span><span class="fig">38.6 GB</span> <span class="est">estimated</span></span></div>
+        </div></div>
+    </div>
+    <h3 class="sec-h">Osaurus</h3>
+    <div class="group" data-od-id="plan-osaurus-consent"><div class="row"><div class="grow">Pin Osaurus settings for the run, restored after<div class="sub">Holds Osaurus's settings still so its numbers compare fairly. Your settings are put back when the run ends or is stopped.</div></div><span class="switch" role="switch" aria-checked="true" aria-label="Pin Osaurus settings"></span></div></div>
+    <div class="actions" style="align-items:center"><span class="cap" style="margin:0 auto 0 0">For steadier numbers, quit other heavy apps first.</span><button class="btn lg primary" data-od-id="benchmark-start">Start Benchmark</button></div>
+  </div>
+</div></figure>
+
+<!-- 6b -->
+<figure class="comp" id="c6b"><figcaption><b>6b</b>Benchmark: running<span>Stage A, cell 3 of 5</span></figcaption>
+<div class="win" data-step="bench" data-sub="Running" data-done="mac,engines,models" data-od-id="screen-benchmark-running">
+  <div class="tools"><button class="btn" data-od-id="stop-after-cell"><svg><use href="#i-pause"/></svg>Stop After This Cell</button><button class="btn" data-od-id="stop-now"><svg style="color:var(--color-red)"><use href="#i-stop"/></svg>Stop Now</button></div>
+  <div class="col">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><p class="lede" style="margin:0">Stage A: engines, cell <span class="fig">3</span> of <span class="fig">5</span></p><span class="muted"><span class="fig">4:12</span> elapsed · about <span class="fig">7 min</span> left <span class="est">estimated</span></span></div>
+    <div class="meter" style="margin:var(--space-3) 0 var(--space-6);height:8px" role="progressbar" aria-valuenow="38"><i style="width:38%"></i></div>
+    <h3 class="sec-h">Now running</h3>
+    <div class="group" data-od-id="current-cell"><div class="row" style="padding:var(--space-3) var(--space-4)"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div><div class="grow"><span class="name">oMLX 0.7.3</span> · mlx 4-bit · Qwen3.5 2B<div class="sub">Prompt <span class="fig">2</span> of <span class="fig">3</span>, generating. Numbers appear when the cell finishes.</div></div></div></div>
+    <h3 class="sec-h">Cells</h3>
+    <div class="group" data-od-id="running-cells">
+      <div class="row"><span class="grow">A1 · mlx-lm</span><span class="status"><span class="dot g"></span>Pass</span><span class="fig" style="width:120px;text-align:right">55.4 tok/s</span></div>
+      <div class="row"><span class="grow">A2 · Osaurus <span class="tag">untested build</span></span><span class="status"><span class="dot g"></span>Pass</span><span class="fig" style="width:120px;text-align:right">58.9 tok/s</span></div>
+      <div class="row"><span class="grow" style="font-weight:600">A3 · oMLX</span><span class="muted">Running</span><span style="width:120px"></span></div>
+      <div class="row"><span class="grow muted">A4 · OptiQ</span><span class="muted">Waiting</span><span style="width:120px"></span></div>
+      <div class="row"><span class="grow muted">A5 · vMLX</span><span class="muted">Waiting</span><span style="width:120px"></span></div>
+      <div class="row"><span class="grow muted">Stage B · 2 formats on the winner</span><span class="muted">Waiting; oQ4 downloads first</span></div>
+    </div>
+    <p class="cap"><b>Stop After This Cell</b> lets oMLX finish and keeps its result. <b>Stop Now</b> ends at once and this cell is not counted. Either way, Osaurus settings are restored.</p>
+  </div>
+</div></figure>
+
+<!-- 7a -->
+<figure class="comp" id="c7a"><figcaption><b>7a</b>Results<span>light</span></figcaption>
+<div class="win" id="w-results" data-step="results" data-sub="Step 5 of 5" data-done="mac,engines,models,bench" data-od-id="screen-results">
+  <div class="tools"><span class="cap" style="margin:0">Run finished 14:32</span><button class="btn" data-od-id="export-results">Export Results…</button></div>
+  <div class="col" style="max-width:none">
+    <div class="best" data-od-id="best-result">
+      <div><div class="label">Best on your Mac</div><div class="what">oMLX with mlx 4-bit</div><div style="margin-top:var(--space-2)"><span class="meas">quick: measured on this Mac</span></div></div>
+      <div class="num"><b>62.1</b><span>tok/s</span><div class="cap" style="margin:0">decode speed, Qwen3.5 2B</div></div>
+    </div>
+    <table class="cells" data-od-id="results-table">
+      <tr><th>Stage A · engines</th><th>Status</th><th class="n">Decode tok/s</th><th class="n">TTFT</th><th>Note</th></tr>
+      <tr><td>mlx-lm <span class="fig muted">0.31.3</span></td><td><span class="status"><span class="dot g"></span>PASS</span></td><td class="n">55.4</td><td class="n">0.21 s</td><td class="why"></td></tr>
+      <tr><td>Osaurus <span class="fig muted">0.25.33</span></td><td><span class="status"><span class="dot g"></span>PASS</span></td><td class="n">58.9</td><td class="n">0.19 s</td><td class="why">Untested build</td></tr>
+      <tr class="win-row"><td><b>oMLX</b> <span class="fig muted">0.7.3</span></td><td><span class="status"><span class="dot g"></span>PASS</span></td><td class="n">61.7</td><td class="n">0.17 s</td><td class="why">Fastest in Stage A</td></tr>
+      <tr><td>OptiQ <span class="fig muted">0.5.13</span></td><td><span class="status"><span class="dot r"></span>FAIL</span></td><td class="n muted">–</td><td class="n muted">–</td><td class="why">Didn't answer within 60 s</td></tr>
+      <tr><td>vMLX <span class="fig muted">1.6.82</span></td><td><span class="status"><span class="dot n"></span>SKIPPED</span></td><td class="n muted">–</td><td class="n muted">–</td><td class="why">This version can't load mlx 4-bit</td></tr>
+    </table>
+    <p class="cap" style="margin:var(--space-2) 0 var(--space-5)">Stage A varied the engine only; it says nothing about formats.</p>
+    <table class="cells">
+      <tr><th>Stage B · formats on oMLX</th><th>Status</th><th class="n">Decode tok/s</th><th class="n">TTFT</th><th>Note</th></tr>
+      <tr class="win-row"><td><b>mlx 4-bit</b></td><td><span class="status"><span class="dot g"></span>PASS</span></td><td class="n">62.1</td><td class="n">0.16 s</td><td class="why">Fastest overall</td></tr>
+      <tr><td>oQ4</td><td><span class="status"><span class="dot n"></span>Stopped by you</span></td><td class="n muted">–</td><td class="n muted">–</td><td class="why">Not counted</td></tr>
+    </table>
+    <p class="cap" style="margin:var(--space-2) 0 var(--space-5)">Stage B varied the format only, on oMLX; other engines may rank formats differently.</p>
+    <p style="margin:0" data-od-id="left-on-disk">Left on disk: Qwen3.5 2B oQ4 (<span class="fig">1.8 GB</span>) — it was in use. You can remove it from <a class="link" href="#c5">Models</a>.</p>
+  </div>
+</div></figure>
+
+<!-- 7b -->
+<figure class="comp" id="c7b"><figcaption><b>7b</b>Results<span>dark</span></figcaption>
+<div class="win dark" data-clone="w-results" data-step="results" data-sub="Step 5 of 5" data-done="mac,engines,models,bench" data-od-id="screen-results-dark"></div>
+</figure>
+
+<!-- 8 -->
+<figure class="comp" id="c8"><figcaption><b>8</b>Interrupted-download banner<span>sits on top of whichever screen opens next; shown here on Your Mac</span></figcaption>
+<div class="win" data-clone="w-mac" data-step="mac" data-sub="Step 1 of 5" data-od-id="screen-banner">
+  <div class="banner" data-od-id="interrupted-banner"><svg class="ico"><use href="#i-info"/></svg><span class="grow">Download of Qwen3.5 2B was interrupted when OhYesMLX quit.</span><button class="btn">Retry</button><button class="btn">Dismiss</button></div>
+</div></figure>
+
+<!-- tokens -->
+<section class="tok" id="tokens" data-od-id="tokens">
+  <h2>Tokens</h2>
+  <p>One source: the block below is the live stylesheet these comps are drawn with. In SwiftUI, use the system role named in each comment; never hard-code the hex. The accent is the user's system accent (blue by default), used at most twice per screen: the primary button and one progress or switch.</p>
+  <h3>Colour roles</h3>
+  <div class="scroll"><table>
+    <tr><th>Token</th><th>Light</th><th>Dark</th><th>SwiftUI</th><th>Use</th></tr>
+    <tr><td><code>--color-accent</code></td><td><span class="sw" style="background:#007AFF"></span>#007AFF</td><td><span class="sw" style="background:#0A84FF"></span>#0A84FF</td><td><code>Color.accentColor</code></td><td>Primary button, active progress, switch on</td></tr>
+    <tr><td><code>--color-window-background</code></td><td><span class="sw" style="background:#ECECEC"></span>#ECECEC</td><td><span class="sw" style="background:#2A2A2C"></span>#2A2A2C</td><td><code>.windowBackgroundColor</code></td><td>Detail column ground</td></tr>
+    <tr><td><code>--color-control-background</code></td><td><span class="sw" style="background:#fff"></span>#FFFFFF</td><td><span class="sw" style="background:#1E1E1E"></span>#1E1E1E</td><td><code>.controlBackgroundColor</code></td><td>Form sections, tables</td></tr>
+    <tr><td><code>--color-label</code> / <code>secondary</code> / <code>tertiary</code></td><td>black 85 / 56 / 32%</td><td>white 88 / 58 / 30%</td><td><code>.primary</code> <code>.secondary</code> <code>.tertiary</code></td><td>Text hierarchy</td></tr>
+    <tr><td><code>--color-separator</code> · <code>--color-fill</code></td><td>black 10% · 7%</td><td>white 10% · 10%</td><td><code>Divider()</code> · <code>.quaternary</code></td><td>Row rules, meter tracks</td></tr>
+    <tr><td><code>--color-green</code> <code>orange</code> <code>red</code></td><td><span class="sw" style="background:#28CD41"></span><span class="sw" style="background:#FF9500"></span><span class="sw" style="background:#FF3B30"></span></td><td><span class="sw" style="background:#32D74B"></span><span class="sw" style="background:#FF9F0A"></span><span class="sw" style="background:#FF453A"></span></td><td><code>.green</code> <code>.orange</code> <code>.red</code></td><td>Status glyphs only; the word beside them carries meaning</td></tr>
+  </table></div>
+  <h3>Type, spacing, radii</h3>
+  <div class="scroll"><table>
+    <tr><th>Token</th><th>Value</th><th>SwiftUI</th></tr>
+    <tr><td><code>--text-large-title</code> … <code>--text-caption</code></td><td>26 / 22 / 17 / 15 / 13b / 13 / 12 / 11 / 10 px</td><td><code>.largeTitle .title .title2 .title3 .headline .body .callout .subheadline .caption</code></td></tr>
+    <tr><td><code>--font-mono</code> on <code>.fig</code></td><td>SF Mono, tabular</td><td><code>.font(.body.monospaced())</code> for figures; <code>.monospacedDigit()</code> inside prose</td></tr>
+    <tr><td><code>--space-1</code> … <code>--space-10</code></td><td>4 8 12 16 20 24 32 40</td><td><code>.padding(4…40)</code>, <code>VStack(spacing:)</code></td></tr>
+    <tr><td><code>--radius-control / group / sheet</code></td><td>6 / 10 / 12</td><td>System default on <code>.bordered</code>, <code>Form(.grouped)</code>, <code>.sheet</code>: no custom shapes</td></tr>
+    <tr><td><code>--size-sidebar</code> · <code>--size-meter</code></td><td>220 · 6</td><td><code>.navigationSplitViewColumnWidth(220)</code> · <code>ProgressView(.linear)</code></td></tr>
+  </table></div>
+  <h3>Component map</h3>
+  <p>Window: <code>NavigationSplitView</code> + <code>List(selection:)</code> sidebar, later steps disabled until reached. Detail: <code>.navigationTitle</code> + <code>.navigationSubtitle("Step n of 5")</code>, toolbar actions. Sections: <code>Form { Section }.formStyle(.grouped)</code>. Results: <code>Table</code>. Consent: <code>.sheet</code> with Cancel / Install as <code>.cancelAction</code> / <code>.defaultAction</code>. Banner: a view in <code>.safeAreaInset(edge: .top)</code>. Launch and failure: <code>ContentUnavailableView</code>-style centred stack. Busy: <code>.disabled(job != nil)</code> plus the caption.</p>
+  <h3>Stylesheet</h3>
+  <pre id="tok-src"></pre>
+</section>
+</div>
+
+<script>
+const STEPS=[["mac","Your Mac","i-mac"],["engines","Engines","i-engines"],["models","Models","i-models"],["bench","Benchmark","i-bench"],["results","Results","i-results"]];
+const originals={};
+document.querySelectorAll(".win[id]").forEach(w=>originals[w.id]=w.innerHTML);
+document.querySelectorAll(".win:not(.bare)").forEach(w=>{
+  if(w.dataset.clone) w.innerHTML+=originals[w.dataset.clone];
+  const step=w.dataset.step, done=(w.dataset.done||"").split(",");
+  const idx=STEPS.findIndex(s=>s[0]===step);
+  const tools=w.querySelector(".tools"), banner=w.querySelector(".banner"), scrim=w.querySelector(".scrim");
+  [tools,banner,scrim].forEach(n=>n&&n.remove());
+  const body=w.innerHTML;
+  const nav=STEPS.map(([k,l,i],n)=>`<a class="${k===step?"on":n>idx?"locked":""}"><svg><use href="#${i}"/></svg>${l}${done.includes(k)?'<svg class="done"><use href="#i-check"/></svg>':""}</a>`).join("");
+  w.innerHTML=`<aside class="side"><div class="lights"><i></i><i></i><i></i></div><div class="side-label">Setup</div><nav>${nav}</nav><div class="side-foot">Nothing changes on this Mac without a click.</div></aside>
+  <div class="main"><header class="bar"><div class="t"><b>${STEPS[idx][1]}</b><span>${w.dataset.sub||""}</span></div></header><div class="content">${body}</div></div>`;
+  const bar=w.querySelector(".bar");
+  if(tools) bar.append(tools);
+  if(banner) bar.after(banner);
+  if(scrim) w.append(scrim);
+});
+document.querySelectorAll(".win.bare").forEach(w=>w.insertAdjacentHTML("afterbegin",'<div class="lights"><i></i><i></i><i></i></div>'));
+document.getElementById("tok-src").textContent=document.getElementById("tokens").textContent.trim();
+</script>
