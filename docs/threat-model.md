@@ -15,7 +15,7 @@ This review changes no code. The fixes are plan 045-02.
 > be fixed yet. For each of those, this document gives only the id, severity and area. Its reproduction detail
 > is kept in a local, gitignored file and moves into this document in the commit that fixes it.
 
-Related documents: `docs/interfaces.md` (the pinned API and job shapes), `AGENTS.md` (runtime hazards),
+Related documents: `docs/interfaces/v5-onboarding.md` (the pinned API and job shapes), `AGENTS.md` (runtime hazards),
 `.paul/phases/v5-onboarding/PLAN.md` (decisions D1-D10).
 
 ---
@@ -542,7 +542,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 | The Osaurus app rewriting its config mid-run | 04-03a audit #1 | T-05, fixed in 045-02 |
 | A user's own Osaurus edit made during a run is overwritten by restore | 04-03a audit #2 | T-05: the fix keeps the user's current files as a second backup |
 | fetch's post-transfer snapshot-conflict check | PHASE-4-SUMMARY | T-16, **fixed in 045-02b (part B)** |
-| The Osaurus baseline's location in a packaged app | PHASE-4-SUMMARY, `docs/interfaces.md` | T-03, fixed in 045-02, plus P5-6 |
+| The Osaurus baseline's location in a packaged app | PHASE-4-SUMMARY, `docs/interfaces/v5-quickbench.md` | T-03, fixed in 045-02, plus P5-6 |
 | The Swift client never logging the token | 04-01 audit #1 | Checklist P5-1 and P5-2 |
 | UAT-001: `fetch.downloaded` compares sizes | 04-UAT | **ACCEPTED** (Jason, 2026-11-03). A size mismatch reads as "not ours". Only files rewritten outside the downloader hit it. The Phase 5 copy says "re-download" (P5-11). |
 | Rate limiting or lockout on repeated 401s | 04-01 audit #2 | ACCEPTED (section 9) |

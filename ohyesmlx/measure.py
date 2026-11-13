@@ -8,7 +8,7 @@ module never speaks HTTP (``ohyesmlx/transport.py`` does) and never spawns a ser
 
 What this module refuses to do:
 
-* **Have two decode tok/s definitions.** There is exactly one, from ``docs/interfaces.md``::
+* **Have two decode tok/s definitions.** There is exactly one, from ``docs/interfaces/measurement-core.md`` (**Metric formulas**)::
 
       decode_tps  = completion_tokens / (last_content_s - ttft_s)
       prefill_tps = prompt_tokens / ttft_s

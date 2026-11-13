@@ -1124,7 +1124,7 @@ def _rollback(created: list[str], engines_dir: str, send) -> None:
 
 
 def _job_event(seq: int, kind: str, message: str, fraction=None, payload=None) -> dict:
-    """The pinned job-event shape (``docs/interfaces.md`` **Job**), built in one place.
+    """The pinned job-event shape (``docs/interfaces/v5-onboarding.md`` **Job**), built in one place.
 
     Every module that emits on a job's stream -- ``install``, ``fetch``, ``quickbench`` --
     and the server's own guard events ask this, so the five keys cannot drift apart.

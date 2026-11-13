@@ -1115,7 +1115,7 @@ def _app(args) -> int:
 
     stdin EOF is the parent-death signal -- the app holds the pipe open for exactly as long as
     it lives -- which is why ``ohyesmlx app </dev/null`` exits at once, by design (documented in
-    ``docs/interfaces.md``). SIGINT and SIGTERM end the same serve loop, and every path leaves
+    ``docs/interfaces/v5-onboarding.md``). SIGINT and SIGTERM end the same serve loop, and every path leaves
     through a job wait and ``server_close()`` with exit 0, so the port is released before the
     process is gone. AC-6: a running install or download is cancelled first (at its next step
     boundary) and waited for at most 120 s -- an evict is only waited for -- and a step still

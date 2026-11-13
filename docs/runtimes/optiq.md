@@ -668,10 +668,10 @@ onto the non-streaming response and the streamed `include_usage` frame alike.
 
 What that means for this harness:
 
-- `docs/interfaces.md` pins
+- `docs/interfaces/measurement-core.md` pins
   `reasoning_tokens: int | None  # from usage.completion_tokens_details, if present`. On 0.5.13
   that field **is** present on OptiQ — this document used to call it a permanent `None` and a
-  blocker for `interfaces.md`. That claim is withdrawn.
+  blocker for `docs/interfaces/measurement-core.md`. That claim is withdrawn.
 - `completion_tokens` still *includes* reasoning: the patch adds the breakdown, it does not
   subtract. `completion_tokens - reasoning_tokens` is the content-only count, and that subtraction
   is only comparable against a runtime that reports the same breakdown.

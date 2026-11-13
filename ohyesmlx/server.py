@@ -22,7 +22,7 @@ or a top-level navigation carries no ``Origin`` and a correct ``Host``; the othe
 defence in depth. The guard answers in a fixed order with fixed messages, so no refusal can
 echo a header value or the token back to its caller.
 
-The response bodies are the shapes pinned in ``docs/interfaces.md`` (v5.0), serialised with
+The response bodies are the shapes pinned in ``docs/interfaces/v5-onboarding.md``, serialised with
 ``dataclasses.asdict``: this module composes, it does not translate.
 """
 
@@ -106,7 +106,7 @@ _JOB_FLAGS = {"quickbench": ("osaurus",)}
 # action is nothing this server serves, and a path that does not match is 404.
 _JOB_PATH = re.compile(r"/jobs/([0-9a-f]{16})(/events|/cancel)?")
 
-# The pinned codes with their statuses (docs/interfaces.md, v5.0, **Errors**). The message is
+# The pinned codes with their statuses (docs/interfaces/v5-onboarding.md, **Errors**). The message is
 # fixed per code, so a refusal can never echo a header value or the token; ``internal``,
 # ``install_plan_failed`` and ``bad_args`` carry a message instead, and no exception this module
 # raises on its own path includes request data (``bad_args`` names a JSON key, never a value).
@@ -299,7 +299,7 @@ def _args_problem(args, name_key: str, *, flags=()) -> str | None:
     Names, versions, paths and disk numbers are not checked here: a string that is not an
     engine or a catalog repo is the module's own refusal (``unknown_engine``, ``unknown_repo``),
     delivered on the job's stream. ``confirmed`` must be JSON ``true`` -- not ``"true"``, not 1
-    -- because it is the client's statement that a user chose this action (docs/interfaces.md).
+    -- because it is the client's statement that a user chose this action (docs/interfaces/v5-onboarding.md, **Job**).
     *flags* are the booleans a kind also takes (quickbench's ``osaurus``); each is required and
     must be a JSON bool, for the same reason ``confirmed`` is: it records a choice.
     """

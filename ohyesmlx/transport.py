@@ -60,7 +60,7 @@ class Observation:
     content_event_count: int
     text: str
     token_source: str
-    # Appended last, not slotted in beside ``text`` where docs/interfaces.md lists it: a
+    # Appended last, not slotted in beside ``text`` where docs/interfaces/measurement-core.md lists it: a
     # field with a default cannot precede one without, and the default is what lets the
     # failure path in measure.py build an Observation with no reasoning to report.
     reasoning_text: str = ""

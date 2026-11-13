@@ -678,7 +678,7 @@ settings-file-only change and it is not the default.
 | Aggregate throughput | unchanged | The project's aggregate figure was never affected |
 | Channel counts | both `content_event_count` and `reasoning_event_count` | A single content delta is a *signal*, not a failure |
 
-`docs/interfaces.md` pins `ttft_s` as "send → first CONTENT delta. Reasoning deltas excluded."
+`docs/interfaces/measurement-core.md` pins `ttft_s` as "send → first CONTENT delta. Reasoning deltas excluded."
 For this runtime that is the one channel carrying no timing information at all — the defect is
 in the instrument, not the runtime.
 

@@ -19,6 +19,9 @@ points at STATE, the research docs and this file rather than copying them. Super
 go to `.paul/archive/`, which is history and not required reading. Where HANDOFF and STATE
 disagree, STATE wins.
 
+`.paul/DECISIONS.md` is the full decision log, also history rather than state: STATE keeps only
+recent decisions, and older rows move there verbatim when STATE is trimmed (2026-11-13).
+
 ## The one rule that defines this project
 
 **Vary one thing at a time.**
@@ -151,7 +154,7 @@ Traps worth keeping:
   file needs `implement`.
 - The collateral-deletion guard compares definition snapshots and misfires under fan-out —
   concurrent workers' files register as deletions. Verify against `git`, not the warning.
-- Pin interfaces in `docs/interfaces.md` before fanning out. Shapes are the coupling.
+- Pin interfaces in `docs/interfaces/` before fanning out. Shapes are the coupling.
 
 ## Never infer a capability from the absence of a flag
 

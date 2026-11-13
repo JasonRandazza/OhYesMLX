@@ -1,0 +1,90 @@
+I'll start by mapping the section structure of `docs/interfaces.md` without reading it whole.
+Headings confirmed: 21 sections. Now let me find every live reference to `interfaces.md`.
+Now let me read each reference in context so I can map it to the right new file.
+
+All 21 sections mapped. Line ranges align with the task's groups (transport→Metric formulas = lines 9–500, etc.). Let me write the split script.
+
+Split written. Now the mandatory verification script.
+
+The table wrapped headings containing inner backticks in backticks — broken nesting. I'll emit the raw heading text instead.
+
+The script now reads its own output. I'll source the original from `git show HEAD` instead.
+
+Verification is clean. Now let me confirm two mappings before editing: the baseline-path pin and the Job shape location.
+Line numbers shifted by the new headers. Let me re-read with the offsets applied.
+Mappings confirmed. Now I'll update the live references, starting with the package modules.
+
+
+
+
+All references updated. Now the required verification pass.
+
+Green at 1329. Now let me capture a true pre-change baseline via a detached worktree (no changes to the working tree), and red-check the verifier so I know it isn't vacuous.
+Baseline shows 1327 passed + 2 skipped — I need to explain why my run has 1329 passed and no skips. Let me get the skip reasons.
+Both skips are missing gitignored `results/grid` fixtures in the fresh worktree — so the real baseline is 1327 passed + 2 skipped = 1329 collected. Now the verifier red check.
+
+
+Verifier red-checks correctly. Cleaning up the worktree and confirming the index's preamble/row count.
+Two things to check: the shell rejected process substitution, and `.paul/STATE.md` plus two `.paul` files are dirty though I never touched them.
+The `.paul` changes are a separate decisions refactor, not mine. Let me confirm timing and clean up my worktree.
+
+Done, uncommitted.
+
+**New files (lines):** measurement-core 496, grid-and-warmup 269, sweep-pins 309, study-pins 303, v5-onboarding 204, v5-quickbench 204, v5-hardening 107. Each starts with `# <subject> — interface shapes` plus one sentence. `docs/interfaces.md` is now 31 lines: original preamble (byte-identical to `HEAD` lines 1–8) and a 21-row heading→file table; every heading present, all links resolve.
+
+**Verification**
+- Verifier (scratchpad, uncommitted): concatenates the seven files' `## ` sections in mapping order, compares to `git show HEAD:docs/interfaces.md` → `IDENTICAL` (127,265 bytes, 1,864 lines), heading order `SAME`. Red-checked on a replica with one byte appended → `DIFFERENT`, exit 1; real tree → `IDENTICAL`.
+- `grep -rn 'interfaces\.md'` over the named live paths → zero matches. 25 references now name a specific file, keeping section names where given (**Metric formulas**, **Errors**, **Job**).
+- pytest: 1329 passed. Baseline at HEAD in a detached worktree: 1327 passed + 2 skipped (both skips = missing gitignored `results/grid` fixture), i.e. 1329 collected and green either way.
+
+**Notes**
+- `ohyesmlx/longtext.md` (3 mentions) is outside the allowed files; left stale.
+- Generic mentions (AGENTS.md, PREAMBLE) point at `docs/interfaces/` — no single file holds them. threat-model:18 names API+Job shapes → v5-onboarding; its baseline-path row → v5-quickbench.
+- `.paul/STATE.md`, `.paul/DECISIONS.md`, `.paul/orders/v5-prototype-p5-flows.md` are dirty from concurrent work, not mine.
+
+Unverified: nothing beyond the checks above.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     31    1908670    1771008    30692   92.8%   0.044378
+
+== cc-agent: git status ==
+ M .paul/STATE.md
+ M .paul/orders/PREAMBLE.md
+ M AGENTS.md
+ M docs/interfaces.md
+ M docs/runtimes/lab-copies.md
+ M docs/runtimes/omlx.md
+ M docs/runtimes/optiq.md
+ M docs/threat-model.md
+ M ohyesmlx/cli.py
+ M ohyesmlx/engines.py
+ M ohyesmlx/measure.py
+ M ohyesmlx/report.py
+ M ohyesmlx/server.py
+ M ohyesmlx/transport.py
+ M scripts/smoke_clean_account.sh
+ M tests/test_measure.py
+ M tests/test_report.py
+?? .paul/DECISIONS.md
+?? .paul/orders/v5-docs-interfaces-split.log
+?? .paul/orders/v5-docs-interfaces-split.md
+?? .paul/orders/v5-prototype-p5-flows.md
+?? docs/interfaces/
+ .paul/STATE.md                 |  101 +--
+ .paul/orders/PREAMBLE.md       |    6 +-
+ AGENTS.md                      |    2 +-
+ docs/interfaces.md             | 1887 +---------------------------------------
+ docs/runtimes/lab-copies.md    |    4 +-
+ docs/runtimes/omlx.md          |    2 +-
+ docs/runtimes/optiq.md         |    4 +-
+ docs/threat-model.md           |    4 +-
+ ohyesmlx/cli.py                |    2 +-
+ ohyesmlx/engines.py            |    2 +-
+ ohyesmlx/measure.py            |    2 +-
+ ohyesmlx/report.py             |    4 +-
+ ohyesmlx/server.py             |    6 +-
+ ohyesmlx/transport.py          |    2 +-
+ scripts/smoke_clean_account.sh |    2 +-
+ tests/test_measure.py          |    4 +-
+ tests/test_report.py           |    4 +-
+ 17 files changed, 50 insertions(+), 1988 deletions(-)

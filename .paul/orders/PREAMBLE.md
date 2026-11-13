@@ -17,7 +17,7 @@ Eighteen modules in `ohyesmlx/`. Measurement: `transport.py` (SSE client), `runt
 `report.py`, `sample.py`, `token_counter.py`, `canary.py`. v5.0 onboarding app backend:
 `hardware.py`, `engines.py` (detect + install), `catalog.py`, `recommend.py`, `fetch.py`
 (downloads), `server.py` (localhost API), `quickbench.py`. Entry: `cli.py`. Tests mirror them
-in `tests/`. Several files run past 900 lines and `docs/interfaces.md` past 1,800.
+in `tests/`. Several files run past 900 lines and `docs/interfaces/` past 1,800.
 
 ## The rules that outrank convenience
 
@@ -35,7 +35,7 @@ in `tests/`. Several files run past 900 lines and `docs/interfaces.md` past 1,80
   generation_duration of 0.0.
 - **No new dependency without naming what it replaces.** No speculative abstraction, no
   interface with one implementation, no config for a value that never changes.
-- `docs/interfaces.md` pins the shapes modules compose on. Read it before changing one.
+- `docs/interfaces/` pins the shapes modules compose on. Read the file for your subject before changing one.
 
 ## How to work
 
@@ -61,7 +61,7 @@ Locate code with it instead of reading whole files:
 - `graphify path "<A>" "<B>"` — how two symbols connect.
 
 Then read only those line ranges (offset/limit, or `sed -n 'A,Bp'`). Never read a file over
-400 lines whole, and never read `docs/interfaces.md` whole: grep it for the shape you need.
+400 lines whole, and never read a `docs/interfaces/*.md` file whole: grep it for the shape you need.
 Do not run `graphify update` yourself; the coordinator refreshes it after every change.
 
 ## Pace

@@ -1,6 +1,6 @@
 """Join measure's raw numbers into one row per cell and one leaderboard.
 
-The metric formulas are the ones pinned in ``docs/interfaces.md``, not re-derived here::
+The metric formulas are the ones pinned in ``docs/interfaces/measurement-core.md``, not re-derived here::
 
     decode_tps  = completion_tokens / (last_content_s - ttft_s)
     prefill_tps = prompt_tokens / ttft_s
@@ -321,7 +321,7 @@ CROSS_RUNTIME_UNCOMPARABLE = {
 # `content_event_count`: the content deltas ordinarily, and the reasoning deltas when a runtime
 # streamed its whole answer in that channel or mirrored it into content
 # (`transport.timing_channel`, and "Which channel is the output stream" in
-# docs/interfaces.md). So a row timed on reasoning measures the model's first token out of it,
+# docs/interfaces/measurement-core.md). So a row timed on reasoning measures the model's first token out of it,
 # and one timed on content measures the first *content* token — which on a thinking model lands
 # after the whole reasoning run, seconds later. Read side by side on a runtime axis those are
 # two definitions of first-token latency, and the ordering would compare them rather than the

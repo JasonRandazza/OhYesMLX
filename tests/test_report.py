@@ -1,6 +1,6 @@
 """Checks for ohyesmlx.report and ohyesmlx.cli.
 
-``measure.py`` (issue #5) is being written concurrently against docs/interfaces.md, so the
+``measure.py`` (issue #5) is being written concurrently against docs/interfaces/measurement-core.md, so the
 shapes it will hand over are stood in for here: ``FakeObservation``, ``FakeCell`` and
 ``FakeCellResult`` are transcriptions of the contract, and no module under test is patched
 to make them fit. Everything else runs for real — the JSONL is parsed back off disk, the
@@ -19,7 +19,7 @@ import pytest
 
 from ohyesmlx import cli, measure, report, runtimes
 
-# --- stand-ins for docs/interfaces.md (measure.py, issue #5) -------------------------------
+# --- stand-ins for docs/interfaces/measurement-core.md (measure.py, issue #5) --------------
 
 
 @dataclasses.dataclass(frozen=True)

@@ -1,7 +1,7 @@
 """Checks for ohyesmlx.measure.
 
 ``ohyesmlx/transport.py`` and ``ohyesmlx/runtimes.py`` are written against the same
-``docs/interfaces.md`` by other workers, so nothing here opens a socket or spawns a
+``docs/interfaces/measurement-core.md`` by other workers, so nothing here opens a socket or spawns a
 server: the fakes below are the module contract written down twice, and they record the
 order of every start, request, stop and cooldown so the loop's shape can be checked
 without a Mac and without a model.
@@ -618,7 +618,7 @@ def test_two_workloads_cannot_share_an_id(harness):
 
 # ---------------------------------------------------------------------- the warmup window
 
-# The rule, from docs/interfaces.md: a window opens with the floor of three, the last three
+# The rule, from docs/interfaces/grid-and-warmup.md: a window opens with the floor of three, the last three
 # rates have to stop moving within 3% of their median, and the cap of sixteen ends it either
 # way. The rates below are built by solving `decode_tps` for timestamps, so a test's warmup
 # population is exactly the one a real stream would have produced.

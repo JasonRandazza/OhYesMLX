@@ -34,7 +34,7 @@ the row says UNKNOWN and names the probe.
 **Status of the harness side.** The machine-local reader this document describes
 (`engines.lab_paths`, `engines.LAB_PATHS_FILE`, `engines.LAB_ENGINES`), the merge in
 `runtimes._engine_env` and the detection preference in `engines.detect_all` are implemented in the
-working tree as this is written (plan 025-03's second task); `docs/interfaces.md`'s v5.0 note is
+working tree as this is written (plan 025-03's second task); `docs/interfaces/v5-onboarding.md`'s v5.0 note is
 the pinned shape. `scripts/lab-copies-wizard.sh` (the interactive steps only Jason can take) is the
 same plan's checkpoint and is generated from this document — this document is its source, not its
 summary. Nothing else here is enforced by code. A procedure a human performs is a procedure that
@@ -594,7 +594,7 @@ quietly shrink.
   settings surface), `docs/runtimes/vmlx.md` (§1.1 the wrapper, §1.4 the GUI composes the CLI),
   `docs/runtimes/mlx-lm.md` (§1 start command), `docs/runtimes/optiq.md` (§1.1 shebang, §3
   settings outside the venv).
-- `docs/interfaces.md` — the pinned shapes; the v5.0 note on `lab_path` is the contract this
+- `docs/interfaces/v5-onboarding.md` — the v5.0 pinned shapes; the note on `lab_path` is the contract this
   document's §3 implements.
 - `AGENTS.md` — one model resident at a time; nothing else runs during a cell; never infer a
   capability from the absence of a flag; the Osaurus standing authorisation.

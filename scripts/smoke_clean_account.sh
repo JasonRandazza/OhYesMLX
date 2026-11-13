@@ -169,7 +169,7 @@ setup() {
 
 # AC-6: a crash mid-quickbench must not leave a model resident. The trap kills the client
 # first, because the client's death is what closes the app's stdin and stdin EOF is the app's
-# own shutdown signal (docs/interfaces.md); it then gives the app its own moment to exit and
+# own shutdown signal (docs/interfaces/v5-onboarding.md); it then gives the app its own moment to exit and
 # sweeps whatever is left: the app, any engine listening on an AC-1 port, any engine out of
 # the app's own engines directory, and the two in-bundle engine tools. One pass is not enough
 # because an engine child still loading when the app died has not bound its port yet and
