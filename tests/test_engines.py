@@ -319,8 +319,7 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--require-hashes",
             "--only-binary",
             ":all:",
-            # --no-deps: the file, not pip's resolver, is the closure. It is what keeps
-            # pygame out: mlx-optiq declares it, nothing here installs it (045-03).
+            # --no-deps: see engines._command_plan.
             "--no-deps",
             # The requirements file names both packages: OptiQ's own pin and mlx-lm's,
             # because OptiQ serves through mlx_lm.server and does not pin it: unpinned, pip

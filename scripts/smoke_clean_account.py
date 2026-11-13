@@ -21,14 +21,16 @@ import json
 import os
 import pathlib
 import re
+import select
 import socket
 import subprocess
 import sys
 import threading
 import time
 
-# AC-1's list, the same six the .sh preflights: a run that leaves one held has failed.
-PORTS = (1337, 8000, 8080, 8081, 8100, 8200)
+# AC-2: the app must write its launch line and nothing else, and a child that writes nothing
+# must not hang the client, so the first read is bounded.
+LAUNCH_TIMEOUT_S = 60
 
 # The order's bounds. An install is two pip steps at most; a download is 0.35 GB; a
 # quickbench is one light cell per installed engine.
@@ -82,6 +84,11 @@ def parse_launch(text: str) -> tuple[int, str]:
     if not isinstance(token, str) or not token:
         raise LaunchLineError(f"token must be a non-empty string, got {token!r}")
     return port, token
+
+
+def parse_ports(text: str) -> tuple[int, ...]:
+    """The AC-1 port list, from the ``.sh``'s ``PORTS`` -- the one definition of it."""
+    return tuple(int(token) for token in text.split())
 
 
 def _sse_frame(block: str) -> dict | None:
@@ -162,8 +169,8 @@ def pip_argv_problems(plan, engine: str, package_dir: str) -> list[str]:
     cover), ``--isolated`` keeps a user's pip config out of the index choice, ``--no-deps``
     makes the file the whole closure so pip resolves nothing of its own, and the
     constraints file must be the one the installed package ships rather than any file the
-    user can edit. ``--no-deps`` is also what keeps mlx-optiq's pygame out of the optiq
-    install (045-03).
+    user can edit. The ``--no-deps``/pygame reasoning is at ``ohyesmlx.engines``
+    (``_command_plan``).
     """
     problems: list[str] = []
     if not isinstance(plan, dict) or plan.get("kind") != "command":
@@ -248,10 +255,10 @@ def job_failed(events: list[dict]) -> str | None:
 
 
 def hub_repo_dir(model: str) -> pathlib.Path:
-    """Where a repo id lands in the HF cache: the ``models--org--name`` directory (AC-1/AC-5)."""
-    return pathlib.Path.home() / ".cache" / "huggingface" / "hub" / (
-        "models--" + model.replace("/", "--")
-    )
+    """Where a repo id lands in the HF cache (AC-1/AC-5): ``fetch``'s one definition of it."""
+    from ohyesmlx import fetch
+
+    return pathlib.Path(fetch._repo_dir(fetch.default_cache_dir(), model))
 
 
 def cell_outcomes(events: list[dict]) -> list[dict]:
@@ -437,6 +444,30 @@ def _port_free(port: int) -> bool:
         return probe.connect_ex(("127.0.0.1", port)) != 0
 
 
+def read_launch_line(stream, timeout_s: float) -> bytes | None:
+    """The child's first stdout line; None when it wrote none before *timeout_s* (AC-2).
+
+    Read from the raw fd, a byte at a time, so nothing is buffered ahead of the drain thread
+    and any line after the launch one is still there for it; bounded by ``select`` so a child
+    that stays alive without writing cannot hang the client.
+    """
+    fd = stream.fileno()
+    deadline = time.monotonic() + timeout_s
+    buffer = b""
+    while not buffer.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            return None
+        chunk = os.read(fd, 1)
+        if not chunk:
+            return buffer
+        buffer += chunk
+    return buffer
+
+
 def _mode(path: pathlib.Path) -> int | None:
     try:
         return os.stat(path).st_mode & 0o777
@@ -492,7 +523,7 @@ def check_ac3(client, model, checks):
         "volumes",
         "model_budget_bytes",
     )
-    missing = [key for key in keys if key not in hardware] if isinstance(hardware, dict) else list(keys)
+    missing = [key for key in keys if key not in hardware]
     add_check(
         checks,
         "AC-3.hardware",
@@ -765,7 +796,7 @@ def check_ac5(client, model, checks):
     )
 
 
-def check_ac6(checks, process, stdin_closed_error):
+def check_ac6(checks, process, stdin_closed_error, ports):
     """AC-6: closing stdin ends the child 0 within 10 s and frees every port."""
     code = None
     duration = None
@@ -785,12 +816,12 @@ def check_ac6(checks, process, stdin_closed_error):
         "PASS" if problem is None and code == 0 else "FAIL",
         {"exit": code, "seconds": duration, "problem": problem},
     )
-    held = [port for port in PORTS if not _port_free(port)]
+    held = [port for port in ports if not _port_free(port)]
     add_check(
         checks,
         "AC-6.ports_free",
         "PASS" if not held else "FAIL",
-        {"held": held} if held else {"ports": list(PORTS)},
+        {"held": held} if held else {"ports": list(ports)},
     )
 
 
@@ -800,7 +831,11 @@ def main(argv=None) -> int:
     parser.add_argument("--head", required=True, help="the git revision the wheel was built from")
     parser.add_argument("--forbid", required=True, help="a string no response may contain")
     parser.add_argument("--model", required=True, help="the catalog repo id to download")
+    parser.add_argument(
+        "--ports", required=True, help="AC-1's ports, space-separated, from the .sh's PORTS"
+    )
     args = parser.parse_args(argv)
+    ports = parse_ports(args.ports)
 
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -831,12 +866,16 @@ def main(argv=None) -> int:
         add_check(checks, "AC-3.no_host_paths", "SKIP", reason)
         return _finish(out, stamp, args, started, checks)
 
-    line = process.stdout.readline()
-    try:
-        port, token = parse_launch(line.decode("utf-8", "replace"))
-    except LaunchLineError as error:
-        launch_error = str(error)
+    launch_line = read_launch_line(process.stdout, LAUNCH_TIMEOUT_S)
+    if launch_line is None:
+        launch_error = f"no launch line within {LAUNCH_TIMEOUT_S} s"
         port, token = None, None
+    else:
+        try:
+            port, token = parse_launch(launch_line.decode("utf-8", "replace"))
+        except LaunchLineError as error:
+            launch_error = str(error)
+            port, token = None, None
     drain = threading.Thread(target=_drain, args=(process.stdout, extras), daemon=True)
     drain.start()
     launch_entry = check_ac2(checks, port, token, APP_SUPPORT, launch_error)
@@ -846,7 +885,7 @@ def main(argv=None) -> int:
         for group in ("AC-3", "AC-4", "AC-5"):
             add_check(checks, group, "SKIP", reason)
         add_check(checks, "AC-3.no_host_paths", "SKIP", reason)
-        _shut_down(checks, process, None)
+        _shut_down(checks, process, None, ports)
         return _finish(out, stamp, args, started, checks)
 
     # AC-6's own promise holds whatever happens in between: an exception in the checks must not
@@ -866,7 +905,7 @@ def main(argv=None) -> int:
         if leak_entry is None:
             leak_entry = add_check(checks, "AC-3.no_host_paths", "SKIP", crash)
     finally:
-        _shut_down(checks, process, None)
+        _shut_down(checks, process, None, ports)
         drain.join(timeout=2)
 
     # AC-2: every line the child wrote after the launch line is a module printing onto the
@@ -881,14 +920,14 @@ def main(argv=None) -> int:
     return _finish(out, stamp, args, started, checks)
 
 
-def _shut_down(checks, process, error) -> None:
+def _shut_down(checks, process, error, ports) -> None:
     """Close the child's stdin, wait for its own exit, and record AC-6 (AC-6)."""
     if error is None:
         try:
             process.stdin.close()
         except OSError as close_error:
             error = f"could not close the child's stdin: {close_error}"
-    check_ac6(checks, process, error)
+    check_ac6(checks, process, error, ports)
 
 
 def _finish(out: pathlib.Path, stamp: str, args, started: str, checks: list[dict]) -> int:

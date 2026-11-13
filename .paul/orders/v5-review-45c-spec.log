@@ -1,0 +1,46 @@
+I'll review the diff and spec. Let me gather the material first.
+Shell is blocked here, so I'll work with read/grep/glob. Let me read the fix orders and the changed files.
+Now let me examine the changed code. I'll look at the resolver, engines pip argv, and the smoke script.
+
+Now the bundle-executable table and the smoke script's checks.
+Now let me read the smoke script's check implementations in detail.
+
+Now the smoke script's helpers and Client (lines 40–412).
+Let me check the job/event contract in server.py and quickbench to validate the smoke's PASS conditions, plus the constraints file and docs.
+Let me look at the live evidence and the smoke shell script to see the AC-1/AC-6/AC-7 checks.
+Let me look at run1's evidence to see which checks passed despite the known breakage, and the .sh's run/verify sections.
+
+Let me check where start commands are recorded and how running engines are matched (stop/orphan sweep/serving_argv).
+Let me read the serving_argv capture and orphan-sweep match logic (runtimes.py 1700–1870).
+Let me check how `env`-prefixed commands are built (VMLX_MTP_FIXED_ENV) and where start_command bytes are recorded.
+
+Let me check run1's recorded head and the worker fix logs for the match-site analysis.
+Let me read the .sh setup/run sections to confirm run2's wheel came from the fixed HEAD.
+Now verifying the fix-order doc requirements (F1 item 5, F2 docs) and the tests.
+Let me check the run2 backend stderr and console logs for the vmlx start failure detail.
+Let me check docs/runtimes/vmlx.md for the verified vMLX bundle layout.
+Let me verify the F1 tests in test_engines.py and the F2 test block in test_runtimes.py.
+No files changed — read-only review. Verified by reading code, tests, and both runs' evidence (shell is blocked in this session, so no `git diff`/pytest: diff scope and suite count are unverified).
+
+**MUST-FIX — F2 is not effective for vmlx on the clean account.** run2 (head 369f180, the fix commit) records `could not start vmlx: [Errno 2] No such file or directory: 'vmlx'` (run2 JSON lines 286, 466, 548) — byte-identical to pre-fix run1 (line 275). The exception's filename is the bare token, so `_resolve_program` (ohyesmlx/runtimes.py:557–561) never substituted: the vmlx candidate at runtimes.py:162 fails `isfile`/`access(X_OK)` as oymlxtest (perms/ACL/traversal — needs a stat as the test user; omlx's substitution works, so the resolver itself fires). Fix-order requirement "exec that path instead" unmet in effect. All resolver tests monkeypatch the table (tests/test_runtimes.py:3444, 3463, 3480), so no test can catch a real-path failure — that's why it shipped.
+
+**MUST-FIX — AC-5.quickbench_cells cannot fail for app-engine breakage.** scripts/smoke_clean_account.py:722–729 asserts only `{"mlxlm","optiq"} <= passed`; the app engines are evidence-only. Demonstrated live: run2 records AC-5.quickbench_cells PASS while vmlx is dead with the F2 symptom (run2 JSON:517–550). AC-5's parenthetical ("oMLX and vMLX do run") is contradicted by its own evidence.
+
+**SHOULD-FIX — AC-6's pgrep check cannot catch a leak.** scripts/smoke_clean_account.sh:220–226 compares snapshots *after* `sweep` (line 220) has killed any leftover engine, and the result is only a log line — not in the results JSON, not in the exit status (line 227 returns the client's status).
+
+**NIT** — smoke_clean_account.sh:155 runs the client from the working tree while the wheel comes from `git archive HEAD` (line 146); `--head` records only the server's revision.
+
+The three explicit checks pass: recorded start commands stay byte-identical (resolution only at runtimes.py:570/596 on a tuple copy; ledger identity is captured post-exec from `ps` at :1759–1760 and matched the same way at :1837–1851; Osaurus app detection at :640 matches `Contents/MacOS`, which the resolver never execs); `env K=V` is skipped correctly (runtimes.py:547–555, test_runtimes.py:3478); `--no-deps` cannot admit a non-hashed package (`--require-hashes` plus `_check_hashed_requirements`, engines.py:722–746/861, refuses any unhashed or option line before install). F1's five items are all present (constraints pygame-free; `_SOURCE_BUILDS` deleted; engines.py:806–825; tests/test_engines.py:294–389; docs/threat-model.md:309, 567).
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     15     965754     884992    26227   91.6%   0.061135
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-45c-spec.log
+?? .paul/orders/v5-review-45c-spec.md
+?? .paul/orders/v5-review-45c-standards.log
+?? .paul/orders/v5-review-45c-standards.md
+?? .paul/phases/v5-onboarding/045-03-SUMMARY.md
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-20261113T192854Z.json
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-app-stderr.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-console.log

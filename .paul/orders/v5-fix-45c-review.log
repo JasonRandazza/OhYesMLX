@@ -1,0 +1,84 @@
+I'll read the review reports and the files in scope.
+Now let me check `fetch.py`'s directory definition and `engines.py`'s rationale.
+Let me check `fetch.default_cache_dir`, and every use of `PORTS` / `check_ac6` in the tests.
+Now let me check `_command_plan`'s location and the test_engines restatement.
+
+Now I have what I need. Starting with the `.py` edits.
+Now `hub_repo_dir` (item 3), the `--no-deps` rationale pointer (item 5), and the dead `else list(keys)` (item 6).
+Now the ports plumbing into `check_ac6` and `main`.
+Now the bounded launch read and ports plumbing in the .py.
+Now `_shut_down` and `main`.
+Now the bounded read call site and the `_shut_down` call sites.
+One refinement: read byte-at-a-time so any extra stdout lines stay in the pipe for the drain thread.
+
+Now the `.sh`: item 1 (two-pass sweep), item 8 (`git show` copy), `--ports`, and the preflight comment.
+Now the sweep rewrite and the `run` return.
+
+
+Now the test file: item 7 and the rationale restatement.
+Item 7 confirmed: the `optiq` iteration runs mlxlm's plan. Fixing that, the test-file rationale restatement, and adding tests for 2/3/4.
+
+Now the port-parsing test and a stronger `hub_repo_dir` test that binds it to `fetch`.
+
+
+Now `sh -n` and the suite.
+Suite is green at 1329 (baseline 1324 + 5 new). Now the red-check for item 2 — I'll replace the `select` bound with a blocking read and watch the new deadline test hang.
+Let me move that backup into the scratchpad, since /tmp is outside the working directory.
+
+Now the red-check: revert the bound so the read blocks, and watch the deadline test fail.
+Let me revert to the actual pre-fix form (an unbounded blocking read) so the failure is the real symptom.
+
+No `pytest-timeout` here, so I'll bound the run externally with `perl alarm`.
+
+The pre-fix form hangs forever, which is exactly the reported symptom. Let me capture that visibly with `-v`.
+Red-check confirmed: with the unbounded read the test hangs at `test_the_launch_read_is_bounded_and_returns_the_first_line` and never reaches the deadline. Restoring.
+The backup predates the red-check edit, so the restore is the fixed version. Let me clean up the stray /tmp file and verify the final state.
+`docs/threat-model.md` was already modified before I started — not mine. Let me verify the restored client and re-run the suite.
+The restore is clean. Let me review the `.sh` diff and fix one comment style.
+One correctness issue in my own sweep: a pid matched by both the port pass and the engines-dir pass would be counted twice, which overstates the residue. Let me dedupe.
+
+1329 passed. Let me verify each numbered item landed, and confirm nothing else was touched.
+Item 5 names "both test files" but the allowlist excludes `tests/test_engines.py`. Let me first tighten the `.sh` comment to the one line the order asks for.
+
+All items landed; suite green at 1329.
+
+**Changes**
+
+1. `.sh:181-227` — `sweep_once`/`sweep` two passes, `sleep 10` between; `sweep_hit` (`:186`) de-dupes pids and increments `SWEEP_SIGNALLED`; engines-dir + `omlx-cli` + `vmlx` patterns at `:210-216`. `run` returns 1 on residue (`:267`). All listings stay `as_test_user`.
+2. `.py:447-468` `read_launch_line` (`select`, byte-at-a-time so the drain still sees later lines); `:869-877` on timeout records AC-2 FAIL "no launch line within 60 s" and takes `_shut_down`.
+3. `.py:257-261` `hub_repo_dir` → `fetch._repo_dir(fetch.default_cache_dir(), model)`. `.sh:72` keeps its own with a one-line reason.
+4. `.py:89` `parse_ports`, `:835` `--ports` (required), `.sh:256` passes `$PORTS`; the `.py` tuple is deleted.
+5. `.py:172` and `tests/…:176` point at `engines._command_plan`.
+6. `.py:526` — `else list(keys)` deleted.
+7. `tests/…:188-192` — each iteration builds its own engine's plan.
+8. `.sh:158` — `git -C "$REPO" show HEAD:scripts/…py`.
+
+**Verified:** `sh -n` ok; `1329 passed in 46.64s` (baseline 1324, +5 tests). Red-check: replacing `read_launch_line` with `stream.readline()` made `test_the_launch_read_is_bounded_and_returns_the_first_line` hang until killed at 15 s (exit 142) — restored from backup and re-ran green.
+
+**Not verified:** no setup/run/teardown, no sudo, no `ohyesmlx app`; the two-pass sweep and the `git show` copy are unexercised by the suite.
+
+**BLOCKED item:** order 5 says "both test files", but `tests/test_engines.py:322-323` restates the pygame rationale and is excluded from the allowed files. I left it; it needs either a yes to touch it or a reworded order.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     43    3044968    2965248    62974   97.4%   0.058638
+
+== cc-agent: git status ==
+ M docs/threat-model.md
+ M scripts/smoke_clean_account.py
+ M scripts/smoke_clean_account.sh
+ M tests/test_smoke_clean_account.py
+?? .paul/orders/v5-fix-45c-review.log
+?? .paul/orders/v5-fix-45c-review.md
+?? .paul/orders/v5-review-45c-spec.log
+?? .paul/orders/v5-review-45c-spec.md
+?? .paul/orders/v5-review-45c-standards.log
+?? .paul/orders/v5-review-45c-standards.md
+?? .paul/phases/v5-onboarding/045-03-SUMMARY.md
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-20261113T192854Z.json
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-app-stderr.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-console.log
+ docs/threat-model.md              |  2 +-
+ scripts/smoke_clean_account.py    | 81 +++++++++++++++++++++++++++++----------
+ scripts/smoke_clean_account.sh    | 58 +++++++++++++++++++++++-----
+ tests/test_smoke_clean_account.py | 61 ++++++++++++++++++++++++++++-
+ 4 files changed, 169 insertions(+), 33 deletions(-)

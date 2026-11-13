@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
 import types
 
@@ -55,6 +56,41 @@ def test_launch_line_refuses_every_shape_it_does_not_pin(text, expected):
     with pytest.raises(smoke.LaunchLineError) as caught:
         smoke.parse_launch(text)
     assert expected in str(caught.value)
+
+
+def test_the_launch_read_is_bounded_and_returns_the_first_line():
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd, "rb") as stream:
+            assert smoke.read_launch_line(stream, 0.05) is None, "no line within the deadline"
+            os.write(write_fd, b'{"port": 1, "token": "t"}\n')
+            assert smoke.read_launch_line(stream, 5) == b'{"port": 1, "token": "t"}\n'
+    finally:
+        os.close(write_fd)
+
+
+def test_the_launch_read_stops_at_the_first_line_and_leaves_the_rest():
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd, "rb") as stream:
+            os.write(write_fd, b"one\ntwo\n")
+            assert smoke.read_launch_line(stream, 5) == b"one\n"
+            assert stream.readline() == b"two\n", "the extra line is still there to be seen"
+    finally:
+        os.close(write_fd)
+
+
+def test_the_launch_read_returns_a_partial_line_at_eof():
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd, "rb") as stream:
+            os.write(write_fd, b'{"port": 1')
+            os.close(write_fd)
+            write_fd = -1
+            assert smoke.read_launch_line(stream, 5) == b'{"port": 1'
+    finally:
+        if write_fd != -1:
+            os.close(write_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +173,7 @@ def _as_plan(plan):
 
 
 def test_both_pip_engines_install_with_no_deps_and_wheels_only():
-    """045-03: the file is the closure, so pip resolves nothing — and pygame stays out."""
+    """The ``--no-deps``/pygame rationale is at ``ohyesmlx.engines`` (``_command_plan``)."""
     from ohyesmlx import engines
 
     package_dir = str(pathlib.Path(engines.__file__).resolve().parent)
@@ -152,8 +188,8 @@ def test_pip_argv_problems_names_a_missing_no_deps():
     from ohyesmlx import engines
 
     package_dir = str(pathlib.Path(engines.__file__).resolve().parent)
-    plan = _as_plan(engines.install_plan("mlxlm", 15))
     for name in ("mlxlm", "optiq"):
+        plan = _as_plan(engines.install_plan(name, 15))
         assert smoke.pip_argv_problems(_strip(plan, "--no-deps"), name, package_dir) == [
             f"{name}: the pip step has no --no-deps"
         ]
@@ -293,6 +329,27 @@ def test_hub_repo_dir_is_the_models_dash_dash_name():
     assert smoke.hub_repo_dir("mlx-community/Qwen3-0.6B-4bit").name == (
         "models--mlx-community--Qwen3-0.6B-4bit"
     )
+
+
+def test_hub_repo_dir_asks_fetch_instead_of_rebuilding_the_name(monkeypatch):
+    """045-03: one definition of the hub directory, and it is ``fetch``'s."""
+    from ohyesmlx import fetch
+
+    asked = []
+    monkeypatch.setattr(fetch, "default_cache_dir", lambda: "/cache/hub")
+    monkeypatch.setattr(
+        fetch, "_repo_dir", lambda root, repo: asked.append((root, repo)) or f"{root}/asked"
+    )
+    assert smoke.hub_repo_dir("org/name") == pathlib.Path("/cache/hub/asked")
+    assert asked == [("/cache/hub", "org/name")]
+
+
+def test_ports_are_the_shs_list_space_separated():
+    """045-03: ``PORTS`` in the .sh is the definition; the client parses what it is given."""
+    assert smoke.parse_ports("1337 8000 8080") == (1337, 8000, 8080)
+    assert smoke.parse_ports(" 1337\n8000 ") == (1337, 8000)
+    with pytest.raises(ValueError):
+        smoke.parse_ports("1337 8o00")
 
 
 def test_outcome_records_the_client_interval_and_the_last_event():

@@ -1,0 +1,11 @@
+{"refused": "unauthorized", "method": "GET", "path": "/hardware", "time": "2026-11-13T19:28:54.850673+00:00"}
+{"job": "19e9e3f27e40b454", "kind": "install", "name": "mlxlm", "time": "2026-11-13T19:28:54.861802+00:00"}
+{"job": "19e9e3f27e40b454", "ok": true, "code": null, "time": "2026-11-13T19:29:07.920775+00:00"}
+{"job": "71566c2cb3383c11", "kind": "install", "name": "optiq", "time": "2026-11-13T19:29:07.921546+00:00"}
+{"job": "71566c2cb3383c11", "ok": true, "code": null, "time": "2026-11-13T19:29:24.569236+00:00"}
+{"job": "380e367222566b41", "kind": "download", "name": "mlx-community/Qwen3-0.6B-4bit", "time": "2026-11-13T19:29:24.605468+00:00"}
+{"job": "380e367222566b41", "ok": true, "code": null, "time": "2026-11-13T19:31:44.563032+00:00"}
+{"job": "fde44815c8ca3b67", "kind": "quickbench", "name": "mlx-community/Qwen3-0.6B-4bit", "time": "2026-11-13T19:31:44.620583+00:00"}
+{"job": "fde44815c8ca3b67", "ok": true, "code": null, "time": "2026-11-13T19:33:45.431927+00:00"}
+{"job": "0a2beb183d17d834", "kind": "evict", "name": "mlx-community/Qwen3-0.6B-4bit", "time": "2026-11-13T19:33:45.432911+00:00"}
+{"job": "0a2beb183d17d834", "ok": true, "code": null, "time": "2026-11-13T19:33:45.440493+00:00"}

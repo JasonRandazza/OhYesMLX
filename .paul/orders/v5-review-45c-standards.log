@@ -1,0 +1,48 @@
+I'll review the diff range against the standards. Let me start by getting the change set.
+Shell is blocked in this mode — I'll work read-only with file tools. Let me find the changed files.
+
+Now the test file and the ohyesmlx side of the fixes.
+Now the engines.py changes (F1 install plan, F2 bundle exec).
+Let me find the F2 fix (app engines exec from their bundle under launchd PATH).
+I can't run git in this mode, so I'll locate the changed surfaces by content. Checking for duplicated definitions — the hub-repo naming, the port list, and the pip rationale in docs.
+Shell is blocked here, so I'll identify the changed surfaces from the fix-order records in the working tree, then verify the code.
+The fix orders name the exact changed surfaces. Now verifying: the pygame-absence guard in test_engines.py, and the F2 resolver in runtimes.py.
+The F2 resolver looks coherent. Let me check the bundle table and the places that match running engines by argv (stop / serving capture / orphan sweep), plus fetch.py's hub-dir definition.
+Let me check the identity-match site (serving_argv ledger) to see whether the bundle-path exec breaks the match.
+One last spot-check on the F2 tests and the port constants, then I'll report.
+No resolver tests surfaced — let me search harder before claiming that.
+
+
+The resolver tests do exist (my first grep pattern missed them). Reading them to check they test their claims.
+Review complete. I changed nothing (read-only; shell/pytest blocked in this mode), so verification is by reading the diff-range files and grep-locating callers instead of graphify.
+
+**Findings (6cdf9aa..HEAD):**
+
+1. **must-fix — `scripts/smoke_clean_account.sh:175-227`: the sweep is single-pass and its residue check cannot fail the run.** `runtimes._spawn` detaches engines (`start_new_session=True`, `ohyesmlx/runtimes.py:601`). Concrete state: crash mid-quickbench while an engine child is still loading and has not yet bound its port — the port sweep (:179-183) misses it, the app is KILLed at :203 without cleanup, the engine later binds and holds a model resident, the state AC-6 forbids. The pgrep diff (:222-226) only logs; `return "$status"` (:227) ignores it. Fix: re-sweep ports/pgrep after the app kill until two consecutive clean passes, and exit 1 on any pgrep-after residue.
+
+2. **should-fix — `scripts/smoke_clean_account.py:834`: unbounded `readline()`.** If `ohyesmlx app` stays alive without writing stdout (launch line on stderr, or wedged before printing), the client blocks forever, `run` never reaches sweep, the app is left running. Fix: bound the first read with a deadline, then take the launch-error path (`_shut_down` already exists).
+
+3. **should-fix — duplicated definition of the hub dir name.** `scripts/smoke_clean_account.py:250-254` and `scripts/smoke_clean_account.sh:72` rebuild `models--<org>--<name>`, which is defined once at `ohyesmlx/fetch.py:198-201` ("The one directory a repo owns in the hub cache"). The client already imports ohyesmlx (:470) — ask fetch instead.
+
+4. **should-fix — duplicated rationale.** The `--no-deps`/pygame rationale is near-verbatim at `ohyesmlx/engines.py:806-812` (where the argv is built) and `scripts/smoke_clean_account.py:165-167`, plus restatements at `tests/test_engines.py:322-323` and `tests/test_smoke_clean_account.py:140`. AGENTS.md: written once where defined. Fix: one clause pointing at engines.py.
+
+5. **nit** — `PORTS` duplicated: `scripts/smoke_clean_account.sh:21` ↔ `scripts/smoke_clean_account.py:31` (its own comment admits "the same six"). Make one the definition.
+
+6. **nit** — dead branch `scripts/smoke_clean_account.py:495`: `else list(keys)` unreachable (hardware forced to dict at :479-480).
+
+7. **nit** — `tests/test_smoke_clean_account.py:155-159`: the loop runs the mlxlm plan under the "optiq" label; the optiq iteration tests only f-string formatting.
+
+F1/F2 themselves (engines.py argv, runtimes.py `_resolve_program` + its tests at test_runtimes.py:3433-3522) show no violation.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     14     824976     750976    22174   91.0%   0.054185
+
+== cc-agent: git status ==
+?? .paul/orders/v5-review-45c-spec.log
+?? .paul/orders/v5-review-45c-spec.md
+?? .paul/orders/v5-review-45c-standards.log
+?? .paul/orders/v5-review-45c-standards.md
+?? .paul/phases/v5-onboarding/045-03-SUMMARY.md
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-20261113T192854Z.json
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-app-stderr.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run2-console.log

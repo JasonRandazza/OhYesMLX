@@ -536,7 +536,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 
 | Item | Origin | Disposition |
 |---|---|---|
-| Clean-account smoke | 04-01, PHASE-4-SUMMARY | Plan 045-03 (human action, at a time Jason chooses) |
+| Clean-account smoke | 04-01, PHASE-4-SUMMARY | **DONE, 045-03 (2026-11-13).** Run as standard user `oymlxtest` under launchd's PATH: 21/21 checks. Found and fixed: optiq could not install without Homebrew SDL (pygame now omitted, wheels-only), and oMLX/vMLX/Osaurus could not start under launchd's PATH (bundle executables). `045-03-SUMMARY.md` |
 | A pip step outliving a server shutdown | 04-02 audit, PHASE-4-SUMMARY | T-02, fixed in 045-02 |
 | Per-job stream-reader cap | 04-02 audit #1 | T-08, fixed in 045-02 |
 | The Osaurus app rewriting its config mid-run | 04-03a audit #1 | T-05, fixed in 045-02 |

@@ -69,6 +69,7 @@ preflight() {
 
     as_test_user test ! -e "$TEST_HOME/Library/Application Support/OhYesMLX" \
         || fail "$TEST_USER has no ~/Library/Application Support/OhYesMLX"
+    # Its own name: this runs before oymlxtest's venv, so ohyesmlx.fetch is not importable here.
     hub="models--$(printf '%s' "$MODEL" | sed 's|/|--|g')"
     as_test_user test ! -e "$TEST_HOME/.cache/huggingface/hub/$hub" \
         || fail "$TEST_USER has no ~/.cache/huggingface/hub/$hub"
@@ -152,7 +153,8 @@ setup() {
     log "setup: uv build --wheel"
     ( cd "$work" && uv build --wheel --out-dir "$SMOKE/dist" >/dev/null )
 
-    cp "$REPO/scripts/smoke_clean_account.py" "$SMOKE/smoke_clean_account.py"
+    # The client comes from the same revision as the wheel, not the working tree.
+    git -C "$REPO" show HEAD:scripts/smoke_clean_account.py >"$SMOKE/smoke_clean_account.py"
     chmod a+rX "$SMOKE" "$SMOKE/dist" "$SMOKE/dist"/* "$SMOKE/smoke_clean_account.py"
 
     log "setup: venv for $TEST_USER"
@@ -168,24 +170,60 @@ setup() {
 # AC-6: a crash mid-quickbench must not leave a model resident. The trap kills the client
 # first, because the client's death is what closes the app's stdin and stdin EOF is the app's
 # own shutdown signal (docs/interfaces.md); it then gives the app its own moment to exit and
-# sweeps whatever engine is left listening on an AC-1 port. Every listing here is taken AS
-# oymlxtest, whose own pgrep and lsof cannot see another account's processes at all, so
-# ownership is structural rather than a guess from a process table: a jrazz-owned process is
-# never named, whatever port it holds.
-sweep() {
-    for pid in $(as_test_user pgrep -f "$SMOKE/smoke_clean_account.py" 2>/dev/null || true); do
-        sweep_pid "client" "$pid"
+# sweeps whatever is left: the app, any engine listening on an AC-1 port, any engine out of
+# the app's own engines directory, and the two in-bundle engine tools. One pass is not enough
+# because an engine child still loading when the app died has not bound its port yet and
+# binds it after the pass, so the sweep waits and runs again. Every listing is limited to
+# oymlxtest: a non-root lsof sees only its own sockets, and pgrep sees every account's
+# processes on macOS, so each pgrep carries `-u $TEST_USER`. A jrazz-owned process (his own
+# oMLX on the same bundle path, say) is never named, whatever port it holds.
+# How many pids both passes signalled: the residue count `run` reports on.
+SWEEP_SIGNALLED=0
+
+# Signal one leftover once: a pid can match more than one listing (a port and an engine
+# command line), and two signallings are still one process left behind.
+sweep_hit() {
+    case " $SWEEP_SEEN " in
+    *" $2 "*) return 0 ;;
+    esac
+    SWEEP_SEEN="$SWEEP_SEEN $2"
+    sweep_pid "$1" "$2"
+    SWEEP_SIGNALLED=$((SWEEP_SIGNALLED + 1))
+}
+
+sweep_once() {
+    for pid in $(as_test_user pgrep -u "$TEST_USER" -f "$SMOKE/smoke_clean_account.py" 2>/dev/null || true); do
+        sweep_hit "client" "$pid"
     done
     for port in $PORTS; do
         for pid in $(as_test_user lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true); do
-            sweep_pid "port $port" "$pid"
+            sweep_hit "port $port" "$pid"
         done
     done
-    # Last, and by its own start command: the app binds an ephemeral port, so a port sweep
-    # alone would miss it and leave it holding the venv's interpreter.
-    for pid in $(as_test_user pgrep -f "$TEST_HOME/oymlx-venv/bin/ohyesmlx app" 2>/dev/null || true); do
-        sweep_pid "app" "$pid"
+    # By its own start command: the app binds an ephemeral port, so a port sweep alone would
+    # miss it and leave it holding the venv's interpreter.
+    for pid in $(as_test_user pgrep -u "$TEST_USER" -f "$TEST_HOME/oymlx-venv/bin/ohyesmlx app" 2>/dev/null || true); do
+        sweep_hit "app" "$pid"
     done
+    # Engines the app started from its own engines directory, or from inside a bundle.
+    for pattern in \
+        "$TEST_HOME/Library/Application Support/OhYesMLX/engines/" \
+        /Applications/oMLX.app/Contents/MacOS/omlx-cli \
+        /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/vmlx; do
+        for pid in $(as_test_user pgrep -u "$TEST_USER" -f "$pattern" 2>/dev/null || true); do
+            sweep_hit "engine $pattern" "$pid"
+        done
+    done
+}
+
+sweep() {
+    SWEEP_SIGNALLED=0
+    SWEEP_SEEN=""
+    sweep_once
+    # An engine that was still loading when the app died binds its port after the first pass.
+    sleep 10
+    sweep_once
+    log "sweep: $SWEEP_SIGNALLED process(es) left behind"
 }
 
 sweep_pid() {
@@ -214,7 +252,7 @@ run() {
     as_test_user "$TEST_HOME/oymlx-venv/bin/python" -I \
         "$SMOKE/smoke_clean_account.py" \
         --out "$SMOKE/results" --head "$head_sha" \
-        --forbid /Users/jrazz --model "$MODEL" || status=$?
+        --forbid /Users/jrazz --model "$MODEL" --ports "$PORTS" || status=$?
     trap - EXIT INT TERM
 
     sweep
@@ -224,6 +262,8 @@ run() {
     else
         log "run: $TEST_USER processes changed (above)"
     fi
+    # Any pid the sweep had to signal is residue the run left behind, whatever the client said.
+    [ "$SWEEP_SIGNALLED" -eq 0 ] || return 1
     return "$status"
 }
 
