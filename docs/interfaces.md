@@ -29,3 +29,4 @@ All types are plain dataclasses or dicts. Stdlib only.
 | ## v5.0 plan 04-03b — quickbench, and the lab path an install writes | [`docs/interfaces/v5-quickbench.md`](interfaces/v5-quickbench.md) |
 | ## v5.0 plan 045-02a — an interrupted app is recovered at the next launch | [`docs/interfaces/v5-hardening.md`](interfaces/v5-hardening.md) |
 | ## v5.0 plan 045-02b — hash-pinned installs and a validated lab path | [`docs/interfaces/v5-hardening.md`](interfaces/v5-hardening.md) |
+| ## Phase 5 (v5.0) — the app: launcher, client, app model, and "Stop now" | [`docs/interfaces/v5-app.md`](interfaces/v5-app.md) |

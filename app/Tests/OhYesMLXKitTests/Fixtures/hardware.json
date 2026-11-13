@@ -1,0 +1,19 @@
+{
+ "supported": true,
+ "unsupported_reason": null,
+ "chip": "Apple M2 Max",
+ "family": "M2",
+ "tier": "max",
+ "cpu_cores": 12,
+ "gpu_cores": 30,
+ "ram_bytes": 68719476736,
+ "macos": "27.2.1",
+ "disk_free_bytes": 43377606656,
+ "volumes": [
+  {
+   "path": "/",
+   "free_bytes": 43377606656
+  }
+ ],
+ "model_budget_bytes": 49392123904
+}

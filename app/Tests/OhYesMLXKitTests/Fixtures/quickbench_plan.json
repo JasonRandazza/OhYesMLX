@@ -1,0 +1,42 @@
+{
+ "repo": "mlx-community/Qwen3.5-2B-4bit",
+ "format": "mlx affine 4-bit gs64",
+ "stage_a": [
+  {
+   "engine": "mlxlm",
+   "version": "0.31.3",
+   "tested": true
+  },
+  {
+   "engine": "osaurus",
+   "version": "0.25.33",
+   "tested": false
+  },
+  {
+   "engine": "omlx",
+   "version": "0.7.3",
+   "tested": true
+  },
+  {
+   "engine": "optiq",
+   "version": "0.5.13",
+   "tested": true
+  },
+  {
+   "engine": "vmlx",
+   "version": "1.6.82",
+   "tested": false
+  }
+ ],
+ "stage_b": [
+  {
+   "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+   "format": "oQ4 (mixed 4/5/6/8)",
+   "size_bytes": 1794528789,
+   "downloaded": false
+  }
+ ],
+ "download_bytes": 1794528789,
+ "osaurus": true,
+ "estimate_s": 630
+}

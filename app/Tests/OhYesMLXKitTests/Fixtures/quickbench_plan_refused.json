@@ -1,0 +1,7 @@
+{
+ "error": {
+  "code": "bad_args",
+  "status": 400,
+  "message": "nope/nope is not a catalog model; nothing was measured"
+ }
+}

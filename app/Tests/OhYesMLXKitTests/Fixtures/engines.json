@@ -1,0 +1,57 @@
+[
+ {
+  "name": "mlxlm",
+  "title": "mlx-lm",
+  "blurb": "Apple's reference MLX server, and this harness's control.",
+  "installed": true,
+  "version": "0.31.3",
+  "path": "/Users/user/.local/share/ohyesmlx/mlx-lm-0.31.3/bin/mlx_lm.server",
+  "tested": true,
+  "verified": "2026-10-29",
+  "install": null
+ },
+ {
+  "name": "osaurus",
+  "title": "Osaurus",
+  "blurb": "Native menubar app with its own MLX engine.",
+  "installed": true,
+  "version": "0.25.33",
+  "path": "/Applications/osaurus.app",
+  "tested": false,
+  "verified": "2026-11-02",
+  "install": null
+ },
+ {
+  "name": "omlx",
+  "title": "oMLX",
+  "blurb": "Menubar app that bundles its own Python and MLX.",
+  "installed": true,
+  "version": "0.7.3",
+  "path": "/Users/user/.omlx/bin/omlx",
+  "tested": true,
+  "verified": "2026-11-02",
+  "install": null
+ },
+ {
+  "name": "optiq",
+  "title": "OptiQ",
+  "blurb": "Python package that serves quantized models through the optiq CLI.",
+  "installed": true,
+  "version": "0.5.13",
+  "path": "/Users/user/Library/Application Support/OhYesMLX/engines/optiq-0.5.13/bin/optiq",
+  "tested": true,
+  "verified": "2026-10-29",
+  "install": null
+ },
+ {
+  "name": "vmlx",
+  "title": "vMLX",
+  "blurb": "Desktop app with a bundled Python engine and an OpenAI-compatible server.",
+  "installed": true,
+  "version": "1.6.82",
+  "path": "/Applications/vMLX.app",
+  "tested": false,
+  "verified": "2026-10-29",
+  "install": null
+ }
+]

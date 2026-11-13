@@ -125,6 +125,15 @@ Plans (Jason, 2026-11-03): `045-01` threat model and verified findings (no code)
 - T5.5 Benchmark + Results screen.
 - T5.6 Packaging: signed .app, first-run, Gatekeeper notes.
 
+Plans (2026-11-13, after the prototype gate; Jason's seven answers are binding and live in `docs/interfaces/v5-app.md`):
+- 05-01 (wave 1) backend: "Stop now" mid-cell abort for quickbench (Q3) and `low_disk` payload numbers (Q4).
+- 05-02 (wave 1) T5.1: Swift package `app/`, launcher, client + SSE + stub, `AppModel` (flow + Q1-Q7), placeholder views.
+- 05-03 (wave 1, coordinator) design direction: Open Design run + design skills -> tokens and screen comps in `docs/design/phase5/`.
+- 05-04 (wave 2) T5.2 + T5.3: Welcome / Your Mac / Engines screens on 05-02's model, 05-03's design.
+- 05-05 (wave 2) T5.4 + T5.5: Models / Benchmark / Results screens.
+- 05-06 (wave 3) T5.6: `.app` assembly with python-build-standalone (D6), ad-hoc signed zip (D7, no Developer account), P5-3/P5-4/P5-6/P5-12 re-verified on the bundled interpreter, clean-account smoke.
+05-04..05-06 are written when their dependencies land, against the code as built.
+
 ## Process gates (agreed 2026-10-29)
 
 PAUL runs the per-phase loop; this file is the overview. Before a phase starts: `/paul:plan` writes that phase's

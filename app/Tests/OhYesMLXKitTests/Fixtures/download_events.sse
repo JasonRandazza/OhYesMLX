@@ -1,0 +1,14 @@
+id: 1
+data: {"seq": 1, "type": "progress", "message": "downloading mlx-community/Qwen3-0.6B-4bit", "fraction": 0.0, "payload": null}
+
+: keepalive
+
+id: 2
+data: {"seq": 2, "type": "progress", "message": "model.safetensors", "fraction": 0.42, "payload": {"path": "model.safetensors", "bytes_done": 147582145, "bytes_total": 351386061}}
+
+id: 3
+data: {"seq": 3, "type": "error", "message": "100000000 bytes free is less than the 421663274 bytes this download needs", "fraction": null, "payload": {"code": "low_disk", "free_bytes": 100000000, "needed_bytes": 421663274}}
+
+id: 4
+data: {"seq": 4, "type": "done", "message": "download refused", "fraction": null, "payload": null}
+
