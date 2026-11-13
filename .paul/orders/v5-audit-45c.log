@@ -1,0 +1,39 @@
+Updated 1.88.5 → 1.89.0
+I'll read the plan and the referenced sources.
+Now let me read the threat model sections and the code the plan names.
+Now the code. Let me pull the specific functions the order names.
+
+Let me verify a few code specifics: how quickbench picks engines, whether install records step durations, the server's refusal code, and `cli._app` shutdown behavior.
+
+
+
+
+
+One check on the `/quickbench/plan` server route to confirm behavior before the model is downloaded.
+Findings, ordered by severity.
+
+**1. must-have — AC-3 contradicts the code.** Plan line 80-81 requires `GET /quickbench/plan?repo=<model>` to "answer 200 with the pinned shape" in the read-endpoints step, but at that point the model is not yet downloaded (download is AC-5, plan line 95). `quickbench.plan` raises "download it first" when the row is not in the cache (`ohyesmlx/quickbench.py:279-283`), and the server delivers it as `400 bad_args` (`ohyesmlx/server.py:599-613`). As written AC-3 cannot pass. Wording fix: split it — before download, expect `400 bad_args` naming "download it first"; after AC-5's download, expect 200 with the pinned shape.
+
+**2. must-have — AC-4 "recorded with its duration" has no recording surface.** Nothing records durations: the install log carries `ts/step/exit_code` only (`engines.py:1143-1153`) and job events carry `seq/type/message/fraction/payload` (`engines.py:1134-1140`), and `files_modified` (plan line 7) names no code file that would add one. Concrete state: optiq install succeeds, the check has nothing to read. Fix: say "the smoke's results JSON records the client-observed build interval from the SSE stream" or drop "with its duration".
+
+**3. strongly-recommended — AC-7 can fail from Jason's own Osaurus app.** §8 (threat-model.md:540) records the running Osaurus app rewriting its config mid-run; AC-1's "no listener on 1337" doesn't cover it — `osaurus stop` frees the port and leaves the app alive (AGENTS.md). AC-7's `cmp` of `~/.osaurus/config` then diffs a change the smoke never made. Fix: add to AC-1 preconditions "the Osaurus app is not running (matched by full executable path, never by name)".
+
+**4. strongly-recommended — no failure-path cleanup (process/port residue).** If the backend dies mid-quickbench, engine servers (ports 8080/8081, model resident) orphan to launchd; AC-6 covers only a clean exit and Task 5's teardown names no sweep. Fix: mandate a `trap` in the .sh: stdin-EOF shutdown, wait, then sweep by full executable path. Also AC-6's `pgrep -u oymlxtest` cannot attribute "nothing the smoke started" — fix wording to "diff a pgrep snapshot taken before setup against the one at shutdown".
+
+**5. strongly-recommended — missing first-time-user precondition.** pygame builds from source (`engines.py:784,827`) needs a C toolchain; AC-1 checks none, so AC-4's "both end in success" is undecidable between defect and environment until a long install fails. Fix: add `xcode-select -p` succeeds to AC-1.
+
+**6. strongly-recommended — AC-5's "skipped with a stated reason" is unreachable for omlx/vmlx.** The catalog row lists all five engines (catalog.json:85-91); only port-busy skips omlx/vmlx (`quickbench.py:418-420`) and AC-1 guarantees the ports are free, so those cells run and their only other outcome is FAIL. Fix: "app engines: PASS, skipped with a stated reason, or recorded FAIL with evidence".
+
+**7. defer — AC-9** should say "by calling `fetch._ledger_save`", not "its semantics" (one-definition rule).
+
+Also: AC-4 names `engines._SOURCE_BUILDS` while Task 1 forbids importing internals besides `check_lab_dir` — point the check at the plan's `--no-binary pygame` flag instead.
+
+Changed nothing (read-only). Verified against plan 045-03, AGENTS.md, threat-model.md §8/§10, interfaces.md v5.0 shapes, and cli.py/server.py/engines.py/quickbench.py/catalog.json at the cited lines.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     12     528818     469632    19596   88.8%   0.044485
+
+== cc-agent: git status ==
+?? .paul/orders/v5-audit-45c.log
+?? .paul/orders/v5-audit-45c.md
+?? .paul/phases/v5-onboarding/045-03-PLAN.md

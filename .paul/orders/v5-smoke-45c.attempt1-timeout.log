@@ -1,0 +1,22 @@
+I'll start by reading the plan, audit, and the interface/server code the task references.
+Now let me read the server and CLI app code, plus engines/fetch/quickbench shapes.
+Let me read the app launch code and the modules whose shapes the smoke drives.
+Now the install plan shapes, `check_lab_dir`, and the quickbench/fetch surfaces the smoke drives.
+
+
+
+Let me check the scripts directory conventions and how existing tests are structured.
+The `test_hash_freeze.py` pattern is exactly what I need. Let me read it plus an existing shell script for style.
+
+
+
+
+
+I have the shapes I need. Let me confirm the constraints files exist (the pip-argv test will use a real `install_plan`) and check how tests import the package.
+Let me confirm a few facts I'll encode: the HF repo directory name, `uv`'s build flags, and the Python path.
+Let me check the packaging (wheel must ship the constraints files) and a couple of shell facts before writing.
+
+I have everything I need. Let me check one last thing — `_app_engine_venvs`, which the pip-plan test will exercise.
+
+Terminated.
+Terminated: 15

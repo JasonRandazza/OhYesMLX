@@ -12,10 +12,12 @@ OhYesMLX measures local LLM serving on Apple Silicon and answers one question: i
 serving runtime or your quantization costing you speed and memory? Two single-variable
 studies. Every run declares which axis it varies; nothing varies both.
 
-Nine modules in `ohyesmlx/`: `transport.py` (SSE measurement client), `runtimes.py`
-(uniform lifecycle over five heterogeneous servers), `osaurus_settings.py` (host-settings drift gate), `measure.py` (the measurement loop),
-`coherence.py` (the gate), `report.py` (join and leaderboard), `sample.py` (macOS unified
-memory sampling), `token_counter.py`, `cli.py`. Tests mirror them in `tests/`.
+Eighteen modules in `ohyesmlx/`. Measurement: `transport.py` (SSE client), `runtimes.py`
+(lifecycle over the serving engines), `osaurus_settings.py`, `measure.py`, `coherence.py`,
+`report.py`, `sample.py`, `token_counter.py`, `canary.py`. v5.0 onboarding app backend:
+`hardware.py`, `engines.py` (detect + install), `catalog.py`, `recommend.py`, `fetch.py`
+(downloads), `server.py` (localhost API), `quickbench.py`. Entry: `cli.py`. Tests mirror them
+in `tests/`. Several files run past 900 lines and `docs/interfaces.md` past 1,800.
 
 ## The rules that outrank convenience
 
@@ -49,11 +51,25 @@ memory sampling), `token_counter.py`, `cli.py`. Tests mirror them in `tests/`.
 - A green suite is not acceptance. Say plainly what you did not verify.
 - If the order asks a question, answer it in your report rather than guessing silently.
 
-## Code graph
+## Code graph — use it first
 
-`graphify-out/graph.json` is a current map of this codebase. Before grepping blind, run
-`graphify query "<question>"`, `graphify path "<A>" "<B>"` or `graphify explain "<concept>"`.
+`graphify-out/graph.json` is a current map of this codebase (every function, its file and line).
+Locate code with it instead of reading whole files:
+
+- `graphify query "<question>"` — the functions and files involved, with `src=` and `loc=L<line>`.
+- `graphify explain "<function or concept>"` — one symbol and its neighbours.
+- `graphify path "<A>" "<B>"` — how two symbols connect.
+
+Then read only those line ranges (offset/limit, or `sed -n 'A,Bp'`). Never read a file over
+400 lines whole, and never read `docs/interfaces.md` whole: grep it for the shape you need.
 Do not run `graphify update` yourself; the coordinator refreshes it after every change.
+
+## Pace
+
+Orientation is not the job. Write a first version of every file the order asks for within
+your first ~15 turns, then iterate against the tests. A dispatch was once stopped after 30
+minutes having read the codebase and written nothing. If the order is unclear enough that you
+cannot start writing, report BLOCKED with the question instead of reading further.
 
 ## The task
 

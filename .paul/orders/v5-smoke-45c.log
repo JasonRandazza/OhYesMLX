@@ -1,0 +1,130 @@
+
+I'll read the v5.0 interfaces section, server endpoints, and the CLI app entry.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the shapes I need. Writing the three files now.
+Now the shell driver.
+Now the tests.
+Cleaning up a few defects I spotted while re-reading.
+
+
+
+
+
+Now fixing the sweep visibility issue (non-root `lsof` cannot see another user's processes) and the main flow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Two real gaps to close: the .py must close stdin on any exit path (AC-6's trap), and the sweep must also catch an app left on an ephemeral port.
+
+
+
+
+
+Now two red-checks to prove the tests actually bind.
+
+Both red checks fire for the right reason. Restoring.
+
+
+
+
+
+
+
+
+
+Now I'll pull the cell-outcome extraction out as a tested pure helper.
+
+
+
+
+
+
+
+
+
+
+
+One gap to close: the sweep should also catch an app process left on its ephemeral port.
+
+
+Three files, nothing else. 1315 passed (1281 baseline + 34 new).
+
+**Files**
+- `scripts/smoke_clean_account.sh` — 272 lines. `preflight`, `setup`, `run`, `verify-host`, `teardown`.
+- `scripts/smoke_clean_account.py` — 911 lines. Stdlib only.
+- `tests/test_smoke_clean_account.py` — 379 lines, 34 tests.
+
+**AC check functions in `smoke_clean_account.py`**
+- `check_ac2` → `AC-2.launch_line`, `AC-2.app_support_mode`
+- `check_ac3` → `AC-3.hardware`, `.engines_plans`, `.recommendations`, `.quickbench_plan_before_download`, `.token_required`, `.no_host_paths`
+- `check_ac4` → `AC-4.install.mlxlm`, `.install.optiq`, `.lab_paths_named`, `.check_lab_dir`, `.engines_installed`
+- `check_ac5` → `AC-5.download`, `.quickbench_plan`, `.quickbench`, `.quickbench_cells`, `.evict`, `.evicted`
+- `check_ac6` → `AC-6.exit`, `.ports_free`
+- AC-1 lives in the .sh (`preflight`); AC-7 in `snapshot_host`/`verify_host`.
+
+**Verification**: `sh -n` clean, `shellcheck -s sh` clean, 1315 passed. Red-checked two: deleting the launch line's extra-key refusal and disabling optiq's `--no-binary pygame` check each failed exactly the intended test; both restored.
+
+**Not verified**: nothing live — no `setup`/`run`/`teardown`, no sudo, no download, no `ohyesmlx app`. So `preflight`, the venv/wheel path, the sweep, and every HTTP/SSE path are unexercised.
+
+**Unsure / to flag**
+- `sudo -n -u oymlxtest` needs `/etc/sudoers.d/oymlxtest`; without it `preflight` exits 1 by design.
+- `setup` runs `uv build --wheel` as jrazz into `$SMOKE/dist`; the order named `uv` but not whether it must run as the test user. jrazz's `uv` has the network access the build needs.
+- The AC-3 leak scan covers response bodies and SSE `data:` lines only, not headers or the child's stderr file.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     89    8751161    8609792   149859   98.4%   0.136950
+
+== cc-agent: git status ==
+ M .paul/orders/PREAMBLE.md
+?? .paul/orders/v5-audit-45c.log
+?? .paul/orders/v5-audit-45c.md
+?? .paul/orders/v5-smoke-45c.attempt1-timeout.log
+?? .paul/orders/v5-smoke-45c.log
+?? .paul/orders/v5-smoke-45c.md
+?? .paul/phases/v5-onboarding/045-03-AUDIT.md
+?? .paul/phases/v5-onboarding/045-03-PLAN.md
+?? .paul/phases/v5-onboarding/045-03-evidence/
+?? scripts/smoke_clean_account.py
+?? scripts/smoke_clean_account.sh
+?? tests/test_smoke_clean_account.py
+ .paul/orders/PREAMBLE.md | 30 +++++++++++++++++++++++-------
+ 1 file changed, 23 insertions(+), 7 deletions(-)

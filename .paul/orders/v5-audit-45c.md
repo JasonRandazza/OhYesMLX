@@ -1,0 +1,4 @@
+# Order: audit plan 045-03 (read-only; report only)
+Read `.paul/phases/v5-onboarding/045-03-PLAN.md`, then AGENTS.md, docs/threat-model.md §8 and §10, and the v5.0 parts of docs/interfaces.md (`ohyesmlx app` launch line, stdin-EOF shutdown, jobs + SSE, `/engines` shape), ohyesmlx/cli.py `_app`, ohyesmlx/server.py, ohyesmlx/engines.py (`install_plan`, `_SOURCE_BUILDS`, `check_lab_dir`, `lab_paths`), ohyesmlx/quickbench.py (how it picks engines, port-in-use skip, Osaurus app-running skip).
+Enterprise-style audit of the plan. Find: (1) an AC that cannot be checked as written or contradicts the code (cite file:line); (2) a way the smoke could touch Jason's account (uid 501, /Users/jrazz) or leave a process/port held; (3) a missing check a first-time user would hit that the plan skips; (4) anything that violates AGENTS.md. For each: must-have / strongly-recommended / defer, and the exact plan wording change.
+Do not write files. Under 400 words.
