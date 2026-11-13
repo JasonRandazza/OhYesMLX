@@ -3416,6 +3416,112 @@ def test_run_hands_the_engine_env_to_the_process(monkeypatch):
     assert captured["env"] is env
 
 
+# A shipped app's PATH is launchd's (`/usr/bin:/bin:/usr/sbin:/sbin`, threat-model P5-9), and
+# the three app engines' command-line tools live under /Applications and reach a shell only
+# through per-user shims. `_resolve_program` is the one place a start (or helper) command is
+# exec'd from its bundle when its bare name does not resolve on the engine's PATH.
+
+
+def _executable(path):
+    """A file that passes the resolver's is-file-and-executable check, and nothing else."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_spawn_execs_the_bundle_executable_when_the_name_is_not_on_the_engines_path(
+    monkeypatch, tmp_path
+):
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = command
+            self.pid = 4321
+
+    bundle = _executable(tmp_path / "oMLX.app" / "Contents" / "MacOS" / "omlx-cli")
+    monkeypatch.setattr(runtimes, "ENGINE_BUNDLE_EXECUTABLES", {"omlx": (str(bundle),)})
+    monkeypatch.setattr(runtimes, "_engine_env", lambda: {"PATH": "/usr/bin:/bin"})
+    monkeypatch.setattr(runtimes.subprocess, "Popen", FakePopen)
+    runtimes._spawn(("omlx", "serve", "--port", "8100"), tmp_path / "runtime.log")
+    assert captured["command"] == (str(bundle), "serve", "--port", "8100")
+
+
+def test_run_execs_the_bundle_executable_when_the_name_is_not_on_the_engines_path(
+    monkeypatch, tmp_path
+):
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return _completed()
+
+    bundle = _executable(
+        tmp_path / "vMLX.app" / "Contents" / "Resources" / "bundled-python" / "python" / "bin" / "vmlx"
+    )
+    monkeypatch.setattr(runtimes, "ENGINE_BUNDLE_EXECUTABLES", {"vmlx": (str(bundle),)})
+    monkeypatch.setattr(runtimes, "_engine_env", lambda: {"PATH": "/usr/bin:/bin"})
+    monkeypatch.setattr(runtimes.subprocess, "run", fake_run)
+    runtimes._run(("vmlx", "serve"), 1.0)
+    assert captured["command"] == (str(bundle), "serve")
+
+
+def test_a_name_that_resolves_on_the_engines_path_is_left_untouched(monkeypatch, tmp_path):
+    shim = _executable(tmp_path / "shims" / "omlx")
+    bundle = _executable(tmp_path / "oMLX.app" / "Contents" / "MacOS" / "omlx-cli")
+    monkeypatch.setattr(runtimes, "ENGINE_BUNDLE_EXECUTABLES", {"omlx": (str(bundle),)})
+    command = ("omlx", "serve", "--port", "8100")
+    assert runtimes._resolve_program(command, {"PATH": str(shim.parent)}) == command
+
+
+def test_an_env_prefixed_command_is_probed_past_the_assignments(monkeypatch, tmp_path):
+    bundle = _executable(tmp_path / "bin" / "vmlx")
+    monkeypatch.setattr(runtimes, "ENGINE_BUNDLE_EXECUTABLES", {"vmlx": (str(bundle),)})
+    command = ("env", *runtimes.VMLX_MTP_FIXED_ENV, "vmlx", "serve", "--port", "8000")
+    assert runtimes._resolve_program(command, {"PATH": "/usr/bin:/bin"}) == (
+        "env",
+        *runtimes.VMLX_MTP_FIXED_ENV,
+        str(bundle),
+        "serve",
+        "--port",
+        "8000",
+    )
+
+
+def test_a_table_entry_that_is_not_on_disk_leaves_the_command_unchanged(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runtimes,
+        "ENGINE_BUNDLE_EXECUTABLES",
+        {"omlx": (str(tmp_path / "gone" / "omlx-cli"),)},
+    )
+    command = ("omlx", "serve", "--port", "8100")
+    assert runtimes._resolve_program(command, {"PATH": "/usr/bin:/bin"}) == command
+
+
+def test_a_name_with_no_resolvable_bundle_still_raises_the_start_error(monkeypatch, tmp_path):
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(
+        runtimes,
+        "ENGINE_BUNDLE_EXECUTABLES",
+        {"omlx": (str(tmp_path / "gone" / "omlx-cli"),)},
+    )
+    monkeypatch.setattr(runtimes, "_engine_env", lambda: {"PATH": "/usr/bin:/bin"})
+    monkeypatch.setattr(runtimes.subprocess, "Popen", FakePopen)
+    with pytest.raises(RuntimeStartError, match="could not start omlx"):
+        runtimes._spawn(("omlx", "serve"), tmp_path / "runtime.log")
+
+
+def test_the_osaurus_bundle_executable_is_derived_from_the_bundle_spellings():
+    assert runtimes.ENGINE_BUNDLE_EXECUTABLES["osaurus"] == tuple(
+        os.path.join(bundle, "Contents", "Helpers", "osaurus")
+        for bundle in runtimes.OSAURUS_APP_BUNDLES
+    )
+
+
 def test_a_helper_command_is_not_run_when_the_lab_copy_is_missing_and_does_not_crash(monkeypatch):
     # The refusal belongs to starting an engine; a stop sweep or an lsof probe that hits a
     # missing lab copy must answer "could not run", the way it does for any other failure.

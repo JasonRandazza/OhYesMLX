@@ -291,6 +291,7 @@ def test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--require-hashes",
             "--only-binary",
             ":all:",
+            "--no-deps",
             "-r",
             str(CONSTRAINTS / "mlxlm-0.31.3.txt"),
         ],
@@ -318,10 +319,9 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--require-hashes",
             "--only-binary",
             ":all:",
-            # The one source build (engines._SOURCE_BUILDS): pygame has no CPython 3.14
-            # wheel, and mlx-optiq requires it. Everything else stays wheel-only.
-            "--no-binary",
-            "pygame",
+            # --no-deps: the file, not pip's resolver, is the closure. It is what keeps
+            # pygame out: mlx-optiq declares it, nothing here installs it (045-03).
+            "--no-deps",
             # The requirements file names both packages: OptiQ's own pin and mlx-lm's,
             # because OptiQ serves through mlx_lm.server and does not pin it: unpinned, pip
             # resolved mlx-lm 0.32.2 and every chat request answered HTTP 404 (2026-10-30
@@ -333,6 +333,9 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
     install_argv = plan.steps[1].command
     assert (CONSTRAINTS / "optiq-0.5.13.txt").is_file()
     assert [token for token in install_argv if "==" in token] == []
+    assert "--no-deps" in install_argv
+    assert "--only-binary" in install_argv
+    assert "--no-binary" not in install_argv, "every pip engine installs wheels only"
 
 
 def test_a_tested_version_without_a_constraints_file_raises_before_a_plan_exists(monkeypatch):
@@ -368,6 +371,23 @@ def test_the_committed_constraints_files_are_fully_hashed_and_pin_their_own_engi
         lines = path.read_text(encoding="utf-8").splitlines()
         assert f"{pin} \\" in lines, f"{path} does not pin {pin}"
         assert sum(1 for line in lines if line.startswith("    --hash=sha256:")) >= 1
+
+
+def test_the_optiq_file_does_not_reintroduce_pygame():
+    """045-03: pygame ships no CPython 3.14 wheel and building it needs SDL headers.
+
+    mlx-optiq declares it for `optiq game` only, which this harness never starts, so the
+    install omits it (`--no-deps`). A re-freeze of a lab venv that still has pygame would
+    put the pin back and break the install on a Mac without Homebrew's sdl2.
+    """
+    path = engines.constraints_path("optiq")
+    requirements = [
+        line.split()[0]
+        for line in engines._requirement_lines(path.read_text(encoding="utf-8"))
+    ]
+    assert not [line for line in requirements if line.startswith("pygame")], (
+        f"{path} requires pygame again; the optiq install must stay wheels-only (045-03)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -736,6 +756,7 @@ def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path)
             "--require-hashes",
             "--only-binary",
             ":all:",
+            "--no-deps",
             "-r",
             str(CONSTRAINTS / "mlxlm-0.31.3.txt"),
         ],

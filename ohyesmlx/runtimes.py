@@ -146,6 +146,26 @@ OSAURUS_APP_BUNDLES = ("/Applications/osaurus.app", "/Applications/Osaurus.app")
 OSAURUS_APP_EXECUTABLES = tuple(
     os.path.join(bundle, "Contents", "MacOS", "osaurus") for bundle in OSAURUS_APP_BUNDLES
 )
+
+# The command-line tool each app engine ships inside its own bundle, in the order a
+# candidate is tried. A shipped app's PATH is launchd's (`/usr/bin:/bin:/usr/sbin:/sbin`,
+# threat-model P5-9), so ``omlx``/``vmlx``/``osaurus`` exist only through per-user shims on a
+# developer's shell -- and a start command carrying the bare name fails with ENOENT there
+# while ``/engines`` correctly reports the bundle installed. :func:`_resolve_program` execs
+# these when the name does not resolve. Osaurus's two spellings are
+# :data:`OSAURUS_APP_BUNDLES`', and its CLI is the ``Contents/Helpers`` tool the shim points
+# at -- not ``Contents/MacOS/osaurus``, which is the app process
+# :data:`OSAURUS_APP_EXECUTABLES` names.
+ENGINE_BUNDLE_EXECUTABLES: dict[str, tuple[str, ...]] = {
+    "omlx": ("/Applications/oMLX.app/Contents/MacOS/omlx-cli",),
+    "vmlx": (
+        "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/vmlx",
+    ),
+    "osaurus": tuple(
+        os.path.join(bundle, "Contents", "Helpers", "osaurus")
+        for bundle in OSAURUS_APP_BUNDLES
+    ),
+}
 _RUN_STARTED_PIDS: set[int] = set()
 
 # The two states the cache pin may take. `None` is not a third state: it is the absence of the
@@ -507,17 +527,53 @@ def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
     return env
 
 
+def _resolve_program(command: tuple[str, ...], env: dict[str, str]) -> tuple[str, ...]:
+    """The command with its program exec'd from its app bundle when PATH cannot name it.
+
+    Called by :func:`_spawn` and :func:`_run` only, and never by a start command's builder:
+    the command a run builds and records -- ``start_command``, the header, the rows -- is the
+    same bytes whether the name resolved or not, and here on a developer's shell it always
+    does, so Jason's harness keeps its own shims. What changes is only the argv exec'd.
+
+    The program token is the first token that is not ``env`` or a ``K=V`` assignment: a vMLX
+    depth cell's command starts ``env VMLX_...=0 VMLX_...=0 vmlx``
+    (:data:`VMLX_MTP_FIXED_ENV`). It resolves against *env*'s PATH rather than this
+    process's, because that is the PATH the child is given. When it does not resolve and
+    :data:`ENGINE_BUNDLE_EXECUTABLES` holds an executable for it, that path takes its place;
+    otherwise the command is returned unchanged and the existing ``OSError`` path in
+    :func:`_spawn` reports it. A name that resolves is untouched: ``~/.omlx/bin/omlx`` and
+    ``~/.local/bin/vmlx`` are shims that may carry a bootstrap this harness cannot.
+    """
+    index = 0
+    while index < len(command):
+        token = command[index]
+        name = token.partition("=")[0]
+        if token != "env" and not ("=" in token and name.isidentifier()):
+            break
+        index += 1
+    if index >= len(command):
+        return command
+    token = command[index]
+    if shutil.which(token, path=env.get("PATH")) is not None:
+        return command
+    for candidate in ENGINE_BUNDLE_EXECUTABLES.get(token, ()):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return (*command[:index], candidate, *command[index + 1 :])
+    return command
+
+
 def _run(command: tuple[str, ...], timeout_s: float):
     """Run a short-lived helper command. ``None`` if it could not be run at all."""
     try:
+        env = _engine_env()
         return subprocess.run(
-            command,
+            _resolve_program(command, env),
             capture_output=True,
             text=True,
             timeout=timeout_s,
             stdin=subprocess.DEVNULL,
             check=False,
-            env=_engine_env(),
+            env=env,
         )
     # A missing lab copy refuses the START (see _engine_env), not a helper probe: a stop
     # sweep that raised here would leave a server running.
@@ -535,12 +591,13 @@ def _spawn(command: tuple[str, ...], log_path: Path) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "ab", buffering=0) as log:
         try:
+            env = _engine_env()
             process = subprocess.Popen(
-                command,
+                _resolve_program(command, env),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                env=_engine_env(),
+                env=env,
                 start_new_session=True,
             )
         except OSError as error:

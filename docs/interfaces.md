@@ -1395,6 +1395,18 @@ naming the file and key. Only `mlxlm` and `optiq` may name one. `runtimes._engin
 `PATH` (the file overriding the manifest's `lab_path` per engine, and still refusing a directory that is not there),
 and `detect_all` looks in them first, so a canary reports the lab copy's version rather than the global install's.
 
+**App-bundle executables** (`runtimes.ENGINE_BUNDLE_EXECUTABLES`, 045-03). The one table mapping `omlx`, `vmlx`
+and `osaurus` to the executable their `.app` ships (`osaurus`'s derived from `OSAURUS_APP_BUNDLES`:
+`Contents/Helpers/osaurus`, the tool its shim points at — not the `Contents/MacOS/osaurus` app binary
+`OSAURUS_APP_EXECUTABLES` names). `runtimes._resolve_program(command, env) -> tuple[str, ...]` is its only reader,
+called by `_spawn` and `_run` only: when the command's program token — the first token that is not `env` or a
+`K=V` assignment, since a vMLX depth cell's command starts `env VMLX_...=0 VMLX_...=0 vmlx` — does not resolve
+with `shutil.which(token, path=env["PATH"])` and the table holds an existing executable for it, that path is
+exec'd instead; otherwise the command is returned unchanged and `_spawn`'s existing `OSError` path reports it. A
+name that resolves on the engine PATH is untouched, so a developer shell's per-user shims still run, and
+`start_command`, headers and rows stay byte-identical: only the exec'd argv changes. A shipped app's PATH is
+launchd's (threat-model P5-9), which is where the bare names failed with `[Errno 2]`.
+
 **`Plan`** (`engines.install_plan(name)`; data only, no side effects)
 `{"engine": str, "kind": "guided_download|command", "source_url": str, "size_bytes_estimate": int|null,
 "needs_admin": bool, "steps": [{"id": str, "label": str, "command": [str]|null}]}`.
@@ -1824,10 +1836,9 @@ requirements file names every package: no `pkg==ver` token is passed on the comm
 `--require-hashes` makes the file the pin: a line without a hash is refused by pip, and a hash the
 file does not list is refused for the file it names. `--only-binary :all:` is required with it,
 because hash-checking mode does not cover the PEP 517 build dependencies pip fetches to build an
-sdist, and building an sdist runs its code. The one exception is `engines._SOURCE_BUILDS`
-(`{"optiq": ("pygame",)}`), appended after `:all:` as `--no-binary pygame`: pygame 2.6.1 has no
-CPython 3.14 wheel and mlx-optiq 0.5.13 requires it; its build tools are not hash-checked
-(Jason, 2026-11-10). (`--isolated` still loads the global and site pip
+sdist, and building an sdist runs its code. There is no exception: every pip step also carries
+`--no-deps`, so the file is the whole closure and optiq's pygame (used only by `optiq game`, no
+CPython 3.14 wheel) is omitted rather than built from source (045-03; rationale at `engines._command_plan`). (`--isolated` still loads the global and site pip
 config; they need admin to write, and a rerouted index cannot pass the hashes.)
 
 **`engines._check_hashed_requirements(path) -> None`** (AC-1). One validator, called by

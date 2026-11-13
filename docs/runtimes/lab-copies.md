@@ -156,7 +156,7 @@ set:
 {python} -I -m venv ~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>
 ~/Library/Application\ Support/OhYesMLX/engines/<name>-<version>/bin/python -I -m pip install \
     --isolated --no-input --disable-pip-version-check --require-hashes \
-    --only-binary :all: -r ohyesmlx/constraints/<name>-<manifest version>.txt
+    --only-binary :all: --no-deps -r ohyesmlx/constraints/<name>-<manifest version>.txt
 ```
 
 (`engines._command_plan`, VERIFIED in the tree; `<python>` must be 3.11 or later — stock
@@ -166,10 +166,10 @@ harness's "install" and this document's "freeze" are the same operation. `-I` an
 keep the user's Python and pip environments out of both steps, and the requirements file names
 every package, so no `pkg==ver` token appears on the command line. `--require-hashes` makes the
 file's hashes the pin, and `--only-binary :all:` is its other half: hash-checking mode does not
-cover the build dependencies pip fetches to build an sdist, and building one runs its code. One
-exception is named in `engines._SOURCE_BUILDS`: OptiQ's install adds `--no-binary pygame`, because
-pygame 2.6.1 ships no CPython 3.14 wheel and mlx-optiq 0.5.13 requires it (for its game command
-only); the 3.14 lab copy built it from source the same way (Jason, 2026-11-10). The
+cover the build dependencies pip fetches to build an sdist, and building one runs its code.
+`--no-deps` makes the file the whole closure: pip has nothing to resolve and no declaration it
+can act on, which is both what a freeze already describes and what lets a requirement be left
+out on purpose (OptiQ: pygame, §4's freeze step, 045-03). The
 clean-install sizes were measured by running these two steps on 2026-10-29, before the hash flags
 were added (research §8, VERIFIED): mlx-lm 472 MB and OptiQ 612 MB per venv, with wall times of
 177 s and 104 s. The older figures in research §3.2 and §4.2 (846 MB, 434 MB) came from
@@ -206,6 +206,17 @@ python -I scripts/hash_freeze.py ohyesmlx/constraints/<name>-<version>.txt
 would describe a different environment from the one that runs the server. Freeze the venv that was
 just installed from the manifest's version, and commit the file in the same commit as the version it
 names.
+
+**Delete the `pygame==` block from an OptiQ freeze before hashing it (045-03).** mlx-optiq declares
+`pygame>=2.5`, but pygame is imported only by `optiq/game/play.py`, reached through a lazy import
+inside the `optiq game` subcommand, which this harness never starts — the install runs `--no-deps`,
+so an omitted requirement stays out and serving is unaffected. Omit it because pygame 2.6.1 has no
+CPython 3.14 wheel: with the pin present pip can only build it from source, and that build needs SDL
+headers, which a Mac without Homebrew's `sdl2` does not have (the clean-account install of
+2026-11-13 failed with `fatal error: 'SDL.h' file not found`; it passed on a host that had them).
+`pip freeze` reports what is installed, so a lab venv that still has pygame puts the block back:
+delete it, then run `scripts/hash_freeze.py`. `tests/test_engines.py` asserts the committed OptiQ
+file carries no `pygame` requirement.
 
 The second command is the hashing step (`scripts/hash_freeze.py`), and it is not optional either:
 it rewrites the freeze in place so each pin is followed by one `--hash=sha256:` line per file
@@ -529,11 +540,8 @@ record: the 2026-09-16 grid published a 40.6% drift that was contention, not a r
    never the committed manifest. For a pip engine, freeze the new venv with
    `<venv>/bin/python -m pip freeze --all`, prefixed by the three header lines §4 shows, into
    `ohyesmlx/constraints/<name>-<new>.txt`: **a bump is not done until its constraints file is
-   committed**, and `install_plan` refuses the install until it exists. Then hash it with
-   `scripts/hash_freeze.py`, and check every package `engines._SOURCE_BUILDS` names for this
-   engine: if the freeze's version of it now ships a wheel for the interpreter the installer uses,
-   delete the entry so the engine installs wheels-only like the others (pygame for OptiQ, added
-   2026-11-10; STATE Deferred Issues tracks it).
+   committed**, and `install_plan` refuses the install until it exists. Delete any `pygame==` block
+   from an OptiQ freeze (§4), then hash the file with `scripts/hash_freeze.py`.
 10. **Rows from different builds never share a table.** A row records `runtime_version`; the join
     guard refuses to join across builds, and this is a rule about tables, not only about joins.
     If a table must show both, they are two columns that each name their build.

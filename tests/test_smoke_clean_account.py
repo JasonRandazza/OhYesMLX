@@ -136,17 +136,27 @@ def _as_plan(plan):
     return dataclasses.asdict(plan)
 
 
-def test_optiq_plan_must_name_its_source_build_and_mlxlm_must_not():
+def test_both_pip_engines_install_with_no_deps_and_wheels_only():
+    """045-03: the file is the closure, so pip resolves nothing — and pygame stays out."""
     from ohyesmlx import engines
 
     package_dir = str(pathlib.Path(engines.__file__).resolve().parent)
-    optiq = _as_plan(engines.install_plan("optiq", 15))
-    assert smoke._flag_value(smoke._pip_argv(optiq), "--no-binary") == "pygame"
+    for name in ("mlxlm", "optiq"):
+        argv = smoke._pip_argv(_as_plan(engines.install_plan(name, 15)))
+        assert "--no-deps" in argv
+        assert "--no-binary" not in argv
+        assert smoke.pip_argv_problems(_as_plan(engines.install_plan(name, 15)), name, package_dir) == []
 
-    stripped = _strip(optiq, "--no-binary", "pygame")
-    problems = smoke.pip_argv_problems(stripped, "optiq", package_dir)
-    assert problems == ["optiq: the pip step has no --no-binary pygame"]
-    assert smoke.pip_argv_problems(stripped, "mlxlm", package_dir) == []
+
+def test_pip_argv_problems_names_a_missing_no_deps():
+    from ohyesmlx import engines
+
+    package_dir = str(pathlib.Path(engines.__file__).resolve().parent)
+    plan = _as_plan(engines.install_plan("mlxlm", 15))
+    for name in ("mlxlm", "optiq"):
+        assert smoke.pip_argv_problems(_strip(plan, "--no-deps"), name, package_dir) == [
+            f"{name}: the pip step has no --no-deps"
+        ]
 
 
 def test_a_plan_missing_a_pin_is_refused_one_reason_each():

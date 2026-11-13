@@ -1,0 +1,97 @@
+
+Confirmed: `Required-by: mlx-optiq` only, so pygame exists for the game subcommand alone. Now let me look at `engines.py`.
+
+
+
+
+
+Confirmed scope. Starting with the constraints file — removing the pygame block (a contiguous 61-line pin) with a precise line filter, then verifying.
+Now the TDD red step: tests first. Let me see the `_strip` helper and the rest of the smoke test file.
+Now the red step — tests first. Let me check for other argv assertions elsewhere in the suite.
+Now the tests, written first so they fail. test_engines.py: three argv expectations plus the new pygame guard.
+Now the re-freeze guard test, added beside the committed-file test.
+
+Now the smoke script tests.
+Now run these to confirm red.
+Red confirmed (5 failures, exactly the claims). Now `engines.py`.
+Now `scripts/smoke_clean_account.py`.
+
+Tests green. Now the docs — let me read the freeze procedure section.
+Now the docs. lab-copies.md first — the §4 argv/prose, the freeze procedure, and the bump procedure that names the deleted symbol.
+
+Now step 9 of the bump procedure, which names `_SOURCE_BUILDS`.
+Now threat-model.md — §9's accepted-risks row and the T-01 text at line 309.
+
+Now the full suite, plus a check that nothing else references the deleted symbol.
+The remaining `--no-binary` hits are intentional assertions. The full suite needs longer than 30s.
+1324 passed. My edits net +2 tests, so the start-of-session baseline should be 1322, not the 1315 the order states. Let me verify that against HEAD.
+`tests/test_runtimes.py` is modified but not by me — pre-existing working-tree state. Let me check it.
+
+Baseline reconciles: 1324 − 2 (my new tests) − 7 (pre-existing uncommitted tests in `test_runtimes.py`) = 1315, matching the order. Now the red-checks. First item 2 — revert `engines.py` to the old argv.
+
+Red-check 1 for item 2 confirmed (8 failures). Restoring, then re-checking the state where `--no-deps` exists but `--no-binary` does too.
+Both assertions bite independently. Restoring green, then red-check item 3 — the pygame re-freeze guard.
+Red-check item 3 confirmed. Restoring and running the full suite for the final count.
+Green again at 1324. Let me confirm the restored files are byte-identical to my intended versions and gather line numbers for the report.
+`docs/interfaces.md` and `ohyesmlx/runtimes.py` show as modified, but I never touched them. Let me check whether those are pre-existing working-tree changes.
+`docs/interfaces.md` and `ohyesmlx/runtimes.py` are pre-existing uncommitted work from the parallel appexec order — not mine, and not on my allowed list. Let me review my own diffs for stray edits.
+
+Done. Report:
+
+**Changes**
+1. `ohyesmlx/constraints/optiq-0.5.13.txt:1206-1266` — deleted the 61-line `pygame==2.6.1` block (pin + 60 hashes). No other line changed (`git diff -U0 | grep -v pygame|--hash` → 0 hits).
+2. `ohyesmlx/engines.py:779` (deleted `_SOURCE_BUILDS`), `:806-825` — rationale written once at the argv; `--no-deps` added to the one argv shape, `--no-binary` tokens gone.
+3. `tests/test_engines.py:294,322-324,336-339` argv expectations; `:376-390` new re-freeze guard.
+4. `scripts/smoke_clean_account.py:162-180` — `--no-deps` required for both engines, `--no-binary` now refused; `tests/test_smoke_clean_account.py:139-159` replace the old `--no-binary` test.
+5. `docs/runtimes/lab-copies.md:159,170-172` (§4 argv), `:210-219` (freeze-step paragraph), `:543-544` (bump step); `docs/threat-model.md:305-313` (T-01 fix text), `:567` (§9 row marked RESOLVED, 045-03).
+
+**`pip show pygame`** (read-only, lab venv): `Name: pygame  Version: 2.6.1  Requires:  Required-by: mlx-optiq` — nothing else requires it.
+
+**Red-checks** (each reverted and restored):
+- Old argv (`--no-binary pygame` for optiq, no `--no-deps`): 8 failed — `test_optiq_plan...`, `test_real_install_plans_carry_the_hash_pins`, etc.
+- `--no-deps` present but `--no-binary pygame` re-added: 3 failed, including `test_both_pip_engines_install_with_no_deps_and_wheels_only`.
+- `pygame==2.6.1` re-inserted into the constraints file: `test_the_optiq_file_does_not_reintroduce_pygame` failed naming the file.
+
+**pytest**: `1324 passed in 46.29s`. Baseline: 1315 — 1324 minus my 2 new tests minus 7 pre-existing uncommitted tests in `tests/test_runtimes.py`.
+
+**Not verified**: no install run (nothing installed, no venv touched), so "pygame is unnecessary to serve" rests on the `pip show` result and the source location named in the order, not on a live serve.
+
+**Outside my file list, needs your call**: `docs/interfaces.md:1839-1840` still documents `engines._SOURCE_BUILDS` and `--no-binary pygame`, and is now stale. That file wasn't in the order's allowed set, so I left it alone.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     49    4660690    4546816    35513   97.6%   0.052029
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_optiq_plan_must_name_its_source_build_and_mlxlm_must_not
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/runtimes/lab-copies.md
+ M docs/threat-model.md
+ M ohyesmlx/constraints/optiq-0.5.13.txt
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M scripts/smoke_clean_account.py
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+ M tests/test_smoke_clean_account.py
+?? .paul/orders/v5-fix-45c-appexec.log
+?? .paul/orders/v5-fix-45c-appexec.md
+?? .paul/orders/v5-fix-45c-optiq.log
+?? .paul/orders/v5-fix-45c-optiq.md
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-20261113T191116Z.json
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-app-stderr.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-console.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-optiq-pip-repro.log
+ docs/interfaces.md                    |  12 ++++
+ docs/runtimes/lab-copies.md           |  28 +++++----
+ docs/threat-model.md                  |  14 +++--
+ ohyesmlx/constraints/optiq-0.5.13.txt |  61 -------------------
+ ohyesmlx/engines.py                   |  20 +++----
+ ohyesmlx/runtimes.py                  |  65 +++++++++++++++++++--
+ scripts/smoke_clean_account.py        |  12 ++--
+ tests/test_engines.py                 |  29 ++++++++--
+ tests/test_runtimes.py                | 106 ++++++++++++++++++++++++++++++++++
+ tests/test_smoke_clean_account.py     |  24 +++++---
+ 10 files changed, 263 insertions(+), 108 deletions(-)

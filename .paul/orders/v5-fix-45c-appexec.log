@@ -1,0 +1,86 @@
+I'll start by understanding the existing code in runtimes.py, specifically the start command construction, `_spawn`, `_run`, and `OSAURUS_APP_BUNDLES`.
+I'll read the key regions: the bundle table area, `_run`/`_spawn`, and the argv-matching code.
+Now let me check graphify and find every place that matches a running engine by argv/name.
+Let me examine the argv-match sites in detail.
+
+
+
+
+
+
+
+
+Let me check `version_command`s, the interfaces doc sections, and any argv/name matching in other modules.
+
+
+
+
+I have what I need. Writing the red tests first.
+
+Now the red run.
+Red confirmed. Now implementing the table and resolver.
+Now the resolver and its two call sites.
+
+All 220 pass. Now the red-check: I'll revert the `_spawn` wiring only and confirm the new test fails with the reported symptom.
+
+
+Now the two doc edits.
+Let me verify no other module consumes `start_command` in a way the exec change could affect, and re-check the match sites.
+Site analysis done. Running the full suite now.
+
+
+
+
+
+
+**Changed**
+
+- `ohyesmlx/runtimes.py:159` — `ENGINE_BUNDLE_EXECUTABLES`: omlx→`oMLX.app/Contents/MacOS/omlx-cli`, vmlx→`vMLX.app/…/bin/vmlx`, osaurus derived from `OSAURUS_APP_BUNDLES` as `Contents/Helpers/osaurus` (the shim's target, not the `Contents/MacOS` app binary).
+- `ohyesmlx/runtimes.py:530` — `_resolve_program(command, env)`: skips leading `env`/`K=V` tokens, probes with `shutil.which(token, path=env["PATH"])`, substitutes the first existing executable from the table, else returns the command unchanged. Used only at `:570` (`_run`) and `:596` (`_spawn`). No `start_command` touched, so recorded commands stay byte-identical.
+- `docs/interfaces.md:1398` (one paragraph), `docs/threat-model.md:585` (P5-9 note).
+
+**Tests** (`tests/test_runtimes.py:3433-3523`, 7 new): spawn and run resolve from a monkeypatched table; resolvable name untouched; `env` prefix resolved at the right index; absent table file leaves command unchanged; the bare name still raises `could not start omlx`; Osaurus entry derived from `OSAURUS_APP_BUNDLES`.
+
+**Red-check:** reverted the `_spawn` wiring → `test_spawn_execs…` failed with `'omlx' != '/…/oMLX.app/Contents/MacOS/omlx-cli'`; restored, green.
+
+**Match-site analysis:** `_resident_osaurus_pids:640` and `quickbench._osaurus_app_running:198` match `OSAURUS_APP_EXECUTABLES` (`Contents/MacOS`); we exec `Contents/Helpers`, so neither newly matches. Ledger `argv`/`serving_argv`/`_stop_orphan` compare a live `ps` capture against the same capture — nothing compares to `start_command`; `serving_pid` comes from lsof. No match breaks. (`_stop_orphan` also honours `stop_command`, now resolved through `_run`.)
+
+**pytest:** `1324 passed in 46.38s`. The tree already carried another 045-03 workstream's uncommitted edits (+2 tests in `test_engines.py`/`test_smoke_clean_account.py`); mine are the 7 that take `test_runtimes.py` 201→208. Not committed. Nothing started, nothing outside the four named files touched.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     46    4192338    4083712    32842   97.4%   0.048250
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_optiq_plan_must_name_its_source_build_and_mlxlm_must_not
+
+== cc-agent: git status ==
+ M docs/interfaces.md
+ M docs/runtimes/lab-copies.md
+ M docs/threat-model.md
+ M ohyesmlx/constraints/optiq-0.5.13.txt
+ M ohyesmlx/engines.py
+ M ohyesmlx/runtimes.py
+ M scripts/smoke_clean_account.py
+ M tests/test_engines.py
+ M tests/test_runtimes.py
+ M tests/test_smoke_clean_account.py
+?? .paul/orders/v5-fix-45c-appexec.log
+?? .paul/orders/v5-fix-45c-appexec.md
+?? .paul/orders/v5-fix-45c-optiq.log
+?? .paul/orders/v5-fix-45c-optiq.md
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-20261113T191116Z.json
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-app-stderr.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-console.log
+?? .paul/phases/v5-onboarding/045-03-evidence/run1-optiq-pip-repro.log
+ docs/interfaces.md                    |  12 ++++
+ docs/runtimes/lab-copies.md           |  28 +++++----
+ docs/threat-model.md                  |  14 +++--
+ ohyesmlx/constraints/optiq-0.5.13.txt |  61 -------------------
+ ohyesmlx/engines.py                   |  20 +++----
+ ohyesmlx/runtimes.py                  |  65 +++++++++++++++++++--
+ scripts/smoke_clean_account.py        |  12 ++--
+ tests/test_engines.py                 |  29 ++++++++--
+ tests/test_runtimes.py                | 106 ++++++++++++++++++++++++++++++++++
+ tests/test_smoke_clean_account.py     |  24 +++++---
+ 10 files changed, 263 insertions(+), 108 deletions(-)

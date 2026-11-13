@@ -159,9 +159,11 @@ def pip_argv_problems(plan, engine: str, package_dir: str) -> list[str]:
 
     AC-3/AC-4: ``--require-hashes`` is only a pin when the file names every requirement with
     a hash, ``--only-binary :all:`` keeps pip off sdists (which hash-checking does not
-    cover), ``--isolated`` keeps a user's pip config out of the index choice, and the
+    cover), ``--isolated`` keeps a user's pip config out of the index choice, ``--no-deps``
+    makes the file the whole closure so pip resolves nothing of its own, and the
     constraints file must be the one the installed package ships rather than any file the
-    user can edit. optiq's pygame exception is ``--no-binary pygame`` and nothing else.
+    user can edit. ``--no-deps`` is also what keeps mlx-optiq's pygame out of the optiq
+    install (045-03).
     """
     problems: list[str] = []
     if not isinstance(plan, dict) or plan.get("kind") != "command":
@@ -169,13 +171,13 @@ def pip_argv_problems(plan, engine: str, package_dir: str) -> list[str]:
     argv = _pip_argv(plan)
     if argv is None:
         return [f"{engine}: the plan has no pip install step"]
-    for flag in ("--require-hashes", "--isolated"):
+    for flag in ("--require-hashes", "--isolated", "--no-deps"):
         if flag not in argv:
             problems.append(f"{engine}: the pip step has no {flag}")
     if _flag_value(argv, "--only-binary") != ":all:":
         problems.append(f"{engine}: the pip step has no --only-binary :all:")
-    if engine == "optiq" and _flag_value(argv, "--no-binary") != "pygame":
-        problems.append(f"{engine}: the pip step has no --no-binary pygame")
+    if "--no-binary" in argv:
+        problems.append(f"{engine}: the pip step has --no-binary; every engine is wheels-only")
     constraints = _flag_value(argv, "-r")
     if constraints is None:
         problems.append(f"{engine}: the pip step has no -r constraints file")

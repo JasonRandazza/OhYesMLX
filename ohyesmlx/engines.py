@@ -776,14 +776,6 @@ def _guided_plan(name: str, macos_major: int) -> Plan:
     )
 
 
-# The packages an engine's install may build from source, by engine: the only exception to
-# `--only-binary :all:`, whose build tools pip fetches without hash checks. The pinned pygame
-# (the latest release) ships no CPython 3.14 wheel, and the tested mlx-optiq requires it for
-# `optiq/game/play.py` only, not for serving; the measured 3.14 lab copy built it from source
-# the same way. Jason's call, 2026-11-10 (045-02b). Remove an entry once a wheel exists.
-_SOURCE_BUILDS = {"optiq": ("pygame",)}
-
-
 def _command_plan(name: str) -> Plan:
     version = TESTED_VERSIONS[name]
     package = _PIP_PACKAGES[name]
@@ -810,8 +802,14 @@ def _command_plan(name: str) -> Plan:
                 # --isolated: no user pip config or PIP_* variable chooses the index (T-07).
                 # --require-hashes/--only-binary: the file names the package and every
                 # dependency, and pip may take only files whose hash it lists. Building an
-                # sdist is not covered by hash-checking and runs its code, so sdists are out,
-                # except the ones _SOURCE_BUILDS names.
+                # sdist is not covered by hash-checking and runs its code, so sdists are out.
+                # --no-deps: the constraints file is the whole closure (scripts/hash_freeze.py
+                # froze the venv's full set), so the resolver has nothing to add and no
+                # declaration it can act on -- which is what lets a requirement be omitted
+                # deliberately. optiq omits pygame: mlx-optiq declares it only for
+                # `optiq game`, which this harness never starts, and pygame 2.6.1 has no
+                # CPython 3.14 wheel, so pip could only build it from source, needing SDL
+                # headers a Mac without Homebrew lacks (045-03).
                 command=[
                     os.path.join(root, "bin", "python"),
                     "-I",
@@ -824,7 +822,7 @@ def _command_plan(name: str) -> Plan:
                     "--require-hashes",
                     "--only-binary",
                     ":all:",
-                    *[token for package in _SOURCE_BUILDS.get(name, ()) for token in ("--no-binary", package)],
+                    "--no-deps",
                     "-r",
                     str(constraints_path(name)),
                 ],

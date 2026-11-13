@@ -303,12 +303,14 @@ Jason approved every severity and disposition as listed at the 045-01 checkpoint
   every file PyPI listed for that version when it was frozen (`scripts/hash_freeze.py`, from
   `https://pypi.org/pypi/<name>/<version>/json`; the script also prints files uploaded more than 7 days after
   their version's first file, for review). The install runs `-I -m pip install --isolated --require-hashes
-  --only-binary :all: -r <file>`. `engines._check_hashed_requirements` refuses a file with an unhashed pin or
+  --only-binary :all: --no-deps -r <file>`. `engines._check_hashed_requirements` refuses a file with an unhashed pin or
   any option line (`--index-url`, `-r`, `-e`, ...) as `no_constraints`. `--only-binary` is part of the fix,
   because hash-checking mode does not cover the PEP 517 build dependencies of an sdist.
-- One named exception, `engines._SOURCE_BUILDS` (`--no-binary pygame` for OptiQ): pygame 2.6.1 ships no CPython
-  3.14 wheel, and mlx-optiq 0.5.13 requires it for its game command only. Its build tools are not hash-checked;
-  the measured lab copy was built the same way. Jason's call, 2026-11-10. See section 9.
+- No exception remains. 045-03 deleted `engines._SOURCE_BUILDS`, the `--no-binary pygame` it appended, and
+  the `pygame==2.6.1` pin from `constraints/optiq-0.5.13.txt`: pygame is imported only by `optiq game`, so
+  the install omits it and runs `--no-deps`, which makes the constraints file the whole closure and leaves
+  pip nothing to resolve. Every pin in both files therefore resolves to a wheel, and no build tools are
+  fetched. Live verification on the clean account `oymlxtest` failed on the earlier form (045-03 F1).
 - Verified live on a scratch HOME (045-02b SUMMARY): both engines install from the hashes. With every mlx hash
   altered, pip refuses (`THESE PACKAGES DO NOT MATCH THE HASHES`) and installs nothing.
 
@@ -562,7 +564,7 @@ file is still checked against the catalog's sha256 or git blob id (`fetch.py:572
 | Same-user symlink races in the HF cache (T-14) | Only a process that can already write the user's files can win them. Fixing them fully needs `O_NOFOLLOW`/`openat` handling throughout `fetch`, a large change for no gain against that actor. | Running the backend as a different user from the one that owns the cache |
 | Anyone holding the token can submit consented jobs | By design: the token is the boundary, and the parent app is the only holder | The token reaching any second process |
 | UAT-001 | Section 8 | Users report surprise re-downloads |
-| pygame built from source in the OptiQ install (T-01) | pygame 2.6.1 has no CPython 3.14 wheel and mlx-optiq 0.5.13 requires it. One named exception (`engines._SOURCE_BUILDS`); its build tools are fetched without hash checks. The measured lab copy was built the same way. | A pygame wheel for the bundled Python, or an OptiQ release that drops the dependency |
+| pygame built from source in the OptiQ install (T-01) | **RESOLVED, 045-03.** pygame is omitted from the OptiQ install (`--no-deps`; the constraints file has no `pygame` pin) and nothing is built from source, so no build tools are fetched. | Reopen only if something this harness serves turns out to need pygame |
 | A local account filling the 32 handler slots (T-08) | Each idle connection is closed by the 10 s handler timeout, so the app's own requests are delayed, not refused for good; the slot leak that made it permanent (T-04) is closed. | The backend serving anything but loopback, or the app needing guaranteed latency |
 | `_acquire_lock`'s stale-lock reclaim is check-then-remove, so two processes that both find a dead owner at the same instant can both proceed (T-06) | Winning it needs a crash plus a two-process race at the same instant. | More than one backend per user is ever supported (checklist P5-7) |
 
@@ -580,7 +582,7 @@ Each line must be checkable by a test or by a manual step that can fail.
 | P5-6 | Nothing is written inside the `.app` bundle: the Osaurus baseline, engine logs and every other writable file live under Application Support. A run with the bundle on a read-only volume succeeds and `codesign --verify --deep` still passes afterwards. | T-03 |
 | P5-7 | Only one app instance (and so one backend) runs per user. A second launch focuses the first. | T-15, T-06 |
 | P5-8 | On quit, the client closes the backend's stdin and waits for it to exit, and does not SIGKILL while a job reports itself running. On launch, the backend's startup recovery (T-02) has run before the first screen offers a job. | T-02 |
-| P5-9 | The backend's PATH is launchd's default, not the user's shell PATH. The engine PATH prefix comes only from `lab-paths.json`. | T-09 |
+| P5-9 | The backend's PATH is launchd's default, not the user's shell PATH. The engine PATH prefix comes only from `lab-paths.json`. An app engine whose command-line tool ships inside its `.app` is exec'd from `runtimes.ENGINE_BUNDLE_EXECUTABLES` when its bare name does not resolve on that PATH (`runtimes._resolve_program`, 045-03), so a start no longer depends on a per-user shim. | T-09 |
 | P5-10 | The app may show or persist the backend's stderr lines as they are, and must never add request headers or the token to them. | 04-01 audit #3, T-11 |
 | P5-11 | Copy: a model whose files differ in size from the catalog is offered as "re-download", not reported as corrupt. | UAT-001 |
 | P5-12 | An SBOM of the bundled interpreter and every pinned engine dependency (names, versions, hashes from T-01) ships with each release. | 045-01 audit deferred #3, T-01 |
