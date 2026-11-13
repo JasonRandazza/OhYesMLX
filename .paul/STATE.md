@@ -15,7 +15,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). 045-02 split in two (Jason 2026-11-03): `045-02a` (server + lifecycle: T-02/03/04/05/08/09/10/11) closed 2026-11-09 (`4b35ef8`, `9bc9388`, review fixes `6c4d616`; 1222 tests; probe 32/32; code review 10 verified + 1 rejected; `045-02a-SUMMARY.md`); 045-02b (installers + fetch: T-01/06/07/12/13/16) next; then 045-03 clean-account smoke. Phase 5 not started.
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). 045-02 split in two (Jason 2026-11-03): `045-02a` (server + lifecycle: T-02/03/04/05/08/09/10/11) closed 2026-11-09 (`4b35ef8`, `9bc9388`, review fixes `6c4d616`; 1222 tests; probe 32/32; code review 10 verified + 1 rejected; `045-02a-SUMMARY.md`); 045-02b (installers + fetch: T-01/06/07/12/13/16) closed 2026-11-13 (`a031ad4`, `fb4e61c`, review fixes `7393715`; 1281 tests; code review 8 items fixed; `045-02b-SUMMARY.md`); 045-03 clean-account smoke next. Phase 5 not started.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
 Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); 04-01 closed (SUMMARY written). Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-03 — 04-03c: quickbench re-run live, all 5 engines PASS incl. Osaurus 131.3 tok/s, restore byte-exact; hero-model safetensors proven to be the pinned tensors. 2026-11-02: quickbench first live run (Osaurus refused by baseline-path gap). Before: 04-02 unified: jobs + SSE (live scratch download/evict). 04-01b: gpu_cores from ioreg. Before it, 04-01: `ohyesmlx app` guarded loopback API (`1c157b0`).
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ○     [045-02b APPLY complete 2026-11-10 - next: code-review, then UNIFY]
+  ✓        ✓        ✓     [045-02b loop closed 2026-11-13 - next: PLAN 045-03]
 ```
 
 ## Performance Metrics
@@ -174,11 +174,11 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ## Session Continuity
 
-Last session: 2026-11-10 (Claude Opus 5.5 coordinator)
-Stopped at: 045-02b APPLY complete (part A `a031ad4`, part B + disclosure in the next commit; 1272 tests; private findings file deleted, 045-01 logs published).
-Next action: code-review (Standards + Spec) on `de67093..HEAD` via Command Code, then /paul:unify 045-02b. Open for Jason: the real fetch ledger's one entry (`mlx-community/Qwen3.5-2B-4bit`) lists 60 paths under 2026-11-03 scratch cache roots, so it was already unevictable before 045-02b; clean it or leave it. Still-open candidates not in 045-02b: `runtimes.LSOF` via which, `_osaurus_app_running` timeout literal.
+Last session: 2026-11-13 (Claude Opus 5.5 coordinator)
+Stopped at: 045-02b UNIFY complete (1281 tests at `7393715`; SUMMARY has a UNIFY section).
+Next action: /paul:plan 045-03 (clean-account smoke), the last plan in Phase 4.5; then Phase 5 (SwiftUI app + packaging). Open for Jason: the real fetch ledger's one entry (`mlx-community/Qwen3.5-2B-4bit`) is scratch residue (60 paths under 2026-11-03 scratch caches); clean it or leave it. Still-open candidates: `runtimes.LSOF` via which, `_osaurus_app_running` timeout literal, `test_server` thread-cap flake.
 Resume file: `.paul/phases/v5-onboarding/045-02b-SUMMARY.md`
-Resume context: 045-02a SUMMARY (Known gaps, code-review table), threat-model §7.3 rows for T-01/T-06/T-07/T-12/T-13/T-16, and the private findings file.
+Resume context: 045-02b SUMMARY (UNIFY section), threat-model §7-§9, the Phase 4.5 section of `.paul/phases/v5-onboarding/PLAN.md`.
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---

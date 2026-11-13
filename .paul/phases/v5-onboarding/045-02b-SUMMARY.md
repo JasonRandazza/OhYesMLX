@@ -3,11 +3,11 @@ phase: 045-security
 plan: 02b
 type: Summary
 about: "OhYesMLX"
-status: applied (part B uncommitted)
-completed: 2026-11-10
-duration: "2026-11-10 (APPLY and close-out)"
-commits: [a031ad4]
-tests: "1222 -> 1272 passed"
+status: unified
+completed: 2026-11-13
+duration: "2026-11-10 (APPLY, close-out) to 2026-11-13 (review fixes, UNIFY)"
+commits: [a031ad4, fb4e61c, 7393715]
+tests: "1222 -> 1281 passed"
 ---
 
 # 045-02b SUMMARY: installer and fetch security fixes
@@ -15,7 +15,7 @@ tests: "1222 -> 1272 passed"
 APPLY of `045-02b-PLAN.md` (audited 2026-11-10). Executed 2026-11-10 by the Claude Opus 5.5
 coordinator, with two Command Code `implement` dispatches (DeepSeek v4.1 flash) and one close-out
 dispatch. Six findings from the 045-01 threat model are fixed: T-01, T-07 and T-12 (part A, committed),
-and T-06, T-13 and T-16 (part B, in the working tree and reviewed, uncommitted at the time of writing).
+and T-06, T-13 and T-16 (part B, `fb4e61c`).
 The private findings file held only T-06 at close-out, moved into the threat model here, and was deleted.
 
 ## Commits
@@ -23,7 +23,8 @@ The private findings file held only T-06 at close-out, moved into the threat mod
 | Commit | Contents |
 |---|---|
 | `a031ad4` | Part A (AC-1, AC-2, AC-3): `constraints/*.txt` became full hashed requirements files produced by `scripts/hash_freeze.py`; the install runs `-I -m pip install --isolated --require-hashes --only-binary :all: -r <file>`; `_check_hashed_requirements` refuses an unhashed pin or an option line as `no_constraints`; `_venv_root` searches the argv; `engines.check_lab_dir` guards both `_engine_env` and `record_lab_path`; `ohyesmlx.atomic_write_text` added. Threat model: T-01, T-07 and T-12 detail published and marked fixed; §9 gains the pygame source-build row. 1261 tests. |
-| (uncommitted) | Part B (AC-4, AC-5, AC-6): `evict` takes `download.lock` and refuses `busy`, releasing in a `finally`; `_ledger_save` writes through `atomic_write_text`; quickbench records `not_evicted` and logs one event per refused eviction; `_repo_dir` is the one repo-directory helper used by `plan`, `evict` and the `.incomplete` residue check; `_link_conflicts` runs in the pre-transfer pass and in `link_all`. Threat model: T-06 detail published, T-06/T-13/T-16 rows marked fixed, §9 gains the reclaim-race row, §8's T-16 carried row names part B. 1272 tests. |
+| `fb4e61c` | Part B (AC-4, AC-5, AC-6): `evict` takes `download.lock` and refuses `busy`, releasing in a `finally`; `_ledger_save` writes through `atomic_write_text`; quickbench records `not_evicted` and logs one event per refused eviction; `_repo_dir` is the one repo-directory helper used by `plan`, `evict` and the `.incomplete` residue check; `_link_conflicts` runs in the pre-transfer pass and in `link_all`. Threat model: T-06 detail published, T-06/T-13/T-16 rows marked fixed, §9 gains the reclaim-race row, §8's T-16 carried row names part B. 1272 tests. |
+| `7393715` | Code-review fixes (Standards + Spec, 8 items, table under "Code review" below), including the `runtimes._engine_env` `lab_path` KeyError fix and `fetch.ledger_for`. 1281 tests. |
 
 Part A's commit carries its order and worker log (`.paul/orders/v5-fix-45b-installers.{md,log}`).
 Part B's order and log are `.paul/orders/v5-fix-45b-fetch.{md,log}`; the close-out's are
@@ -252,3 +253,28 @@ TDD, red test first, for each behavioural change.
   it passed 20/20 repetitions alone, passed with all of `test_server.py`, and passed in the three clean full
   runs, so it is a load-sensitive flake rather than a regression — but I did not prove that. Nothing committed.
 
+
+## UNIFY (2026-11-13)
+
+Reconciled by the Claude Opus 5.5 coordinator against `045-02b-PLAN.md`.
+
+- **AC-1 to AC-7: all PASS.** AC-5's real-ledger clause did not hold as written: the host's one ledger entry
+  was scratch residue, not a real download (Live check (c)). The code meets the AC; the plan's premise about
+  the host was wrong.
+- **Commits:** part A `a031ad4`, part B `fb4e61c`, review fixes `7393715`.
+- **Tests:** `1281 passed in 46.59s`, run by the coordinator on 2026-11-13 at `7393715`. The 1280 in the
+  Code review notes was the worker's count; the coordinator's KeyError test (item 7) is the 1281st.
+- **The `lab_path` KeyError fix is in place** at `runtimes.py:488` (`entry.get("lab_path")`) and tested
+  by `tests/test_runtimes.py:3372`. Before the fix this could not crash, because all five entries in
+  `engines-tested.json` set `"lab_path": null`. It would have crashed every engine start once an entry
+  omitted the key, since the validator accepts that.
+- **Known gaps resolved by the review fixes:** "Two continuation joiners" is fixed (item 1). The mechanism
+  behind "real fetch ledger polluted by scratch-cache runs" is fixed (item 8: a non-default cache now writes
+  a sibling ledger). The host's existing polluted entry is still there; cleaning it is Jason's call.
+- **Still open, carried:** the four atomic-write copies, global pip config under `--isolated`, the
+  lock-reclaim race (§9), the pygame wheel watch (STATE Deferred Issues), the one "archived" restatement in
+  the `lab_paths` refusal, the load-sensitive `test_server` thread-cap flake (once in four runs), and the two
+  candidates outside 045-02b (`runtimes.LSOF` via `which`, the `_osaurus_app_running` timeout literal).
+- **Not done:** `/paul:verify`. 045-02b changes no UI, and the AC evidence is the live checks above.
+- **Phase 4.5:** 045-01, 045-02a and 045-02b are closed. 045-03 (clean-account smoke) is next and is not
+  planned yet.
