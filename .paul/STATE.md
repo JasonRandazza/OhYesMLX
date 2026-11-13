@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Phase 4.5 closed 2026-11-13 - next: prototype gate, then PLAN Phase 5]
+  ✓        ✓        ✓     [Phase 4.5 closed 2026-11-13 - prototype gate built; next: Jason's answers, then PLAN Phase 5]
 ```
 
 ## Performance Metrics
@@ -78,10 +78,10 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-13 (Claude Opus 5.5 coordinator)
-Stopped at: Phase 4.5 complete (045-03 unified; clean-account smoke 21/21; 1329 tests).
-Next action: Phase 5 prototype gate (screen flows), then /paul:plan Phase 5. Pending doc work (Jason, 2026-11-13): split `docs/interfaces.md` into `docs/interfaces/` by surface with an index left at the old path, and move STATE's Decisions table into `.paul/DECISIONS.md`; only while no worker reads them. Jason: `sudo rm /etc/sudoers.d/oymlxtest` when clean-account runs are done. No Apple Developer account yet: T5.6 plans an unsigned/ad-hoc build.
+Stopped at: Phase 4.5 complete; docs split done (`181fc35`); Phase 5 prototype gate built and published, awaiting Jason's click-through.
+Next action: Jason clicks through the prototype (https://claude.ai/code/artifact/0f1614ae-9053-4c90-b31e-621393d56128; source on branch `prototype/phase5-flows`, never merges) and answers its 7 open questions (one-slot UI, interrupted jobs on relaunch, cancel mid-cell, who owns low_disk, guided install verified later, unsupported-Mac gate, not_evicted on Results). Those answers feed /paul:plan Phase 5. Jason: `sudo rm /etc/sudoers.d/oymlxtest` when clean-account runs are done. No Apple Developer account yet: T5.6 is the unsigned zip (D7).
 Resume file: `.paul/phases/v5-onboarding/PHASE-4.5-SUMMARY.md`
-Resume context: PHASE-4.5-SUMMARY (Carried forward), threat-model §10 checklist, PLAN.md Phase 5 tickets.
+Resume context: PHASE-4.5-SUMMARY (Carried forward), threat-model §10 checklist, PLAN.md Phase 5 tickets, the prototype's open questions.
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---
