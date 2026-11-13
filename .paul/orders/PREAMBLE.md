@@ -70,6 +70,8 @@ Orientation is not the job. Write a first version of every file the order asks f
 your first ~15 turns, then iterate against the tests. A dispatch was once stopped after 30
 minutes having read the codebase and written nothing. If the order is unclear enough that you
 cannot start writing, report BLOCKED with the question instead of reading further.
+Write any file larger than ~12 KB in stages (skeleton first, then one edit per part): a
+provider error during one giant write once lost 68K output tokens and left no file.
 
 ## The task
 

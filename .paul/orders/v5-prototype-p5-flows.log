@@ -1,0 +1,129 @@
+I'll start by writing the skeleton immediately, then read the ground truth in stages.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now stage 2 — the pure state module.
+
+
+
+
+
+
+
+
+
+Now the renderer and free-play controls.
+
+
+Now the walkthrough renderer plus scenarios a–e.
+
+
+Now let me extract the pure model and run assertions against it in Node.
+
+
+
+
+
+
+
+
+
+
+
+
+The file is over the 40 KB cap, so I'll rebuild it compactly in staged appends and keep the tested logic identical.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+**File:** `prototypes/phase5-onboarding-flow.prototype.html` — 39,819 bytes, sole change; not committed.
+
+**Actions (20):** `backend_up`, `bind_failed`, `crash`, `relaunch`, `go`, `set_hardware`, `sim`, `consent`, `install`, `guided_opened`, `guided_installed`, `install_ok`, `install_fails`, `download`, `download_tick`, `download_finishes`, `evict`, `quickbench`, `cancel`, `quit`.
+
+**Scenarios (9):** a happy path; b pip step fails → tail → retry; c download while an install holds the slot (409 busy); d quickbench before download (400 bad_args, "download it first"); e mlx-lm's port busy + vMLX cannot start, run still completes; f Intel / under 8 GiB; g quit mid-download → relaunch → recovery; h disk-excluded model with its reason; i Osaurus pin declined.
+
+**ASSUMED:** screen order; relaunch returning to Welcome; the recovery wording; `link_lost` as the client's name for a dead backend (no such server code); all tok/s and TTFT figures (placeholders).
+
+**Open questions (7, in-page):** contended single slot; non-persisted jobs after a crash; cancel latency mid-cell; which screen owns `low_disk`; the unsupported-Mac gate; a guided install completed later; `not_evicted` rows.
+
+**Verified:** 34 node assertions on the extracted pure model (exact refusal codes/messages, skip reasons, exclusions, crash/quit recovery, no input mutation); a DOM-stub sweep rendering all 9 scenarios plus every action without throwing; headless Chrome render, no JS errors. Red-check: reverted the slot guard to count a finished job as busy — "quickbench completes" failed; restored byte-identical. `pytest -q`: 1329 passed (no Python touched, so the baseline is unchanged; I captured no pre-change count).
+
+**Not verified:** Safari, a real human click-through, and an actual 400 px visual review.
+
+**Note:** `.paul/orders/PREAMBLE.md` shows as modified in git; its mtime predates my first write, so it is not my edit.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    103   13570232   13360000   122854   98.5%   0.145327
+
+== cc-agent: git status ==
+ M .paul/orders/PREAMBLE.md
+?? .paul/orders/v5-prototype-p5-flows.attempt1-apierror.log
+?? .paul/orders/v5-prototype-p5-flows.log
+?? .paul/orders/v5-prototype-p5-flows.md
+?? prototypes/
+ .paul/orders/PREAMBLE.md | 2 ++
+ 1 file changed, 2 insertions(+)
