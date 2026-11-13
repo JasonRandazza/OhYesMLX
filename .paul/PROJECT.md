@@ -51,10 +51,12 @@ runtime or their quantization is what's actually costing them speed and memory.
 ### Validated (Shipped)
 
 - [x] Repository, license, and the stated methodology — 0.0.1
+- [x] v1 format axis, v2 JANG + accuracy, v3 large-model scaling — see ROADMAP Completed Milestones
+- [x] v5.0 onboarding backend (Phases 0–4.5): hardware scan, engine detect + consented hash-pinned install, model catalog + recommender + fetch, guarded localhost API with jobs/SSE, quickbench, security hardening; verified on a clean standard account (2026-11-13)
 
 ### Active (In Progress)
 
-- [ ] Phase 2.1 — the coherence gate, which every later number depends on.
+- [ ] v5.0 Phase 5 — SwiftUI app and packaging (unsigned/ad-hoc build until an Apple Developer account exists).
 
 ### Planned (Next)
 
@@ -163,4 +165,4 @@ Testing that claim fairly is the sharpest single reason this project should exis
 
 ---
 *PROJECT.md — Updated when requirements or context change*
-*Last updated: 2026-09-25*
+*Last updated: 2026-11-13 after v5.0 Phase 4.5*

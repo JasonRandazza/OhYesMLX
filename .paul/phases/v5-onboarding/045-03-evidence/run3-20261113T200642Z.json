@@ -1,0 +1,612 @@
+{
+  "head": "f7c22e0e4391750ff1aa7423a112e1335505d4f7",
+  "started": "2026-11-13T20:06:42.350445+00:00",
+  "ended": "2026-11-13T20:09:29.327165+00:00",
+  "checks": [
+    {
+      "id": "AC-2.launch_line",
+      "status": "PASS",
+      "evidence": {
+        "port": 52375,
+        "token_read": true,
+        "line": "one line, port and token only"
+      }
+    },
+    {
+      "id": "AC-2.app_support_mode",
+      "status": "PASS",
+      "evidence": {
+        "path": "/Users/oymlxtest/Library/Application Support/OhYesMLX",
+        "mode": "0o700"
+      }
+    },
+    {
+      "id": "AC-3.hardware",
+      "status": "PASS",
+      "evidence": {
+        "status": 200,
+        "missing": [],
+        "chip": "Apple M2 Max",
+        "ram_bytes": 68719476736
+      }
+    },
+    {
+      "id": "AC-3.engines_plans",
+      "status": "PASS",
+      "evidence": {
+        "status": 200,
+        "problems": {
+          "mlxlm": [],
+          "optiq": []
+        },
+        "engines": {
+          "mlxlm": {
+            "present": true,
+            "installed": false,
+            "version": null,
+            "install_plan_keys": [
+              "engine",
+              "kind",
+              "needs_admin",
+              "size_bytes_estimate",
+              "source_url",
+              "steps"
+            ]
+          },
+          "optiq": {
+            "present": true,
+            "installed": false,
+            "version": null,
+            "install_plan_keys": [
+              "engine",
+              "kind",
+              "needs_admin",
+              "size_bytes_estimate",
+              "source_url",
+              "steps"
+            ]
+          },
+          "osaurus": {
+            "present": true,
+            "installed": true
+          },
+          "omlx": {
+            "present": true,
+            "installed": true
+          },
+          "vmlx": {
+            "present": true,
+            "installed": true
+          }
+        }
+      }
+    },
+    {
+      "id": "AC-3.recommendations",
+      "status": "PASS",
+      "evidence": {
+        "status": 200,
+        "picks": 12,
+        "excluded": 0,
+        "unsupported_reason": null
+      }
+    },
+    {
+      "id": "AC-3.quickbench_plan_before_download",
+      "status": "PASS",
+      "evidence": {
+        "status": 400,
+        "body": "{\"error\": {\"code\": \"bad_args\", \"status\": 400, \"message\": \"mlx-community/Qwen3-0.6B-4bit is not in this Mac's Hugging Face cache; download it first -- quickbench never fetches or evicts the model you chose\"}}"
+      }
+    },
+    {
+      "id": "AC-3.token_required",
+      "status": "PASS",
+      "evidence": {
+        "status": 401,
+        "body": "{\"error\": {\"code\": \"unauthorized\", \"status\": 401, \"message\": \"a valid Authorization: Bearer token is required\"}}"
+      }
+    },
+    {
+      "id": "AC-3.no_host_paths",
+      "status": "PASS",
+      "evidence": "no occurrence of /Users/jrazz"
+    },
+    {
+      "id": "AC-4.install.mlxlm",
+      "status": "PASS",
+      "evidence": {
+        "events": 3,
+        "seconds": 10.827,
+        "problem": null,
+        "error": null,
+        "last": {
+          "seq": 3,
+          "type": "done",
+          "message": "install finished",
+          "fraction": null,
+          "payload": null
+        }
+      }
+    },
+    {
+      "id": "AC-4.install.optiq",
+      "status": "PASS",
+      "evidence": {
+        "events": 3,
+        "seconds": 14.486,
+        "problem": null,
+        "error": null,
+        "last": {
+          "seq": 3,
+          "type": "done",
+          "message": "install finished",
+          "fraction": null,
+          "payload": null
+        }
+      }
+    },
+    {
+      "id": "AC-4.lab_paths_named",
+      "status": "PASS",
+      "evidence": {
+        "path": "/Users/oymlxtest/Library/Application Support/OhYesMLX/lab-paths.json",
+        "engines": {
+          "mlxlm": "/Users/oymlxtest/Library/Application Support/OhYesMLX/engines/mlxlm-0.31.3/bin",
+          "optiq": "/Users/oymlxtest/Library/Application Support/OhYesMLX/engines/optiq-0.5.13/bin"
+        },
+        "problem": null
+      }
+    },
+    {
+      "id": "AC-4.check_lab_dir",
+      "status": "PASS",
+      "evidence": {
+        "mlxlm": "ok",
+        "optiq": "ok"
+      }
+    },
+    {
+      "id": "AC-4.engines_installed",
+      "status": "PASS",
+      "evidence": {
+        "status": 200,
+        "installed": {
+          "mlxlm": true,
+          "osaurus": true,
+          "omlx": true,
+          "optiq": true,
+          "vmlx": true
+        }
+      }
+    },
+    {
+      "id": "AC-5.download",
+      "status": "PASS",
+      "evidence": {
+        "events": 46,
+        "seconds": 19.05,
+        "problem": null,
+        "error": null,
+        "last": {
+          "seq": 46,
+          "type": "done",
+          "message": "download finished",
+          "fraction": null,
+          "payload": null
+        },
+        "repo_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit"
+      }
+    },
+    {
+      "id": "AC-5.quickbench_plan",
+      "status": "PASS",
+      "evidence": {
+        "status": 200,
+        "missing": [],
+        "stage_a": [
+          "mlxlm",
+          "osaurus",
+          "omlx",
+          "optiq",
+          "vmlx"
+        ],
+        "estimate_s": 450,
+        "body": null
+      }
+    },
+    {
+      "id": "AC-5.quickbench",
+      "status": "PASS",
+      "evidence": {
+        "events": 11,
+        "seconds": 118.551,
+        "problem": null,
+        "error": null,
+        "last": {
+          "seq": 11,
+          "type": "done",
+          "message": "quickbench finished",
+          "fraction": null,
+          "payload": null
+        },
+        "stream": [
+          {
+            "seq": 1,
+            "type": "progress",
+            "message": "stage A: 5 installed engine(s), one format (engines compared on one format only)",
+            "fraction": 0.0,
+            "payload": {
+              "stage": "A"
+            }
+          },
+          {
+            "seq": 2,
+            "type": "progress",
+            "message": "stage A: mlxlm PASS",
+            "fraction": 0.2,
+            "payload": {
+              "engine": "mlxlm",
+              "status": "PASS"
+            }
+          },
+          {
+            "seq": 3,
+            "type": "progress",
+            "message": "stage A: osaurus skipped: Osaurus was not allowed for this run (osaurus: false)",
+            "fraction": 0.4,
+            "payload": {
+              "engine": "osaurus",
+              "skipped": "Osaurus was not allowed for this run (osaurus: false)"
+            }
+          },
+          {
+            "seq": 4,
+            "type": "progress",
+            "message": "stage A: omlx PASS",
+            "fraction": 0.6,
+            "payload": {
+              "engine": "omlx",
+              "status": "PASS"
+            }
+          },
+          {
+            "seq": 5,
+            "type": "progress",
+            "message": "stage A: optiq PASS",
+            "fraction": 0.8,
+            "payload": {
+              "engine": "optiq",
+              "status": "PASS"
+            }
+          },
+          {
+            "seq": 6,
+            "type": "progress",
+            "message": "stage A: vmlx N/A: runtime 'vmlx' did not start: RuntimeStartError: could not start vmlx: [Errno 2] No such file or directory: 'vmlx'",
+            "fraction": 1.0,
+            "payload": {
+              "engine": "vmlx",
+              "status": "N/A"
+            }
+          },
+          {
+            "seq": 7,
+            "type": "log",
+            "message": "stage_a: this Mac was busy (1-minute load 7.9 -> 4.9); the numbers are recorded, not retried",
+            "fraction": null,
+            "payload": {
+              "label": "this Mac was busy"
+            }
+          },
+          {
+            "seq": 8,
+            "type": "progress",
+            "message": "stage B: omlx over 0 sibling format(s) (formats compared on one engine only)",
+            "fraction": null,
+            "payload": {
+              "stage": "B",
+              "engine": "omlx"
+            }
+          },
+          {
+            "seq": 9,
+            "type": "log",
+            "message": "stage_b: this Mac was busy (1-minute load 4.9 -> 4.9); the numbers are recorded, not retried",
+            "fraction": null,
+            "payload": {
+              "label": "this Mac was busy"
+            }
+          },
+          {
+            "seq": 10,
+            "type": "result",
+            "message": "quickbench finished",
+            "fraction": null,
+            "payload": {
+              "label": "quick: measured on this Mac",
+              "repo": "mlx-community/Qwen3-0.6B-4bit",
+              "format": "mlx affine 4-bit gs64",
+              "plan": {
+                "repo": "mlx-community/Qwen3-0.6B-4bit",
+                "format": "mlx affine 4-bit gs64",
+                "stage_a": [
+                  {
+                    "engine": "mlxlm",
+                    "version": "0.31.3",
+                    "tested": true
+                  },
+                  {
+                    "engine": "osaurus",
+                    "version": "0.25.33",
+                    "tested": false
+                  },
+                  {
+                    "engine": "omlx",
+                    "version": "0.7.3",
+                    "tested": true
+                  },
+                  {
+                    "engine": "optiq",
+                    "version": "0.5.13",
+                    "tested": true
+                  },
+                  {
+                    "engine": "vmlx",
+                    "version": null,
+                    "tested": false
+                  }
+                ],
+                "stage_b": [],
+                "download_bytes": 0,
+                "osaurus": true,
+                "estimate_s": 450
+              },
+              "estimate_s": 450,
+              "actual_s": 118.552,
+              "ended": "finished",
+              "results_dir": "/Users/oymlxtest/Library/Application Support/OhYesMLX/quickbench/20261113T200730Z",
+              "not_evicted": [],
+              "harness": {
+                "version": "0.3.0",
+                "source_sha256": "43d6f644780fbb43d5854a3d34e41adca556073df50d054bb77c5b79ecf24d4b"
+              },
+              "engines": [
+                {
+                  "name": "mlxlm",
+                  "version": "0.31.3",
+                  "tested": true
+                },
+                {
+                  "name": "osaurus",
+                  "version": "0.25.33",
+                  "tested": false
+                },
+                {
+                  "name": "omlx",
+                  "version": "0.7.3",
+                  "tested": true
+                },
+                {
+                  "name": "optiq",
+                  "version": "0.5.13",
+                  "tested": true
+                },
+                {
+                  "name": "vmlx",
+                  "version": null,
+                  "tested": false
+                }
+              ],
+              "load": {
+                "stage_a": {
+                  "before": 7.89599609375,
+                  "after": 4.93017578125,
+                  "label": "this Mac was busy"
+                },
+                "stage_b": {
+                  "before": 4.93017578125,
+                  "after": 4.93017578125,
+                  "label": "this Mac was busy"
+                }
+              },
+              "osaurus": {
+                "allowed": false,
+                "pinned": false,
+                "restored": null,
+                "reason": null
+              },
+              "stage_a": {
+                "caveat": "engines compared on one format only",
+                "cells": [
+                  {
+                    "engine": "mlxlm",
+                    "format": "mlx affine 4-bit gs64",
+                    "artifact_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+                    "status": "PASS",
+                    "reason": null,
+                    "decode_tps": 230.5590482793702,
+                    "ttft_s": 0.10534595901845023,
+                    "runtime_version": "0.31.3",
+                    "label": "quick: measured on this Mac",
+                    "reused": false
+                  },
+                  {
+                    "engine": "osaurus",
+                    "format": "mlx affine 4-bit gs64",
+                    "artifact_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+                    "status": "SKIPPED",
+                    "reason": "Osaurus was not allowed for this run (osaurus: false)",
+                    "decode_tps": null,
+                    "ttft_s": null,
+                    "runtime_version": null,
+                    "label": "quick: measured on this Mac",
+                    "reused": false
+                  },
+                  {
+                    "engine": "omlx",
+                    "format": "mlx affine 4-bit gs64",
+                    "artifact_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+                    "status": "PASS",
+                    "reason": null,
+                    "decode_tps": 413.8942913481531,
+                    "ttft_s": 0.1265637920005247,
+                    "runtime_version": "0.7.3",
+                    "label": "quick: measured on this Mac",
+                    "reused": false
+                  },
+                  {
+                    "engine": "optiq",
+                    "format": "mlx affine 4-bit gs64",
+                    "artifact_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+                    "status": "PASS",
+                    "reason": null,
+                    "decode_tps": 235.82010861004375,
+                    "ttft_s": 0.11163341600331478,
+                    "runtime_version": "0.5.13",
+                    "label": "quick: measured on this Mac",
+                    "reused": false
+                  },
+                  {
+                    "engine": "vmlx",
+                    "format": "mlx affine 4-bit gs64",
+                    "artifact_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+                    "status": "N/A",
+                    "reason": "runtime 'vmlx' did not start: RuntimeStartError: could not start vmlx: [Errno 2] No such file or directory: 'vmlx'",
+                    "decode_tps": null,
+                    "ttft_s": null,
+                    "runtime_version": null,
+                    "label": "quick: measured on this Mac",
+                    "reused": false
+                  }
+                ],
+                "winner": "omlx",
+                "tie": [],
+                "note": null
+              },
+              "stage_b": {
+                "caveat": "formats compared on one engine only",
+                "engine": "omlx",
+                "cells": [
+                  {
+                    "engine": "omlx",
+                    "format": "mlx affine 4-bit gs64",
+                    "artifact_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit/snapshots/73e3e38d981303bc594367cd910ea6eb48349da8",
+                    "status": "PASS",
+                    "reason": null,
+                    "decode_tps": 413.8942913481531,
+                    "ttft_s": 0.1265637920005247,
+                    "runtime_version": "0.7.3",
+                    "label": "quick: measured on this Mac",
+                    "reused": true
+                  }
+                ],
+                "note": null
+              },
+              "best": {
+                "engine": "omlx",
+                "decode_tps": 413.8942913481531,
+                "ttft_s": 0.1265637920005247,
+                "measured_at": "2026-11-13T20:07:30.218555+00:00",
+                "quick": true
+              }
+            }
+          },
+          {
+            "seq": 11,
+            "type": "done",
+            "message": "quickbench finished",
+            "fraction": null,
+            "payload": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "AC-5.quickbench_cells",
+      "status": "PASS",
+      "evidence": [
+        {
+          "engine": "mlxlm",
+          "status": "PASS",
+          "reason": null
+        },
+        {
+          "engine": "omlx",
+          "status": "PASS",
+          "reason": null
+        },
+        {
+          "engine": "optiq",
+          "status": "PASS",
+          "reason": null
+        },
+        {
+          "engine": "osaurus",
+          "status": "SKIPPED",
+          "reason": "Osaurus was not allowed for this run (osaurus: false)"
+        },
+        {
+          "engine": "stage_b:omlx",
+          "status": "PASS",
+          "reason": null
+        },
+        {
+          "engine": "vmlx",
+          "status": "N/A",
+          "reason": "runtime 'vmlx' did not start: RuntimeStartError: could not start vmlx: [Errno 2] No such file or directory: 'vmlx'"
+        }
+      ]
+    },
+    {
+      "id": "AC-5.evict",
+      "status": "PASS",
+      "evidence": {
+        "events": 2,
+        "seconds": 0.0,
+        "problem": null,
+        "error": null,
+        "last": {
+          "seq": 2,
+          "type": "done",
+          "message": "eviction finished",
+          "fraction": null,
+          "payload": null
+        }
+      }
+    },
+    {
+      "id": "AC-5.evicted",
+      "status": "PASS",
+      "evidence": {
+        "repo_dir": "/Users/oymlxtest/.cache/huggingface/hub/models--mlx-community--Qwen3-0.6B-4bit",
+        "present": false,
+        "ledger_entries": [],
+        "ledger_problem": null
+      }
+    },
+    {
+      "id": "AC-6.exit",
+      "status": "PASS",
+      "evidence": {
+        "exit": 0,
+        "seconds": 0.548,
+        "problem": null
+      }
+    },
+    {
+      "id": "AC-6.ports_free",
+      "status": "PASS",
+      "evidence": {
+        "ports": [
+          1337,
+          8000,
+          8080,
+          8081,
+          8100,
+          8200
+        ]
+      }
+    }
+  ]
+}

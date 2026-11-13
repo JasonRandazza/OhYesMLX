@@ -3,11 +3,11 @@ phase: 045-security
 plan: 03
 type: Summary
 about: "OhYesMLX"
-status: applied (code review pending)
+status: unified
 completed: 2026-11-13
 duration: "2026-11-13, one session (plan, audit, scripts, two live runs, two fixes)"
-commits: [743ada3, 369f180]
-tests: "1281 -> 1324 passed"
+commits: [743ada3, 369f180, f7c22e0]
+tests: "1281 -> 1329 passed"
 description: "Clean-account smoke as oymlxtest: 21/21 checks pass after fixing two defects only a fresh account could show — optiq could not install without Homebrew SDL, and the three app engines could not start under launchd's PATH"
 ---
 
@@ -25,6 +25,7 @@ every check. Jason's account was verified unchanged after both runs.
 |---|---|
 | `743ada3` | PLAN + AUDIT; `scripts/smoke_clean_account.{sh,py}` and 34 tests (Task 1, Command Code); the host fetch ledger's scratch residue removed (AC-9); PREAMBLE refreshed (18 modules, graphify-first, pace rule). 1315 tests. |
 | `369f180` | F1 and F2 fixes (two parallel Command Code orders), `interfaces.md` and STATE follow-ups, run-1 evidence. 1324 tests. |
+| `f7c22e0` | Code-review fixes to the smoke scripts (below), threat-model §8 row done, run-2 evidence. 1329 tests. |
 
 ## Acceptance criteria
 
@@ -99,4 +100,34 @@ keeps only `results/`. The account itself stays (Jason's).
 
 ## Code review
 
-Pending (Standards + Spec, `6cdf9aa..HEAD`).
+Standards and Spec reviews of `6cdf9aa..HEAD` (Command Code `review`, MiMo v2.6 pro, $0.12 together;
+logs `.paul/orders/v5-review-45c-{standards,spec}.log`). Fixes by one `implement` order ($0.06) plus the
+coordinator.
+
+| # | Finding | Verdict | Change |
+|---|---|---|---|
+| Std 1 / Spec S | Sweep single-pass; residue never failed the run | Accepted | Two passes 10 s apart; engines-dir and in-bundle tools swept; any signalled pid fails `run` |
+| Std 2 | Launch-line read unbounded | Accepted | 60 s `select` deadline → `AC-2.launch_line` FAIL path; red-checked |
+| Std 3 | Hub dir name defined twice | Accepted | Client asks `fetch._repo_dir`; the .sh preflight keeps its own (runs before the venv), commented |
+| Std 4 | `--no-deps` rationale restated | Accepted | Pointers to `engines._command_plan` (worker: smoke files; coordinator: `test_engines.py`, outside its list) |
+| Std 5 | Ports defined twice | Accepted | `--ports` from the .sh |
+| Std 6, 7 | Dead branch; optiq test ran mlxlm's plan | Accepted | Fixed |
+| Spec nit | Client from working tree, wheel from HEAD | Accepted | `git show HEAD:` |
+| Spec M1 | "F2 not effective for vMLX" | **Rejected** | Environment: vMLX's `bundled-python` is `0700` to the installing account (Findings) |
+| Spec M2 | `quickbench_cells` cannot fail for app engines | **Rejected** | AC-5 as audited allows an app-engine FAIL with evidence; vMLX's is recorded |
+| Coordinator | macOS `pgrep` lists every account's processes; the new bundle-path pattern would have matched Jason's own oMLX | Fixed | Every sweep `pgrep` carries `-u oymlxtest`; the comment claiming otherwise corrected |
+
+**Run 3** (`f7c22e0`, the acceptance run for the revised scripts): 21/21 PASS, `sweep: 0 process(es) left
+behind`, `verify-host: Jason's account is unchanged`; cells mlxlm/omlx/optiq PASS, osaurus SKIPPED by plan,
+vmlx N/A (environment). Evidence `045-03-evidence/run3-*`.
+
+## UNIFY (2026-11-13)
+
+All nine ACs pass (AC-6 with the Spotlight note). Two code defects found by the smoke and fixed; neither
+could have been seen from the account the backend was developed in. Process gates: code review done (above);
+`/paul:verify` is satisfied by the three live runs, which are this phase's manual smoke. Deferred:
+`/engines` reports vMLX installed for an account that cannot execute it, and the resolver's error for that
+case still names the bare `vmlx` (multi-user Macs only). Phase 4.5 is complete with this plan.
+
+**Jason:** `sudo rm /etc/sudoers.d/oymlxtest` when no further clean-account runs are wanted (Phase 5's
+install smoke could reuse it).
