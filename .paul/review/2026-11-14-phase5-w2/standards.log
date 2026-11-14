@@ -1,0 +1,85 @@
+I'll review the Phase 5 wave 2 diff against the standards sources. Let me start by locating the diff and the standards docs.
+
+The diff spans ~4,900 lines across 25 files. Let me pull the standards sections and start reading the diff in ranges.
+
+
+Now I have the standards. Let me read the diff in ranges.
+
+
+
+
+
+
+
+
+
+The diff is fully read. Now let me verify a few suspects against the actual repo state — the `summaries()` wiring in server.py, the `latest()` tie-break, and test helper duplication.
+Key suspects confirmed. Let me pin down the `latest()` tie-break definition, the "Format as the only formatter" standard, and exact line numbers in the current files.
+
+
+Let me confirm the test helper duplication and the EnginesView install duplication precisely.
+
+Let me quickly check the review dir's spec/standards logs in case they pin additional criteria I should apply.
+
+The spec.log references AC-1's grep gate. Let me read its context to pin the exact criterion and find the source spec.
+Let me locate the source spec text for AC-1 to cite it precisely.
+Review complete. I changed nothing (read-only); verified findings by reading `diff.patch` in full ranges plus the current files (grep/read) to pin line numbers.
+
+## HARD — documented-standard violations
+
+1. **`app/Sources/OhYesMLX/Screens/ModelsView.swift:248`** — `String(format: "%.0f%%", …)` violates AC-1's grep gate (`.paul/phases/v5-onboarding/05-04-PLAN.md:47`: "no `ByteCountFormatter`/`String(format:` outside Format.swift"; the 05-04 order log states "`String(format:` only in `Format.swift`"). The gate as written fails on any download row. (The plan's behaviour clause covers only byte/rate/duration, so the two clauses conflict; the mechanical check is still violated.)
+
+2. **`app/Sources/OhYesMLX/Screens/BenchmarkView.swift:331-342`** (doc comment 325-326) — `BenchmarkCellRow` renders status as a word only, no glyph, contradicting DESIGN §4.3 ("every status is a glyph plus a word") and its own comment ("the status is a glyph plus a word … DESIGN.md §4.3"). Breaks on every cell row in Benchmark's "Cells" list and Results' unfinished-run list.
+
+3. **`app/Sources/OhYesMLX/Screens/EnginesView.swift:181-185`** — disabled "Try Again" carries only an accessibility hint, no reason beside the control; DESIGN §4.6 requires the reason next to every job-starting control. Trigger: engine install failed and another job active (`canStartJob == false`) — the row shows no reason.
+
+4. **`app/Sources/OhYesMLXKit/AppModel.swift:664`** — `.done` sets state from `summary?.ended == .restoreFailed`, but `summary` is cleared only for quickbench starts (`start()`), so it leaks across jobs. Trigger: a quickbench ends `restore_failed`, then any download/install completes — its `job.state` becomes `.failed` though it succeeded. No current UI reads `.failed` for those kinds; the stored state is wrong regardless.
+
+5. **`ohyesmlx/server.py:584-591` vs `ohyesmlx/quickbench.py:1054-1058`** — two definitions of "newest wins" for the same `best.repo` resolution: `measured_at` string vs file mtime (violates "One definition of everything"; the docstrings disagree). The server-side copy is unreachable via production wiring (`summaries=quickbench.latest`, `server.py:1017`, already keyed by `best.repo`) and `tests/test_server.py:2312` reaches it only with a double that breaks that keying.
+
+6. **`app/Sources/OhYesMLX/Screens/ResultsView.swift:162-167`** duplicates `AppModel.swift:265-271` — same "Left on disk … it was in use" template and rationale in two places (one-definition; tests pin only the AppModel copy).
+
+7. **`app/Sources/OhYesMLX/Components/StatusGlyph.swift:36`** — glyph 9 pt; DESIGN §3 says 8 pt.
+
+## JUDGEMENT — smells
+
+8. Repeated switches over raw status strings in three places with inconsistent words: `BenchmarkView.swift:344` ("Pass") vs `ResultsView.swift:287` ("PASS"), `:298`, `:307`.
+9. Duplicated install flow: `EnginesView.swift:71-76` (`startInstall`) vs `:192-197` (`retry`).
+10. `AppModelTests.swift:1048` `waitUntilAsync` is a byte-for-byte duplicate of `waitUntil` (`:71-80`).
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     27    2126346    1921152    22828   90.3%   0.116036
+
+== cc-agent: git status ==
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLX/Screens/FullWindowStates.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/BackendLauncher.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/LauncherTests.swift
+ M docs/interfaces/v5-app.md
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-05-best-fix.log
+?? .paul/orders/p5-05-screens-2.log
+?? .paul/orders/p5-06-packaging.log
+?? .paul/orders/p5-06-packaging.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? .paul/orders/p5-w2-review-spec.md
+?? .paul/orders/p5-w2-review-standards.md
+?? .paul/review/2026-11-14-phase5-w2/
+?? app/Resources/
+?? docs/release/
+?? scripts/build_app.sh
+?? scripts/check_bundle.sh
+?? scripts/fetch_python_standalone.sh
+?? scripts/make_sbom.py
+ app/Sources/OhYesMLX/RootView.swift                |  2 ++
+ .../OhYesMLX/Screens/FullWindowStates.swift        | 28 +++++++++++++++
+ app/Sources/OhYesMLXKit/AppModel.swift             | 40 +++++++++++++++++++---
+ app/Sources/OhYesMLXKit/BackendLauncher.swift      |  4 ++-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift     | 31 +++++++++++++++--
+ app/Tests/OhYesMLXKitTests/LauncherTests.swift     |  2 +-
+ docs/interfaces/v5-app.md                          | 10 ++++--
+ 7 files changed, 106 insertions(+), 11 deletions(-)

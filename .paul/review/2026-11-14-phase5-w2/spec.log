@@ -1,0 +1,85 @@
+I'll review the diff against the specs. Let me start by checking the sizes and reading the plans.
+Shell is blocked as expected. I'll use read and grep instead.
+Now let me read the specs in full.
+
+
+
+
+Specs are clear. Now I'll read the diff, starting with the backend portion (quickbench.py, server.py, tests).
+The backend diff raises a question about the "unexpected raise" ending path. Let me look at the actual quickbench.py ending paths.
+The `result` send is in the `finally` block — good for all four endings. Let me verify the error ending's tail and read the summary-write path.
+The backend ending paths look structurally right. Now the Swift core — AppModel and Models (patch lines 2238–2949).
+Now the rest of Models.swift and StubBackend, and I need to verify the `done` handler context in AppModel.
+Let me read the `apply` handler in context to check the `done` state race.
+The `done` handler has a real state race. Now let me scan the shell and app entry (patch 222–740).
+
+The sidebar tick logic looks fragile. Now the BenchmarkView (patch 740–1099).
+BenchmarkView is mostly conformant. Let me verify the stop states and cancelJob, then read EnginesView.
+Stop controls check out. Now EnginesView and FullWindowStates (patch 1099–1480).
+Let me check the components (consent sheet, banner) and how `launchError` gets its content.
+Let me read AppModel's launch path to see what `launchError` carries for couldn't-start.
+
+Now the Models screen (patch 1484–1842).
+Now ResultsView and YourMacView (patch 1844–2238).
+Now the pinned summary shape vs the Swift decoder, and the remaining test/stub sections.
+
+
+Pinned shape matches the decoder. Now the test sections (patch 3756–4334).
+
+Now the Python tests (patch 4663–end).
+The Python tests can fail. One last backend check — what the server sends when the quickbench callable raises (the `error` ending and "moves to Results").
+Now the StubBackend scenarios — and specifically whether `drive()` merely sets the screen (which would make the scenario tests unfailable).
+Scenario tests use real event flows — fine. Two last checks: JSONValue's number fidelity (for the raw-bytes finding) and exact file line numbers for my findings.
+
+Review complete — read-only; I changed nothing and ran nothing. Findings, in severity order:
+
+**1. State race: a stale summary marks every later job failed.** Spec (05-05 AC-4/v5-app Q3): only a quickbench's ending is judged by its summary. `app/Sources/OhYesMLXKit/AppModel.swift:629-632` — `.done` does `status.state = summary?.ended == .restoreFailed ? .failed : .finished` for **any** job kind, and `summary` is cleared only when a quickbench starts (`start()`, ~line 547). Repro: quickbench ends `restore_failed`, then run a download/install to completion — its `done` sets `.failed` and the row shows failure although the job succeeded.
+
+**2. Benchmark tick is ephemeral.** 05-04 AC-2: "completed steps showing a trailing checkmark.circle … (Benchmark: a finished quickbench)". `AppModel.swift:199` keys `benchmarkComplete` off the *current* `job`. Repro: finish a quickbench (tick shows), then run any download — `job` is replaced and the completed Benchmark step loses its tick permanently (Engines/Models ticks survive because they derive from data, not `job`).
+
+**3. AC-2 must-have / D8 "exactly as received" not implemented.** 05-05 AC-2: "AppModel also keeps the payload's raw JSON bytes exactly as received"; AC-5: "writes the summary JSON exactly as received (D8)". `Models.swift:498` (`JobEvent.payloadData`) re-encodes the decoded `JSONValue` with sorted keys — its own docstring admits "the frame's original bytes are gone" — and `ResultsView.swift` export writes those bytes while the panel claims "exactly as the backend wrote it". The export is not byte-identical to `results_dir/summary.json` (key order, whitespace, number forms). The tests (`AppModelTests` "…KeepsItsRawBytes", `DecodingTests.testPayloadDataKeepsKeys…`) assert only key survival and cannot fail on byte drift. Note the spec conflict: exact bytes need the SSE/HTTP layer, which 05-05's DO NOT CHANGE freezes — this needs a decision (accept re-encode and fix the copy, or un-freeze the transport), not silent divergence.
+
+**4. Two definitions of the not_evicted line; tests exercise the copy the UI doesn't use.** `ResultsView.swift:162` builds the "Left on disk: …" string itself; `AppModel.swift:265` (`notEvictedLines`) builds it again and is what `AppModelTests.swift:708,1014` assert on. The rendered line can drift from the tested one with a green suite — against the project rule "One definition of everything."
+
+**5. Benchmark plan fetch race.** `BenchmarkView`'s Picker fires `planBenchmark` per change with no request-identity guard (`AppModel.swift:481-485` assigns whichever response lands last). Repro: switch the picker A→B quickly with A slower: `quickPlan` ends up A's while the picker shows B, and Start Benchmark runs A (`AppModel.swift:500`).
+
+**6. AC-1's stated grep gate fails literally.** AC-1: "no `ByteCountFormatter`/`String(format:` outside Format.swift"; `ModelsView.swift:248` has `String(format: "%.0f%%", …)`. It formats a percentage, not a byte/rate/duration — the behaviour clause is arguably fine, but the mechanical check as written is violated.
+
+No missing screens/ACs otherwise; no scope creep worth naming.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     36    2853549    2698880    26594   94.6%   0.100134
+
+== cc-agent: git status ==
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLX/Screens/FullWindowStates.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/BackendLauncher.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/LauncherTests.swift
+ M docs/interfaces/v5-app.md
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-05-best-fix.log
+?? .paul/orders/p5-05-screens-2.log
+?? .paul/orders/p5-06-packaging.log
+?? .paul/orders/p5-06-packaging.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? .paul/orders/p5-w2-review-spec.md
+?? .paul/orders/p5-w2-review-standards.md
+?? .paul/review/2026-11-14-phase5-w2/
+?? app/Resources/
+?? docs/release/
+?? scripts/build_app.sh
+?? scripts/check_bundle.sh
+?? scripts/fetch_python_standalone.sh
+?? scripts/make_sbom.py
+ app/Sources/OhYesMLX/RootView.swift                |  2 ++
+ .../OhYesMLX/Screens/FullWindowStates.swift        | 28 +++++++++++++++
+ app/Sources/OhYesMLXKit/AppModel.swift             | 40 +++++++++++++++++++---
+ app/Sources/OhYesMLXKit/BackendLauncher.swift      |  4 ++-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift     | 31 +++++++++++++++--
+ app/Tests/OhYesMLXKitTests/LauncherTests.swift     |  2 +-
+ docs/interfaces/v5-app.md                          | 10 ++++--
+ 7 files changed, 106 insertions(+), 11 deletions(-)
