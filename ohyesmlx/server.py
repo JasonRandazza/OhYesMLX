@@ -39,7 +39,16 @@ import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ohyesmlx import catalog, engines, fetch, hardware, quickbench, recommend, stderr_json
+from ohyesmlx import (
+    catalog,
+    engines,
+    fetch,
+    hardware,
+    quickbench,
+    recommend,
+    runtimes,
+    stderr_json,
+)
 
 # The only address this server ever binds: never 0.0.0.0 and never ::, so nothing off this
 # machine can reach it and a page's DNS-rebinding request arrives with a foreign Host the guard
@@ -132,6 +141,7 @@ _ERRORS = {
     ),
     "not_cancellable": (409, "an evict job cannot be cancelled"),
     "job_finished": (409, "the job has already finished"),
+    "not_abortable": (409, "only a quickbench can stop mid-cell"),
 }
 
 
@@ -159,6 +169,7 @@ class _Job:
         self.condition = threading.Condition()
         self.done = False
         self.cancel_requested = False
+        self.abort_requested = False
         self.streams = 0
         self._registry = registry
 
@@ -198,6 +209,14 @@ class _Job:
     def cancelled(self) -> bool:
         """The callable a module probes; True from the moment ``POST /jobs/{id}/cancel`` lands."""
         return self.cancel_requested
+
+    def aborted(self) -> bool:
+        """The callable quickbench probes for "Stop now"; True once ``{"now": true}`` landed.
+
+        Separate from :meth:`cancelled` because it means something different: the engine is
+        being stopped under the cell in flight, not merely requested to stop at the next check.
+        """
+        return self.abort_requested
 
     def open_stream(self) -> bool:
         """Take one of the job's stream slots, or False when all of them are held (AC-3)."""
@@ -371,10 +390,10 @@ class _Handler(BaseHTTPRequestHandler):
     """The request handler: one guard, three GETs, the job routes, and no other response shape.
 
     ``self.server`` is the object :func:`make_server` built, carrying the injected ``scan``,
-    ``detect``, ``load_catalog``, ``install``, ``download`` and ``evict`` seams, the job
-    registry and the launch ``token``. ``timeout`` is overridden per server by the factory, so
-    the test that proves a stalled connection -- or a stalled stream write -- is dropped does
-    not wait the production ten seconds.
+    ``detect``, ``load_catalog``, ``install``, ``download``, ``evict`` and ``stop_engines``
+    seams, the job registry and the launch ``token``. ``timeout`` is overridden per server by
+    the factory, so the test that proves a stalled connection -- or a stalled stream write --
+    is dropped does not wait the production ten seconds.
     """
 
     # HTTP/1.0 is the base class's default and is load-bearing here: it is what closes the
@@ -725,6 +744,7 @@ class _Handler(BaseHTTPRequestHandler):
                     osaurus=job.args.get("osaurus") is True,
                     emit=job.append,
                     cancel=job.cancelled,
+                    abort=job.aborted,
                 )
             else:
                 ok = self.server.evict(job.name, True, emit=job.append)
@@ -743,7 +763,19 @@ class _Handler(BaseHTTPRequestHandler):
             )
 
     def _post_job_cancel(self, job_id: str) -> None:
-        """Flip a running install's or download's cancel flag; an evict has none (AC-5)."""
+        """Flip a running job's cancel flag, and -- for ``{"now": true}`` -- abort it mid-cell.
+
+        The refusals keep their existing order, so a body never changes the answer an unknown,
+        evict or finished job gets. No body, or ``{}``, is what this route always was: stop at
+        the module's next check, which for a quickbench is between cells (AC-5).
+
+        ``{"now": true}`` also sets the abort flag the quickbench probe reads, and starts the
+        injected ``stop_engines`` on a daemon thread *after* both flags are set: the 202 is
+        never held for the TERM/KILL grace, and the module cannot observe one flag without the
+        other. One stop per job -- a second ``{"now": true}`` finds the abort flag already set
+        and starts none -- and the stop is taken under the job's own condition so two handlers
+        cannot both start one.
+        """
         job = self.server.jobs.get(job_id)
         if job is None:
             self._respond("unknown_job")
@@ -754,8 +786,58 @@ class _Handler(BaseHTTPRequestHandler):
         if job.done:
             self._respond("job_finished")
             return
-        job.cancel_requested = True
+        now = self._cancel_now()
+        if now is None:
+            return
+        if now and job.kind != "quickbench":
+            self._respond("not_abortable")
+            return
+        stop = False
+        with job.condition:
+            job.cancel_requested = True
+            if now and not job.abort_requested:
+                job.abort_requested = True
+                stop = True
+        if stop:
+            threading.Thread(
+                target=self.server.stop_engines,
+                daemon=True,
+                name=f"abort-{job.id}",
+            ).start()
         self._write_json(202, {"job_id": job.id})
+
+    def _cancel_now(self) -> bool | None:
+        """Whether this cancel asked to stop now; None means a refusal was already written.
+
+        A cancel that declares no body, or a zero-length one, keeps its old meaning. Anything
+        else goes through the same guard ``POST /jobs`` uses -- the same 415, 413 and 400
+        ``bad_json`` -- and then accepts exactly one key, ``now``, whose only accepted value is
+        JSON ``true``: the client states a choice, and a ``false`` or a ``"true"`` would record
+        one the user did not make (docs/interfaces/v5-app.md). ``{}`` is refused by neither:
+        it is a bodyless cancel that happened to be serialised.
+        """
+        declared = self.headers.get("Content-Length")
+        if declared is None or declared.strip() == "0":
+            return False
+        body = self._job_body()
+        if body is None:
+            return None
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            self._respond("bad_json")
+            return None
+        if not isinstance(payload, dict):
+            self._respond("bad_args", "the cancel body must be an object")
+            return None
+        extra = sorted(set(payload) - {"now"})
+        if extra:
+            self._respond("bad_args", f"unexpected key {extra[0]}")
+            return None
+        if "now" in payload and payload["now"] is not True:
+            self._respond("bad_args", "now must be true")
+            return None
+        return payload.get("now") is True
 
     def _get_job_events(self, job_id: str) -> None:
         """Stream the job's events as server-sent events, then close after ``done`` (AC-4).
@@ -915,6 +997,7 @@ def make_server(
     download=fetch.download,
     evict=fetch.evict,
     quickbench=quickbench.run,
+    stop_engines=runtimes.stop_own_engines,
     summaries=quickbench.latest,
     token: str | None = None,
     timeout: float = HANDLER_TIMEOUT_S,
@@ -925,7 +1008,9 @@ def make_server(
     The module seams default to the real functions, so the CLI passes none of them and a test
     passes fakes; the job seams take a name, a literal ``true`` and -- for quickbench -- the
     client's boolean ``osaurus``, and emit on the job, so a test never installs, downloads,
-    starts a runtime or opens a socket. *summaries* is the quickbench reader
+    starts a runtime or opens a socket. *stop_engines* is what ``{"now": true}`` starts on a
+    daemon thread -- ``runtimes.stop_own_engines`` by default, injected so a test never
+    signals a process. *summaries* is the quickbench reader
     ``/recommendations`` asks for ``measured_here``, injected so a test never reads this
     Mac's Application Support directory. *token* is generated fresh with
     ``secrets.token_urlsafe(32)`` when the caller has none, and it lives only on this object and
@@ -946,6 +1031,7 @@ def make_server(
     listener.download = download
     listener.evict = evict
     listener.quickbench = quickbench
+    listener.stop_engines = stop_engines
     listener.summaries = summaries
     listener.jobs = _Jobs()
     listener.keepalive_s = keepalive_s

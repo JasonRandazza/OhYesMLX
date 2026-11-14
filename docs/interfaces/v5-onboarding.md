@@ -111,7 +111,10 @@ itself: an unknown name is the module's own refusal (`unknown_engine`, `unknown_
 and `done` events, and a module that raises still ends the stream with `error` payload `{"code": "internal"}` and
 `done`, continuing the job's seq. An `evict` refuses `busy` while a download or another eviction holds
 `download.lock` -- the ledger it rewrites is the one a download also writes -- and nothing is removed
-(045-02b AC-4). A non-JSON Content-Type is `415 unsupported_media_type`; a missing, non-integer or
+(045-02b AC-4). A `low_disk` refusal carries `free_bytes` and `needed_bytes` (JSON integers) in its
+`error` payload -- the same two numbers its message prints, so a client computes how much to free
+without parsing English or restating the disk margin. A non-JSON Content-Type is
+`415 unsupported_media_type`; a missing, non-integer or
 over-4096 `Content-Length` is `413 body_too_large` and the body is never read; invalid JSON is `400 bad_json`. One job
 runs at a time: a second `POST /jobs` is `409 busy` naming the running job's id, and the slot frees the moment its
 `done` event is stored. Jobs are not persisted; they live as long as the process.
@@ -133,7 +136,9 @@ running pip step, whose own 900 s timeout and the installer's rollback still app
 cells (its in-flight cell's stop path, sibling eviction and Osaurus restore still run, and the run ends `cancelled`
 with a summary), and the stream ends with the module's own cancelled `error`/`done`. Cancelling an `evict` is
 `409 not_cancellable`; a finished job is
-`409 job_finished`; an unknown id is `404 unknown_job`.
+`409 job_finished`; an unknown id is `404 unknown_job`. An optional body `{"now": true}` stops a
+quickbench mid-cell instead of between cells; its refusals are `v5-app.md`'s (**Backend addition:
+"Stop now"**).
 Shutdown (stdin EOF, `SIGINT`, `SIGTERM`) cancels a running install, download or quickbench at its next check and
 waits for any
 running job at most 120 s, then exits 0; an evict is waited for, never cancelled. When the 120 s bound expires with

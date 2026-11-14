@@ -717,9 +717,13 @@ def test_disk_guard_refuses_before_any_request(tmp_path):
     assert harness.download() is False
 
     assert harness.codes() == ["low_disk"]
-    assert [event for event in harness.events if event["type"] == "error"][-1][
-        "message"
-    ] == "8 bytes free is less than the 22 bytes this download needs"
+    error = next(event for event in harness.events if event["type"] == "error")
+    assert error["message"] == "8 bytes free is less than the 22 bytes this download needs"
+    assert error["payload"] == {
+        "code": "low_disk",
+        "free_bytes": 8,
+        "needed_bytes": 22,
+    }
     assert transport.calls == []
     assert not harness.cache.exists()
     assert not harness.ledger.exists()
@@ -739,6 +743,13 @@ def test_the_disk_guard_is_rechecked_before_each_file(tmp_path):
 
     assert len(calls) == 2
     assert harness.codes() == ["low_disk"]
+    # The per-file guard, with the 11-byte first file's own required bytes.
+    error = next(event for event in harness.events if event["type"] == "error")
+    assert error["payload"] == {
+        "code": "low_disk",
+        "free_bytes": 0,
+        "needed_bytes": 14,
+    }
     assert transport.calls == []
 
 
@@ -1021,6 +1032,12 @@ def test_the_lock_is_released_after_a_refusal(tmp_path):
     assert harness.download() is False
 
     assert harness.codes() == ["low_disk"]
+    error = next(event for event in harness.events if event["type"] == "error")
+    assert error["payload"] == {
+        "code": "low_disk",
+        "free_bytes": 1,
+        "needed_bytes": 22,
+    }
     assert not (harness.locks / fetch.LOCK_NAME).exists()
 
 

@@ -186,10 +186,11 @@ ending (finished, cancelled, restore failed, unexpected raise):
   "best": {"engine": str, "decode_tps": float, "ttft_s": float,
            "measured_at": iso, "quick": true} | null
 }
-# cell: {"engine", "format", "artifact_dir", "status": "PASS|FAIL|SKIPPED",
+# cell: {"engine", "format", "artifact_dir", "status": "PASS|FAIL|SKIPPED|ABORTED",
 #        "reason": str|null, "decode_tps": float|null, "ttft_s": float|null,
 #        "runtime_version": str|null, "label": "quick: measured on this Mac",
 #        "reused": bool}
+# ABORTED ("Stop now"): a mid-cell stop, no figure, never the winner -- see v5-app.md.
 ```
 
 `best` is non-null only on a finished run: a cancelled or half-restored run is a record of what

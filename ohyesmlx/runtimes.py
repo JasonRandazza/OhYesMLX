@@ -138,6 +138,10 @@ RUNNING_ENGINES_DIRNAME = "running-engines"
 # removal on stop.
 LEDGER_ERROR_CODE = "running_engine_ledger"
 
+# "Stop now"'s failure line: one entry of this process's own ledger that would not stop. It is
+# written per entry and never raised, because the entries after it are still stopped.
+ABORT_STOP_ERROR_CODE = "abort_stop_failed"
+
 # The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag
 # install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
 # on a case-sensitive volume they are two different files. Matched by full executable path
@@ -1806,6 +1810,20 @@ def _recorded_identity(entry: dict, pid: int) -> tuple[str, str] | None:
     return None
 
 
+def _entry_stop_command(entry: dict) -> tuple[str, ...]:
+    """The stop command *entry* recorded, or none when it recorded no usable one.
+
+    One reader for the one field shape :func:`_record_running_engine` writes, because both of
+    the ledger's stoppers hand it to :func:`_shutdown` and a second parse could only disagree.
+    """
+    stop_command = entry.get("stop_command")
+    if isinstance(stop_command, list) and all(
+        isinstance(part, str) for part in stop_command
+    ):
+        return tuple(stop_command)
+    return ()
+
+
 def _stop_orphan(entry: dict) -> None:
     """Stop one dead owner's engine through :func:`_shutdown`, or drop the entry.
 
@@ -1821,13 +1839,7 @@ def _stop_orphan(entry: dict) -> None:
     port = entry.get("port")
     if not isinstance(pid, int) or not isinstance(port, int):
         return
-    stop_command = entry.get("stop_command")
-    command = (
-        tuple(stop_command)
-        if isinstance(stop_command, list)
-        and all(isinstance(part, str) for part in stop_command)
-        else ()
-    )
+    command = _entry_stop_command(entry)
     listeners = _listener_pids(port)
     if listeners is None:
         return
@@ -1891,6 +1903,38 @@ def stop_orphaned_engines(root=None) -> None:
                 failures.append(f"could not remove {path}: {error}")
     if failures:
         raise RuntimeStopError("; ".join(failures))
+
+
+def stop_own_engines(root=None) -> int:
+    """Stop every engine this process's own ledger file records, and count them.
+
+    "Stop now": the app stops the engine the cell in flight is talking to, from outside the
+    measurement path, and the cell's own stop path then finds nothing to do. Only
+    ``<this pid>.json`` is read -- another owner's file is another process's run, and its
+    engines are not this call's to stop. Each entry goes through :func:`_shutdown` with the
+    pid this process spawned (``_shutdown`` already takes every other listener on the port).
+
+    The ledger is read and never written: ``Handle.stop`` drops its own entry when the cell's
+    stop path runs, which is the one writer for it. A stop that fails is one stderr line and
+    the next entry is still tried, because an engine left holding a port and its weights is
+    worse than a stop that had to report itself. An absent, unreadable or empty file is no
+    engines and returns 0, which is also what "Stop now" after the last cell answers.
+    """
+    stopped = 0
+    for entry in _ledger_entries(_ledger_path(root=root)):
+        pid = entry.get("pid")
+        port = entry.get("port")
+        if not isinstance(pid, int) or not isinstance(port, int):
+            continue
+        try:
+            _shutdown(pid, port, _entry_stop_command(entry))
+        except RuntimeStopError as error:
+            stderr_json(
+                {"error": {"code": ABORT_STOP_ERROR_CODE, "message": str(error)}}
+            )
+            continue
+        stopped += 1
+    return stopped
 
 
 @dataclass

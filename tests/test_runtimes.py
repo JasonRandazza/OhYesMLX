@@ -4093,3 +4093,80 @@ def test_the_ledger_file_is_removed_once_its_last_entry_is_gone(tmp_path, monkey
     runtimes._forget_running_engine(4242)
 
     assert not path.exists()
+
+
+# --------------------------------------------------------------------------------------
+# 05-01 AC-2: `stop_own_engines` stops this process's engines, and only this process's
+# --------------------------------------------------------------------------------------
+
+
+def test_stop_own_engines_stops_only_this_processes_entries_and_never_writes(tmp_path, monkeypatch):
+    own = write_ledger(
+        tmp_path,
+        os.getpid(),
+        [
+            ledger_entry(pid=4242, serving_pid=4242, port=8081, stop_command=[]),
+            ledger_entry(
+                pid=4243,
+                serving_pid=4243,
+                port=1337,
+                stop_command=["osaurus", "stop"],
+            ),
+        ],
+    )
+    other = write_ledger(tmp_path, 999_999, [ledger_entry(pid=4343, port=8000)])
+    before = (own.read_bytes(), other.read_bytes())
+    calls = []
+    monkeypatch.setattr(
+        runtimes,
+        "_shutdown",
+        lambda pid, port, stop_command=(): calls.append((pid, port, stop_command)),
+    )
+
+    stopped = runtimes.stop_own_engines(tmp_path)
+
+    assert stopped == 2
+    assert calls == [(4242, 8081, ()), (4243, 1337, ("osaurus", "stop"))]
+    assert (own.read_bytes(), other.read_bytes()) == before, "a stop wrote the ledger"
+
+
+def test_stop_own_engines_reports_a_failing_stop_and_still_stops_the_next(
+    tmp_path, monkeypatch, capsys
+):
+    write_ledger(
+        tmp_path,
+        os.getpid(),
+        [ledger_entry(pid=4242, port=8081), ledger_entry(pid=4243, port=8100)],
+    )
+    calls = []
+
+    def shutdown(pid, port, stop_command=()):
+        calls.append((pid, port))
+        if pid == 4242:
+            raise runtimes.RuntimeStopError(f"port {port} is still held")
+
+    monkeypatch.setattr(runtimes, "_shutdown", shutdown)
+
+    stopped = runtimes.stop_own_engines(tmp_path)
+
+    assert calls == [(4242, 8081), (4243, 8100)], "the entry after the failure was skipped"
+    assert stopped == 1
+    lines = capsys.readouterr().err.strip().splitlines()
+    assert len(lines) == 1, lines
+    assert json.loads(lines[0]) == {
+        "error": {"code": "abort_stop_failed", "message": "port 8081 is still held"}
+    }
+
+
+def test_stop_own_engines_without_a_readable_ledger_is_zero(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("an engine was stopped for a ledger that is not there")
+
+    monkeypatch.setattr(runtimes, "_shutdown", refuse)
+
+    assert runtimes.stop_own_engines(tmp_path) == 0
+
+    unreadable = write_ledger(tmp_path, os.getpid(), [ledger_entry()])
+    unreadable.write_text("not json", encoding="utf-8")
+
+    assert runtimes.stop_own_engines(tmp_path) == 0

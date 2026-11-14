@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from ohyesmlx import catalog, engines, fetch, hardware, recommend, server
+from ohyesmlx import catalog, engines, fetch, hardware, recommend, runtimes, server
 
 TOKEN = "a-fixed-launch-token-for-these-tests"
 
@@ -1950,3 +1950,292 @@ def test_a_hung_hardware_tool_is_500_internal_and_not_a_hang(launch):
     error = error_of(raw)
     assert error["code"] == "internal"
     assert "timed out" in error["message"].lower() or "timeout" in error["message"].lower()
+
+
+# --- 05-01: "Stop now", ``POST /jobs/{id}/cancel`` with ``{"now": true}`` ---------------------
+
+STOP_NOW_JOB = {
+    "kind": "quickbench",
+    "args": {"repo": "org/small", "confirmed": True, "osaurus": False},
+}
+
+
+def cancel_job(listener, job_id, payload=None, **kwargs):
+    """POST /jobs/{id}/cancel: bodyless by default, or with *payload* as its JSON body."""
+    if payload is None:
+        return send_to(listener, f"/jobs/{job_id}/cancel", **kwargs)
+    raw = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json", "Content-Length": str(len(raw))}
+    headers.update(kwargs.pop("headers", None) or {})
+    return send_to(listener, f"/jobs/{job_id}/cancel", body=raw, headers=headers, **kwargs)
+
+
+def quickbench_until_abort(state):
+    """A quickbench seam that runs until the abort probe answers, then ends cancelled.
+
+    It records what the two probes said when it ended, which is what proves the server wired
+    ``abort`` and set it before ``stop_engines`` ran.
+    """
+
+    def module(name, confirmed, **kwargs):
+        kwargs["emit"](an_event("progress", "stage A", payload={"stage": "A"}))
+        seen = wait_until(kwargs["abort"])
+        state["abort_seen"] = seen
+        state["cancel_seen"] = kwargs["cancel"]()
+        kwargs["emit"](
+            an_event("error", "quickbench was cancelled", payload={"code": "cancelled"})
+        )
+        kwargs["emit"](an_event("done", "quickbench cancelled"))
+        return False
+
+    return module
+
+
+def test_stop_engines_defaults_to_the_runtimes_stop():
+    listener = server.make_server(0, token=TOKEN, summaries=lambda: {})
+    try:
+        assert listener.stop_engines is runtimes.stop_own_engines
+    finally:
+        listener.server_close()
+
+
+@pytest.mark.parametrize("payload", [None, {}], ids=["no body", "empty object"])
+def test_a_cancel_without_now_keeps_its_old_meaning(launch, payload):
+    module = cancelled_on_request()
+    stopper = Recorder(None)
+    listener = launch(download=module, stop_engines=stopper)
+    job_id = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: len(listener.jobs.get(job_id).events) == 1)
+
+    code, _, raw = cancel_job(listener, job_id, payload)
+
+    assert code == 202
+    assert json.loads(raw) == {"job_id": job_id}
+    job = listener.jobs.get(job_id)
+    assert job.cancel_requested is True
+    assert job.abort_requested is False
+    assert stopper.calls == 0
+    _, body = stream_to_close(listener, job_id)
+    assert [
+        event["payload"]["code"]
+        for _, event in sse_events(body)
+        if event["type"] == "error"
+    ] == ["cancelled"]
+
+
+def test_stop_now_sets_both_flags_starts_one_stop_and_the_job_ends_cancelled(launch):
+    state = {}
+    stopper = Recorder(None)
+    listener = launch(quickbench=quickbench_until_abort(state), stop_engines=stopper)
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert wait_until(lambda: len(listener.jobs.get(job_id).events) == 1)
+
+    code, _, raw = cancel_job(listener, job_id, {"now": True})
+
+    assert code == 202
+    assert json.loads(raw) == {"job_id": job_id}
+    job = listener.jobs.get(job_id)
+    assert (job.cancel_requested, job.abort_requested) == (True, True)
+    assert wait_until(lambda: job.done)
+    assert stopper.calls == 1
+    assert state == {"abort_seen": True, "cancel_seen": True}
+
+
+@pytest.mark.parametrize(
+    "payload, named",
+    [
+        ({"now": False}, "now"),
+        ({"now": "true"}, "now"),
+        ({"now": 1}, "now"),
+        ({"later": True}, "later"),
+        ({"now": True, "later": 1}, "later"),
+    ],
+)
+def test_a_bad_cancel_body_is_400_bad_args_naming_the_key_and_sets_no_flag(
+    launch, payload, named
+):
+    release = threading.Event()
+    module = blocking(release)
+    stopper = Recorder(None)
+    listener = launch(quickbench=module, stop_engines=stopper)
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert module.started.wait(5)
+
+    code, _, raw = cancel_job(listener, job_id, payload)
+
+    assert code == 400
+    error = error_of(raw)
+    assert error["code"] == "bad_args"
+    assert named in error["message"]
+    job = listener.jobs.get(job_id)
+    assert (job.cancel_requested, job.abort_requested) == (False, False)
+    assert stopper.calls == 0
+    release.set()
+
+
+def test_a_cancel_body_that_is_not_an_object_is_400_bad_args(launch):
+    release = threading.Event()
+    listener = launch(quickbench=blocking(release))
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert listener.jobs.get(job_id) is not None
+
+    code, _, raw = cancel_job(listener, job_id, [1, 2])
+
+    assert code == 400
+    assert error_of(raw)["code"] == "bad_args"
+    assert listener.jobs.get(job_id).abort_requested is False
+    release.set()
+
+
+@pytest.mark.parametrize("kind, args", [
+    ("download", {"repo": "org/small", "confirmed": True}),
+    ("install", {"engine": "mlxlm", "confirmed": True}),
+])
+def test_stop_now_on_a_job_that_is_not_a_quickbench_is_409_not_abortable(
+    launch, kind, args
+):
+    release = threading.Event()
+    module = blocking(release)
+    stopper = Recorder(None)
+    listener = launch(download=module, install=module, stop_engines=stopper)
+    job_id = posted_job_id(listener, {"kind": kind, "args": args})
+    assert module.started.wait(5)
+
+    code, _, raw = cancel_job(listener, job_id, {"now": True})
+
+    assert code == 409
+    assert error_of(raw)["code"] == "not_abortable"
+    job = listener.jobs.get(job_id)
+    assert (job.cancel_requested, job.abort_requested) == (False, False)
+    assert stopper.calls == 0
+    release.set()
+
+
+def test_the_old_refusals_are_answered_before_the_body_matters(launch):
+    listener = launch(
+        download=scripted(an_event("done", "finished")), evict=blocking(threading.Event())
+    )
+
+    code, _, raw = send_to(
+        listener,
+        "/jobs/0123456789abcdef/cancel",
+        body=b"not json",
+        headers={"Content-Type": "text/plain", "Content-Length": "8"},
+    )
+    assert (code, error_of(raw)["code"]) == (404, "unknown_job")
+
+    finished = posted_job_id(listener, DOWNLOAD)
+    assert wait_until(lambda: listener.jobs.get(finished).done)
+    code, _, raw = cancel_job(listener, finished, {"now": True})
+    assert (code, error_of(raw)["code"]) == (409, "job_finished")
+
+    release = threading.Event()
+    evict = blocking(release)
+    listener.evict = evict
+    evict_job = posted_job_id(
+        listener, {"kind": "evict", "args": {"repo": "org/small", "confirmed": True}}
+    )
+    assert evict.started.wait(5)
+    code, _, raw = cancel_job(listener, evict_job, {"now": True})
+    assert (code, error_of(raw)["code"]) == (409, "not_cancellable")
+    release.set()
+
+
+@pytest.mark.parametrize(
+    "headers, expected",
+    [
+        ({"Content-Type": "text/plain", "Content-Length": "2"}, 415),
+        ({"Content-Type": "application/json", "Content-Length": "5000"}, 413),
+        ({"Content-Type": "application/json", "Content-Length": "six"}, 413),
+        ({"Content-Type": "application/json", "Content-Length": ""}, 413),
+        ({"Content-Type": "application/json", "Content-Length": "-1"}, 413),
+    ],
+    ids=["content type", "oversize", "not a number", "no number", "negative"],
+)
+def test_a_cancel_body_gets_the_same_guard_codes_as_post_jobs(launch, headers, expected):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(quickbench=module)
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert module.started.wait(5)
+    body = b"{}" if "text/plain" in headers["Content-Type"] else b'{"now": true}'
+
+    code, _, raw = send_to(
+        listener, f"/jobs/{job_id}/cancel", body=body, headers=headers
+    )
+
+    assert code == expected
+    assert error_of(raw)["code"] == (
+        "unsupported_media_type" if expected == 415 else "body_too_large"
+    )
+    job = listener.jobs.get(job_id)
+    assert (job.cancel_requested, job.abort_requested) == (False, False)
+    release.set()
+
+
+def test_an_invalid_json_cancel_body_is_400_bad_json_and_sets_no_flag(launch):
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(quickbench=module)
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert module.started.wait(5)
+
+    code, _, raw = send_to(
+        listener,
+        f"/jobs/{job_id}/cancel",
+        body=b"{now: true",
+        headers={"Content-Type": "application/json", "Content-Length": "10"},
+    )
+
+    assert code == 400
+    assert error_of(raw)["code"] == "bad_json"
+    job = listener.jobs.get(job_id)
+    assert (job.cancel_requested, job.abort_requested) == (False, False)
+    release.set()
+
+
+def test_stop_now_answers_202_before_the_stop_finishes(launch):
+    """AC-7: the stop runs on a daemon thread, so the TERM/KILL grace is never the request's."""
+    release = threading.Event()
+    entered = threading.Event()
+
+    def stop_engines():
+        entered.set()
+        release.wait(5)
+
+    listener = launch(
+        quickbench=cancelled_on_request(), stop_engines=stop_engines
+    )
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert wait_until(lambda: len(listener.jobs.get(job_id).events) == 1)
+
+    started = time.monotonic()
+    code, _, raw = cancel_job(listener, job_id, {"now": True})
+    elapsed = time.monotonic() - started
+
+    assert code == 202
+    assert elapsed < 2.0, "the 202 waited for the stop"
+    assert entered.wait(5), "the stop never started"
+    assert listener.jobs.get(job_id).abort_requested is True
+    release.set()
+    assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+
+def test_a_second_stop_now_answers_202_without_a_second_stop(launch):
+    release = threading.Event()
+    module = blocking(release)
+    stopper = Recorder(None)
+    listener = launch(quickbench=module, stop_engines=stopper)
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert module.started.wait(5)
+
+    first, _, _ = cancel_job(listener, job_id, {"now": True})
+    second, _, raw = cancel_job(listener, job_id, {"now": True})
+
+    assert (first, second) == (202, 202)
+    assert json.loads(raw) == {"job_id": job_id}
+    assert wait_until(lambda: stopper.calls >= 1), "the first stop never started"
+    assert not wait_until(lambda: stopper.calls > 1, timeout=0.3), "a second stop started"
+    assert stopper.calls == 1
+    release.set()
+    assert wait_until(lambda: listener.jobs.get(job_id).done)

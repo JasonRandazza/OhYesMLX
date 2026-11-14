@@ -79,6 +79,10 @@ CAVEAT_A = "engines compared on one format only"
 CAVEAT_B = "formats compared on one engine only"
 BUSY = "this Mac was busy"
 CANCELLED = "the run was cancelled before this cell"
+# "Stop now"'s cell, written once: a status no figure is published under, and the reason a
+# results screen can show without parsing the number that is deliberately absent.
+ABORTED = "ABORTED"
+ABORTED_REASON = "stopped by the user mid-cell; no number is reported"
 
 # The one place a quick run's files live. Asked of the package rather than restated, the way
 # `fetch` asks it, so the app's Application Support directory has one spelling.
@@ -349,6 +353,17 @@ def _skipped(engine, fmt, artifact_dir, reason) -> dict:
     return _cell_record(engine, fmt, artifact_dir, status="SKIPPED", reason=reason)
 
 
+def _aborted(engine, fmt, artifact_dir) -> dict:
+    """The cell a "Stop now" landed on: a status and a reason, and no number at all.
+
+    The cell was measured -- its raw rows are on disk, because raw observations are never
+    discarded -- but a stop landed while it ran, so the engine was taken out from under it
+    and whatever it returned is not a reading. A figure here would be a number from a run that
+    did not finish being measured.
+    """
+    return _cell_record(engine, fmt, artifact_dir, status=ABORTED, reason=ABORTED_REASON)
+
+
 def _winner(cells) -> tuple[dict | None, list[str]]:
     """Stage A's winner and the engines inside the tie band.
 
@@ -482,6 +497,7 @@ def run(
     clock=time.time,
     emit=_print_event,
     cancel=_never_cancelled,
+    abort=_never_cancelled,
     cache_dir=None,
     results_dir=DEFAULT_RESULTS_DIR,
     backup_dir=DEFAULT_BACKUP_DIR,
@@ -511,6 +527,15 @@ def run(
     immediately after it, so one extra model at most is on disk. The chosen repo is never
     downloaded and never evicted. Every ending -- finished, cancelled, restore failed, or an
     unexpected raise -- leaves a summary on disk saying which one it was.
+
+    ``abort`` is "Stop now": the server has already stopped the engine from outside by the
+    time it answers True, so there is nothing for this module to stop and nothing in
+    ``measure.py`` to change. After each cell's own call returns -- or raises, because the
+    engine going away is what the cell's stop path sees -- an abort in flight replaces the
+    record with :func:`_aborted` and ends the run on the *existing* cancelled tail: the rest
+    of the plan is skipped, the Osaurus restore and sibling eviction still run, the summary
+    is written and the stream ends with the cancelled ``error``/``done``. The cell's raw rows
+    stay on disk, because raw observations are never discarded.
     """
     send = _emitter(emit)
     if not confirmed:
@@ -718,6 +743,22 @@ def run(
             )
         return _cell_record(engine, fmt, artifact_dir, row=rows[0])
 
+    def measured(engine, fmt, artifact_dir, cell_dir):
+        """One cell's record, replaced by :func:`_aborted` when a stop landed while it ran.
+
+        Both stages turn a cell into a record through here, so "Stop now" has one
+        implementation rather than one per loop. A raise with no abort in flight is the run's
+        unexpected error, exactly as before; a raise *with* an abort in flight is the cell's
+        own stop path losing a race with the stop already done outside, and is not an error.
+        """
+        try:
+            record = measure_cell(engine, fmt, artifact_dir, cell_dir)
+        except Exception:
+            if not abort():
+                raise
+            return _aborted(engine, fmt, artifact_dir)
+        return _aborted(engine, fmt, artifact_dir) if abort() else record
+
     try:
         send(
             "progress",
@@ -741,9 +782,7 @@ def run(
                     {"engine": name, "skipped": reason},
                 )
                 continue
-            record = measure_cell(
-                name, model.format, snapshot, root / "A" / name
-            )
+            record = measured(name, model.format, snapshot, root / "A" / name)
             summary["stage_a"]["cells"].append(record)
             step(
                 f"stage A: {name} {record['status']}"
@@ -752,6 +791,9 @@ def run(
             )
             if restore_failure:
                 summary["ended"] = "restore_failed"
+                break
+            if record["status"] == ABORTED:
+                summary["ended"] = "cancelled"
                 break
         record_load("stage_a", load_a, load())
 
@@ -830,7 +872,7 @@ def run(
                             summary["ended"] = "cancelled"
                             break
                     try:
-                        record = measure_cell(
+                        record = measured(
                             top["engine"],
                             sibling.format,
                             sibling_snapshot,
@@ -861,6 +903,9 @@ def run(
                                 outstanding.discard(sibling.repo)
                     if restore_failure:
                         summary["ended"] = "restore_failed"
+                        break
+                    if record["status"] == ABORTED:
+                        summary["ended"] = "cancelled"
                         break
                 record_load("stage_b", load_b, load())
         if summary["ended"] == "running":

@@ -1212,8 +1212,8 @@ def install(
         emit(event)
         return event
 
-    def refuse(code, message):
-        send("error", message, payload={"code": code})
+    def refuse(code, message, **payload):
+        send("error", message, payload={"code": code, **payload})
         send("done", "install did not start")
         return False
 
@@ -1328,6 +1328,8 @@ def install(
             return refuse(
                 "low_disk",
                 f"{free} bytes free is less than the {needed} bytes this install needs",
+                free_bytes=free,
+                needed_bytes=needed,
             )
 
         if plan.kind == "guided_download":

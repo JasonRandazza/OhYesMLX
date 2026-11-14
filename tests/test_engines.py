@@ -1037,8 +1037,14 @@ def test_a_known_size_needs_twice_its_estimate_free(tmp_path):
     assert ok is False
     assert opened == []
     assert [
-        event["payload"]["code"] for event in events if event["type"] == "error"
-    ] == ["low_disk"]
+        event["payload"] for event in events if event["type"] == "error"
+    ] == [
+        {
+            "code": "low_disk",
+            "free_bytes": 2 * 85_900_000 - 1,
+            "needed_bytes": 2 * 85_900_000,
+        }
+    ]
 
     ok, events, opened, sleeps = do_install(
         tmp_path / "enough", engine="osaurus",
@@ -1056,8 +1062,14 @@ def test_an_unknown_size_falls_back_to_a_two_gib_floor(tmp_path):
     )
     assert ok is False
     assert [
-        event["payload"]["code"] for event in events if event["type"] == "error"
-    ] == ["low_disk"]
+        event["payload"] for event in events if event["type"] == "error"
+    ] == [
+        {
+            "code": "low_disk",
+            "free_bytes": 2 * 1024**3 - 1,
+            "needed_bytes": 2 * 1024**3,
+        }
+    ]
 
     run = FakeRun()
     ok, events, opened, sleeps = do_install(tmp_path / "exactly", run=run,

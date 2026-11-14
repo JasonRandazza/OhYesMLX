@@ -822,6 +822,8 @@ def _download(
             send,
             "low_disk",
             f"{free} bytes free is less than the {needed} bytes this download needs",
+            free_bytes=free,
+            needed_bytes=needed,
         )
 
     def make_dirs(path: str, stop: str) -> None:
@@ -1148,6 +1150,8 @@ def _download(
                 "low_disk",
                 f"{free} bytes free is less than the {required} bytes {planned_file.path} "
                 "still needs",
+                free_bytes=free,
+                needed_bytes=required,
             )
         if not fetch_file(planned_file):
             return False

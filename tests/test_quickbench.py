@@ -244,6 +244,18 @@ class CancelAfter:
         return self.after is not None and self.checks > self.after
 
 
+class AbortProbe:
+    """The "Stop now" probe: false until something flips it, true from the next check on."""
+
+    def __init__(self):
+        self.triggered = False
+        self.checks = 0
+
+    def __call__(self):
+        self.checks += 1
+        return self.triggered
+
+
 class PortProbe:
     """The port probe: answers from a set and records every port asked about."""
 
@@ -271,6 +283,7 @@ def a_run(
     port_busy=(),
     app_running=False,
     cancel_after=None,
+    abort=None,
     recover=True,
     pin_error=None,
     restore=True,
@@ -317,6 +330,7 @@ def a_run(
         clock=FakeClock(),
         emit=events.append,
         cancel=CancelAfter(cancel_after),
+        abort=quickbench._never_cancelled if abort is None else abort,
         cache_dir=str(tmp_path / "cache"),
         results_dir=str(tmp_path / "quickbench"),
         backup_dir=str(tmp_path / "backup"),
@@ -1272,3 +1286,142 @@ def test_the_osaurus_app_probe_runs_the_absolute_ps():
     assert quickbench._osaurus_app_running(run=run) is False
     assert runtimes.PS == "/bin/ps"
     assert calls == [[runtimes.PS, "-axo", "comm="]]
+
+
+# --- 05-01 AC-3/AC-7: "Stop now", a stop that lands while a cell is being measured ----------
+#
+# The server stops the engine from outside; quickbench only sees the abort probe answer True
+# after the cell's own call returns (or raises). A fake run loop flips the probe while it is
+# inside the cell, which is exactly what that looks like from here.
+
+
+def test_an_abort_during_stage_as_first_cell_records_it_aborted_and_ends_cancelled(tmp_path):
+    probe = AbortProbe()
+    cells = FakeRunCells(
+        on_call=lambda _cell, _kwargs: setattr(probe, "triggered", True)
+    )
+
+    ok, fakes, summary = a_run(tmp_path, run_cells=cells, abort=probe)
+
+    assert ok is False
+    assert len(fakes.run_cells.calls) == 1, "a cell was measured after the stop"
+    aborted, skipped = summary["stage_a"]["cells"]
+    assert (aborted["engine"], aborted["status"]) == ("mlxlm", quickbench.ABORTED)
+    assert aborted["reason"] == quickbench.ABORTED_REASON
+    assert aborted["decode_tps"] is None and aborted["ttft_s"] is None, "a number survived"
+    assert (skipped["status"], skipped["reason"]) == ("SKIPPED", quickbench.CANCELLED)
+    assert summary["ended"] == "cancelled"
+    assert summary["best"] is None
+    assert summary["stage_a"]["winner"] is None
+    assert summary["stage_b"]["note"] == "stage B was not run: the run was cancelled"
+    assert [event["type"] for event in fakes.events[-2:]] == ["error", "done"]
+    assert fakes.events[-2]["payload"]["code"] == "cancelled"
+    assert fakes.events[-1]["message"] == "quickbench cancelled"
+
+
+def test_an_abort_during_a_stage_b_cell_evicts_the_sibling_and_stops_there(tmp_path):
+    probe = AbortProbe()
+
+    def on_call(_cell, _kwargs):
+        # Stage A measures two cells; the third call is stage B's first sibling.
+        if len(calls.calls) == 3:
+            probe.triggered = True
+
+    calls = FakeRunCells(on_call=on_call)
+
+    ok, fakes, summary = a_run(tmp_path, run_cells=calls, abort=probe)
+
+    assert ok is False
+    assert len(fakes.run_cells.calls) == 3, "a sibling after the stop was measured"
+    assert fakes.cache.downloads == [SIBLING.repo]
+    assert fakes.cache.evicts == [SIBLING.repo], "what this run fetched is taken back out"
+    assert [
+        (cell["format"], cell["status"], cell["reason"])
+        for cell in summary["stage_b"]["cells"][1:]
+    ] == [
+        (SIBLING.format, quickbench.ABORTED, quickbench.ABORTED_REASON),
+        (SIBLING_2.format, "SKIPPED", quickbench.CANCELLED),
+    ]
+    assert summary["ended"] == "cancelled"
+    assert summary["best"] is None
+    assert fakes.events[-2]["payload"]["code"] == "cancelled"
+
+
+def test_an_aborted_osaurus_cell_still_restores_the_host_settings(tmp_path):
+    probe = AbortProbe()
+    calls = FakeRunCells(
+        on_call=lambda cell, _kwargs: setattr(
+            probe, "triggered", cell.runtime == "osaurus"
+        )
+    )
+
+    ok, fakes, summary = a_run(
+        tmp_path, engines_list=WITH_OSAURUS, osaurus=True, run_cells=calls, abort=probe
+    )
+
+    assert ok is False
+    osaurus_cell = next(
+        cell for cell in summary["stage_a"]["cells"] if cell["engine"] == "osaurus"
+    )
+    assert osaurus_cell["status"] == quickbench.ABORTED
+    assert [kind for kind, _kwargs in fakes.osaurus.calls] == ["recover", "pin", "restore"]
+    assert summary["osaurus"]["restored"] is True
+    assert summary["ended"] == "cancelled"
+
+
+def test_an_abort_after_the_last_cells_engine_stopped_leaves_the_ending_finished(tmp_path):
+    """The probe is asked once per measured cell and never after the last one, so a "Stop
+    now" that arrives once every engine has stopped is never consulted: the run finishes,
+    and `stop_own_engines` finds an empty ledger (its own test)."""
+    probe = AbortProbe()
+
+    ok, fakes, summary = a_run(tmp_path, abort=probe)
+
+    assert ok is True
+    assert summary["ended"] == "finished"
+    assert probe.checks == len(fakes.run_cells.calls) == 4, "a check after the last cell"
+    assert not [
+        cell
+        for stage in ("stage_a", "stage_b")
+        for cell in summary[stage]["cells"]
+        if cell["status"] == quickbench.ABORTED
+    ]
+
+
+def test_a_stop_that_makes_the_cells_own_stop_raise_is_still_an_aborted_cell(tmp_path):
+    """AC-7: the engine is already gone when the cell's own `handle.stop()` runs, so the
+    measurement raises. That is the abort, not the run's unexpected error."""
+    probe = AbortProbe()
+
+    def run_cells(cells, workloads, **kwargs):
+        probe.triggered = True
+        raise runtimes.RuntimeStopError("spawned process 4242 is still alive after SIGKILL")
+
+    ok, fakes, summary = a_run(tmp_path, run_cells=run_cells, abort=probe)
+
+    assert ok is False
+    assert summary["ended"] == "cancelled", "a stop race became the run's error"
+    assert summary["stage_a"]["cells"][0]["status"] == quickbench.ABORTED
+    assert summary["stage_a"]["cells"][0]["reason"] == quickbench.ABORTED_REASON
+    codes = [event["payload"]["code"] for event in fakes.events if event["type"] == "error"]
+    assert codes == ["cancelled"], "the raise was reported as an error on the stream"
+    assert fakes.events[-1]["type"] == "done"
+
+
+def test_an_aborted_cell_is_never_the_winner_even_with_a_number(tmp_path):
+    aborted = quickbench._cell_record(
+        "mlxlm", "stock4bit", "/a", status=quickbench.ABORTED, reason=quickbench.ABORTED_REASON
+    )
+    aborted["decode_tps"] = 99.0  # a number the status must still exclude
+    failed = quickbench._cell_record("optiq", "stock4bit", "/b", status="FAIL", reason="x")
+
+    assert quickbench._winner([aborted, failed]) == (None, [])
+
+
+def test_the_default_abort_probe_never_fires(tmp_path):
+    default = inspect.signature(quickbench.run).parameters["abort"].default
+
+    assert default is quickbench._never_cancelled
+    ok, fakes, summary = a_run(tmp_path)
+
+    assert ok is True and summary["ended"] == "finished"
