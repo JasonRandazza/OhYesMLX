@@ -210,6 +210,17 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(mode.intValue, 0o700)
     }
 
+    func testTheFirstStdoutLineIsTheLaunchLineWhenTwoArriveBeforeTheAwait() async throws {
+        let fake = FakeLauncherProcess()
+        let session = LaunchSession(process: fake, lockFD: -1, timing: .standard)
+
+        session.deliverLine("{\"port\": 43210, \"token\": \"launch-token\"}")
+        session.deliverLine("a later stdout line")
+
+        let line = await session.awaitLaunchLine(timeout: 2)
+        XCTAssertEqual(line, "{\"port\": 43210, \"token\": \"launch-token\"}")
+    }
+
     func testChattyStderrStillYieldsTheLaunchLine() async throws {
         let fake = FakeLauncherProcess()
         let factory = LauncherFactory([fake])

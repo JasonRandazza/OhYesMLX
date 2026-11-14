@@ -1,0 +1,43 @@
+I'll read the specs and the diff to review against them.
+
+Now the spec doc and the diff. Let me check sizes first.
+v5-app.md is 100 lines — I'll read it whole, then the diff in ranges.
+Now the diff. I'll read the Python/docs half first (05-01), then the Swift half.
+I've read the 05-01 diff. Now let me verify key placements in the actual source — the quickbench run loop tails and the server's body guard.
+Now I'll read the run loop and the server handler in the actual source.
+The run loop structure is clear. Now the server handler and body guard.
+The 05-01 side is checked. Now the Swift half — I'll read the diff in ranges.
+AppModel read. Now the remaining kit sources — launcher, client, SSE, token.
+Now the rest of Models, SSE, StubBackend, and the tests.
+Now the remaining tests — Decoding, Fixtures, HTTPBackend, Launcher, Live.
+The full diff is read. Let me verify a few remaining details — fixtures existence, `_winner`'s PASS check, `stderr_json` in runtimes, and the P5-1 token grep.
+All verified — fixtures exist, `_winner` gates on `"PASS"`, token `.raw` used only in the header builder. Now exact line numbers in the working tree for my findings.
+Review complete. No changes made (read-only); verified by reading the diff, both plans, `docs/interfaces/v5-app.md`, and the cited working-tree sources line-by-line. I could not run any suite (read-only), so pass/fail claims are unverified.
+
+**(a) Requirements missing or partial**
+
+1. **05-01 AC-1, PLAN.md:54** — "an oversize or missing-length body with a non-empty body … get the same 415/413/400 codes `POST /jobs` gives". `server.py:819-821` (`_cancel_now`): `declared is None` short-circuits to "bodyless" before the guard. Input: `POST /jobs/{id}/cancel`, `Content-Type: application/json`, **no** `Content-Length`, body `{"now": true}` — spec says 413 `body_too_large`; this answers 202 and sets only `cancel_requested`, silently ignoring the body. `POST /jobs` on the same shape gives 413 (`_job_body`, server.py:709-713). The guard tests cover `Content-Length: ""` ("no number" case, test_server.py:5384) but never an absent header. Same check compares `== "0"` as a string: `Content-Length: 00` (or `+0`) with no body falls through to `json.loads(b"")` → 400 `bad_json` instead of the unchanged 202.
+
+**(c) Looks implemented but wrong**
+
+2. **Stage-B cells collapse (data loss).** v5-quickbench.md's cell pins `{"engine", "format", …}`; v5-app.md:91 (Q3) requires Results to show the cells. Stage B's progress payload carries only `{"engine": top["engine"], "status": …}` (quickbench.py:885 — the winner's engine for *every* sibling), and `AppModel.updateBenchmarkCell` merges rows keyed by engine (`AppModel.swift:550`, `BenchmarkCell.id` at :101). Input: any quickbench with ≥2 stage-B siblings (or a stage-B abort) — each sibling's event overwrites the winner's stage-A row; `benchmarkCells` ends with one row per engine showing the last sibling's status, earlier cells gone, and `AppModel.reason(from:)` never matches "stage B: <format> …" so stage-B rows lose their reasons too.
+
+3. **Q6's absolute gate misses quickbench.** v5-app.md:97-98: "absolute … no control leads past it". Only `go(to:)` checks `supported` (`AppModel.swift:278`); `start()` sets `screen = .benchmark` (`AppModel.swift:451`) and `apply`'s `done` sets `.results` (`AppModel.swift:480`) unconditionally, and the interrupted banner's **Retry** (`RootView.swift:63`) renders on the unsupported screen → `retryInterrupted()` → `quickbench()` → benchmark screen. `testUnsupportedMacIsAbsolute` (AppModelTests.swift:2977) exercises only `install`, which touches no screen — it passes while the quickbench path escapes.
+
+4. **Test that cannot fail for its claim.** `tests/test_quickbench.py:1372` `test_an_abort_after_the_last_cells_engine_stopped_leaves_the_ending_finished`: the probe is never triggered, so a regression where a late abort flips `ended` to `"cancelled"` leaves it green (AC-7, PLAN.md:94 "the run's ending is unchanged"); only the `checks == 4` count catches an extra consult. It must set `triggered` after the last cell.
+
+5. **AC-7's raise path is untested.** PLAN.md:91 asks for "a fake `measure_cell` that raises `RuntimeStopError`"; `test_a_stop_that_makes_the_cells_own_stop_raise…` (test_quickbench.py:1391) fakes `run_cells`, but `measure_cell` swallows that raise into a FAIL record (quickbench.py:697-700), so `measured`'s except branch (quickbench.py:756-759) — the code handling "measure_cell raises while abort()" — is never exercised; the test passes via the FAIL→ABORTED replacement at :760.
+
+**(b) Scope creep:** none found in either commit.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     13    1209396    1078016    40175   89.1%   0.095983
+
+== cc-agent: git status ==
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-w1-review-spec.md
+?? .paul/orders/p5-w1-review-standards.md
+?? .paul/phases/v5-onboarding/05-04-PLAN.md
+?? .paul/phases/v5-onboarding/05-05-PLAN.md
+?? .paul/review/2026-11-14-phase5-w1/

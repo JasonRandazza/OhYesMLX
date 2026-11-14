@@ -54,7 +54,7 @@ struct RootView: View {
                 }
             }
         }
-        if let interrupted = model.interruptedJob {
+        if let interrupted = model.interruptedJob, model.showsInterruptedBanner {
             HStack {
                 Text(
                     "\(interrupted.kind.wireName) of \(interrupted.name) was interrupted when OhYesMLX quit."

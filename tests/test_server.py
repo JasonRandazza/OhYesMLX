@@ -2173,6 +2173,42 @@ def test_a_cancel_body_gets_the_same_guard_codes_as_post_jobs(launch, headers, e
     release.set()
 
 
+@pytest.mark.parametrize(
+    "headers, body, expected",
+    [
+        ({}, b"", 202),
+        ({"Content-Type": "application/json"}, b'{"now": true}', 413),
+        ({"Content-Type": "application/json", "Content-Length": "00"}, b"", 202),
+    ],
+    ids=["neither header", "json type without a length", "length 00"],
+)
+def test_a_cancel_body_is_detected_by_its_headers_and_its_length_as_an_integer(
+    launch, headers, body, expected
+):
+    """AC-1: a bodyless cancel declares neither Content-Type nor Content-Length, and a
+    declared length is read as an integer, so `00` is zero. A JSON Content-Type with no
+    Content-Length is the same 413 ``body_too_large`` ``POST /jobs`` answers."""
+    release = threading.Event()
+    module = blocking(release)
+    listener = launch(quickbench=module)
+    job_id = posted_job_id(listener, STOP_NOW_JOB)
+    assert module.started.wait(5)
+
+    code, _, raw = send_to(
+        listener, f"/jobs/{job_id}/cancel", body=body, headers=headers
+    )
+
+    assert code == expected
+    job = listener.jobs.get(job_id)
+    if expected == 413:
+        assert error_of(raw)["code"] == "body_too_large"
+        assert (job.cancel_requested, job.abort_requested) == (False, False)
+    else:
+        assert json.loads(raw) == {"job_id": job_id}
+        assert (job.cancel_requested, job.abort_requested) == (True, False)
+    release.set()
+
+
 def test_an_invalid_json_cancel_body_is_400_bad_json_and_sets_no_flag(launch):
     release = threading.Event()
     module = blocking(release)

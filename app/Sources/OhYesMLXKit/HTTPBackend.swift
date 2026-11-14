@@ -122,7 +122,17 @@ public struct HTTPBackend: Backend {
                         let lines = try await transport.lines(for: request)
                         for try await line in lines {
                             guard let payload = parser.consume(line: line) else { continue }
-                            let event = try JSONDecoder().decode(JobEvent.self, from: Data(payload.utf8))
+                            guard let event = try? JSONDecoder().decode(
+                                JobEvent.self, from: Data(payload.utf8)
+                            ) else {
+                                // A frame this client cannot read is skipped, never re-fetched:
+                                // `last` moves to the frame's own SSE id, so the reconnect asks
+                                // for what follows it rather than the same event forever.
+                                if let frameID = parser.lastEventID, let id = Int(frameID) {
+                                    last = max(last, id)
+                                }
+                                continue
+                            }
                             last = max(last, event.seq)
                             continuation.yield(event)
                             if event.type == .done {

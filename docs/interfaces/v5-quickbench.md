@@ -129,6 +129,11 @@ the only selector: each cell is one `run_cells` call (one light cell, `--cells` 
 `cell_spec` and parsed by `cli.build_cells`), with `warmup=3`, `measured=5`, `cooldown_s=10` and
 `quick=True`, under `.../quickbench/<stamp>/A/<engine>` or `.../quickbench/<stamp>/B/<format>__<engine>`.
 
+Every `progress` event about a cell -- measured or skipped, in either stage -- carries
+`{"stage": "A"|"B", "engine": str, "format": str, "status": str, "reason": str|null}`, with `status`
+`SKIPPED` for a skip and `reason` null when the cell has none. That payload is the whole cell row
+the app renders: it reads these fields and never parses the event's message text.
+
 The run's rules, each one a rule the harness already paid for:
 
 - **One variable per stage.** Stage A varies the engine on the chosen row's format; its winner is

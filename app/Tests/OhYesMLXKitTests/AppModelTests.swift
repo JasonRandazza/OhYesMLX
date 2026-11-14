@@ -113,6 +113,22 @@ final class AppModelTests: XCTestCase {
         )
     }
 
+    private func cellPayload(
+        _ stage: String,
+        _ engine: String,
+        _ format: String,
+        _ status: String,
+        _ reason: String?
+    ) -> JSONValue {
+        .object([
+            "stage": .string(stage),
+            "engine": .string(engine),
+            "format": .string(format),
+            "status": .string(status),
+            "reason": reason.map { .string($0) } ?? .null,
+        ])
+    }
+
     private var downloadRepo: String { "mlx-community/Qwen3-0.6B-4bit" }
     private var quickbenchRepo: String { "mlx-community/Qwen3.5-2B-4bit" }
 
@@ -151,7 +167,17 @@ final class AppModelTests: XCTestCase {
 
         stack.backend.enqueue(events: [
             progress(1, "stage A: 5 installed engine(s)", payload: .object(["stage": .string("A")])),
-            progress(2, "stage A: mlxlm PASS", payload: .object(["engine": .string("mlxlm"), "status": .string("PASS")])),
+            progress(
+                2,
+                "stage A: mlxlm PASS",
+                payload: .object([
+                    "stage": .string("A"),
+                    "engine": .string("mlxlm"),
+                    "format": .string("mlx affine 4-bit gs64"),
+                    "status": .string("PASS"),
+                    "reason": .null,
+                ])
+            ),
             result(3, ["ended": .string("finished")]),
             done(4, "quickbench finished"),
         ])
@@ -259,17 +285,31 @@ final class AppModelTests: XCTestCase {
             progress(
                 2,
                 "stage A: mlxlm skipped: quit mlxlm first",
-                payload: .object(["engine": .string("mlxlm"), "skipped": .string("quit mlxlm first")])
+                payload: cellPayload(
+                    "A", "mlxlm", "mlx affine 4-bit gs64", "SKIPPED", "quit mlxlm first"
+                )
             ),
             progress(
                 3,
                 "stage A: vmlx N/A: runtime 'vmlx' did not start: RuntimeStartError: could not start",
-                payload: .object(["engine": .string("vmlx"), "status": .string("N/A")])
+                payload: cellPayload(
+                    "A",
+                    "vmlx",
+                    "mlx affine 4-bit gs64",
+                    "N/A",
+                    "runtime 'vmlx' did not start: RuntimeStartError: could not start"
+                )
             ),
             progress(
                 4,
                 "stage A: osaurus SKIPPED: Osaurus was not allowed for this run (osaurus: false)",
-                payload: .object(["engine": .string("osaurus"), "status": .string("SKIPPED")])
+                payload: cellPayload(
+                    "A",
+                    "osaurus",
+                    "mlx affine 4-bit gs64",
+                    "SKIPPED",
+                    "Osaurus was not allowed for this run (osaurus: false)"
+                )
             ),
             done(5),
         ])
@@ -290,6 +330,63 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(osaurus.reason?.contains("(osaurus: false)") == true, osaurus.reason ?? "")
     }
 
+    func testTwoStageBSiblingsStayTwoRows() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+        stack.backend.enqueue(events: [
+            progress(
+                1, "stage A: mlxlm PASS",
+                payload: cellPayload("A", "mlxlm", "mlx affine 4-bit gs64", "PASS", nil)
+            ),
+            progress(
+                2, "stage B: oQ4 (mixed 4/5/6/8) PASS",
+                payload: cellPayload("B", "mlxlm", "oQ4 (mixed 4/5/6/8)", "PASS", nil)
+            ),
+            progress(
+                3, "stage B: mxfp4 PASS",
+                payload: cellPayload("B", "mlxlm", "mxfp4", "PASS", nil)
+            ),
+            done(4),
+        ])
+
+        await stack.model.quickbench(repo: quickbenchRepo)
+
+        XCTAssertEqual(stack.model.benchmarkCells.map(\.id), [
+            "A/mlxlm/mlx affine 4-bit gs64",
+            "B/mlxlm/oQ4 (mixed 4/5/6/8)",
+            "B/mlxlm/mxfp4",
+        ])
+        XCTAssertEqual(stack.model.benchmarkCells.map(\.stage), ["A", "B", "B"])
+        XCTAssertEqual(stack.model.benchmarkCells.map(\.status), ["PASS", "PASS", "PASS"])
+    }
+
+    func testAStageBAbortedRowCarriesItsReasonFromThePayload() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+        stack.backend.enqueue(events: [
+            progress(
+                1,
+                "mlxlm ABORTED: a message the client must never parse",
+                payload: cellPayload(
+                    "B",
+                    "mlxlm",
+                    "oQ4 (mixed 4/5/6/8)",
+                    "ABORTED",
+                    "stopped by the user mid-cell; no number is reported"
+                )
+            ),
+            done(2, "quickbench cancelled"),
+        ])
+
+        await stack.model.quickbench(repo: quickbenchRepo)
+
+        let cell = try XCTUnwrap(stack.model.benchmarkCells.first)
+        XCTAssertEqual(cell.stage, "B")
+        XCTAssertEqual(cell.format, "oQ4 (mixed 4/5/6/8)")
+        XCTAssertEqual(cell.status, "ABORTED")
+        XCTAssertEqual(cell.reason, "stopped by the user mid-cell; no number is reported")
+    }
+
     // MARK: - f · an unsupported Mac is absolute, Q6
 
     func testUnsupportedMacIsAbsolute() async throws {
@@ -307,11 +404,24 @@ final class AppModelTests: XCTestCase {
             volumes: [],
             modelBudgetBytes: 24_000_000_000
         )
-        let stack = try makeStack(hardware: unsupported)
+        let stack = try makeStack(hardware: unsupported, plan: try Fixtures.quickPlan)
+        stack.defaults.set(
+            [
+                "kind": "quickbench",
+                "name": quickbenchRepo,
+                "started": ISO8601DateFormatter().string(from: Date()),
+            ],
+            forKey: "inflightJob"
+        )
         await stack.model.launch()
 
         XCTAssertEqual(stack.model.screen, .unsupported)
         XCTAssertEqual(stack.model.hardware?.unsupportedReason, "this Mac is not Apple silicon")
+        XCTAssertNotNil(stack.model.interruptedJob)
+        XCTAssertFalse(
+            stack.model.showsInterruptedBanner,
+            "the interrupted banner is shown on an unsupported Mac"
+        )
 
         stack.model.go(to: .welcome)
         XCTAssertEqual(stack.model.screen, .unsupported)
@@ -321,8 +431,22 @@ final class AppModelTests: XCTestCase {
         stack.model.installConsent = true
         stack.backend.enqueue(events: [progress(1, "Preparing OptiQ", fraction: 0), done(2)])
         await stack.model.install(engine: "optiq")
+        XCTAssertTrue(stack.backend.startedJobs.isEmpty, "an install started on an unsupported Mac")
+
+        stack.backend.enqueue(events: [done(1)])
+        await stack.model.quickbench(repo: quickbenchRepo)
+        XCTAssertTrue(
+            stack.backend.startedJobs.isEmpty, "a quickbench started on an unsupported Mac"
+        )
+        XCTAssertNil(stack.model.quickPlan, "the plan was fetched for a Mac that cannot run it")
         XCTAssertEqual(stack.model.screen, .unsupported)
-        XCTAssertEqual(stack.backend.startedJobs.last?.args, .install(engine: "optiq"))
+
+        await stack.model.retryInterrupted()
+        XCTAssertTrue(
+            stack.backend.startedJobs.isEmpty, "a retry started on an unsupported Mac"
+        )
+        XCTAssertNotNil(stack.model.interruptedJob, "retry ran on an unsupported Mac")
+        XCTAssertEqual(stack.model.screen, .unsupported)
     }
 
     // MARK: - g · quit mid-download, Q2

@@ -1,0 +1,47 @@
+I'll review the Phase 5 wave 1 diff against the documented standards. First, let me read the diff in ranges and pull the threat-model §10 rows.
+Continuing through the diff and pulling the threat-model §10 rows.
+Reading the remainder of the diff.
+I've read the full diff and the P5 rows. Now I need to verify a few couplings against the actual sources: the quickbench progress-message format the Swift client re-parses, what `v5-app.md` pins for "Stop now", and the `runtimes._shutdown`/ledger helpers the new code calls.
+The message format the Swift `reason(from:)` parses is built in `quickbench.py`. Let me see how the reason is appended and what `step` emits, plus what v5-app.md pins for the cell-row/status copy.
+
+The stage-B message names the format, not the engine — I need to see what its payload carries and what v5-app.md pins for these rows, since `AppModel.reason(from:)` keys on `"\(engine) \(status): "`.
+One more check — the stage-B skipped row's payload keys, to confirm how `updateBenchmarkCell` collapses rows.
+Read-only review complete — full diff read, cross-checked against `AGENTS.md`, `docs/threat-model.md` §10, `docs/interfaces/v5-{app,onboarding,quickbench}.md`, and the emitting code in `quickbench.py`/`runtimes.py`. I changed nothing; I could not run the suite (the order forbids shell).
+
+**HARD — "One definition of everything" + unpinned shape (quickbench.py ↔ AppModel.swift).** Stage-B rows are unrepresentable in the client and their reasons are dropped. `quickbench.py:867,885` puts `top["engine"]` in every stage-B progress payload while the message names `sibling.format` (`:883`). `AppModel.updateBenchmarkCell` (AppModel.swift:532-556) keys rows on `payload["engine"]`, so with any plan that reaches stage B, every sibling row overwrites the stage-A winner's row and each other — one clobbered row, no per-format rows. `AppModel.reason(from:)` (AppModel.swift:581-589) re-derives quickbench's message format by searching `"\(engine) \(status): "` (`quickbench.py:788-789`); a stage-B message never contains the engine name, so status-row reasons — including `ABORTED_REASON` — render empty. `BenchmarkCell` (AppModel.swift:96-108) lacks `format`, unlike the pinned cell record (`docs/interfaces/v5-quickbench.md`). The shape exists only in `quickbench.py:782,788-790,866-867,883-885`; no `docs/interfaces/` file pins it. The new Swift tests exercise only stage-A-shaped payloads, so the suite is green here.
+
+**HARD — "Each rationale is written once" (quickbench.py, runtimes.py).** The abort rationale is restated three times: `_aborted` docstring (`quickbench.py:356-364`), `run`'s ``abort`` paragraph (`:530-537`, "the cell's raw rows stay on disk, because raw observations are never discarded"), and `measured`'s docstring (`:746-755`, the raise-is-the-abort race), which `run`'s paragraph again rewords ("or raises, because the engine going away is what the cell's stop path sees"). Likewise `ABORT_STOP_ERROR_CODE`'s comment ("never raised, because the entries after it are still stopped", `runtimes.py:141-143`) vs `stop_own_engines`' docstring (`runtimes.py:1908-1924`).
+
+**JUDGEMENT — Duplicated Code (quickbench.py).** The `if record["status"] == ABORTED: summary["ended"] = "cancelled"; break` block is copied into both loops (`:795-797`, `:907-909`).
+
+**JUDGEMENT — defect (HTTPBackend.swift:125, 140-146).** A poison SSE event (`data:` JSON missing required keys — the kind `testMissingRequiredKeyFailsDecoding` proves throws) hits the reconnect catch; `last` never advances, so the stream re-fetches the same event forever. `AppModel.start` never sees `done`: job pinned `.running`, the one slot stays held, and `inflightJob` survives to produce a false "interrupted" banner at next launch.
+
+**JUDGEMENT — defect (BackendLauncher.swift:445-460).** `deliverLine` overwrites `pendingLine` when no waiter is registered (`lineDelivered` is still false), so two complete stdout lines arriving before `awaitLaunchLine` (`:192`) loses the launch line and `start()` reports "could not be read" and abandons a healthy backend.
+
+Threat-model P5-1..P5-12: no breach found (P5-8's SIGKILL on "Quit anyway" matches the pinned flow at `v5-app.md:58-61`).
+
+Traceback (most recent call last):
+  File "/Users/jrazz/.local/share/orca-agent-layer/current/scripts/fleet/route-cost.py", line 159, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/Users/jrazz/.local/share/orca-agent-layer/current/scripts/fleet/route-cost.py", line 134, in main
+    model, inp, out, cr, cw, turns = totals(path)
+                                     ~~~~~~^^^^^^
+  File "/Users/jrazz/.local/share/orca-agent-layer/current/scripts/fleet/route-cost.py", line 76, in totals
+    for line in pathlib.Path(path).read_text().splitlines():
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 788, in read_text
+    return f.read()
+           ~~~~~~^^
+  File "<frozen codecs>", line 325, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x86 in position 2396742: invalid start byte
+cc-agent: could not price /Users/jrazz/.local/state/cc-agent/runs/20261114T174603Z-review-mimo-pro.ndjson
+
+== cc-agent: git status ==
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-w1-review-spec.md
+?? .paul/orders/p5-w1-review-standards.md
+?? .paul/phases/v5-onboarding/05-04-PLAN.md
+?? .paul/phases/v5-onboarding/05-05-PLAN.md
+?? .paul/review/2026-11-14-phase5-w1/

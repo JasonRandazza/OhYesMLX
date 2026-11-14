@@ -809,16 +809,25 @@ class _Handler(BaseHTTPRequestHandler):
     def _cancel_now(self) -> bool | None:
         """Whether this cancel asked to stop now; None means a refusal was already written.
 
-        A cancel that declares no body, or a zero-length one, keeps its old meaning. Anything
-        else goes through the same guard ``POST /jobs`` uses -- the same 415, 413 and 400
-        ``bad_json`` -- and then accepts exactly one key, ``now``, whose only accepted value is
-        JSON ``true``: the client states a choice, and a ``false`` or a ``"true"`` would record
-        one the user did not make (docs/interfaces/v5-app.md). ``{}`` is refused by neither:
-        it is a bodyless cancel that happened to be serialised.
+        A cancel is bodyless only when it declares neither ``Content-Length`` nor
+        ``Content-Type``, or when its declared length is the integer zero however it is spelled
+        (``00`` is zero). Anything else goes through the same guard ``POST /jobs`` uses -- the
+        same 415, 413 and 400 ``bad_json`` -- so a JSON type with no length is the same 413
+        ``body_too_large`` that ``POST /jobs`` answers. Then the body must be exactly one key,
+        ``now``, whose only accepted value is JSON ``true``: the client states a choice, and a
+        ``false`` or a ``"true"`` would record one the user did not make (docs/interfaces/
+        v5-app.md). ``{}`` is refused by neither: it is a bodyless cancel that happened to be
+        serialised.
         """
         declared = self.headers.get("Content-Length")
-        if declared is None or declared.strip() == "0":
+        if declared is None and self.headers.get("Content-Type") is None:
             return False
+        if declared is not None:
+            try:
+                if int(declared) == 0:
+                    return False
+            except ValueError:
+                pass
         body = self._job_body()
         if body is None:
             return None

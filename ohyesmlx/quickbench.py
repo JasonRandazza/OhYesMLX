@@ -356,10 +356,13 @@ def _skipped(engine, fmt, artifact_dir, reason) -> dict:
 def _aborted(engine, fmt, artifact_dir) -> dict:
     """The cell a "Stop now" landed on: a status and a reason, and no number at all.
 
-    The cell was measured -- its raw rows are on disk, because raw observations are never
-    discarded -- but a stop landed while it ran, so the engine was taken out from under it
-    and whatever it returned is not a reading. A figure here would be a number from a run that
-    did not finish being measured.
+    "Stop now" is the server stopping the engine from outside, and ``abort`` answers True only
+    after that has happened. The cell was therefore measured, but the stop took the reading
+    with it: its raw rows are on disk, because raw observations are never discarded, and a
+    figure here would be a number from a run that did not finish being measured. A cell's own
+    stop path raising while the abort is in flight is that same stop losing a race, not the
+    run's unexpected error. This docstring is the one place the rationale is written; callers
+    point at it.
     """
     return _cell_record(engine, fmt, artifact_dir, status=ABORTED, reason=ABORTED_REASON)
 
@@ -528,14 +531,8 @@ def run(
     downloaded and never evicted. Every ending -- finished, cancelled, restore failed, or an
     unexpected raise -- leaves a summary on disk saying which one it was.
 
-    ``abort`` is "Stop now": the server has already stopped the engine from outside by the
-    time it answers True, so there is nothing for this module to stop and nothing in
-    ``measure.py`` to change. After each cell's own call returns -- or raises, because the
-    engine going away is what the cell's stop path sees -- an abort in flight replaces the
-    record with :func:`_aborted` and ends the run on the *existing* cancelled tail: the rest
-    of the plan is skipped, the Osaurus restore and sibling eviction still run, the summary
-    is written and the stream ends with the cancelled ``error``/``done``. The cell's raw rows
-    stay on disk, because raw observations are never discarded.
+    ``abort`` is "Stop now"; a cell it landed on is :func:`_aborted`'s record, which states
+    why, and the rest of the plan is skipped on the existing cancelled tail.
     """
     send = _emitter(emit)
     if not confirmed:
@@ -744,13 +741,7 @@ def run(
         return _cell_record(engine, fmt, artifact_dir, row=rows[0])
 
     def measured(engine, fmt, artifact_dir, cell_dir):
-        """One cell's record, replaced by :func:`_aborted` when a stop landed while it ran.
-
-        Both stages turn a cell into a record through here, so "Stop now" has one
-        implementation rather than one per loop. A raise with no abort in flight is the run's
-        unexpected error, exactly as before; a raise *with* an abort in flight is the cell's
-        own stop path losing a race with the stop already done outside, and is not an error.
-        """
+        """One cell's record, replaced by :func:`_aborted` when a stop landed while it ran."""
         try:
             record = measure_cell(engine, fmt, artifact_dir, cell_dir)
         except Exception:
@@ -779,7 +770,13 @@ def run(
                 )
                 step(
                     f"stage A: {name} skipped: {reason}",
-                    {"engine": name, "skipped": reason},
+                    {
+                        "stage": "A",
+                        "engine": name,
+                        "format": model.format,
+                        "status": "SKIPPED",
+                        "reason": reason,
+                    },
                 )
                 continue
             record = measured(name, model.format, snapshot, root / "A" / name)
@@ -787,7 +784,13 @@ def run(
             step(
                 f"stage A: {name} {record['status']}"
                 + (f": {record['reason']}" if record["reason"] else ""),
-                {"engine": name, "status": record["status"]},
+                {
+                    "stage": "A",
+                    "engine": name,
+                    "format": model.format,
+                    "status": record["status"],
+                    "reason": record["reason"],
+                },
             )
             if restore_failure:
                 summary["ended"] = "restore_failed"
@@ -864,7 +867,13 @@ def run(
                             )
                             step(
                                 f"stage B: {sibling.format} skipped: {reason}",
-                                {"engine": top["engine"], "skipped": reason},
+                                {
+                                    "stage": "B",
+                                    "engine": top["engine"],
+                                    "format": sibling.format,
+                                    "status": "SKIPPED",
+                                    "reason": reason,
+                                },
                             )
                             continue
                         outstanding.add(sibling.repo)
@@ -882,7 +891,13 @@ def run(
                         step(
                             f"stage B: {sibling.format} {record['status']}"
                             + (f": {record['reason']}" if record["reason"] else ""),
-                            {"engine": top["engine"], "status": record["status"]},
+                            {
+                                "stage": "B",
+                                "engine": top["engine"],
+                                "format": sibling.format,
+                                "status": record["status"],
+                                "reason": record["reason"],
+                            },
                         )
                     finally:
                         if fetched:

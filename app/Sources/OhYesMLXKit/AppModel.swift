@@ -94,14 +94,18 @@ public struct InterruptedJob: Sendable, Equatable {
 }
 
 public struct BenchmarkCell: Sendable, Equatable, Identifiable {
+    public let stage: String
     public let engine: String
+    public let format: String
     public var status: String
     public var reason: String?
 
-    public var id: String { engine }
+    public var id: String { "\(stage)/\(engine)/\(format)" }
 
-    public init(engine: String, status: String, reason: String?) {
+    public init(stage: String, engine: String, format: String, status: String, reason: String?) {
+        self.stage = stage
         self.engine = engine
+        self.format = format
         self.status = status
         self.reason = reason
     }
@@ -146,6 +150,11 @@ public final class AppModel {
     public var installConsent = false
     public var osaurusConsent = false
     public var onQuitComplete: (() -> Void)?
+
+    /// Q6's absolute gate: one definition, asked by every path that starts a job or a screen.
+    public var unsupported: Bool { hardware?.supported == false }
+
+    public var showsInterruptedBanner: Bool { interruptedJob != nil && !unsupported }
 
     private var backend: any Backend
     private var runner: (any BackendRunner)?
@@ -275,7 +284,7 @@ public final class AppModel {
     }
 
     public func go(to target: Screen) {
-        guard hardware?.supported != false else { return }
+        guard !unsupported else { return }
         screen = target
     }
 
@@ -308,6 +317,7 @@ public final class AppModel {
     }
 
     public func quickbench(repo: String) async {
+        guard !unsupported else { return }
         quickPlan = nil
         do {
             quickPlan = try await backend.quickbenchPlan(repo: repo)
@@ -351,6 +361,7 @@ public final class AppModel {
     }
 
     public func retryInterrupted() async {
+        guard !unsupported else { return }
         guard let interrupted = interruptedJob else { return }
         interruptedJob = nil
         switch interrupted.kind {
@@ -411,6 +422,7 @@ public final class AppModel {
     }
 
     private func start(_ args: JobArgs) async {
+        guard !unsupported else { return }
         refusal = nil
         if args.kind == .quickbench {
             benchmarkRefusal = nil
@@ -531,27 +543,23 @@ public final class AppModel {
 
     private func updateBenchmarkCell(_ event: JobEvent) {
         guard let payload = event.payload,
-              let engine = payload["engine"]?.stringValue
+              let stage = payload["stage"]?.stringValue,
+              let engine = payload["engine"]?.stringValue,
+              let format = payload["format"]?.stringValue,
+              let status = payload["status"]?.stringValue
         else { return }
 
-        let status: String
-        var reason: String?
-        if let explicit = payload["status"]?.stringValue {
-            status = explicit
-        } else if let skipped = payload["skipped"]?.stringValue {
-            status = "SKIPPED"
-            reason = skipped
+        let cell = BenchmarkCell(
+            stage: stage,
+            engine: engine,
+            format: format,
+            status: status,
+            reason: payload["reason"]?.stringValue
+        )
+        if let index = benchmarkCells.firstIndex(where: { $0.id == cell.id }) {
+            benchmarkCells[index] = cell
         } else {
-            return
-        }
-        if reason == nil {
-            reason = Self.reason(from: event.message, engine: engine, status: status)
-        }
-        if let index = benchmarkCells.firstIndex(where: { $0.engine == engine }) {
-            benchmarkCells[index].status = status
-            benchmarkCells[index].reason = reason
-        } else {
-            benchmarkCells.append(BenchmarkCell(engine: engine, status: status, reason: reason))
+            benchmarkCells.append(cell)
         }
     }
 
@@ -576,16 +584,6 @@ public final class AppModel {
               let started = object["started"] as? String
         else { return nil }
         return InterruptedJob(kind: kind, name: name, started: started)
-    }
-
-    static func reason(from message: String, engine: String, status: String) -> String? {
-        if let range = message.range(of: "\(engine) \(status): ") {
-            return String(message[range.upperBound...])
-        }
-        if let range = message.range(of: "\(engine) skipped: ") {
-            return String(message[range.upperBound...])
-        }
-        return nil
     }
 
     public static func formatGB(_ bytes: Int64) -> String {

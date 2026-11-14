@@ -442,7 +442,7 @@ final class LaunchSession: @unchecked Sendable {
         }
     }
 
-    private func deliverLine(_ line: String) {
+    func deliverLine(_ line: String) {
         lock.lock()
         if lineDelivered || timedOut {
             lock.unlock()
@@ -454,7 +454,11 @@ final class LaunchSession: @unchecked Sendable {
             lock.unlock()
             waiter.resume(returning: line)
         } else {
-            pendingLine = line
+            // The FIRST stdout line is the launch line: a later line never overwrites a
+            // pending one.
+            if pendingLine == nil {
+                pendingLine = line
+            }
             lock.unlock()
         }
     }

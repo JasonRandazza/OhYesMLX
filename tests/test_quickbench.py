@@ -547,6 +547,63 @@ def test_an_already_downloaded_sibling_is_neither_downloaded_nor_evicted(tmp_pat
     assert fakes.cache.evicts == []
 
 
+# --- 05-w1: a cell's progress event is the whole row the app renders ---------------------------
+#
+# The app keys its rows on stage + engine + format and reads status and reason from the
+# payload; it never parses the message text. These pin the payload on the wire.
+
+
+def cell_events(fakes):
+    """Every progress event whose payload is a cell row."""
+    return [
+        event
+        for event in fakes.events
+        if event["type"] == "progress"
+        and isinstance(event["payload"], dict)
+        and "status" in event["payload"]
+    ]
+
+
+def test_every_measured_cell_event_carries_stage_engine_format_status_and_reason(tmp_path):
+    ok, fakes, _summary = a_run(tmp_path)
+
+    events = cell_events(fakes)
+
+    assert ok is True
+    assert [
+        (event["payload"]["stage"], event["payload"]["engine"], event["payload"]["format"])
+        for event in events
+    ] == [
+        ("A", "mlxlm", CHOSEN.format),
+        ("A", "optiq", CHOSEN.format),
+        ("B", "mlxlm", SIBLING.format),
+        ("B", "mlxlm", SIBLING_2.format),
+    ]
+    assert all(event["payload"]["status"] == "PASS" for event in events)
+    assert all(event["payload"]["reason"] is None for event in events)
+
+
+def test_a_skipped_cell_event_is_skipped_with_its_reason(tmp_path):
+    ok, fakes, _summary = a_run(tmp_path, download_result=False)
+
+    assert ok is True
+    skipped = [
+        event["payload"]
+        for event in cell_events(fakes)
+        if event["payload"]["status"] == "SKIPPED"
+    ]
+    assert [
+        (payload["stage"], payload["engine"], payload["format"]) for payload in skipped
+    ] == [
+        ("B", "mlxlm", SIBLING.format),
+        ("B", "mlxlm", SIBLING_2.format),
+    ]
+    assert all(
+        isinstance(payload["reason"], str) and payload["reason"] for payload in skipped
+    ), "a skipped cell's reason did not reach the client"
+
+
+
 def test_a_refused_sibling_eviction_is_logged_and_recorded(tmp_path):
     """AC-4: a `busy` (or any) evict refusal is a fact about what this run left on disk,
     not a return value to discard."""
@@ -1345,6 +1402,20 @@ def test_an_abort_during_a_stage_b_cell_evicts_the_sibling_and_stops_there(tmp_p
     assert summary["ended"] == "cancelled"
     assert summary["best"] is None
     assert fakes.events[-2]["payload"]["code"] == "cancelled"
+    aborted_event = next(
+        event
+        for event in fakes.events
+        if event["type"] == "progress"
+        and isinstance(event["payload"], dict)
+        and event["payload"].get("status") == quickbench.ABORTED
+    )
+    assert aborted_event["payload"] == {
+        "stage": "B",
+        "engine": "mlxlm",
+        "format": SIBLING.format,
+        "status": quickbench.ABORTED,
+        "reason": quickbench.ABORTED_REASON,
+    }
 
 
 def test_an_aborted_osaurus_cell_still_restores_the_host_settings(tmp_path):
@@ -1370,13 +1441,31 @@ def test_an_aborted_osaurus_cell_still_restores_the_host_settings(tmp_path):
 
 
 def test_an_abort_after_the_last_cells_engine_stopped_leaves_the_ending_finished(tmp_path):
-    """The probe is asked once per measured cell and never after the last one, so a "Stop
-    now" that arrives once every engine has stopped is never consulted: the run finishes,
-    and `stop_own_engines` finds an empty ledger (its own test)."""
-    probe = AbortProbe()
+    """The probe is asked once per measured cell and never after the last one. A "Stop now"
+    that arrives as the last cell's own check returns is therefore answered False, never
+    consulted again, and never flips the ending: the run finishes, and `stop_own_engines`
+    finds an empty ledger (its own test)."""
+
+    class AbortAfterTheLastCheck(AbortProbe):
+        """False up to the numbered check, True from then on, like a stop landing mid-cell."""
+
+        def __init__(self, after):
+            super().__init__()
+            self.after = after
+
+        def __call__(self):
+            answer = self.triggered
+            self.checks += 1
+            if self.checks >= self.after:
+                self.triggered = True
+            return answer
+
+    # Two stage-A cells and two stage-B siblings: the fourth consult is the last one.
+    probe = AbortAfterTheLastCheck(4)
 
     ok, fakes, summary = a_run(tmp_path, abort=probe)
 
+    assert probe.triggered is True, "the probe never turned True, so nothing was guarded"
     assert ok is True
     assert summary["ended"] == "finished"
     assert probe.checks == len(fakes.run_cells.calls) == 4, "a check after the last cell"
@@ -1386,6 +1475,38 @@ def test_an_abort_after_the_last_cells_engine_stopped_leaves_the_ending_finished
         for cell in summary[stage]["cells"]
         if cell["status"] == quickbench.ABORTED
     ]
+
+
+def test_a_raise_from_measure_cell_itself_while_aborted_is_an_aborted_cell(tmp_path):
+    """AC-7's other half: `run_cells` returning a row `report.summarize` cannot read makes
+    `measure_cell` raise *past* its own catch. With the abort in flight that raise is the
+    stop, not the run's unexpected error (``measured``'s except branch)."""
+    probe = AbortProbe()
+
+    class UnreadableRow:
+        @property
+        def measured_pin(self):
+            raise runtimes.RuntimeStopError(
+                "spawned process 4242 is still alive after SIGKILL"
+            )
+
+    def run_cells(cells, workloads, **kwargs):
+        probe.triggered = True
+        return [UnreadableRow()]
+
+    ok, fakes, summary = a_run(tmp_path, run_cells=run_cells, abort=probe)
+
+    assert ok is False
+    assert summary["ended"] == "cancelled", "a stop race became the run's error"
+    aborted, skipped = summary["stage_a"]["cells"]
+    assert (aborted["status"], aborted["reason"]) == (
+        quickbench.ABORTED,
+        quickbench.ABORTED_REASON,
+    )
+    assert skipped["status"] == "SKIPPED"
+    codes = [event["payload"]["code"] for event in fakes.events if event["type"] == "error"]
+    assert codes == ["cancelled"], "the raise was reported as an error on the stream"
+    assert fakes.events[-1]["type"] == "done"
 
 
 def test_a_stop_that_makes_the_cells_own_stop_raise_is_still_an_aborted_cell(tmp_path):

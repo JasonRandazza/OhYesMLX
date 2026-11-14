@@ -138,8 +138,8 @@ RUNNING_ENGINES_DIRNAME = "running-engines"
 # removal on stop.
 LEDGER_ERROR_CODE = "running_engine_ledger"
 
-# "Stop now"'s failure line: one entry of this process's own ledger that would not stop. It is
-# written per entry and never raised, because the entries after it are still stopped.
+# "Stop now"'s failure line: one entry of this process's own ledger that would not stop.
+# :func:`stop_own_engines` states why it is written per entry and never raised.
 ABORT_STOP_ERROR_CODE = "abort_stop_failed"
 
 # The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag

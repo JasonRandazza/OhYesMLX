@@ -217,6 +217,31 @@ final class HTTPBackendTests: XCTestCase {
         XCTAssertEqual(transport.requests[1].value(forHTTPHeaderField: "Last-Event-ID"), "2")
     }
 
+    func testAPoisonEventIsSkippedAndItsIDIsNeverFetchedAgain() async throws {
+        let transport = FakeTransport()
+        transport.enqueueStream([
+            .line("id: 1"),
+            .line("data: {\"seq\": 1, \"type\": \"progress\"}"),
+            .line(""),
+            .failure(.networkConnectionLost),
+        ])
+        transport.enqueueStream([
+            .line("id: 2"),
+            .line("data: \(makeEventJSON(seq: 2, type: "done", message: "finished"))"),
+            .line(""),
+        ])
+
+        var received: [JobEvent] = []
+        for try await event in backend(transport).events(jobID: "a1b2c3d4e5f60708", after: nil) {
+            received.append(event)
+        }
+
+        XCTAssertEqual(received.map(\.seq), [2])
+        XCTAssertEqual(received.last?.type, .done)
+        XCTAssertEqual(transport.requests.count, 2, "the poison frame was fetched again")
+        XCTAssertEqual(transport.requests[1].value(forHTTPHeaderField: "Last-Event-ID"), "1")
+    }
+
     func testUnknownJobEndsTheStreamWithoutReconnecting() async throws {
         let transport = FakeTransport()
         transport.enqueueStream([

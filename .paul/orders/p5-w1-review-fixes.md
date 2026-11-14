@@ -1,0 +1,14 @@
+# Order: Phase 5 wave-1 code-review fixes (05-01 + 05-02)
+
+Reviews: `.paul/review/2026-11-14-phase5-w1/{standards,spec}.log` (read both; the coordinator verified each item below in the code).
+Files you may touch: ohyesmlx/quickbench.py, ohyesmlx/server.py, ohyesmlx/runtimes.py (docstring/comment only), tests/test_quickbench.py, tests/test_server.py, docs/interfaces/v5-quickbench.md, app/Sources/OhYesMLXKit/{AppModel,HTTPBackend,SSE,BackendLauncher,Models,StubBackend}.swift, app/Sources/OhYesMLX/RootView.swift, app/Tests/OhYesMLXKitTests/*.swift. Touch nothing else.
+
+1. Structured cell events (HARD, data loss). Every quickbench progress event about a cell (stage A/B, measured or skipped) carries payload `{"stage": "A"|"B", "engine", "format", "status", "reason"}` (status SKIPPED for skips; reason null when none). Pin it in v5-quickbench.md (one short paragraph). Swift: `BenchmarkCell` gains `stage` and `format`; its id is stage+engine+format; status/reason are read from the payload; DELETE `AppModel.reason(from:engine:status:)` — the client never parses message text. Tests: two stage-B siblings stay two rows; a stage-B ABORTED row carries its reason.
+2. Cancel body detection (spec AC-1). A cancel is bodyless only when it has neither `Content-Length` nor `Content-Type`; `Content-Length` is compared as an integer (`00` is zero). A JSON Content-Type with no Content-Length is 413 body_too_large, as `POST /jobs`. Tests for: absent both -> 202 unchanged; JSON type + no length -> 413; `Content-Length: 00` no body -> 202.
+3. Q6 absolute gate. On an unsupported Mac AppModel starts no job (install/download/evict/quickbench/retry are no-ops) and never leaves `.unsupported`; the interrupted banner is not shown there. Test the quickbench and retry paths, not only install.
+4. Tests that cannot fail: fix `test_an_abort_after_the_last_cells_engine_stopped_leaves_the_ending_finished` so the probe turns True after the last cell; add a test where `measure_cell` itself raises RuntimeStopError while abort() is True (exercise `measured`'s except branch). Red-check both.
+5. SSE poison event: an event whose JSON does not decode is skipped — `last` advances to that frame's SSE `id` — and never re-fetched in a loop. Test with a fake transport.
+6. Launcher: the FIRST stdout line is the launch line; a later line never overwrites a pending one. Test two lines before await.
+7. "Each rationale is written once": the abort rationale lives in `_aborted`'s docstring only; `run`'s `abort` paragraph and `measured`'s docstring point at it in one line each; `ABORT_STOP_ERROR_CODE`'s comment points at `stop_own_engines`.
+
+Suites: `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q` (baseline 1360) and `cd app && OYMLX_DEV_PYTHON=$HOME/.local/share/ohyesmlx/app-dev-venv/bin/python swift test` (baseline 48). Red-check every new test. Report per item: the change, the test, the red-check.
