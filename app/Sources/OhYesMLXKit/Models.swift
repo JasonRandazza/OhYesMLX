@@ -1,0 +1,501 @@
+import Foundation
+
+public enum JSONValue: Sendable, Equatable, Codable {
+    case null
+    case bool(Bool)
+    case int(Int64)
+    case double(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Int64.self) {
+            self = .int(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .double(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "unsupported JSON value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null:
+            try container.encodeNil()
+        case .bool(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        }
+    }
+
+    public subscript(key: String) -> JSONValue? {
+        guard case .object(let object) = self else { return nil }
+        return object[key]
+    }
+
+    public var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+
+    public var boolValue: Bool? {
+        guard case .bool(let value) = self else { return nil }
+        return value
+    }
+
+    public var intValue: Int64? {
+        switch self {
+        case .int(let value): return value
+        case .double(let value): return Int64(value)
+        default: return nil
+        }
+    }
+
+    public var doubleValue: Double? {
+        switch self {
+        case .double(let value): return value
+        case .int(let value): return Double(value)
+        default: return nil
+        }
+    }
+
+    public var arrayValue: [JSONValue]? {
+        guard case .array(let value) = self else { return nil }
+        return value
+    }
+
+    public var objectValue: [String: JSONValue]? {
+        guard case .object(let value) = self else { return nil }
+        return value
+    }
+}
+
+public struct Volume: Codable, Sendable, Equatable {
+    public let path: String
+    public let freeBytes: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case freeBytes = "free_bytes"
+    }
+
+    public init(path: String, freeBytes: Int64) {
+        self.path = path
+        self.freeBytes = freeBytes
+    }
+}
+
+public struct Hardware: Codable, Sendable, Equatable {
+    public let supported: Bool
+    public let unsupportedReason: String?
+    public let chip: String
+    public let family: String
+    public let tier: String
+    public let cpuCores: Int
+    public let gpuCores: Int?
+    public let ramBytes: Int64
+    public let macos: String
+    public let diskFreeBytes: Int64
+    public let volumes: [Volume]
+    public let modelBudgetBytes: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case supported
+        case unsupportedReason = "unsupported_reason"
+        case chip
+        case family
+        case tier
+        case cpuCores = "cpu_cores"
+        case gpuCores = "gpu_cores"
+        case ramBytes = "ram_bytes"
+        case macos
+        case diskFreeBytes = "disk_free_bytes"
+        case volumes
+        case modelBudgetBytes = "model_budget_bytes"
+    }
+
+    public init(
+        supported: Bool,
+        unsupportedReason: String?,
+        chip: String,
+        family: String,
+        tier: String,
+        cpuCores: Int,
+        gpuCores: Int?,
+        ramBytes: Int64,
+        macos: String,
+        diskFreeBytes: Int64,
+        volumes: [Volume],
+        modelBudgetBytes: Int64
+    ) {
+        self.supported = supported
+        self.unsupportedReason = unsupportedReason
+        self.chip = chip
+        self.family = family
+        self.tier = tier
+        self.cpuCores = cpuCores
+        self.gpuCores = gpuCores
+        self.ramBytes = ramBytes
+        self.macos = macos
+        self.diskFreeBytes = diskFreeBytes
+        self.volumes = volumes
+        self.modelBudgetBytes = modelBudgetBytes
+    }
+}
+
+public struct PlanStep: Codable, Sendable, Equatable {
+    public let id: String
+    public let label: String
+    public let command: [String]?
+
+    public init(id: String, label: String, command: [String]?) {
+        self.id = id
+        self.label = label
+        self.command = command
+    }
+}
+
+public struct InstallPlan: Codable, Sendable, Equatable {
+    public let engine: String
+    public let kind: String
+    public let sourceURL: String
+    public let sizeBytesEstimate: Int64?
+    public let needsAdmin: Bool
+    public let steps: [PlanStep]
+
+    enum CodingKeys: String, CodingKey {
+        case engine
+        case kind
+        case sourceURL = "source_url"
+        case sizeBytesEstimate = "size_bytes_estimate"
+        case needsAdmin = "needs_admin"
+        case steps
+    }
+
+    public init(
+        engine: String,
+        kind: String,
+        sourceURL: String,
+        sizeBytesEstimate: Int64?,
+        needsAdmin: Bool,
+        steps: [PlanStep]
+    ) {
+        self.engine = engine
+        self.kind = kind
+        self.sourceURL = sourceURL
+        self.sizeBytesEstimate = sizeBytesEstimate
+        self.needsAdmin = needsAdmin
+        self.steps = steps
+    }
+}
+
+public struct EngineStatus: Codable, Sendable, Equatable, Identifiable {
+    public let name: String
+    public let title: String
+    public let blurb: String
+    public let installed: Bool
+    public let version: String?
+    public let path: String?
+    public let tested: Bool
+    public let verified: String?
+    public let install: InstallPlan?
+
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case title
+        case blurb
+        case installed
+        case version
+        case path
+        case tested
+        case verified
+        case install
+    }
+
+    public init(
+        name: String,
+        title: String,
+        blurb: String,
+        installed: Bool,
+        version: String?,
+        path: String?,
+        tested: Bool,
+        verified: String?,
+        install: InstallPlan?
+    ) {
+        self.name = name
+        self.title = title
+        self.blurb = blurb
+        self.installed = installed
+        self.version = version
+        self.path = path
+        self.tested = tested
+        self.verified = verified
+        self.install = install
+    }
+}
+
+public struct MeasuredHere: Codable, Sendable, Equatable {
+    public let decodeTPS: Double
+    public let engine: String
+    public let measuredAt: String
+    public let quick: Bool
+    public let ttftS: Double
+
+    enum CodingKeys: String, CodingKey {
+        case decodeTPS = "decode_tps"
+        case engine
+        case measuredAt = "measured_at"
+        case quick
+        case ttftS = "ttft_s"
+    }
+
+    public init(decodeTPS: Double, engine: String, measuredAt: String, quick: Bool, ttftS: Double) {
+        self.decodeTPS = decodeTPS
+        self.engine = engine
+        self.measuredAt = measuredAt
+        self.quick = quick
+        self.ttftS = ttftS
+    }
+}
+
+public struct Pick: Codable, Sendable, Equatable, Identifiable {
+    public let modelID: String
+    public let title: String
+    public let paramsB: Double
+    public let format: String
+    public let sizeBytes: Int64
+    public let fit: String
+    public let fitBasis: String
+    public let engines: [String]
+    public let installNeeded: Bool
+    public let startHere: Bool
+    public let reason: String
+    public let downloaded: Bool
+    public let measuredHere: MeasuredHere?
+
+    public var id: String { modelID }
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case title
+        case paramsB = "params_b"
+        case format
+        case sizeBytes = "size_bytes"
+        case fit
+        case fitBasis = "fit_basis"
+        case engines
+        case installNeeded = "install_needed"
+        case startHere = "start_here"
+        case reason
+        case downloaded
+        case measuredHere = "measured_here"
+    }
+
+    public init(
+        modelID: String,
+        title: String,
+        paramsB: Double,
+        format: String,
+        sizeBytes: Int64,
+        fit: String,
+        fitBasis: String,
+        engines: [String],
+        installNeeded: Bool,
+        startHere: Bool,
+        reason: String,
+        downloaded: Bool,
+        measuredHere: MeasuredHere?
+    ) {
+        self.modelID = modelID
+        self.title = title
+        self.paramsB = paramsB
+        self.format = format
+        self.sizeBytes = sizeBytes
+        self.fit = fit
+        self.fitBasis = fitBasis
+        self.engines = engines
+        self.installNeeded = installNeeded
+        self.startHere = startHere
+        self.reason = reason
+        self.downloaded = downloaded
+        self.measuredHere = measuredHere
+    }
+}
+
+public struct ExcludedModel: Codable, Sendable, Equatable, Identifiable {
+    public let modelID: String
+    public let reason: String
+
+    public var id: String { modelID }
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case reason
+    }
+
+    public init(modelID: String, reason: String) {
+        self.modelID = modelID
+        self.reason = reason
+    }
+}
+
+public struct Recommendations: Codable, Sendable, Equatable {
+    public let picks: [Pick]
+    public let excluded: [ExcludedModel]
+    public let unsupportedReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case picks
+        case excluded
+        case unsupportedReason = "unsupported_reason"
+    }
+
+    public init(picks: [Pick], excluded: [ExcludedModel], unsupportedReason: String?) {
+        self.picks = picks
+        self.excluded = excluded
+        self.unsupportedReason = unsupportedReason
+    }
+}
+
+public struct PlannedEngine: Codable, Sendable, Equatable {
+    public let engine: String
+    public let version: String?
+    public let tested: Bool
+
+    public init(engine: String, version: String?, tested: Bool) {
+        self.engine = engine
+        self.version = version
+        self.tested = tested
+    }
+}
+
+public struct PlannedSibling: Codable, Sendable, Equatable {
+    public let repo: String
+    public let format: String
+    public let sizeBytes: Int64
+    public let downloaded: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case repo
+        case format
+        case sizeBytes = "size_bytes"
+        case downloaded
+    }
+
+    public init(repo: String, format: String, sizeBytes: Int64, downloaded: Bool) {
+        self.repo = repo
+        self.format = format
+        self.sizeBytes = sizeBytes
+        self.downloaded = downloaded
+    }
+}
+
+public struct QuickPlan: Codable, Sendable, Equatable {
+    public let repo: String
+    public let format: String
+    public let stageA: [PlannedEngine]
+    public let stageB: [PlannedSibling]
+    public let downloadBytes: Int64
+    public let osaurus: Bool
+    public let estimateS: Int
+
+    enum CodingKeys: String, CodingKey {
+        case repo
+        case format
+        case stageA = "stage_a"
+        case stageB = "stage_b"
+        case downloadBytes = "download_bytes"
+        case osaurus
+        case estimateS = "estimate_s"
+    }
+
+    public init(
+        repo: String,
+        format: String,
+        stageA: [PlannedEngine],
+        stageB: [PlannedSibling],
+        downloadBytes: Int64,
+        osaurus: Bool,
+        estimateS: Int
+    ) {
+        self.repo = repo
+        self.format = format
+        self.stageA = stageA
+        self.stageB = stageB
+        self.downloadBytes = downloadBytes
+        self.osaurus = osaurus
+        self.estimateS = estimateS
+    }
+}
+
+public enum JobEventType: String, Codable, Sendable {
+    case progress
+    case log
+    case result
+    case error
+    case done
+}
+
+public struct JobEvent: Codable, Sendable, Equatable, Identifiable {
+    public let seq: Int
+    public let type: JobEventType
+    public let message: String
+    public let fraction: Double?
+    public let payload: JSONValue?
+
+    public var id: Int { seq }
+
+    public init(seq: Int, type: JobEventType, message: String, fraction: Double?, payload: JSONValue?) {
+        self.seq = seq
+        self.type = type
+        self.message = message
+        self.fraction = fraction
+        self.payload = payload
+    }
+}
+
+public struct BackendError: Codable, Error, Sendable, Equatable, LocalizedError {
+    public let code: String
+    public let status: Int?
+    public let message: String
+
+    public var errorDescription: String? { message }
+
+    public init(code: String, status: Int?, message: String) {
+        self.code = code
+        self.status = status
+        self.message = message
+    }
+}
+
+struct BackendErrorEnvelope: Decodable, Sendable {
+    let error: BackendError
+}

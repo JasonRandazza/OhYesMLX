@@ -27,3 +27,6 @@ scratch/
 
 # Knowledge graph (regenerate with graphify)
 graphify-out/
+
+# Swift package build output
+app/.build/
