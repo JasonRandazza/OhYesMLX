@@ -1,0 +1,162 @@
+I'll start by reading the plan and the referenced specs.
+Read the plan and §10. Now let me find the launcher spec and the Swift files I need to touch.
+Now let me read the launcher spec section and the Swift sources.
+
+
+
+
+
+
+
+
+
+
+Now I'll write the fetch script (AC-1).
+
+
+
+
+Now the Info.plist and the launcher argv change.
+
+Now the translocation state in `AppModel`.
+Now the guards in `launch`, `relaunch`, and the job path.
+
+
+
+
+
+
+
+
+Let me run the Swift suite to check compilation and the new test.
+Red-checking the AC-7 test by reverting the detector.
+Now `scripts/make_sbom.py` (AC-3).
+
+
+Now `scripts/build_app.sh` (AC-2).
+
+
+
+
+
+Now `scripts/check_bundle.sh` (AC-4).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+`ps eww` can't read another process's environment on this macOS — let me check whether `KERN_PROCARGS2` can.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+A real defect: the SBOM step wrote a `.pyc` into the signed bundle after verification. Fixing with `-B` and a final verify.
+
+
+
+
+
+
+Everything is delivered and green. Here is the report.
+
+## Blocker for your decision (one AC-4 sub-clause)
+
+**P5-9's observation method does not exist on this machine.** AC-4 says the backend's PATH is checked with `ps eww`. On macOS 27.2.1 (26B131) no process's environment is readable from outside:
+
+```
+$ /bin/ps eww -p <sleep pid started with env -i PATH=/usr/bin:/bin ...>   → "/bin/sleep 5"   (no env block)
+$ /bin/ps -E -p <pid>                                                    → same
+$ sysctl KERN_PROCARGS2 (ctypes)                                         → 33 bytes: argv only
+```
+Also true for Finder and for our own parent. So `check_bundle.sh` P5-9 checks what *is* observable (the live argv is exactly the launcher's) and then **FAILs** with a message naming the limitation rather than passing an unverified property. The property is covered by `LauncherTests.testArgvEnvironmentAndDirectory` (exact dict). Decide: accept that as P5-9's evidence, or add a backend startup line echoing PATH (an `ohyesmlx/` change, out of this order's scope).
+
+## Per-AC evidence
+
+**AC-1** `./scripts/fetch_python_standalone.sh` → exit 0, real artefact fetched and its sha256 equals the pin `30a18bcb…5183a4`; cached tarball + unpacked tree under `~/Library/Caches/OhYesMLX/build/`. Refusal red-check (same script copied with a wrong pin, temp HOME): `exit=1`, `sha256 mismatch … nothing was unpacked`, build dir empty afterwards.
+
+**AC-2** `rm -rf dist && ./scripts/build_app.sh` → exit 0.
+```
+codesign --verify --deep --strict --verbose=2 dist/OhYesMLX.app
+  → valid on disk / satisfies its Designated Requirement
+10 Mach-O files under Contents/Resources/python signed (each individually `codesign --verify`d)
+plist: io.github.jasonrandazza.ohyesmlx · 0.3.0 (from ohyesmlx.__version__) · 14.0 · developer-tools
+site-packages/ohyesmlx: 18 .py, 18 .pyc (compileall with the bundled interpreter)
+zip ditto -c -k --keepParent: extracted copy verifies deep+strict
+```
+argv is `[python, "-I", "-B", "-m", "ohyesmlx.cli", "app"]`; `LauncherTests` and `v5-app.md` updated in the same change.
+
+**AC-3** `dist/OhYesMLX-0.3.0-sbom.json`, **177,612 bytes**: interpreter CPython 3.14.10 / release 20261026 / url / sha256; ohyesmlx 0.3.0, commit `bb762c6`, source sha256 `bde0d125…` (from `measure._source_sha256()`, imported not copied); Swift 6.4; 2 engines, 105 pinned packages, 2,052 hashes. `python3 scripts/make_sbom.py --check` → `ok: … mlxlm 35, optiq 70 …`.
+
+**Bug found and fixed:** the SBOM step ran the bundled interpreter without `-B` and wrote `lib/python3.14/__pycache__/platform.cpython-314.pyc` into the bundle *after* signing — the final verify caught it (`a sealed resource is missing or invalid`). All bundled-interpreter calls now use `-B`, and `build_app.sh` re-verifies after the SBOM and zips last.
+
+**AC-4 (what I could run)** `./scripts/check_bundle.sh dist/OhYesMLX.app --no-gui` → P5-3 PASS (prints the bundle's 4 sys.path entries, no `''`, no cwd, `ENABLE_USER_SITE=false`, PYTHONPATH absent, shadow module not importable; red-checked by dropping `-I` → fails), P5-4 PASS (`status 200`, `CERT_REQUIRED`, `check_hostname true`, OpenSSL 3.5.9). P5-6/P5-9 are yours to run; the script is written and syntax-checked.
+
+**AC-5 / AC-7** `docs/release/gatekeeper.md` covers move-to-Applications-first, refusal, Open Anyway, SBOM+sha256, written paths and removal, notarization gated. AC-7 test `testATranslocatedBundleAsksForApplicationsAndStartsNoJob` (screen `.moveToApplications`, `startedJobs.isEmpty` after download/evict/install/quickbench); red-checked by reverting the detector → `("welcome") is not equal to ("moveToApplications")` and jobs started. PBS `LICENSE.txt` `cmp`-identical in the bundle.
+
+**Sizes** zip `dist/OhYesMLX-0.3.0.zip` 30,253,716 B; SBOM 177,612 B; app 77 MB.
+
+**Suites** `swift test` 75 passed (baseline 74 + 1); `pytest -q` 1371 passed. `.gitignore` needed no edit — `dist/` is already line 12.
+
+**Not verified:** the GUI half of `check_bundle.sh` (read-only dmg launch, quit, re-verify) — never run; P5-9 at runtime (unobservable, above); the app itself was never opened, no server or model started.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     85   10825595   10653952    76860   98.4%   0.103824
+
+== cc-agent: git status ==
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLX/Screens/FullWindowStates.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/BackendLauncher.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/LauncherTests.swift
+ M docs/interfaces/v5-app.md
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-05-best-fix.log
+?? .paul/orders/p5-05-screens-2.log
+?? .paul/orders/p5-06-packaging.log
+?? .paul/orders/p5-06-packaging.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? .paul/orders/p5-w2-review-spec.md
+?? .paul/orders/p5-w2-review-standards.md
+?? .paul/review/2026-11-14-phase5-w2/
+?? app/Resources/
+?? docs/release/
+?? scripts/build_app.sh
+?? scripts/check_bundle.sh
+?? scripts/fetch_python_standalone.sh
+?? scripts/make_sbom.py
+ app/Sources/OhYesMLX/RootView.swift                |  2 ++
+ .../OhYesMLX/Screens/FullWindowStates.swift        | 28 +++++++++++++++
+ app/Sources/OhYesMLXKit/AppModel.swift             | 40 +++++++++++++++++++---
+ app/Sources/OhYesMLXKit/BackendLauncher.swift      |  4 ++-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift     | 31 +++++++++++++++--
+ app/Tests/OhYesMLXKitTests/LauncherTests.swift     |  2 +-
+ docs/interfaces/v5-app.md                          | 10 ++++--
+ 7 files changed, 106 insertions(+), 11 deletions(-)

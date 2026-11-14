@@ -1,0 +1,134 @@
+I'll start by reading the two review logs and the files in scope.
+Now let me look at the Swift files in scope.
+
+
+
+
+
+
+
+
+
+
+Let me run the baseline suite before changing anything.
+Baseline is 75 tests passing. Now I'll make the AppModel fixes (items 1, 2, 3, 5).
+
+Now the `.done` handler gate for item 1.
+Now the payloadData docstring in Models.swift (item 3).
+Now ResultsView: the single not-evicted line, the honest export copy, and the shared status mapping.
+
+Now item 7: one status mapping in StatusGlyph.swift at 8 pt.
+
+
+Now item 6: Format.percent and its use in ModelsView.
+
+Now item 8: EnginesView's one install-start path and the busy reason beside Try Again.
+
+Now the tests: new cases for items 1, 2, 5, the integer round-trip for item 3, the percent formatting, and removing `waitUntilAsync`.
+
+
+
+
+
+
+
+Two test expectations need adjusting to the new definition: a run's tick needs its summary, and the default fixture already carries a `measured_here` pick.
+
+All 81 pass. Now the red-checks: revert each fix, watch the new test fail, restore. Item 1 first.
+
+
+
+Item 1 red-check confirms the reported symptom. Restoring, then red-checking item 2.
+
+
+Item 2 red-check confirms the tick loss. Restoring, then red-check item 5.
+
+
+Item 5 red-check confirms the stale plan wins. Restoring the guard.
+
+
+Now I need to build the app target too — `swift test` only compiles the Kit.
+
+
+
+
+
+Final full run, then I'll report.
+All done. Suite: **81 tests, 0 failures** (baseline 75, +6 new).
+
+**Per item**
+
+1. **Done-ending judged only by a quickbench's summary.** `AppModel.apply` `.done` now gates the `restore_failed` consult on `status.kind == .quickbench`. New test `testADownloadAfterARestoreFailedQuickbenchStillFinishes` (quickbench `restore_failed` → `.failed`, then download → `.finished`). **Red-checked:** reverted the line, test failed with the reported symptom — download state `.failed` instead of `.finished`; restored.
+2. **Benchmark tick is durable.** `benchmarkComplete` is now `summary?.ended == .finished || any pick.measuredHere != nil`, independent of `job`. New tests `testTheBenchmarkTickSurvivesALaterDownload` and `testAPickMeasuredHereTicksBenchmarkWithNoSummaryInThisSession`; the existing step-completion test now ends its run with a `result` + `done`, as a real run does. **Red-checked:** reverted to the `job`-based rule, the tick test failed with "a later job took the Benchmark tick away"; restored.
+3. **Export honesty + integer fidelity.** `payloadData` and `AppModel.summaryData` docstrings, the export doc comment and the save-panel message now say "every field the backend sent, re-serialised" instead of "exactly as the backend wrote it"; property names unchanged. Added `testPayloadDataKeepsIntegersAsIntegers` (5,000,000,000 and 12,884,901,888 round-trip as integer tokens). No defect existed here — the test guards current behaviour, so there was nothing to red-check.
+4. **One not_evicted line.** `ResultsView` iterates `AppModel.notEvictedLines`; its own `notEvictedLine(_:)` builder is deleted.
+5. **Plan fetch race.** `planBenchmark` records the newest requested repo and drops any response (success or refusal) whose repo is no longer newest. New `testASlowPlanForThePreviousPickIsDropped` with a `SlowPlanBackend` (150 ms delay on the first repo). **Red-checked:** removed the guard, test failed with the stale slow plan on screen while the picker showed the newer repo; restored.
+6. **`Format.percent`.** Added to `Format`, used by `ModelsView`; `String(format:` no longer appears outside `Format.swift`. Test `testPercentIsWholePercentOfTheFraction`.
+7. **One status mapping.** `cellStatus(_:)` in `StatusGlyph.swift` returns `(kind, word)`; `BenchmarkCellRow` now renders glyph + word (PASS/FAIL/SKIPPED/Stopped by you) and `ResultCellRow` uses the same function; glyph size 9 pt → 8 pt.
+8. **EnginesView.** One install-start path: `EngineRow` takes `askConsent` and `startInstall`, both Install… and Try Again route into `EnginesView.startInstall`; `retry()` deleted. The disabled Try Again now shows `oneSlotReason` beside it, matching Install….
+9. **Duplicate helper.** `waitUntilAsync` deleted; its one call site uses `waitUntil`.
+
+**Not verified:** items 7 and 8 are app-target UI with no test target — they compile (`swift build --target OhYesMLX`, forced recompile) but I did not view them rendered. Item 4's rendered line likewise not viewed; the string itself is covered by existing `notEvictedLines` tests.
+
+Files touched: `AppModel.swift`, `Models.swift`, `Format.swift`, `BenchmarkView.swift`, `ResultsView.swift`, `ModelsView.swift`, `EnginesView.swift`, `StatusGlyph.swift`, `AppModelTests.swift`, `DecodingTests.swift`, `FormatTests.swift`. Nothing else; 05-06's uncommitted changes are intact.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     57    6374781    6239744    36128   97.9%   0.060652
+
+== cc-agent: git status ==
+ M app/Sources/OhYesMLX/Components/StatusGlyph.swift
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLX/Screens/BenchmarkView.swift
+ M app/Sources/OhYesMLX/Screens/EnginesView.swift
+ M app/Sources/OhYesMLX/Screens/FullWindowStates.swift
+ M app/Sources/OhYesMLX/Screens/ModelsView.swift
+ M app/Sources/OhYesMLX/Screens/ResultsView.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/BackendLauncher.swift
+ M app/Sources/OhYesMLXKit/Format.swift
+ M app/Sources/OhYesMLXKit/Models.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/DecodingTests.swift
+ M app/Tests/OhYesMLXKitTests/FormatTests.swift
+ M app/Tests/OhYesMLXKitTests/LauncherTests.swift
+ M docs/interfaces/v5-app.md
+ M ohyesmlx/server.py
+ M tests/test_server.py
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-05-best-fix.log
+?? .paul/orders/p5-05-screens-2.log
+?? .paul/orders/p5-06-packaging.log
+?? .paul/orders/p5-06-packaging.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? .paul/orders/p5-w2-review-fixes.log
+?? .paul/orders/p5-w2-review-fixes.md
+?? .paul/orders/p5-w2-review-spec.md
+?? .paul/orders/p5-w2-review-standards.md
+?? .paul/review/2026-11-14-phase5-w2/
+?? app/Resources/
+?? docs/release/
+?? scripts/build_app.sh
+?? scripts/check_bundle.sh
+?? scripts/fetch_python_standalone.sh
+?? scripts/make_sbom.py
+ app/Sources/OhYesMLX/Components/StatusGlyph.swift  |  16 +-
+ app/Sources/OhYesMLX/RootView.swift                |   2 +
+ app/Sources/OhYesMLX/Screens/BenchmarkView.swift   |  18 +--
+ app/Sources/OhYesMLX/Screens/EnginesView.swift     |  37 +++--
+ .../OhYesMLX/Screens/FullWindowStates.swift        |  28 ++++
+ app/Sources/OhYesMLX/Screens/ModelsView.swift      |   6 +-
+ app/Sources/OhYesMLX/Screens/ResultsView.swift     |  51 ++----
+ app/Sources/OhYesMLXKit/AppModel.swift             |  69 +++++++--
+ app/Sources/OhYesMLXKit/BackendLauncher.swift      |   4 +-
+ app/Sources/OhYesMLXKit/Format.swift               |   5 +
+ app/Sources/OhYesMLXKit/Models.swift               |  11 +-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift     | 171 +++++++++++++++++++--
+ app/Tests/OhYesMLXKitTests/DecodingTests.swift     |  20 +++
+ app/Tests/OhYesMLXKitTests/FormatTests.swift       |   6 +
+ app/Tests/OhYesMLXKitTests/LauncherTests.swift     |   2 +-
+ docs/interfaces/v5-app.md                          |  10 +-
+ ohyesmlx/server.py                                 |   6 +-
+ tests/test_server.py                               |  25 ---
+ 18 files changed, 350 insertions(+), 137 deletions(-)

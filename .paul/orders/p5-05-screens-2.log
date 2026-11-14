@@ -1,0 +1,342 @@
+I'll read the plan and specs first.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the plan and specs. Let me gather the remaining shape details.
+
+
+
+
+
+
+
+
+
+
+
+
+Baselines: pytest 1366, swift 57. Now the Python change.
+Baselines confirmed: pytest 1366, swift test 57. Starting with the Python change.
+
+
+
+
+
+
+
+
+1368 passed (baseline 1366 + 2). Now red-checking the Python test.
+Both new tests fail against the old code for the reported symptom. Restoring.
+Now the v5-quickbench.md sentence, then the Swift side.
+Baselines and red-check are done for Python. Now the Swift typed summary.
+
+That edit was wrong — restoring the enum body.
+
+
+
+Now the typed summary types in Models.swift.
+
+Now I'll append the typed summary types to Models.swift.
+
+Now I'll append the typed summary types to Models.swift.
+
+I named the cell type `QuickCells`; it should be singular.
+Now `AppModel`: summary typed, raw bytes kept, cells/notEvicted derived from it.
+Now the two summary fixtures.
+
+Now AppModel: typed `summary`, raw bytes, and cells/notEvicted derived from it.
+
+
+
+
+Now the AppModel core: typed summary, raw bytes, derived cells, title naming, and recommendations refresh.
+
+
+
+Now update the mutation sites in AppModel.
+
+
+
+
+
+That mangled a line. Fixing it.
+
+
+
+Now add the benchmark plan-vs-run split and download progress helpers.
+
+
+Now update RootView's references and start building screens. First let me update RootView to route to the new screens and fix the sidebar glyph (§AC-6).
+
+Now the ModelsView skeleton.
+The disk meter needs a denominator, and `Hardware` only carries free bytes. Let me check whether a plan decided it.
+The payload carries only free bytes (no disk capacity), so the gauge's denominator has to be defined honestly. I'll build the row next.
+
+ModelRow must live inside the plan's named file list. I'll consolidate into ModelsView.swift.
+
+
+Fixing that edit properly, and making the refresh public since the screen calls it.
+Now BenchmarkView.
+
+Now ResultsView, plus the Export writing.
+
+Build is green. Now the stub scenarios.
+Now the stub fixtures. I'll add recommendations for models and the summary data.
+
+Now add the recommendations variants, plan, and the summary scenario payloads.
+
+I'll replace the stub recommendations with a richer fixture and add the plan and summary payloads.
+
+
+Now the stub scenarios' drive logic.
+That `var`/`let` construct is awkward. Let me simplify with a helper.
+
+Now the enqueued events for the new scenarios, plus the drive logic.
+
+Now the helper functions and the drive logic.
+Now the drive logic for scenarios.
+
+Build is clean. Now the tests: DecodingTests for the fixtures, AppModelTests for the typed summary.
+Now update AppModelTests — the existing tests that assert `summary?["ended"]` and `notEvicted`.
+The existing tests build partial summary payloads. I'll add a full-shape helper and update those call sites.
+
+
+`summaryPayload` was removed by that edit. Re-adding it.
+Now update the call sites in AppModelTests.
+
+
+
+
+61 tests pass (baseline 57 + 4 new decoding tests). Now the AppModel-specific tests for the typed summary and AC-6 behaviours.
+
+
+
+
+Line 755 uses the old unlabelled call. Fixing.
+
+
+
+
+
+
+
+
+
+
+Stale build lock. Retrying.
+
+
+
+One test passes. Let me isolate which new test hangs.
+
+The hang is a race: I release the held stream before it registers. I'll wait for the event instead of the job.
+
+The fixture's title is "Qwen3.5 2B 4-bit" — my expectation was wrong, not the code.
+
+68 Swift tests pass (baseline 57 + 11). Next: the red-check for the Export raw-bytes test.
+The revert order was wrong so it failed differently. Let me make the red-check faithful: write the typed re-encode.
+Both pass because my `QuickSummary` models every key in the fixture. The test needs a key the client does *not* model to be genuine.
+The fixture models every key, so the test doesn't prove the point. I'll add a key the client does not model.
+Now red-check this test: make AppModel store the typed re-encode.
+The Export test's payload has no unmodeled key, so it can't catch a typed re-encode. Making it carry one.
+
+
+
+Green. Now the faithful red-check.
+Red-checked: the test fails exactly on the dropped key. Restoring.
+
+Restored and green. Now AC-6's ConsentSheet fixes.
+Now the interrupted banner should name the pick's title too.
+
+
+Now the PlannedEngine `tested` badge and the AC-6 sidebar done. Let me build and check the app runs in stub scenarios.
+Now a test that drives each new stub scenario, which is the runnable check for AC-3/4/5 at the model level.
+
+Two of those assertions are wrong (a tautology and a nonsense check). Fixing them.
+
+Two real bugs in my stub: the results scenarios need a plan, and the running one is a detached task.
+
+
+All five pass. Now the full suite and the pytest suite.
+Both suites green: pytest 1368, swift 73. Now let me verify the app actually launches in a stub scenario (screenshot-ability).
+
+All seven scenarios launch and stay running until the timeout (124 = killed by timeout, not a crash), with no stderr. Let me capture screenshots to verify visuals.
+
+Results-cancelled renders correctly, but two stub gaps show: stage A should carry the fixture's three cells, and the not_evicted line needs the oQ4 row to name its title and size.
+That edit broke the struct. Restoring it and adding the oQ4 pick instead.
+
+Now add the oQ4 sibling pick so the not_evicted line names a title and size, and stage A gets its three cells.
+Now stage A of the cancelled stub summary needs its three cells (PASS, SKIPPED, SKIPPED).
+
+Now the cancelled stub's stage-A cell count changes, so the test expectation must follow.
+
+
+I dropped `unsupportedReason` when fixing the struct.
+
+Let me re-screenshot the cancelled results and check the other screens.
+
+That's correct now: three stage-A rows, "Stopped by you" with no number, and the not_evicted line naming title and size. Let me check the other screens.
+
+Models renders right: the disk gauge is in the toolbar, rows carry the badge/title/format/fit/reason, the measured line shows, and the disclosure is collapsed. Let me check benchmark-plan and results-finished.
+
+Plan screen renders correctly. The plan screen is scrollable so Time/Downloads/disk-after and the Osaurus toggle are below the fold. Let me check benchmark-running and results-finished.
+
+The running scenario shows the plan, not the run. Let me check for stale instances.
+Stale instances are accumulating and the screenshot caught the wrong window. Let me clean up and retry with a single instance.
+
+
+Clean. Now a screenshot of benchmark-running with a single instance.
+
+
+The instance is still running. Let me capture it again now that it's had more time.
+
+The running scenario shows the plan, which contradicts the passing test. Let me instrument to find out why.
+The task isn't reaching the job. Let me instrument `AppModel.start` to find where it stops.
+`start` isn't running. The `Task { await model.startBenchmark() }` needs a main-actor hop; my sleep loop is blocking that. Let me await it directly but with a release.
+Found it: `planBenchmark` clears `quickPlan` before an await, and the view's `.onAppear` fires a second plan request concurrently, so `startBenchmark` sees a nil plan. Fixing the window.
+Let me instrument properly and rebuild, checking the build succeeded.
+
+
+
+Running screen is correct. The toolbar stop buttons collapse to icons; I'll force their labels since the spec names them.
+
+Now let me check results-finished and models-downloading, then finalize.
+
+Results-finished looks right. Let me check models-downloading and models-low-disk.
+
+The wrapping is a real defect: the busy reason squeezes the title and breaks "Comfortable" mid-word. Fixing the layout priorities.
+
+
+
+The busy reason wraps badly on long-title rows. Let me give the trailing slot its ideal width and let the title wrap instead.
+
+
+The app didn't come to the front. Let me activate it before capturing.
+
+
+
+
+The busy reason is still crushed. Comp 5 gives the trailing slot a fixed 250 pt; I'll do that.
+
+
+The reason now reads cleanly. The title column is too narrow; I'll tighten the header so it doesn't compete.
+
+
+Screenshots keep catching whichever window has focus. Let me capture the app's own window id directly.
+
+
+
+
+Rows are clean now. Let me verify the low-disk refusal.
+
+Both remaining screens verified. Let me check the CLI doesn't regress on the new result event.
+
+Let me verify the lower half of the plan screen by enlarging the window.
+
+Found a copy defect: "about about 11 min". `Format.duration` already adds "about".
+Now let me run both suites and double-check the remaining ACs.
+Let me fix Results reachability: AC-5 requires the "no run in this launch" state, which the sidebar currently disables.
+Let me improve the running view's "current cell" to be derived from the plan, which is what the comp shows.
+
+I overwrote `engineTitle`. Restoring it.
+
+
+
+Running screen now matches comp 6b: cell 4 of 5, "Now running OptiQ", stop buttons with labels. Let me run the full suites once more and review my model changes.
+InterruptedBanner isn't in the plan's file list. Let me revert it and do the naming in RootView instead.
+
+
+Let me review the complete diff for correctness.
+One inference in `nextBenchmarkCell` is unsound: the stage-B engine isn't necessarily the last stage-A cell. Fixing it.
+
+Two more AC-3 fixes: the downloaded row needs its busy reason, and the disk meter should match comp 5 (fill = download's set-aside share of free disk).
+
+
+
+
+Let me verify the "no run in this launch" Results state visually by clicking through the sidebar.
+
+Let me verify the interrupted banner names the title.
+
+The banner names the pick. Let me verify the no-run Results state by clicking the sidebar row.
+
+
+
+
+
+
+One design-spec deviation to fix: ABORTED needs `stop.circle`, which `StatusKind` lacks.
+
+
+
+
+
+
+
+Let me fix one real defect I noticed: a cancelled run leaves a cancellation in `benchmarkRefusal`, which would hide the plan on returning to Benchmark.
+
+
+Let me do a final check for leftover instrumentation and review the complete file list.
+Let me do a final review of the new screen files and confirm no regressions.
+Let me verify the release build (stub code is DEBUG-only).
+Release builds clean. One more AC-3 detail to check: the low_disk meter refresh. It's already in `apply`. Let me run both suites a final time and verify the plan's file list is fully covered.
+
+
+Let me run the final verification of both suites and confirm the complete picture.
+Both suites green. Let me capture a final "models" screenshot to confirm nothing broke after the layout edits, then report.
+Warning: Reached maximum conversation turns (300). The response may be incomplete. Retry with --max-turns 600 to extend the budget.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    300   65805039   65067136   284685   98.9%   0.476698
+
+== cc-agent: git status ==
+ M .paul/phases/v5-onboarding/05-05-PLAN.md
+ M app/Sources/OhYesMLX/Components/ConsentSheet.swift
+ M app/Sources/OhYesMLX/Components/StatusGlyph.swift
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/Models.swift
+ M app/Sources/OhYesMLXKit/StubBackend.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/DecodingTests.swift
+ M docs/interfaces/v5-quickbench.md
+ M ohyesmlx/quickbench.py
+ M tests/test_quickbench.py
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-05-screens-2.log
+?? .paul/orders/p5-05-screens-2.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? app/Sources/OhYesMLX/Screens/BenchmarkView.swift
+?? app/Sources/OhYesMLX/Screens/ModelsView.swift
+?? app/Sources/OhYesMLX/Screens/ResultsView.swift
+?? app/Tests/OhYesMLXKitTests/Fixtures/quickbench_summary_cancelled.json
+?? app/Tests/OhYesMLXKitTests/Fixtures/quickbench_summary_finished.json
+ .paul/phases/v5-onboarding/05-05-PLAN.md           |  12 +-
+ app/Sources/OhYesMLX/Components/ConsentSheet.swift |  10 +-
+ app/Sources/OhYesMLX/Components/StatusGlyph.swift  |   5 +-
+ app/Sources/OhYesMLX/RootView.swift                | 113 +----
+ app/Sources/OhYesMLXKit/AppModel.swift             | 190 ++++++++-
+ app/Sources/OhYesMLXKit/Models.swift               | 259 ++++++++++++
+ app/Sources/OhYesMLXKit/StubBackend.swift          | 470 ++++++++++++++++++++-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift     | 318 +++++++++++++-
+ app/Tests/OhYesMLXKitTests/DecodingTests.swift     | 105 +++++
+ docs/interfaces/v5-quickbench.md                   |   4 +-
+ ohyesmlx/quickbench.py                             |   6 +-
+ tests/test_quickbench.py                           |  78 ++++
+ 12 files changed, 1429 insertions(+), 141 deletions(-)

@@ -1,0 +1,176 @@
+I'll read the order plan and the spec first.
+Now let me look at the current state of `app/`, fixtures, and supporting files.
+
+Let me grep the interface docs for shapes and view the threat model section plus the prototype flow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the shapes. Writing `Package.swift` and `Models.swift` first.
+
+
+
+
+
+
+
+
+Swift 6 forbids raw `lock()`/`unlock()` in async contexts. Switching to scoped `withLock`.
+
+Task 1 code builds. Now writing the Task-1 tests.
+
+
+
+
+
+
+
+Task 1 is green. Now writing the launcher (in two stages).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+`read(upToCount:)` waits for the full count on a pipe. Switching the readers to `availableData`, which returns what's there.
+
+
+
+Now the dev venv and the live round trip.
+
+Task 2 green. Now the AppModel (in two stages).
+
+
+
+
+
+
+
+
+
+
+Full suite green (47, 1 skipped without the env var). Now the live app check.
+
+
+
+Adding the scene-phase hook, the bounded `/hardware` poll, and single-instance activation required by the spec.
+
+
+
+
+
+
+
+All tasks are implemented and verified. Here is the report.
+
+## What changed
+
+**Task 1** — `app/Package.swift` (tools 6.0, `.macOS(.v14)`, no dependencies); `Sources/OhYesMLXKit/{Models,Backend,BackendToken,SSE,HTTPBackend,StubBackend}.swift`; `Tests/OhYesMLXKitTests/{Fixtures,DecodingTests,SSETests,HTTPBackendTests}.swift`; `.gitignore` (`app/.build/`).
+
+**Task 2** — `Sources/OhYesMLXKit/BackendLauncher.swift` (process protocol + Foundation adapter, flock single instance, launch line, ring buffers, quit escalation, `RunningBackend`); `scripts/dev_backend_venv.sh`; `Tests/OhYesMLXKitTests/{LauncherTests,LiveBackendTests}.swift`.
+
+**Task 3** — `Sources/OhYesMLXKit/AppModel.swift`; `Sources/OhYesMLX/{OhYesMLXApp,RootView}.swift`; `Tests/OhYesMLXKitTests/AppModelTests.swift`.
+
+## Per-AC evidence
+
+- **AC-1** — clean `swift build` + `swift test`: 0 warnings, 0 errors. `app/.build/` ignored (git status clean for it).
+- **AC-2** — `testArgvEnvironmentAndDirectory` (exact argv/env/cwd/0700), `testMissingInterpreterNamesThePathLookedFor`, `testNoLaunchLineWithinTheTimeoutIsCouldntStart`, `testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail`, `testTokenIsRedactedInEveryDescription` (description, reflecting, dump), `testQuitEscalatesGraceThenTerminateThenKill`, `testQuitWhileAJobRunsClosesStdinAndNeverSignals`, `testQuitReturnsTerminated…`, `testQuitReturnsExited…`, `testSecondLauncherIsAlreadyRunningAndSpawnsNothing`.
+- **AC-2b** — `testChattyStderrStillYieldsTheLaunchLine` (1.1 MB stderr before the line), `testStdoutAfterTheLaunchLineIsDrainedAndDiscarded`, `testChildExitWhileRunningReportsStatusAndTheStderrTail`, `testQuitMidDownloadLeavesTheBannerAndNoAutomaticRetry` (AppModel interrupted state + kept `inflightJob`).
+- **AC-2c** — `testQuitWhileAJobRunsOffersQuitAnyway` (job-running quit → `.stillRunning`, zero signals, then exactly one SIGKILL on the explicit click).
+- **AC-3** — `testLiveRoundTrip`: hardware/engines/recommendations decode, `.exited`, exit status 0, port free; skips with `XCTSkip` when `OYMLX_DEV_PYTHON` is unset (observed: 1 skipped).
+- **AC-4** — `DecodingTests` (all shapes, `Plan` inline, `Int64` counts, missing-key failure), `SSETests` (4 events, keepalive ignored, last id `"4"`), `testEventsResumeAfterADroppedStream` (second request carries `Last-Event-ID: 2`, seqs 1–4 once each), `testHardwareRequestCarriesOnlyTheBearerHeader` (Authorization only, no Origin), `testStartJobSendsTheClosedArgsIncludingOsaurusFalse`, `testCancelNowSendsTheNowBodyAndBetweenCellsSendsNone`.
+- **AC-5** — 16 tests covering a–i and Q1–Q7: happy path, install failure + tail + retry, one-slot reason, 409 verbatim, quickbench-before-download, skipped/N-A cells, absolute unsupported, interrupted banner/Retry/Dismiss, excluded reason, `low_disk` + `amountToFree` + hardware refresh, Osaurus false/true, both cancel texts, three engine re-fetches, `not_evicted` line, quit-anyway.
+- **AC-6** — built binary launched with the dev venv; backend spawned (`pgrep -f "ohyesmlx.cli app"` showed it), app killed → backend exited, no process left.
+
+## Counts
+
+- `swift test`: **48 tests, 0 failures** with `OYMLX_DEV_PYTHON` set; 47 + 1 skip without it. Baseline was zero Swift tests (`app/` held only fixtures).
+- Python suite (untouched by me): `1360 passed in 47.54s` (1329 + 05-01's additions).
+
+## P5-1 grep
+
+```
+$ grep -rn "rawValue\|\.raw" app/Sources
+app/Sources/OhYesMLXKit/HTTPBackend.swift:172:        request.setValue("Bearer \(token.raw)", forHTTPHeaderField: "Authorization")
+```
+
+## Red-checks
+
+- SSE `lastEventID` was red first: `XCTAssertEqual failed: ("nil") is not equal to ("Optional("4")")`; fixed the dispatch order, now green.
+- Launcher readers were red first: every launch test failed `couldntStart("the backend did not print its launch line")` because `FileHandle.read(upToCount:)` waits for the full count on a pipe; switched to `availableData`, now green.
+
+## Not verified
+
+- The visual **Welcome** screenshot and a normal menu Quit through the delegate (the coordinator's line). The quit mechanics themselves are exercised by `testLiveRoundTrip` and the SIGTERM process check.
+- `alreadyRunning` activation by bundle id — no app bundle exists yet (05-06); it falls back to terminate.
+- Not written: `.paul/phases/v5-onboarding/05-02-SUMMARY.md`. The plan's `<output>` names it, but the dispatch restricts me to the plan's `files_modified` list, which excludes it — flagging rather than guessing.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    157   21942578   21501568   134729   98.0%   0.211494
+
+== cc-agent: git status ==
+ M .gitignore
+ M docs/interfaces/v5-onboarding.md
+ M docs/interfaces/v5-quickbench.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_engines.py
+ M tests/test_fetch.py
+ M tests/test_quickbench.py
+ M tests/test_runtimes.py
+ M tests/test_server.py
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-01-stop-now.md
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-02-app-skeleton.md
+?? app/Package.swift
+?? app/Sources/
+?? app/Tests/OhYesMLXKitTests/AppModelTests.swift
+?? app/Tests/OhYesMLXKitTests/DecodingTests.swift
+?? app/Tests/OhYesMLXKitTests/Fixtures.swift
+?? app/Tests/OhYesMLXKitTests/HTTPBackendTests.swift
+?? app/Tests/OhYesMLXKitTests/LauncherTests.swift
+?? app/Tests/OhYesMLXKitTests/LiveBackendTests.swift
+?? app/Tests/OhYesMLXKitTests/SSETests.swift
+?? scripts/dev_backend_venv.sh
+ .gitignore                       |   3 +
+ docs/interfaces/v5-onboarding.md |   9 +-
+ docs/interfaces/v5-quickbench.md |   3 +-
+ ohyesmlx/engines.py              |   6 +-
+ ohyesmlx/fetch.py                |   4 +
+ ohyesmlx/quickbench.py           |  53 ++++++-
+ ohyesmlx/runtimes.py             |  58 +++++++-
+ ohyesmlx/server.py               | 102 ++++++++++++--
+ tests/test_engines.py            |  20 ++-
+ tests/test_fetch.py              |  23 +++-
+ tests/test_quickbench.py         | 153 ++++++++++++++++++++
+ tests/test_runtimes.py           |  77 +++++++++++
+ tests/test_server.py             | 291 ++++++++++++++++++++++++++++++++++++++-
+ 13 files changed, 770 insertions(+), 32 deletions(-)

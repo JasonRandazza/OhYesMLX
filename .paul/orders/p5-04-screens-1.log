@@ -1,0 +1,98 @@
+I'll start by reading the order (the plan), the design authority, and the app interface spec.
+Now let me see the app's current source tree and the interface doc's structure.
+
+Now the existing app model and models — I need the exact public API.
+
+
+Now the comps. I'll grep the frames I build (1, 2, 3, 4a–4c, 8) rather than reading 50 KB.
+
+
+Let me check how `installConsent` is used and see the test conventions.
+Now the launcher's failure shape and the fixture data.
+
+
+
+
+Baseline is green at 52. I have the plan, design, comps, and the model API. I'll start writing: `Format.swift` and its tests first.
+Now the additive AppModel changes and removing `formatGB`.
+Now the stub scenarios and the `String(format:)` cleanup in StubBackend.
+
+
+Now the shared components.
+
+Now the full-window states.
+
+Now the two screens, starting with Your Mac.
+
+Now the shell and placeholders in RootView.
+Now the app entry point with the DEBUG scenario launch.
+Now add the step-completion test.
+Now I'll build and fix compile errors.
+Missing imports in two components.
+
+
+
+Build is green. Running the suite.
+
+57 tests pass. Now I'll smoke-launch the built binary in every stub scenario and confirm it stays up.
+All nine scenarios stay up with clean stderr. Now confirm the release build compiles with the stub code excluded.
+Now the verification greps.
+Reviewing the ACs against the code: two gaps — the guided-download sentence should match AC-5 verbatim, and a failed install's "Try Again" is a job-starting control so Q1 requires it disabled while busy.
+
+Tests stay green at 57. One more smoke check: that the unbundled binary now runs as a foreground app (the 05-02 audit finding).
+One shell bug I spotted: the benchmark step's own reachability drops while its job replaces the download, which would leave the current step disabled mid-run. The current screen must always stay reachable.
+
+I'll red-check the formatter test by breaking the non-breaking space rule, then restore.
+
+Red-check confirmed. Restoring the rule.
+Final verification run.
+
+Implemented plan 05-04 against DESIGN.md and `v5-app.md`.
+
+**What changed** (only the plan's `files_modified`): new `OhYesMLXKit/Format.swift`, `Components/{Badge,StatusGlyph,Figure,InterruptedBanner,ConsentSheet}.swift`, `Screens/{FullWindowStates,YourMacView,EnginesView}.swift`; rewrote `RootView.swift` and `OhYesMLXApp.swift`; additive step-completion properties in `AppModel` (and `formatGB` deleted); DEBUG `StubScenario` in `StubBackend.swift`; `FormatTests.swift` + one `AppModelTests` case.
+
+**Per AC**
+- **AC-1** — `FormatTests` (4 tests): binary GB `68719476736 → "64 GB"`, decimal `43377606656 → "43.4 GB"` / `351386061 → "351 MB"`, `"62.1 tok/s"`, `"0.21 s"` / `"about 11 min"`, and every number/unit pair asserted with `\u{00A0}`. `AppModel.formatGB` deleted; `notEvictedLines` and all figures call `Format`.
+- **AC-2** — Scenarios `welcome` (shell, all five screens' chrome), `unsupported`, `couldnt-start`, `backend-stopped`; runtime check `lsappinfo` reports `type="Foreground"` for the unbundled binary. `applicationDidFinishLaunching` sets `.regular` + activates; `.defaultSize(1100×720)`, `.windowResizability(.contentMinSize)`, root `minWidth 900/minHeight 600`. Sidebar/ticks are driven by the four new AppModel properties, tested by `testStepCompletionTracksHardwareEnginesModelsAndBenchmark`.
+- **AC-3** — Scenario `interrupted`; existing state-machine tests `testQuitMidDownloadLeavesTheBannerAndNoAutomaticRetry` and `testRetryResendsTheJobAndDismissClearsIt` still pass. Retry is click-only.
+- **AC-4** — Scenarios `welcome` and `interrupted` (banner over the same screen). Grouped Form with Chip/Processor/Memory/Free disk/macOS, budget sentence + `estimated` badge; toolbar Scan Again; Continue to Engines.
+- **AC-5** — Scenarios `engines` (all installed), `engines-consent` (sheet open), `engines-busy` (disabled Install… + reason + hint), `engines-failed` (step_failed code, mono tail, Try Again). Check Again in toolbar; `onAppear` re-requests engines.
+- **AC-6** — All nine scenarios launched and stayed alive with clean stderr; release build green and `strings .build/release/OhYesMLX` contains no `OYMLX_STUB_SCENARIO` (0 matches).
+
+**Tests:** baseline 52 → **57 passed, 0 failures** (`cd app && OYMLX_DEV_PYTHON=$HOME/.local/share/ohyesmlx/app-dev-venv/bin/python swift test`).
+
+**Greps:** no hex literals or `Color(red:` in `app/Sources`; no `ByteCountFormatter` anywhere; `String(format:` only in `Format.swift`.
+
+**Red-check:** changed `Format`'s NBSP to a plain space — `FormatTests` failed on all five unit joins with `("64 GB") is not equal to ("64 GB")`; restored, suite green.
+
+**Stub scenarios** (DEBUG builds only): `welcome`, `engines`, `engines-consent`, `engines-busy`, `engines-failed`, `couldnt-start`, `unsupported`, `backend-stopped`, `interrupted`. Launch any with:
+`OYMLX_STUB_SCENARIO=engines-consent .build/debug/OhYesMLX` (or `swift run`); the variable is never read in release.
+
+**Not verified:** visuals/light+dark layout (yours to screenshot), any live-backend run, and the couldnt-start Try Again inside a stub scenario is inert (`relaunch()` needs a real `BackendLauncher`; production path is correct). Cross-plan note: `AppModel` does not refresh `recommendations` after a download finishes, so the Models tick and Benchmark reachability depend on the next `GET /recommendations` — worth handling in 05-05.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     50    7028383    6828672    86549   97.2%   0.102372
+
+== cc-agent: git status ==
+ M app/Sources/OhYesMLX/OhYesMLXApp.swift
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/StubBackend.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-04-screens-1.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? .paul/phases/v5-onboarding/05-06-AUDIT.md
+?? .paul/phases/v5-onboarding/05-06-PLAN.md
+?? app/Sources/OhYesMLX/Components/
+?? app/Sources/OhYesMLX/Screens/
+?? app/Sources/OhYesMLXKit/Format.swift
+?? app/Tests/OhYesMLXKitTests/FormatTests.swift
+ app/Sources/OhYesMLX/OhYesMLXApp.swift         |  45 ++-
+ app/Sources/OhYesMLX/RootView.swift            | 417 ++++++++++++++++---------
+ app/Sources/OhYesMLXKit/AppModel.swift         |  16 +-
+ app/Sources/OhYesMLXKit/StubBackend.swift      | 322 ++++++++++++++++++-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift |  36 +++
+ 5 files changed, 678 insertions(+), 158 deletions(-)

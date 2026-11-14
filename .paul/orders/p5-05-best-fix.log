@@ -1,0 +1,124 @@
+I'll start by locating the pieces named in the order: `_cell_record`, `_best`, and wherever `latest` feeds a `{repo: best}` map.
+Now let me read the exact code regions.
+The map is built in `server._get_recommendations` (lines 580-584) from `server.summaries()`. Now let me see how cells and the summary are assembled in `run()`, plus the tests that pin these shapes.
+Now the rest of `run()` where cells are recorded, and the Swift models/fixtures.
+Now the Swift side and the interface doc's relevant sections.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Python baseline: 1368 passed. Let me start the Swift baseline in the background while I make the Python changes.
+Now the Python changes in `quickbench.py`.
+Now threading `repo` through the cell path in `run()`.
+
+
+Now the server's map, keyed on `best["repo"]`.
+
+Now the Python tests.
+Now the server test.
+
+The fake keys answers by engine, so stage B could not beat stage A. I'll drive it by the cell's format label instead.
+
+Swift baseline: 73 passed. Now the Swift model changes.
+Now the StubBackend payloads.
+
+
+Now the recommendation stub: the number belongs to the sibling that won stage B, not the chosen row.
+Now both fixtures.
+Now the Swift decoding tests.
+
+
+
+
+The suite passed on re-run, but the first post-edit run had one failure. I need to identify it rather than ignore it.
+Now the interface doc.
+
+Python suite: 1370 passed (baseline 1368). Now the red-check on the misattribution test: revert the server keying and watch it fail.
+
+Red-check confirmed: the chosen pick carried the sibling's block. Restoring the fix.
+Both suites green so far. Let me re-run everything after restoring the fix, and repeat Swift to chase that one-off failure.
+
+
+
+
+All changes are in place. Final verification was run exactly as specified.
+
+## What changed
+
+**Python**
+- `ohyesmlx/quickbench.py`: `_cell_record` takes a `repo` and writes it on every cell (chosen repo in stage A, sibling repo in stage B), threaded through `_skipped`, `_aborted`, `measure_cell`, `measured` and all call sites including cancellation tails. `_best` now carries the winning cell's `format` and `repo`. `latest()` now keys each newest finished summary by `best["repo"]` (the repo the winning cell actually measured) and its docstring says so; a finished summary with no best block is skipped, since it measured no repo.
+- `ohyesmlx/server.py`: `_get_recommendations` builds `{repo: best}` from `best["repo"]` rather than the summary's map key. `recommend.py` untouched — it does not build the map.
+
+**Tests**
+- `tests/test_quickbench.py`: stage-B cells assert their repo; the full-summary test asserts cells carry a repo and `best` carries format/repo; a new run drives a stage-B sibling win and asserts `latest` is keyed by the sibling, not the chosen repo; `latest` test payloads now carry `best.repo`; `_cell_record` calls updated.
+- `tests/test_server.py`: existing measured_here test's block carries format/repo; new `test_measured_here_lands_on_the_repo_the_winning_cell_measured` keys the summary under the chosen repo on purpose and asserts the sibling pick gets the block while the chosen pick stays null.
+
+**Docs**
+- `docs/interfaces/v5-quickbench.md`: cell gains `repo`, best gains `format`/`repo`, and the prose now states the keying rule and the newest-wins tie.
+
+**Swift**
+- `Models.swift`: `QuickCell` gains required `repo`; `MeasuredHere` (this codebase's type for `best`; there is no `QuickBest` symbol) gains optional `format`/`repo` so an older payload still decodes; `QuickSummary.bestFormat` holds the fallback rule. `ResultsView` prints `summary.bestFormat`. Fixtures and StubBackend carry repos, the finished fixture/StubBackend best name `oQ4 (mixed 4/5/6/8)` on `RepublicOfKorokke/Qwen3.5-2B-oQ4`, and the recommendation stub's measured block moved from the chosen 2B pick to the oQ4 sibling it actually came from.
+- `DecodingTests.swift`: finished fixture asserts best format/repo, cell repos, that `bestFormat` names oQ4, and a test that a summary whose best lacks format/repo still decodes and falls back.
+
+## Verification
+- Python: **1370 passed** (baseline 1368).
+- Swift: **74 passed** (baseline 73).
+- Red-check: reverted the server keying to the old comprehension; the new misattribution test failed with the chosen pick carrying `{'engine': 'omlx', 'format': 'oq4', 'repo': 'org/sibling', ...}`; restored, suite green.
+
+Not verified / notes: the first Swift run immediately after editing fixtures reported 1 failure in 74 tests; I did not capture which test, and it has not reproduced across three subsequent runs (74/74 each). `recommend.py` and `test_recommend.py` were left untouched because the `{repo: best}` map is built in `server.py`; the order's `QuickBest` maps to this codebase's `MeasuredHere`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     53    5617071    5465344    51878   97.3%   0.070282
+
+== cc-agent: git status ==
+ M .paul/phases/v5-onboarding/05-05-PLAN.md
+ M app/Sources/OhYesMLX/Components/ConsentSheet.swift
+ M app/Sources/OhYesMLX/Components/StatusGlyph.swift
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/Models.swift
+ M app/Sources/OhYesMLXKit/StubBackend.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/DecodingTests.swift
+ M docs/interfaces/v5-quickbench.md
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/server.py
+ M tests/test_quickbench.py
+ M tests/test_server.py
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-04-screens-1.log
+?? .paul/orders/p5-05-best-fix.log
+?? .paul/orders/p5-05-best-fix.md
+?? .paul/orders/p5-05-screens-2.log
+?? .paul/orders/p5-05-screens-2.md
+?? .paul/orders/p5-w1-review-fixes.log
+?? app/Sources/OhYesMLX/Screens/BenchmarkView.swift
+?? app/Sources/OhYesMLX/Screens/ModelsView.swift
+?? app/Sources/OhYesMLX/Screens/ResultsView.swift
+?? app/Tests/OhYesMLXKitTests/Fixtures/quickbench_summary_cancelled.json
+?? app/Tests/OhYesMLXKitTests/Fixtures/quickbench_summary_finished.json
+ .paul/phases/v5-onboarding/05-05-PLAN.md           |  12 +-
+ app/Sources/OhYesMLX/Components/ConsentSheet.swift |  10 +-
+ app/Sources/OhYesMLX/Components/StatusGlyph.swift  |   5 +-
+ app/Sources/OhYesMLX/RootView.swift                | 113 +----
+ app/Sources/OhYesMLXKit/AppModel.swift             | 190 +++++++-
+ app/Sources/OhYesMLXKit/Models.swift               | 287 +++++++++++-
+ app/Sources/OhYesMLXKit/StubBackend.swift          | 484 ++++++++++++++++++++-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift     | 318 +++++++++++++-
+ app/Tests/OhYesMLXKitTests/DecodingTests.swift     | 130 ++++++
+ docs/interfaces/v5-quickbench.md                   |  18 +-
+ ohyesmlx/quickbench.py                             |  80 ++--
+ ohyesmlx/server.py                                 |  17 +-
+ tests/test_quickbench.py                           | 145 +++++-
+ tests/test_server.py                               |  34 ++
+ 14 files changed, 1655 insertions(+), 188 deletions(-)

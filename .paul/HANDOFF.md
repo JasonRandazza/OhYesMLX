@@ -1,62 +1,49 @@
 ---
-description: "OhYesMLX (OYMLX) session handoff, 2026-11-13: v5.0 Phase 4.5 complete; Phase 5 prototype gate built, waiting on Jason's answers before PLAN"
+description: "OhYesMLX (OYMLX) session handoff, 2026-11-14: v5.0 Phase 5 built and reviewed; clean-account smoke, live checks and UAT remain"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-11-13
+# Handoff — 2026-11-14
 
 > Read this, then `.paul/STATE.md` (Current Position, Session Continuity), then
-> `.paul/phases/v5-onboarding/PHASE-4.5-SUMMARY.md` (Carried forward), then the Phase 5 section of
-> `.paul/phases/v5-onboarding/PLAN.md`, then `AGENTS.md`. STATE wins on conflict.
-> Previous handoff: `.paul/archive/2026-11-03-handoff-phase-4-complete.md`. Jason calls the project **OYMLX**.
+> `.paul/phases/v5-onboarding/05-06-SUMMARY.md`, then `AGENTS.md`. STATE wins on conflict.
+> Previous handoff: `.paul/archive/2026-11-13-handoff-phase5-prototype.md`. Jason calls the project **OYMLX**.
 
 ## Where things stand
 
-v5.0 Phases 0–4.5 are complete on `main` and the tree is clean. 1,329 tests pass
-(`/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`). Phase 4.5 ended with a
-clean-account smoke run as standard user `oymlxtest`: 21/21 after two fixes, optiq installing without
-pygame and the app engines starting from their own bundles. Jason removed `/etc/sudoers.d/oymlxtest`
-on 2026-11-13, so a new clean-account run needs that rule re-added. The rule is in
-`045-03-SUMMARY.md` Deviations 5, and `scripts/smoke_clean_account.sh` is the harness.
+Phase 5 (the SwiftUI app) is built on `main`. Jason answered the prototype's 7 questions on 2026-11-13, and they are
+pinned in `docs/interfaces/v5-app.md`. Six plans (05-01 to 05-06) were each audited, applied by Command Code, verified
+by the coordinator and reviewed on two axes in two waves. 1370 pytest and 81 swift tests pass. The design authority
+is `docs/design/phase5/DESIGN.md` (Open Design comps plus an impeccable critique), and screenshots of every state are
+under `docs/design/phase5/shots-05-0{4,5}/`.
 
-## The one thing to do next: Phase 5
+Build: `scripts/build_app.sh` writes `dist/OhYesMLX.app`, `dist/OhYesMLX-0.3.0.zip` and the SBOM. Check:
+`scripts/check_bundle.sh dist/OhYesMLX.app` passes 9/9. Dev: `scripts/dev_backend_venv.sh`, then
+`OYMLX_DEV_PYTHON=… swift run OhYesMLX`, or `OYMLX_STUB_SCENARIO=<name>` (DEBUG) for any screen state without a backend.
 
-1. **Prototype gate (built).** https://claude.ai/code/artifact/0f1614ae-9053-4c90-b31e-621393d56128.
-   Its source is on branch `prototype/phase5-flows`, which never merges. Jason answers the seven open
-   questions at the bottom of the page:
-   - while a job holds the one slot, are other actions greyed out or left live with a 409;
-   - what the next launch says about an interrupted job;
-   - what to show on a cancel in the middle of a cell;
-   - which screen owns `low_disk`;
-   - whether a guided install is verified again later;
-   - whether the unsupported-Mac gate is absolute;
-   - whether Results mentions `not_evicted`.
-2. With those answers, run `/paul:plan` for Phase 5 (T5.1–T5.6, PLAN.md). The constraints:
-   - threat-model §10 (P5-1..P5-12) binds the packaging;
-   - D6 bundles python-build-standalone, so the bundled interpreter must re-verify P5-3 and P5-4
-     (both were checked against Homebrew Python only);
-   - **there is no Apple Developer account**, so T5.6 is the unsigned `.app` zip (D7) and
-     notarization stays a gated step;
-   - the backend's PATH is launchd's (P5-9).
-3. Each ticket follows PAUL: `/paul:audit` on the plan, then APPLY through Command Code workers,
-   then a Standards + Spec code review, then `/paul:unify`.
+## The next steps, in order
+
+1. **Clean-account smoke (05-06 AC-6).** Jason re-adds `/etc/sudoers.d/oymlxtest`
+   (`jrazz ALL=(oymlxtest) NOPASSWD: ALL`), then removes it afterwards. The coordinator runs the built bundle's
+   backend as `oymlxtest`, using the launcher's exact argv and env, with `scripts/smoke_clean_account.sh`.
+2. **Live checks, with Jason's go-ahead** (measurement rule: a quiet machine). Run one "Stop now" on a quickbench of
+   the smallest catalog model, and one real download and evict through the app.
+3. `/paul:verify` Phase 5 UAT, then `PHASE-5-SUMMARY.md`, then close the milestone.
+
+## Jason's calls
+
+- The release version. The bundle reads `ohyesmlx.__version__`, which is 0.3.0.
+- Whether, and when, to publish a GitHub Release. This is outward-facing; nothing has been uploaded.
+- Open Design's MCP registration is stale (it points at 0.24.1; the app is 0.26.1). Refresh it in the app.
 
 ## How this session worked (keep doing it)
 
-- **Workers.** Command Code does all implementation through `.paul/orders/dispatch.sh`. Every
-  dispatch gets a five-minute progress Monitor, and a backgrounded dispatch needs a Bash timeout of
-  7200000.
-- **Worker instructions.** The preamble (`.paul/orders/PREAMBLE.md`) now says to use graphify first,
-  to write a file within ~15 turns, and to write any file over ~12 KB in stages.
-- **Read-only reviewers.** The `review` and `explain` profiles cannot run a shell, so give them the
-  diff as a file.
-- **Docs layout.** `docs/interfaces/` holds the shapes, one file per subject; `docs/interfaces.md`
-  is now an index. `.paul/DECISIONS.md` is the full decision log, and STATE keeps only recent rows.
-
-## Open, not urgent
-
-- `/engines` reports vMLX installed for an account that cannot run its bundle. This affects
-  multi-user Macs only; it is deferred, and the full list is in PHASE-4.5-SUMMARY.
-- Paused milestones: v3.1's 0.3.1 bump, and v4.0 MTPLX (`mtplx-wip`).
-- README rewrite (STATE Deferred Issues).
+- Command Code does the implementation through `.paul/orders/dispatch.sh`, with a 5-minute progress Monitor on each
+  dispatch. Reviewers (`review` profile) get the diff as a file under `.paul/review/<date>-…/` (gitignored `diff.patch`).
+- **A worker's report is not evidence.** This session, coordinator verification found:
+  - a measured number attributed to the wrong model (`best.repo`);
+  - stage-B results collapsing in the client;
+  - the signed bundle being written to at runtime;
+  - three defects in the bundle check script itself.
+- Screenshots of the stub scenarios need the system appearance toggled. Restore it to what you found (dark).

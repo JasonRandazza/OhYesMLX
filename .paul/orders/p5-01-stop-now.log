@@ -1,0 +1,192 @@
+I'll start by reading the plan and the spec section it implements.
+The "Backend addition" heading didn't match exactly. Let me locate it.
+
+Now let me look at the relevant code sections in parallel.
+Now let me read quickbench's run and the cell-record/winner logic.
+Let me read the record/winner helpers and the cancelled tail of `run`.
+Let me read the server structure and the ledger entry shape.
+
+
+
+
+
+
+
+Now let me examine the quickbench test harness and a between-cell cancel test.
+
+
+
+I need to check how the summary serializes the `Path` passed as `artifact_dir` — let me verify empirically.
+Let me look at the quickbench test fixtures (engines list, Osaurus run pattern) and the server tests' harness.
+
+
+
+
+
+I have the full picture. Starting with quickbench: constants, the `abort` probe, and the record wrapper.
+
+
+Now the `abort` keyword and the wrapper around `measure_cell`.
+
+
+
+
+Now the two stage loops.
+
+
+
+Now `runtimes.py` — the shared command parse and `stop_own_engines`.
+
+
+
+
+Now add `stop_own_engines` beside `stop_orphaned_engines`.
+
+Now the server: import, error code, job flags, and the cancel body.
+
+
+
+Now the quickbench call in `_run_job` and the cancel handler.
+
+
+
+Now the `stop_engines` injection on the server object.
+
+
+
+
+Now AC-6: the three `low_disk` payloads.
+
+
+
+
+
+
+
+Now the two onboarding doc sentences.
+
+Code and docs are in. Let me run the affected suites before writing the new tests.
+Existing tests are green. Now the new tests — first the runtime ledger tests.
+
+
+
+Now the quickbench tests. First the `abort` seam in the test helper.
+
+
+Now append the AC-3 / AC-7 quickbench tests.
+
+Now red-check the quickbench tests: I'll neuter the abort check and confirm they fail.
+
+Now AC-6. Let me check the fetch test fixture numbers before extending the assertions.
+
+
+
+
+
+Now I'll extend the three fetch tests and both engines tests to assert the payload.
+
+
+
+
+
+Now the server tests. Let me check the test module's imports first.
+Now the server tests for AC-1, AC-4 and AC-7.
+
+
+
+
+Now the red-checks for the server half. First: drop the `not_abortable` guard.
+
+
+
+
+Now red-check the `stop_own_engines` tests.
+
+
+
+All red-checks confirmed. Now the full suite and the diff scope.
+
+Let me review the complete source diff for quality.
+One more test to pin AC-4's default wiring.
+
+
+
+
+
+
+
+
+
+
+
+## Report — plan 05-01 (Stop now)
+
+**Suite:** `1360 passed` (baseline `1329`; +31 tests). Run twice, same count. `git diff --stat` touches only the plan's `files_modified`.
+
+### Per AC
+
+| AC | Proof |
+|---|---|
+| **AC-1** | `test_server.py::test_a_cancel_without_now_keeps_its_old_meaning[no body / empty object]`, `::test_a_bad_cancel_body_is_400_bad_args_naming_the_key_and_sets_no_flag` (5 cases), `::test_a_cancel_body_that_is_not_an_object_is_400_bad_args`, `::test_stop_now_on_a_job_that_is_not_a_quickbench_is_409_not_abortable[download/install]`, `::test_the_old_refusals_are_answered_before_the_body_matters` (unknown/evict/finished), `::test_a_cancel_body_gets_the_same_guard_codes_as_post_jobs` (415/413×4), `::test_an_invalid_json_cancel_body_is_400_bad_json_and_sets_no_flag`; plus the three pre-existing cancel tests, unmodified |
+| **AC-2** | `test_runtimes.py::test_stop_own_engines_stops_only_this_processes_entries_and_never_writes`, `::test_stop_own_engines_reports_a_failing_stop_and_still_stops_the_next`, `::test_stop_own_engines_without_a_readable_ledger_is_zero` |
+| **AC-3** | `test_quickbench.py::test_an_abort_during_stage_as_first_cell_records_it_aborted_and_ends_cancelled`, `::test_an_abort_during_a_stage_b_cell_evicts_the_sibling_and_stops_there`, `::test_an_aborted_osaurus_cell_still_restores_the_host_settings`, `::test_an_aborted_cell_is_never_the_winner_even_with_a_number`, `::test_the_default_abort_probe_never_fires`; every pre-existing quickbench test unchanged and green |
+| **AC-4** | `test_server.py::test_stop_now_sets_both_flags_starts_one_stop_and_the_job_ends_cancelled` (fake quickbench blocks until abort, records `cancel()`/`abort()`, fake `stop_engines` counted), `::test_stop_engines_defaults_to_the_runtimes_stop` |
+| **AC-5** | `v5-quickbench.md` status set now `PASS\|FAIL\|SKIPPED\|ABORTED` + one pointer line; `v5-onboarding.md` cancel paragraph gains one sentence pointing at v5-app.md; neither restates the mechanism |
+| **AC-6** | `test_fetch.py::test_disk_guard_refuses_before_any_request`, `::test_the_disk_guard_is_rechecked_before_each_file`, `::test_the_lock_is_released_after_a_refusal`; `test_engines.py::test_a_known_size_needs_twice_its_estimate_free`, `::test_an_unknown_size_falls_back_to_a_two_gib_floor` — all assert the two keys and leave the message text untouched |
+| **AC-7** | `test_quickbench.py::test_a_stop_that_makes_the_cells_own_stop_raise_is_still_an_aborted_cell` (RuntimeStopError after abort ⇒ ABORTED, `cancelled`, no `internal` error), `test_server.py::test_stop_now_answers_202_before_the_stop_finishes` (blocking `stop_engines`, 202 < 2 s), `::test_a_second_stop_now_answers_202_without_a_second_stop` (one call), `test_quickbench.py::test_an_abort_after_the_last_cells_engine_stopped_leaves_the_ending_finished` + `test_runtimes.py::test_stop_own_engines_without_a_readable_ledger_is_zero` (stops nothing, ending unchanged) |
+
+**`_winner` needed no change** — it already filters `cell["status"] == "PASS"`, so ABORTED is excluded exactly as FAIL is.
+
+### Red-checks (each reverted after)
+Removing the abort wrapper → 5/7 new quickbench tests fail; removing `not_abortable` → both not_abortable tests fail; removing `abort=job.aborted` → wiring test fails; stopping synchronously instead of a daemon thread → 202-before-stop fails (5 s block); removing the one-stop guard → second-stop test fails; reading every ledger file → AC-2 test returns 3; removing the `RuntimeStopError` catch → the failure test raises; removing either `low_disk` payload → its tests fail.
+
+### Found, not fixed / not verified
+- **AC-1, one clause is not expressible:** "a missing-length body with a non-empty body" cannot reach 413 under HTTP/1.0 — a body with no `Content-Length` has no framing, and detecting one would need a blocking `rfile.peek()` that would hang every bodyless cancel (an existing test and the normal case). I implemented every observable form: header absent → bodyless cancel (202); header present with no usable number (`""`, `"six"`, `"-1"`) → 413; oversize → 413; non-JSON type → 415; invalid JSON → 400. Say the word if you want a different reading.
+- **One small refactor beyond the letter of the plan:** `_stop_orphan` now uses a shared `_entry_stop_command()` so the `stop_command` parse has one definition (behaviour identical); `engines.refuse` gained `**payload` as the plan allowed.
+- **Not verified:** the live "Stop now" (fakes only, per the order), and the app's ABORTED rendering (05-02's side).
+- **Not mine in this tree:** `.gitignore` (`app/.build/`) and `app/**` are the parallel 05-02 worker's; I touched neither. I also did not write `05-01-SUMMARY.md` — it is outside `files_modified`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    132   16933038   16756224    87881   99.0%   0.129519
+
+== cc-agent: git status ==
+ M .gitignore
+ M docs/interfaces/v5-onboarding.md
+ M docs/interfaces/v5-quickbench.md
+ M ohyesmlx/engines.py
+ M ohyesmlx/fetch.py
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_engines.py
+ M tests/test_fetch.py
+ M tests/test_quickbench.py
+ M tests/test_runtimes.py
+ M tests/test_server.py
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-01-stop-now.md
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-02-app-skeleton.md
+?? app/Package.swift
+?? app/Sources/
+?? app/Tests/OhYesMLXKitTests/DecodingTests.swift
+?? app/Tests/OhYesMLXKitTests/Fixtures.swift
+?? app/Tests/OhYesMLXKitTests/HTTPBackendTests.swift
+?? app/Tests/OhYesMLXKitTests/LauncherTests.swift
+?? app/Tests/OhYesMLXKitTests/LiveBackendTests.swift
+?? app/Tests/OhYesMLXKitTests/SSETests.swift
+?? scripts/dev_backend_venv.sh
+ .gitignore                       |   3 +
+ docs/interfaces/v5-onboarding.md |   9 +-
+ docs/interfaces/v5-quickbench.md |   3 +-
+ ohyesmlx/engines.py              |   6 +-
+ ohyesmlx/fetch.py                |   4 +
+ ohyesmlx/quickbench.py           |  53 ++++++-
+ ohyesmlx/runtimes.py             |  58 +++++++-
+ ohyesmlx/server.py               | 102 ++++++++++++--
+ tests/test_engines.py            |  20 ++-
+ tests/test_fetch.py              |  23 +++-
+ tests/test_quickbench.py         | 153 ++++++++++++++++++++
+ tests/test_runtimes.py           |  77 +++++++++++
+ tests/test_server.py             | 291 ++++++++++++++++++++++++++++++++++++++-
+ 13 files changed, 770 insertions(+), 32 deletions(-)

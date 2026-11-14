@@ -1,0 +1,211 @@
+I'll start by reading the two review logs and orienting on the files I'm allowed to touch.
+Now let me orient on the actual code. I'll grep for the key symbols in quickbench and server.
+
+
+
+Now the Swift side. Let me read AppModel.swift in ranges.
+
+
+
+Now the HTTP backend, SSE, launcher, models, and stub backend.
+
+
+
+
+
+
+
+
+
+
+
+Now let me look at the server's body guard and `_cancel_now`.
+Let me look at the server tests' request helpers and the existing cancel-body tests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the full picture. Let me start with quickbench.py's four cell payloads.
+
+
+Now the rationale consolidation (item 7) in quickbench.py.
+
+
+Now runtimes.py's comment (item 7, other half).
+Now the cancel-body guard in server.py (item 2).
+
+
+
+Now the Swift model changes. First, check every use of the old shapes.
+
+
+
+
+Now the Q6 absolute gate in AppModel.
+
+
+
+
+
+
+Now the skipped/missing-binary rows test and the unsupported-Mac test.
+
+
+
+Now the Python tests. First the payload-shape tests and the stage-B aborted payload assertion.
+
+
+
+Now the item 4 test fixes in test_quickbench.py.
+
+Let me run the Python tests now.
+Python suite is green at 1366 (baseline 1360 + 6). Now the red-checks. First, revert a payload and watch the new tests fail.
+
+
+
+
+
+
+Now red-check item 4a: plant a post-loop abort consult that flips the ending.
+
+
+
+
+
+
+Now let me build and run the Swift suite.
+Swift is green at 52 (baseline 48 + 4). Now Swift red-checks. Item 5 first: let the decode throw again.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Both suites are green. Let me review the complete diff.
+
+
+
+
+
+
+
+All green. Final state: **Python 1366 passed** (baseline 1360, +6), **Swift 52 passed** (baseline 48, +4).
+
+## Per-item report
+
+**1. Structured cell events**
+- `quickbench.py`: the four cell progress payloads (stage A measured/skipped, stage B measured/skipped) now carry `{"stage", "engine", "format", "status", "reason"}`, `SKIPPED` for skips, `reason: None` when none. Stage headings and the sibling-download event are not cell events and were left alone.
+- `v5-quickbench.md`: one paragraph pins the shape and says the client never parses message text.
+- Swift: `BenchmarkCell` gained `stage`+`format`, `id` is `stage/engine/format`; `updateBenchmarkCell` reads stage/engine/format/status/reason from the payload and replaces by `id`; `reason(from:engine:status:)` deleted.
+- Tests: `test_every_measured_cell_event_carries_stage_engine_format_status_and_reason`, `test_a_skipped_cell_event_is_skipped_with_its_reason`, the stage-B abort test now asserts the ABORTED payload; `testTwoStageBSiblingsStayTwoRows`, `testAStageBAbortedRowCarriesItsReasonFromThePayload`.
+- Red-check: reverted each of the four payload sites → the matching test failed (`KeyError: 'format'`, `[] == [('B',...)])`, payload mismatch); reverted Swift id-keying to engine-keying → 1 row instead of 3; set `reason: nil` → ABORTED reason assertion failed.
+
+**2. Cancel body detection**
+- `_cancel_now`: bodyless only when neither header is present, or when the declared length is integer zero (`00`, `+0`); otherwise the `POST /jobs` guard runs, so JSON type + no length reaches `_job_body`'s 413.
+- Test: `test_a_cancel_body_is_detected_by_its_headers_and_its_length_as_an_integer` (neither header → 202, JSON type no length → 413, `00` no body → 202).
+- Red-check: restored the old `declared is None or strip()=="0"` logic → both new cases failed (413 case answered 202; `00` case answered 400).
+
+**3. Q6 absolute gate**
+- `AppModel`: one `unsupported` definition (`hardware?.supported == false`), used by `go`, `quickbench` (before the plan fetch), `retryInterrupted`, and `start` (so install/download/evict/quickbench can't start). `showsInterruptedBanner` = job present and not unsupported; `RootView` reads it.
+- Test: `testUnsupportedMacIsAbsolute` extended — install, quickbench (asserts `quickPlan == nil`), retry (asserts `interruptedJob` survives), banner hidden, screen never leaves `.unsupported`. Its old assertion "install's job started" was inverted per the new rule.
+- Red-check: four separate reverts — banner rule, `start` guard, `quickbench` guard, `retryInterrupted` guard — each failed its own assertion.
+
+**4. Tests that cannot fail**
+- The late-abort test's probe now turns True on the 4th (last) consult, after answering False; asserts `triggered`, `ended == "finished"`, 4 checks.
+- New `test_a_raise_from_measure_cell_itself_while_aborted_is_an_aborted_cell`: `run_cells` returns a row whose `measured_pin` raises `RuntimeStopError` from `report.summarize`, i.e. past `measure_cell`'s catch, with `abort()` True → ABORTED cell, cancelled ending, one `cancelled` error.
+- Red-check: planted a post-loop `if abort(): ended = "cancelled"` → late-abort test failed on `ok is True`; made `measured`'s except re-raise → new test failed with the RuntimeStopError.
+
+**5. SSE poison event**
+- `HTTPBackend.events`: a frame whose JSON fails to decode is skipped, `last` advances to `parser.lastEventID` parsed as an integer, and the loop continues.
+- Test: `testAPoisonEventIsSkippedAndItsIDIsNeverFetchedAgain` (poison `id: 1` + connection loss, then a done frame; asserts reconnect's `Last-Event-ID: 1` and one reconnect).
+- Red-check: made the decode throw again → `Last-Event-ID` was nil.
+
+**6. Launcher first line**
+- `deliverLine` only fills `pendingLine` when it is nil; the first stdout line wins. It is now internal so the test can drive it without a thread race.
+- Test: `testTheFirstStdoutLineIsTheLaunchLineWhenTwoArriveBeforeTheAwait`.
+- Red-check: restored the overwrite → the later line was returned.
+
+**7. Rationale written once**
+- The full abort rationale (server stops the engine outside, the reading is void, raw rows stay, a rise-is-the-stop race) lives only in `_aborted`'s docstring; `run`'s abort paragraph and `measured`'s docstring are one sentence each pointing at it. `ABORT_STOP_ERROR_CODE`'s comment points at `stop_own_engines`, whose docstring keeps the per-entry/never-raised rule.
+
+## Not verified
+- No real backend, model, or serving runtime was run (forbidden), and no GUI launch of the app.
+- I did not run `scripts/smoke_clean_account.py`; noting for the coordinator: its `cell_outcomes` still reads the retired `payload["skipped"]` key (now a dead branch) and keys per engine, so it remains functional but can't tell stage-B siblings apart — it is outside this order's files, so I left it.
+
+BLOCKED: none.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    125   16477623   16277376    63053   98.8%   0.116701
+
+== cc-agent: git status ==
+ M app/Sources/OhYesMLX/RootView.swift
+ M app/Sources/OhYesMLXKit/AppModel.swift
+ M app/Sources/OhYesMLXKit/BackendLauncher.swift
+ M app/Sources/OhYesMLXKit/HTTPBackend.swift
+ M app/Tests/OhYesMLXKitTests/AppModelTests.swift
+ M app/Tests/OhYesMLXKitTests/HTTPBackendTests.swift
+ M app/Tests/OhYesMLXKitTests/LauncherTests.swift
+ M docs/interfaces/v5-quickbench.md
+ M ohyesmlx/quickbench.py
+ M ohyesmlx/runtimes.py
+ M ohyesmlx/server.py
+ M tests/test_quickbench.py
+ M tests/test_server.py
+?? .paul/orders/p5-01-stop-now.log
+?? .paul/orders/p5-02-app-skeleton.log
+?? .paul/orders/p5-w1-review-fixes.log
+?? .paul/orders/p5-w1-review-fixes.md
+?? .paul/orders/p5-w1-review-spec.md
+?? .paul/orders/p5-w1-review-standards.md
+?? .paul/phases/v5-onboarding/05-04-AUDIT.md
+?? .paul/phases/v5-onboarding/05-04-PLAN.md
+?? .paul/phases/v5-onboarding/05-05-AUDIT.md
+?? .paul/phases/v5-onboarding/05-05-PLAN.md
+?? .paul/review/2026-11-14-phase5-w1/
+ app/Sources/OhYesMLX/RootView.swift               |   2 +-
+ app/Sources/OhYesMLXKit/AppModel.swift            |  60 +++++-----
+ app/Sources/OhYesMLXKit/BackendLauncher.swift     |   8 +-
+ app/Sources/OhYesMLXKit/HTTPBackend.swift         |  12 +-
+ app/Tests/OhYesMLXKitTests/AppModelTests.swift    | 136 +++++++++++++++++++++-
+ app/Tests/OhYesMLXKitTests/HTTPBackendTests.swift |  25 ++++
+ app/Tests/OhYesMLXKitTests/LauncherTests.swift    |  11 ++
+ docs/interfaces/v5-quickbench.md                  |   5 +
+ ohyesmlx/quickbench.py                            |  61 ++++++----
+ ohyesmlx/runtimes.py                              |   4 +-
+ ohyesmlx/server.py                                |  23 ++--
+ tests/test_quickbench.py                          | 129 +++++++++++++++++++-
+ tests/test_server.py                              |  36 ++++++
+ 13 files changed, 435 insertions(+), 77 deletions(-)
