@@ -156,6 +156,16 @@ public final class AppModel {
 
     public var showsInterruptedBanner: Bool { interruptedJob != nil && !unsupported }
 
+    // Step completion, as the sidebar ticks it off.
+
+    public var yourMacComplete: Bool { hardware != nil }
+
+    public var enginesComplete: Bool { engines.contains(where: \.installed) }
+
+    public var modelsComplete: Bool { recommendations?.picks.contains(where: \.downloaded) ?? false }
+
+    public var benchmarkComplete: Bool { job?.kind == .quickbench && job?.state == .finished }
+
     private var backend: any Backend
     private var runner: (any BackendRunner)?
     private let launcher: BackendLauncher?
@@ -204,7 +214,7 @@ public final class AppModel {
         notEvicted.map { repo in
             let pick = recommendations?.picks.first { $0.modelID == repo }
             let title = pick?.title ?? repo
-            let size = pick.map { Self.formatGB($0.sizeBytes) } ?? "size unknown"
+            let size = pick.map { Format.size($0.sizeBytes) } ?? "size unknown"
             return "Left on disk: \(title) (\(size)) — it was in use. You can remove it from Models."
         }
     }
@@ -584,10 +594,6 @@ public final class AppModel {
               let started = object["started"] as? String
         else { return nil }
         return InterruptedJob(kind: kind, name: name, started: started)
-    }
-
-    public static func formatGB(_ bytes: Int64) -> String {
-        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 }
 

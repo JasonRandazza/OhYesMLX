@@ -8,7 +8,22 @@ struct OhYesMLXApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AppModel
 
+    #if DEBUG
+    private let stubScenario: StubScenario?
+    #endif
+
     init() {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["OYMLX_STUB_SCENARIO"],
+           let scenario = StubScenario(rawValue: raw) {
+            let model = scenario.makeModel()
+            _model = State(initialValue: model)
+            stubScenario = scenario
+            AppDelegate.model = model
+            return
+        }
+        stubScenario = nil
+        #endif
         let model = AppModel(launcher: BackendLauncher())
         _model = State(initialValue: model)
         AppDelegate.model = model
@@ -16,10 +31,7 @@ struct OhYesMLXApp: App {
 
     var body: some Scene {
         Window("OhYesMLX", id: "main") {
-            RootView(model: model)
-                .task {
-                    await model.launch()
-                }
+            launchView
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         Task { await model.appBecameActive() }
@@ -36,7 +48,28 @@ struct OhYesMLXApp: App {
                     NSApp.terminate(nil)
                 }
         }
-        .defaultSize(width: 760, height: 560)
+        .defaultSize(width: 1100, height: 720)
+        .windowResizability(.contentMinSize)
+    }
+
+    @ViewBuilder
+    private var launchView: some View {
+        #if DEBUG
+        let scenario = stubScenario
+        RootView(model: model, debugConsentEngine: scenario?.consentEngineName)
+            .task {
+                if let scenario {
+                    await scenario.drive(model)
+                } else {
+                    await model.launch()
+                }
+            }
+        #else
+        RootView(model: model)
+            .task {
+                await model.launch()
+            }
+        #endif
     }
 }
 
@@ -45,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var model: AppModel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
         Self.model?.onQuitComplete = {
             NSApp.reply(toApplicationShouldTerminate: true)
         }

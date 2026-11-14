@@ -684,4 +684,40 @@ final class AppModelTests: XCTestCase {
         stack.backend.releaseJob([done(2)])
         await download.value
     }
+
+    // MARK: - AC-2 · the sidebar's completion ticks
+
+    func testStepCompletionTracksHardwareEnginesModelsAndBenchmark() async throws {
+        let pick = Pick(
+            modelID: "org/example-2b-4bit",
+            title: "Example 2B",
+            paramsB: 2,
+            format: "mlx 4-bit",
+            sizeBytes: 1_400_000_000,
+            fit: "comfortable",
+            fitBasis: "estimated",
+            engines: ["mlxlm"],
+            installNeeded: false,
+            startHere: true,
+            reason: "Fits with room to spare.",
+            downloaded: true,
+            measuredHere: nil
+        )
+        let downloaded = Recommendations(
+            picks: [pick],
+            excluded: [],
+            unsupportedReason: nil
+        )
+        let stack = try makeStack(recommendations: downloaded, plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+
+        XCTAssertTrue(stack.model.yourMacComplete)
+        XCTAssertTrue(stack.model.enginesComplete)
+        XCTAssertTrue(stack.model.modelsComplete)
+        XCTAssertFalse(stack.model.benchmarkComplete)
+
+        stack.backend.enqueue(events: [done(1)])
+        await stack.model.quickbench(repo: quickbenchRepo)
+        XCTAssertTrue(stack.model.benchmarkComplete)
+    }
 }

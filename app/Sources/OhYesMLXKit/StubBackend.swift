@@ -196,7 +196,8 @@ public final class StubBackend: Backend, @unchecked Sendable {
             let script = queuedScripts.isEmpty
                 ? StubScript(events: [])
                 : queuedScripts.removeFirst()
-            let jobID = String(format: "%016llx", nextID)
+            let hex = String(nextID, radix: 16)
+            let jobID = String(repeating: "0", count: max(0, 16 - hex.count)) + hex
             nextID += 1
             jobs[jobID] = Job(args: args, script: script)
             starts.append(StubJobStart(kind: kind, args: args))
@@ -228,3 +229,322 @@ public final class StubBackend: Backend, @unchecked Sendable {
         }
     }
 }
+
+#if DEBUG
+/// The screens a DEBUG build can be started in, for screenshots without a backend.
+/// Selected by `OYMLX_STUB_SCENARIO=<rawValue>`; release builds ignore the variable.
+public enum StubScenario: String, CaseIterable, Sendable {
+    case welcome
+    case engines
+    case enginesConsent = "engines-consent"
+    case enginesBusy = "engines-busy"
+    case enginesFailed = "engines-failed"
+    case couldntStart = "couldnt-start"
+    case unsupported
+    case backendStopped = "backend-stopped"
+    case interrupted
+
+    static let stubRepo = "mlx-community/Qwen3.5-2B-4bit"
+
+    public var consentEngineName: String? {
+        self == .enginesConsent ? "osaurus" : nil
+    }
+
+    var hardwareReadyTimeout: TimeInterval {
+        self == .couldntStart ? 0.2 : 2
+    }
+
+    private var missingEngines: Set<String> {
+        switch self {
+        case .enginesConsent, .enginesBusy: return ["osaurus", "optiq"]
+        case .enginesFailed: return ["optiq"]
+        default: return []
+        }
+    }
+
+    func makeBackend() -> StubBackend {
+        let backend = StubBackend(
+            hardware: Self.stubHardware(supported: self != .unsupported),
+            engines: Self.stubEngines(missing: missingEngines),
+            recommendations: Self.stubRecommendations
+        )
+        if self == .couldntStart {
+            backend.setError(
+                BackendError(
+                    code: "couldnt_start",
+                    status: nil,
+                    message: """
+                    the backend did not print its launch line
+                    Traceback (most recent call last):
+                      File "ohyesmlx/server.py", line 41, in <module>
+                        sock.bind(("127.0.0.1", 47821))
+                    OSError: [Errno 48] Address already in use
+                    """
+                ),
+                for: .hardware
+            )
+        }
+        if self == .enginesBusy {
+            backend.enqueue(
+                events: [
+                    JobEvent(
+                        seq: 1,
+                        type: .progress,
+                        message: "Downloading Qwen3.5 2B",
+                        fraction: 0.42,
+                        payload: nil
+                    ),
+                ],
+                hold: true
+            )
+        }
+        if self == .enginesFailed {
+            backend.enqueue(events: [
+                JobEvent(seq: 1, type: .progress, message: "Preparing OptiQ", fraction: 0, payload: nil),
+                JobEvent(
+                    seq: 2,
+                    type: .error,
+                    message: "step install failed with exit code 1",
+                    fraction: nil,
+                    payload: .object([
+                        "code": .string("step_failed"),
+                        "output_tail": .string(
+                            "ERROR: Could not find a version that satisfies the requirement "
+                                + "mlx-optiq==0.5.13\nERROR: No matching distribution found for mlx-optiq==0.5.13"
+                        ),
+                    ])
+                ),
+                JobEvent(
+                    seq: 3,
+                    type: .done,
+                    message: "install failed; nothing else was run",
+                    fraction: nil,
+                    payload: nil
+                ),
+            ])
+        }
+        return backend
+    }
+
+    private static func stubHardware(supported: Bool) -> Hardware {
+        Hardware(
+            supported: supported,
+            unsupportedReason: supported
+                ? nil
+                : "It has an Intel Core i9 processor. Every engine OhYesMLX sets up is built on "
+                    + "Apple's MLX, which runs only on Apple silicon (M1 or later).",
+            chip: supported ? "Apple M2 Max" : "Intel Core i9",
+            family: supported ? "M2" : "Intel",
+            tier: supported ? "max" : "base",
+            cpuCores: supported ? 12 : 8,
+            gpuCores: supported ? 30 : nil,
+            ramBytes: supported ? 68_719_476_736 : 32_000_000_000,
+            macos: "27.2.1",
+            diskFreeBytes: 43_377_606_656,
+            volumes: [Volume(path: "/", freeBytes: 43_377_606_656)],
+            modelBudgetBytes: supported ? 49_392_123_904 : 24_000_000_000
+        )
+    }
+
+    private static func stubEngines(missing: Set<String>) -> [EngineStatus] {
+        [
+            engine(
+                name: "mlxlm",
+                title: "mlx-lm",
+                blurb: "Apple's reference MLX server, and this harness's control.",
+                version: "0.31.3",
+                tested: true,
+                missing: missing.contains("mlxlm"),
+                install: nil
+            ),
+            engine(
+                name: "osaurus",
+                title: "Osaurus",
+                blurb: "Native menubar app with its own MLX engine.",
+                version: "0.25.33",
+                tested: false,
+                missing: missing.contains("osaurus"),
+                install: osaurusPlan
+            ),
+            engine(
+                name: "omlx",
+                title: "oMLX",
+                blurb: "Menubar app that bundles its own Python and MLX.",
+                version: "0.7.3",
+                tested: true,
+                missing: missing.contains("omlx"),
+                install: nil
+            ),
+            engine(
+                name: "optiq",
+                title: "OptiQ",
+                blurb: "Python package that serves quantized models through the optiq CLI.",
+                version: "0.5.13",
+                tested: true,
+                missing: missing.contains("optiq"),
+                install: optiqPlan
+            ),
+            engine(
+                name: "vmlx",
+                title: "vMLX",
+                blurb: "Desktop app with a bundled Python engine and an OpenAI-compatible server.",
+                version: "1.6.82",
+                tested: false,
+                missing: missing.contains("vmlx"),
+                install: nil
+            ),
+        ]
+    }
+
+    private static func engine(
+        name: String,
+        title: String,
+        blurb: String,
+        version: String,
+        tested: Bool,
+        missing: Bool,
+        install: InstallPlan?
+    ) -> EngineStatus {
+        EngineStatus(
+            name: name,
+            title: title,
+            blurb: blurb,
+            installed: !missing,
+            version: missing ? nil : version,
+            path: missing ? nil : "/Applications/\(title).app",
+            tested: !missing && tested,
+            verified: tested ? "2026-11-02" : nil,
+            install: missing ? install : nil
+        )
+    }
+
+    private static let osaurusPlan = InstallPlan(
+        engine: "osaurus",
+        kind: "guided_download",
+        sourceURL: "https://github.com/osaurus-ai/osaurus/releases",
+        sizeBytesEstimate: 310_000_000,
+        needsAdmin: false,
+        steps: [
+            PlanStep(
+                id: "open-page",
+                label: "Download Osaurus from the release page and drag Osaurus to Applications.",
+                command: nil
+            ),
+            PlanStep(
+                id: "verify-install",
+                label: "Reopen this screen: Osaurus is detected once its app bundle is in /Applications.",
+                command: nil
+            ),
+        ]
+    )
+
+    private static let optiqPlan = InstallPlan(
+        engine: "optiq",
+        kind: "command",
+        sourceURL: "https://pypi.org/project/mlx-optiq/",
+        sizeBytesEstimate: nil,
+        needsAdmin: false,
+        steps: [
+            PlanStep(
+                id: "create-venv",
+                label: "Create a private Python environment for OptiQ.",
+                command: [
+                    "{python}", "-I", "-m", "venv",
+                    "/Users/you/Library/Application Support/OhYesMLX/engines/optiq",
+                ]
+            ),
+            PlanStep(
+                id: "install",
+                label: "Install OptiQ into it, with every requirement hash-checked.",
+                command: [
+                    "{python}", "-I", "-m", "pip", "install", "--require-hashes",
+                    "-r", "optiq-requirements.txt",
+                ]
+            ),
+            PlanStep(
+                id: "verify",
+                label: "Check that it starts.",
+                command: ["optiq", "--version"]
+            ),
+        ]
+    )
+
+    private static var stubRecommendations: Recommendations {
+        Recommendations(
+            picks: [
+                Pick(
+                    modelID: stubRepo,
+                    title: "Qwen3.5 2B",
+                    paramsB: 2,
+                    format: "mlx 4-bit",
+                    sizeBytes: 1_400_000_000,
+                    fit: "comfortable",
+                    fitBasis: "estimated",
+                    engines: ["mlxlm"],
+                    installNeeded: false,
+                    startHere: true,
+                    reason: "Fits with about 44.6 GB of memory to spare; 1.4 GB download.",
+                    downloaded: true,
+                    measuredHere: nil
+                ),
+            ],
+            excluded: [],
+            unsupportedReason: nil
+        )
+    }
+}
+
+@MainActor
+extension StubScenario {
+    public func makeModel() -> AppModel {
+        let defaults = UserDefaults(suiteName: "ohyesmlx.stub.scenario") ?? .standard
+        defaults.removeObject(forKey: "inflightJob")
+        if self == .interrupted {
+            defaults.set(
+                [
+                    "kind": "download",
+                    "name": Self.stubRepo,
+                    "started": "2026-11-14T09:12:00Z",
+                ],
+                forKey: "inflightJob"
+            )
+        }
+        return AppModel(
+            backend: makeBackend(),
+            defaults: defaults,
+            hardwareReadyTimeout: hardwareReadyTimeout
+        )
+    }
+
+    public func drive(_ model: AppModel) async {
+        await model.launch()
+        switch self {
+        case .welcome, .couldntStart, .unsupported, .backendStopped:
+            break
+        case .engines, .enginesConsent:
+            model.go(to: .engines)
+        case .enginesBusy:
+            model.go(to: .engines)
+            Task { await model.download(repo: Self.stubRepo) }
+        case .enginesFailed:
+            model.go(to: .engines)
+            model.installConsent = true
+            await model.install(engine: "optiq")
+            model.installConsent = false
+        case .interrupted:
+            model.go(to: .yourMac)
+        }
+        if self == .backendStopped {
+            model.backendExited(
+                status: 1,
+                stderrTail: [
+                    "Traceback (most recent call last):",
+                    "  File \"ohyesmlx/server.py\", line 41, in <module>",
+                    "    sock.bind((\"127.0.0.1\", 47821))",
+                    "OSError: [Errno 48] Address already in use",
+                ]
+            )
+        }
+    }
+}
+#endif
