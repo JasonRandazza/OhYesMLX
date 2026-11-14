@@ -15,7 +15,7 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). 045-02 split in two (Jason 2026-11-03): `045-02a` (server + lifecycle: T-02/03/04/05/08/09/10/11) closed 2026-11-09 (`4b35ef8`, `9bc9388`, review fixes `6c4d616`; 1222 tests; probe 32/32; code review 10 verified + 1 rejected; `045-02a-SUMMARY.md`); 045-02b (installers + fetch: T-01/06/07/12/13/16) closed 2026-11-13 (`a031ad4`, `fb4e61c`, review fixes `7393715`; `045-02b-SUMMARY.md`); 045-03 clean-account smoke closed 2026-11-13 (`743ada3`, `369f180`, `f7c22e0`; 21/21 as `oymlxtest`; two defects fixed; 1329 tests; `045-03-SUMMARY.md`). **Phase 4.5 complete** (`PHASE-4.5-SUMMARY.md`). Phase 5 (SwiftUI app): prototype answered 2026-11-13; plans 05-01..05-06 laid out in PLAN.md, 05-01 and 05-02 written.
+Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). 045-02 split in two (Jason 2026-11-03): `045-02a` (server + lifecycle: T-02/03/04/05/08/09/10/11) closed 2026-11-09 (`4b35ef8`, `9bc9388`, review fixes `6c4d616`; 1222 tests; probe 32/32; code review 10 verified + 1 rejected; `045-02a-SUMMARY.md`); 045-02b (installers + fetch: T-01/06/07/12/13/16) closed 2026-11-13 (`a031ad4`, `fb4e61c`, review fixes `7393715`; `045-02b-SUMMARY.md`); 045-03 clean-account smoke closed 2026-11-13 (`743ada3`, `369f180`, `f7c22e0`; 21/21 as `oymlxtest`; two defects fixed; 1329 tests; `045-03-SUMMARY.md`). **Phase 4.5 complete** (`PHASE-4.5-SUMMARY.md`). Phase 5 (SwiftUI app): prototype answered 2026-11-13; 05-01 Stop now (`93d374c`), 05-02 app skeleton (`004171c`), 05-03 design (`99d2a55`), wave-1 review fixes (`ac0de1b`): 1366 pytest + 52 swift tests. 05-04 in APPLY.
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
 Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); 04-01 closed (SUMMARY written). Handoff: `.paul/HANDOFF.md`.
 Last activity: 2026-11-03 — 04-03c: quickbench re-run live, all 5 engines PASS incl. Osaurus 131.3 tok/s, restore byte-exact; hero-model safetensors proven to be the pinned tensors. 2026-11-02: quickbench first live run (Osaurus refused by baseline-path gap). Before: 04-02 unified: jobs + SSE (live scratch download/evict). 04-01b: gpu_cores from ioreg. Before it, 04-01: `ohyesmlx app` guarded loopback API (`1c157b0`).
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ○        ○     [Phase 5 planned 2026-11-13: 05-01 (Stop now) + 05-02 (app skeleton) wave 1, 05-03 design (coordinator); audited; next: APPLY]
+  ✓        ◐        ◐     [Phase 5: 05-01, 05-02, 05-03 unified 2026-11-14 (wave-1 review fixed, ac0de1b); 05-04 APPLY running; 05-05 planned+audited; 05-06 to plan]
 ```
 
 ## Performance Metrics
@@ -79,10 +79,12 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 ## Session Continuity
 
-Last session: 2026-11-13 (Claude Opus 5.5 coordinator)
-Stopped at: Phase 5 PLAN: `docs/interfaces/v5-app.md` pinned; 05-01-PLAN and 05-02-PLAN written; fixtures captured from the live backend into `app/Tests/OhYesMLXKitTests/Fixtures/`.
-Next action: /paul:audit 05-01 and 05-02, then APPLY both in parallel (Command Code), with 05-03 design (Open Design via the coordinator's stdio shim; OD MCP is configured for Codex only, not Claude Code).
-Resume file: `.paul/phases/v5-onboarding/05-02-PLAN.md`
+Last session: 2026-11-14 (Claude Opus 5.5 coordinator)
+Stopped at: 05-04 (shell + Your Mac + Engines) dispatched to Command Code; 05-05 planned + audited; 05-06 (packaging) not yet planned.
+Next action: verify 05-04 (screenshots of every stub scenario, light + dark) -> APPLY 05-05 -> plan 05-06 -> phase review + live checks (Stop now, a download) with Jason's go-ahead.
+Resume file: `.paul/phases/v5-onboarding/05-04-PLAN.md`
+Open Design: its MCP registration (Codex) points at the 0.24.1 payload after the app updated to 0.26.1; this session used a headless daemon on 127.0.0.1:17456 + a stdio shim. Jason to refresh the registration in the app.
+Packaging finding (05-06): python-build-standalone reads macOS's `/etc/ssl/cert.pem`; `-I` + launchd env HTTPS to huggingface.co -> 200 (uv's cpython 3.13.13), so P5-4 likely needs no bundled CA file.
 Osaurus on this host is now 0.25.33 (untested build; was 0.25.29 on 2026-11-02).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
