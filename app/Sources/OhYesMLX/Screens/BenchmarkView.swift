@@ -329,25 +329,19 @@ struct BenchmarkCellRow: View {
     let title: String
 
     var body: some View {
+        let status = cellStatus(cell.status)
         HStack(spacing: 8) {
             Text("\(cell.stage) · \(title)")
                 .frame(maxWidth: .infinity, alignment: .leading)
-            SwiftUI.Text(statusWord)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                StatusGlyph(kind: status.kind)
+                SwiftUI.Text(status.word)
+            }
+            .foregroundStyle(.secondary)
             if let decode = cell.decodeTPS {
                 Figure(Format.rate(decode))
                     .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var statusWord: String {
-        switch cell.status {
-        case "PASS": return "Pass"
-        case "FAIL": return "Fail"
-        case "SKIPPED": return "Skipped"
-        case "ABORTED": return "Stopped by you"
-        default: return cell.status
         }
     }
 }

@@ -257,4 +257,24 @@ final class DecodingTests: XCTestCase {
         )
         XCTAssertNil(reencoded["future_field"], "a re-encode of the typed value drops it")
     }
+
+    func testPayloadDataKeepsIntegersAsIntegers() throws {
+        // A byte count above 2^31 is what a download event carries; re-serialising must not
+        // turn it into a float or truncate it.
+        let json = Data(#"{"bytes_done": 5000000000, "bytes_total": 12884901888}"#.utf8)
+        let event = JobEvent(
+            seq: 1,
+            type: .progress,
+            message: "downloading",
+            fraction: 0.5,
+            payload: try JSONDecoder().decode(JSONValue.self, from: json)
+        )
+
+        let data = try XCTUnwrap(event.payloadData)
+
+        XCTAssertEqual(
+            String(decoding: data, as: UTF8.self),
+            #"{"bytes_done":5000000000,"bytes_total":12884901888}"#
+        )
+    }
 }

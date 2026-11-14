@@ -23,6 +23,11 @@ public enum Format {
         fixed(tokensPerSecond, places: 1) + nbsp + "tok/s"
     }
 
+    /// "42%": a fraction in 0...1 as whole percent, for a download's own counter.
+    public static func percent(_ fraction: Double) -> String {
+        String(format: "%.0f%%", fraction * 100)
+    }
+
     /// "0.21 s" under a minute, "about 11 min" above it.
     public static func duration(_ seconds: Double) -> String {
         if seconds < 60 {

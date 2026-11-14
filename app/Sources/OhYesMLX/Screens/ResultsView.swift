@@ -34,10 +34,10 @@ struct ResultsView: View {
                     winner: nil,
                     byFormat: true
                 )
-                if !summary.notEvicted.isEmpty {
+                if !model.notEvictedLines.isEmpty {
                     Section {
-                        ForEach(summary.notEvicted, id: \.self) { repo in
-                            Text(notEvictedLine(repo))
+                        ForEach(model.notEvictedLines, id: \.self) { line in
+                            Text(line)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -159,13 +159,6 @@ struct ResultsView: View {
         }
     }
 
-    private func notEvictedLine(_ repo: String) -> String {
-        let pick = model.recommendations?.picks.first { $0.modelID == repo }
-        let title = pick?.title ?? repo
-        let size = pick.map { Format.size($0.sizeBytes) } ?? "size unknown"
-        return "Left on disk: \(title) (\(size)) — it was in use. You can remove it from Models."
-    }
-
     // MARK: - nothing has run
 
     @ViewBuilder
@@ -194,10 +187,11 @@ struct ResultsView: View {
 
     // MARK: - Export (D8)
 
-    /// A panel the user chooses the file in, and the summary's own bytes written to it.
+    /// A panel the user chooses the file in, and the summary's payload written to it.
     ///
-    /// The bytes are the received payload (`AppModel.summaryData`), not a re-encode of the
-    /// typed value, so keys this client does not model survive into the file (AC-2).
+    /// The bytes are the received payload (`AppModel.summaryData`) re-serialised, not an
+    /// encode of the typed value, so every field the backend sent survives into the file,
+    /// including keys this client does not model (AC-2).
     private func export() {
         guard let data = model.summaryData else { return }
         let panel = NSSavePanel()
@@ -205,7 +199,7 @@ struct ResultsView: View {
         panel.nameFieldStringValue = "OhYesMLX-quickbench-\(stamp()).json"
         panel.canCreateDirectories = true
         panel.title = "Export Results"
-        panel.message = "The run's summary, exactly as the backend wrote it."
+        panel.message = "Every field the backend sent, re-serialised as JSON."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try data.write(to: url, options: .atomic)
@@ -263,9 +257,10 @@ struct ResultCellRow: View {
     }
 
     private var status: some View {
-        HStack(spacing: 4) {
-            StatusGlyph(kind: kind)
-            Text(word)
+        let display = cellStatus(cell.status)
+        return HStack(spacing: 4) {
+            StatusGlyph(kind: display.kind)
+            Text(display.word)
         }
         .font(.callout)
         .foregroundStyle(statusIsSecondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
@@ -284,26 +279,8 @@ struct ResultCellRow: View {
         .frame(width: 84, alignment: .trailing)
     }
 
-    private var word: String {
-        switch cell.status {
-        case "PASS": return "PASS"
-        case "FAIL": return "FAIL"
-        case "SKIPPED": return "SKIPPED"
-        case "ABORTED": return "Stopped by you"
-        default: return cell.status
-        }
-    }
-
-    private var kind: StatusKind {
-        switch cell.status {
-        case "PASS": return .pass
-        case "FAIL": return .fail
-        case "ABORTED": return .stopped
-        default: return .neutral
-        }
-    }
-
     private var statusIsSecondary: Bool {
-        cell.status != "PASS" && cell.status != "FAIL"
+        let kind = cellStatus(cell.status).kind
+        return kind != .pass && kind != .fail
     }
 }

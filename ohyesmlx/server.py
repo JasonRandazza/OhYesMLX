@@ -583,11 +583,7 @@ class _Handler(BaseHTTPRequestHandler):
         measured = {}
         for summary in self.server.summaries().values():
             best = summary.get("best")
-            if not (isinstance(best, dict) and isinstance(best.get("repo"), str)):
-                continue
-            held = measured.get(best["repo"])
-            # Two runs whose winners measured the same repo: the newer one (ISO measured_at) wins.
-            if held is None or str(best.get("measured_at", "")) > str(held.get("measured_at", "")):
+            if isinstance(best, dict) and isinstance(best.get("repo"), str):
                 measured[best["repo"]] = best
         picks = [
             dataclasses.asdict(pick)

@@ -30,6 +30,56 @@ final class FakeRunner: BackendRunner, @unchecked Sendable {
     }
 }
 
+/// A backend whose plan for one repo is slow, so a later pick's answer can overtake it.
+final class SlowPlanBackend: Backend, @unchecked Sendable {
+    private let inner: StubBackend
+    private let slowRepo: String
+    private let lock = NSLock()
+    private var planCalls: [String] = []
+
+    init(inner: StubBackend, slowRepo: String) {
+        self.inner = inner
+        self.slowRepo = slowRepo
+    }
+
+    var requestedRepos: [String] { lock.withLock { planCalls } }
+
+    func hardware() async throws -> Hardware { try await inner.hardware() }
+
+    func engines() async throws -> [EngineStatus] { try await inner.engines() }
+
+    func recommendations() async throws -> Recommendations { try await inner.recommendations() }
+
+    func quickbenchPlan(repo: String) async throws -> QuickPlan {
+        lock.withLock { planCalls.append(repo) }
+        if repo == slowRepo {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        let plan = try await inner.quickbenchPlan(repo: repo)
+        return QuickPlan(
+            repo: repo,
+            format: plan.format,
+            stageA: plan.stageA,
+            stageB: plan.stageB,
+            downloadBytes: plan.downloadBytes,
+            osaurus: plan.osaurus,
+            estimateS: plan.estimateS
+        )
+    }
+
+    func startJob(kind: JobKind, args: JobArgs) async throws -> String {
+        try await inner.startJob(kind: kind, args: args)
+    }
+
+    func cancel(jobID: String, now: Bool) async throws {
+        try await inner.cancel(jobID: jobID, now: now)
+    }
+
+    func events(jobID: String, after: Int?) -> AsyncThrowingStream<JobEvent, Error> {
+        inner.events(jobID: jobID, after: after)
+    }
+}
+
 @MainActor
 final class AppModelTests: XCTestCase {
     struct Stack {
@@ -43,7 +93,8 @@ final class AppModelTests: XCTestCase {
         hardware: Hardware? = nil,
         recommendations: Recommendations? = nil,
         plan: QuickPlan? = nil,
-        runner: (any BackendRunner)? = nil
+        runner: (any BackendRunner)? = nil,
+        bundlePath: String = Bundle.main.bundlePath
     ) throws -> Stack {
         let suiteName = "ohyesmlx-app-model-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -55,7 +106,12 @@ final class AppModelTests: XCTestCase {
             recommendations: recommendationsValue,
             plan: plan
         )
-        let model = AppModel(backend: backend, runner: runner, defaults: defaults)
+        let model = AppModel(
+            backend: backend,
+            runner: runner,
+            defaults: defaults,
+            bundlePath: bundlePath
+        )
         addTeardownBlock {
             defaults.removePersistentDomain(forName: suiteName)
         }
@@ -208,6 +264,27 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(stack.model.screen, .results)
         XCTAssertEqual(stack.model.summary?.ended, .finished)
         XCTAssertEqual(stack.backend.startedJobs.last?.args, .quickbench(repo: quickbenchRepo, osaurus: false))
+    }
+
+    // MARK: - the translocated bundle (AC-7, plan 05-06)
+
+    /// macOS runs a quarantined app from `/AppTranslocation/<uuid>/d/...`, a path that changes
+    /// every launch. The venvs are made from `sys.executable`, so nothing may be spawned there.
+    func testATranslocatedBundleAsksForApplicationsAndStartsNoJob() async throws {
+        let translocated = "/private/var/folders/xy/T/AppTranslocation/8F2C-9A1B/d/OhYesMLX.app"
+        XCTAssertTrue(AppModel.isTranslocated(bundlePath: translocated))
+        XCTAssertFalse(AppModel.isTranslocated(bundlePath: "/Applications/OhYesMLX.app"))
+
+        let stack = try makeStack(bundlePath: translocated)
+        await stack.model.launch()
+        XCTAssertEqual(stack.model.screen, .moveToApplications)
+
+        await stack.model.download(repo: downloadRepo)
+        await stack.model.evict(repo: downloadRepo)
+        stack.model.installConsent = true
+        await stack.model.install(engine: "optiq")
+        await stack.model.quickbench(repo: quickbenchRepo)
+        XCTAssertTrue(stack.backend.startedJobs.isEmpty)
     }
 
     // MARK: - b · a failed install keeps its tail, and the retry clears it
@@ -647,6 +724,26 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(stack.model.job?.state, .cancelled)
     }
 
+    // MARK: - a job's ending is its own, never a stale summary's (spec #1)
+
+    func testADownloadAfterARestoreFailedQuickbenchStillFinishes() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+
+        stack.backend.enqueue(events: [
+            try result(seq: 1, ended: "restore_failed"),
+            done(2, "quickbench ended"),
+        ])
+        await stack.model.quickbench(repo: quickbenchRepo)
+        XCTAssertEqual(stack.model.summary?.ended, .restoreFailed)
+        XCTAssertEqual(stack.model.job?.state, .failed)
+
+        stack.backend.enqueue(events: [done(1, "download finished")])
+        await stack.model.download(repo: downloadRepo)
+        XCTAssertEqual(stack.model.job?.kind, .download)
+        XCTAssertEqual(stack.model.job?.state, .finished)
+    }
+
     // MARK: - Q5 · engines re-verify
 
     func testAppBecameActiveAndEnginesAppearRefetchEngines() async throws {
@@ -860,6 +957,32 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(stack.backend.startedJobs.isEmpty)
     }
 
+    func testASlowPlanForThePreviousPickIsDropped() async throws {
+        let suiteName = "ohyesmlx-plan-race-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+
+        let stub = StubBackend(
+            hardware: try Fixtures.hardware,
+            engines: try Fixtures.engines,
+            recommendations: try Fixtures.recommendations,
+            plan: try Fixtures.quickPlan
+        )
+        let slowRepo = "mlx-community/a-slow-pick"
+        let backend = SlowPlanBackend(inner: stub, slowRepo: slowRepo)
+        let model = AppModel(backend: backend, defaults: defaults)
+        await model.launch()
+
+        let slow = Task { await model.planBenchmark(repo: slowRepo) }
+        await waitUntil { backend.requestedRepos.contains(slowRepo) }
+        let fastPlanned = await model.planBenchmark(repo: quickbenchRepo)
+        let slowPlanned = await slow.value
+
+        XCTAssertTrue(fastPlanned)
+        XCTAssertFalse(slowPlanned, "the earlier pick's answer landed after the picker moved on")
+        XCTAssertEqual(model.quickPlan?.repo, quickbenchRepo)
+    }
+
     // MARK: - AC-2c · quit while a job runs offers Quit anyway
 
     func testQuitWhileAJobRunsOffersQuitAnyway() async throws {
@@ -916,9 +1039,38 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(stack.model.modelsComplete)
         XCTAssertFalse(stack.model.benchmarkComplete)
 
-        stack.backend.enqueue(events: [done(1)])
+        stack.backend.enqueue(events: [try result(seq: 1), done(2)])
         await stack.model.quickbench(repo: quickbenchRepo)
         XCTAssertTrue(stack.model.benchmarkComplete)
+    }
+
+    func testTheBenchmarkTickSurvivesALaterDownload() async throws {
+        let stack = try makeStack(
+            recommendations: Recommendations(picks: [], excluded: [], unsupportedReason: nil),
+            plan: try Fixtures.quickPlan
+        )
+        await stack.model.launch()
+        XCTAssertFalse(stack.model.benchmarkComplete)
+
+        stack.backend.enqueue(events: [try result(seq: 1), done(2)])
+        await stack.model.quickbench(repo: quickbenchRepo)
+        XCTAssertTrue(stack.model.benchmarkComplete)
+
+        stack.backend.enqueue(events: [done(1, "download finished")])
+        await stack.model.download(repo: downloadRepo)
+        XCTAssertEqual(stack.model.job?.kind, .download)
+        XCTAssertTrue(stack.model.benchmarkComplete, "a later job took the Benchmark tick away")
+    }
+
+    func testAPickMeasuredHereTicksBenchmarkWithNoSummaryInThisSession() async throws {
+        let stack = try makeStack()
+        await stack.model.launch()
+
+        XCTAssertNil(stack.model.summary)
+        XCTAssertTrue(
+            stack.model.benchmarkComplete,
+            "a pick measured on this Mac is a finished benchmark"
+        )
     }
 
     // MARK: - 05-05 · the stub scenarios render without a backend
@@ -999,7 +1151,7 @@ final class AppModelTests: XCTestCase {
     func testTheDownloadingScenarioExposesTheByteCounters() async throws {
         let model = StubScenario.modelsDownloading.makeModel()
         await StubScenario.modelsDownloading.drive(model)
-        await waitUntilAsync { model.downloadProgress(repo: StubScenario.stubRepo) != nil }
+        await waitUntil { model.downloadProgress(repo: StubScenario.stubRepo) != nil }
 
         let counters = try XCTUnwrap(model.downloadProgress(repo: StubScenario.stubRepo))
         XCTAssertEqual(counters.total, 1_400_000_000)
@@ -1016,16 +1168,5 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(low.neededBytes, 40_200_000_000)
         XCTAssertEqual(low.amountToFree, 1_200_000_000)
         XCTAssertEqual(model.hardware?.diskFreeBytes, 39_000_000_000, "the meter re-read the disk")
-    }
-
-    private func waitUntilAsync(
-        timeout: TimeInterval = 2,
-        _ condition: @MainActor () -> Bool
-    ) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
     }
 }

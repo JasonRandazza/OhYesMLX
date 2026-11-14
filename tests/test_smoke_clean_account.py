@@ -375,7 +375,8 @@ def test_cell_outcomes_take_the_progress_events_and_the_summary_wins():
         },
         {
             "type": "progress",
-            "payload": {"engine": "omlx", "skipped": "port 8100 answers"},
+            "payload": {"stage": "A", "engine": "omlx", "format": "mlx 4-bit",
+                        "status": "SKIPPED", "reason": "port 8100 answers"},
         },
         {
             "type": "result",
@@ -386,7 +387,7 @@ def test_cell_outcomes_take_the_progress_events_and_the_summary_wins():
                         {"engine": "optiq", "status": "PASS", "reason": None},
                     ]
                 },
-                "stage_b": {"cells": [{"engine": "optiq", "status": "PASS"}]},
+                "stage_b": {"cells": [{"engine": "optiq", "format": "oQ4", "status": "PASS"}]},
             },
         },
         {"type": "done", "payload": None},
@@ -395,7 +396,7 @@ def test_cell_outcomes_take_the_progress_events_and_the_summary_wins():
         {"engine": "mlxlm", "status": "FAIL", "reason": "token salad"},
         {"engine": "omlx", "status": "SKIPPED", "reason": "port 8100 answers"},
         {"engine": "optiq", "status": "PASS", "reason": None},
-        {"engine": "stage_b:optiq", "status": "PASS", "reason": None},
+        {"engine": "stage_b:oQ4", "status": "PASS", "reason": None},
     ]
 
 

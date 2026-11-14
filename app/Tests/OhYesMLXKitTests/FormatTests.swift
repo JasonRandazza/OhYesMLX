@@ -22,6 +22,12 @@ final class FormatTests: XCTestCase {
         XCTAssertEqual(Format.duration(660), "about 11" + nbsp + "min")
     }
 
+    func testPercentIsWholePercentOfTheFraction() {
+        XCTAssertEqual(Format.percent(0), "0%")
+        XCTAssertEqual(Format.percent(0.42), "42%")
+        XCTAssertEqual(Format.percent(1), "100%")
+    }
+
     func testNumberAndUnitAreJoinedByANonBreakingSpace() {
         XCTAssertEqual(Format.memory(68_719_476_736), "64\u{00A0}GB")
         XCTAssertEqual(Format.size(43_377_606_656), "43.4\u{00A0}GB")

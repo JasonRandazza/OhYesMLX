@@ -5,6 +5,8 @@ public enum Screen: Sendable, Equatable {
     case launching
     case couldntStart
     case unsupported
+    /// macOS is running the app from its translocated, read-only copy; nothing may be installed.
+    case moveToApplications
     case welcome
     case yourMac
     case engines
@@ -166,7 +168,8 @@ public final class AppModel {
     public private(set) var lowDisk: [String: LowDisk] = [:]
     public private(set) var liveCells: [BenchmarkCell] = []
     public private(set) var summary: QuickSummary?
-    /// The summary exactly as the backend sent it, which is what Export writes (AC-2, D8).
+    /// Every field the summary's payload carried, re-serialised; that is what Export writes
+    /// (AC-2, D8), so keys this client does not model survive into the file.
     public private(set) var summaryData: Data?
     public private(set) var interruptedJob: InterruptedJob?
     public private(set) var launchError: String?
@@ -194,41 +197,67 @@ public final class AppModel {
 
     public var modelsComplete: Bool { recommendations?.picks.contains(where: \.downloaded) ?? false }
 
-    public var benchmarkComplete: Bool { job?.kind == .quickbench && job?.state == .finished }
+    /// A finished quickbench is a tick even after a later job replaces `job`, and a row the
+    /// backend marked measured here is the same fact from the other record.
+    public var benchmarkComplete: Bool {
+        if let summary, summary.ended == .finished { return true }
+        return recommendations?.picks.contains { $0.measuredHere != nil } ?? false
+    }
 
     private var backend: any Backend
     private var runner: (any BackendRunner)?
     private let launcher: BackendLauncher?
     private let defaults: UserDefaults
+    private let bundlePath: String
     private let hardwareReadyTimeout: TimeInterval
     private let inflightKey = "inflightJob"
+    /// The repo the newest plan request is for; a slower earlier response is dropped.
+    private var planningRepo: String?
 
     public init(
         backend: any Backend,
         runner: (any BackendRunner)? = nil,
         launcher: BackendLauncher? = nil,
         defaults: UserDefaults = .standard,
-        hardwareReadyTimeout: TimeInterval = 10
+        hardwareReadyTimeout: TimeInterval = 10,
+        bundlePath: String = Bundle.main.bundlePath
     ) {
         self.backend = backend
         self.runner = runner
         self.launcher = launcher
         self.defaults = defaults
+        self.bundlePath = bundlePath
         self.hardwareReadyTimeout = hardwareReadyTimeout
     }
 
     public convenience init(
         launcher: BackendLauncher,
         defaults: UserDefaults = .standard,
-        hardwareReadyTimeout: TimeInterval = 10
+        hardwareReadyTimeout: TimeInterval = 10,
+        bundlePath: String = Bundle.main.bundlePath
     ) {
         self.init(
             backend: PlaceholderBackend(),
             runner: nil,
             launcher: launcher,
             defaults: defaults,
-            hardwareReadyTimeout: hardwareReadyTimeout
+            hardwareReadyTimeout: hardwareReadyTimeout,
+            bundlePath: bundlePath
         )
+    }
+
+    /// Whether macOS is running this app from its App Translocation copy (AC-7, plan 05-06).
+    ///
+    /// A quarantined app opened where it was downloaded is run from a random read-only path
+    /// under `/AppTranslocation/` that changes every launch. Engine venvs are made from
+    /// `sys.executable` — a path inside the bundle — so a venv made in one such run points at
+    /// an interpreter that is gone the next time. Nothing is spawned until the app is moved.
+    static func isTranslocated(bundlePath: String) -> Bool {
+        bundlePath.contains("/AppTranslocation/")
+    }
+
+    var translocated: Bool {
+        Self.isTranslocated(bundlePath: bundlePath)
     }
 
     public var oneSlotReason: String? {
@@ -331,6 +360,12 @@ public final class AppModel {
     }
 
     public func launch() async {
+        // AC-7: checked before anything is spawned, because the venvs it would make point at a
+        // bundle path that is gone the next launch.
+        guard !translocated else {
+            screen = .moveToApplications
+            return
+        }
         if runner == nil, let launcher {
             switch await launcher.start() {
             case .couldntStart(let message):
@@ -349,6 +384,10 @@ public final class AppModel {
     }
 
     public func relaunch() async {
+        guard !translocated else {
+            screen = .moveToApplications
+            return
+        }
         guard let launcher else { return }
         backendStopped = nil
         backendStderrTail = []
@@ -445,15 +484,21 @@ public final class AppModel {
     /// The plan for *repo*, and nothing started: the Benchmark screen shows this first (D4).
     ///
     /// The previous plan is kept until the new one arrives, so a Start pressed while a plan is
-    /// being re-fetched runs the plan on screen rather than finding none.
+    /// being re-fetched runs the plan on screen rather than finding none. A response that
+    /// arrives after the picker has moved on belongs to a plan that is no longer selected, so
+    /// it is dropped rather than replacing the newer one.
     @discardableResult
     public func planBenchmark(repo: String) async -> Bool {
         guard !unsupported else { return false }
         benchmarkRefusal = nil
+        planningRepo = repo
         do {
-            quickPlan = try await backend.quickbenchPlan(repo: repo)
+            let plan = try await backend.quickbenchPlan(repo: repo)
+            guard planningRepo == repo else { return false }
+            quickPlan = plan
             return true
         } catch let error as BackendError {
+            guard planningRepo == repo else { return false }
             quickPlan = nil
             refusal = error
             benchmarkRefusal = error
@@ -560,7 +605,8 @@ public final class AppModel {
     }
 
     private func start(_ args: JobArgs) async {
-        guard !unsupported else { return }
+        // AC-7: no job can start from a translocated bundle, whatever the screen says.
+        guard !unsupported, !translocated else { return }
         refusal = nil
         if args.kind == .quickbench {
             benchmarkRefusal = nil
@@ -628,8 +674,11 @@ public final class AppModel {
         switch event.type {
         case .done:
             if status.state.isActive {
-                // A half-restored run sends `done` and no error; only its summary says so.
-                status.state = summary?.ended == .restoreFailed ? .failed : .finished
+                // A half-restored quickbench sends `done` and no error; only its summary says
+                // so. Any other kind's completion is its own, never a summary it did not write.
+                let restoreFailed =
+                    status.kind == .quickbench && summary?.ended == .restoreFailed
+                status.state = restoreFailed ? .failed : .finished
             }
             job = status
             defaults.removeObject(forKey: inflightKey)

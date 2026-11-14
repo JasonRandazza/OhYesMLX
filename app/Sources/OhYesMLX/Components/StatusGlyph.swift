@@ -27,13 +27,27 @@ enum StatusKind {
     }
 }
 
+/// The one mapping from a cell's status string to its glyph and word (DESIGN.md §4.3).
+///
+/// `ABORTED` reads "Stopped by you" and never carries a number; a status the design has no
+/// word for is shown as the backend wrote it.
+func cellStatus(_ status: String) -> (kind: StatusKind, word: String) {
+    switch status {
+    case "PASS": return (.pass, "PASS")
+    case "FAIL": return (.fail, "FAIL")
+    case "SKIPPED": return (.neutral, "SKIPPED")
+    case "ABORTED": return (.stopped, "Stopped by you")
+    default: return (.neutral, status)
+    }
+}
+
 /// Status is always a glyph plus a word; the glyph carries colour, the word carries meaning.
 struct StatusGlyph: View {
     let kind: StatusKind
 
     var body: some View {
         Image(systemName: kind.symbol)
-            .font(.system(size: 9))
+            .font(.system(size: 8))
             .foregroundStyle(kind.color)
             .accessibilityHidden(true)
     }

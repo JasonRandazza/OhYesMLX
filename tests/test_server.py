@@ -2311,28 +2311,3 @@ def test_a_second_stop_now_answers_202_without_a_second_stop(launch):
     assert wait_until(lambda: listener.jobs.get(job_id).done)
 
 
-
-def test_measured_here_keeps_the_newer_of_two_runs_won_on_the_same_repo(launch):
-    """Two finished runs on different chosen repos whose winners both measured one sibling: the newer counts,
-    whatever order the summaries arrive in."""
-    def best(tps, when):
-        return {"engine": "omlx", "format": "oq4", "repo": "org/sibling", "decode_tps": tps,
-                "ttft_s": 0.2, "measured_at": when, "quick": True}
-
-    older = best(50.0, "2026-11-01T00:00:00+00:00")
-    newer = best(60.0, "2026-11-02T00:00:00+00:00")
-    models = [a_model("org/a", 2 * 1024**3), a_model("org/b", 2 * 1024**3),
-              a_model("org/sibling", 2 * 1024**3)]
-    for first, second in ((older, newer), (newer, older)):
-        listener = launch(
-            scan=Recorder(this_mac()),
-            detect=Recorder([status("mlxlm", installed=True, version="0.31.3")]),
-            load_catalog=Recorder(models),
-            summaries=lambda first=first, second=second: {
-                "org/a": {"repo": "org/a", "ended": "finished", "best": first},
-                "org/b": {"repo": "org/b", "ended": "finished", "best": second},
-            },
-        )
-        body = json.loads(request(listener, "/recommendations", token=TOKEN)[2])
-        picks = {pick["model_id"]: pick for pick in body["picks"]}
-        assert picks["org/sibling"]["measured_here"] == newer

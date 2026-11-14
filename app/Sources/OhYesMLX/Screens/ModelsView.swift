@@ -175,7 +175,7 @@ private struct ModelRow: View {
                 ProgressView(value: job.fraction)
                     .frame(width: 200)
                 HStack(spacing: 4) {
-                    Text(percent(job.fraction))
+                    Text(Format.percent(job.fraction))
                         .monospacedDigit()
                     if let progress = model.downloadProgress(repo: pick.modelID) {
                         Text("·")
@@ -242,10 +242,6 @@ private struct ModelRow: View {
             }
             .layoutPriority(2)
         }
-    }
-
-    private func percent(_ fraction: Double) -> String {
-        String(format: "%.0f%%", fraction * 100)
     }
 
     private var accessibilityLabel: String {

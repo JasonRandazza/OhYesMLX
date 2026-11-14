@@ -192,7 +192,7 @@ final class LauncherTests: XCTestCase {
         let backend = try await startRunning(launcher, fake)
         defer { backend.forceKill() }
 
-        XCTAssertEqual(fake.argv, ["/usr/bin/true", "-I", "-m", "ohyesmlx.cli", "app"])
+        XCTAssertEqual(fake.argv, ["/usr/bin/true", "-I", "-B", "-m", "ohyesmlx.cli", "app"])
         XCTAssertEqual(fake.environment, [
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": "/Users/tester",

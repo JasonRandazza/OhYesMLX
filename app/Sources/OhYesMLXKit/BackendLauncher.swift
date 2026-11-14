@@ -180,7 +180,9 @@ public final class BackendLauncher: @unchecked Sendable {
         }
 
         let session = LaunchSession(process: process, lockFD: lockFD, timing: timing)
-        let argv = [interpreter.path, "-I", "-m", "ohyesmlx.cli", "app"]
+        // -B: never write bytecode into the bundle; it is signed and may be on a read-only
+        // volume (P5-6). The bundle's own modules are precompiled at build time.
+        let argv = [interpreter.path, "-I", "-B", "-m", "ohyesmlx.cli", "app"]
         do {
             try process.run(argv: argv, environment: childEnvironment(), directory: directory)
         } catch {

@@ -276,16 +276,13 @@ def cell_outcomes(events: list[dict]) -> list[dict]:
             continue
         kind = event.get("type")
         if kind == "progress" and isinstance(payload.get("engine"), str):
+            # The structured cell payload (v5-quickbench.md, 05-01 review): skips carry
+            # status SKIPPED and their reason, so there is one branch.
             if payload.get("status"):
                 reached[payload["engine"]] = {
                     "engine": payload["engine"],
                     "status": payload["status"],
-                }
-            elif payload.get("skipped"):
-                reached[payload["engine"]] = {
-                    "engine": payload["engine"],
-                    "status": "SKIPPED",
-                    "reason": payload["skipped"],
+                    "reason": payload.get("reason"),
                 }
         elif kind == "result":
             for stage in ("stage_a", "stage_b"):
@@ -295,7 +292,7 @@ def cell_outcomes(events: list[dict]) -> list[dict]:
                 for cell in block.get("cells") or []:
                     if not isinstance(cell, dict) or not cell.get("engine"):
                         continue
-                    name = cell["engine"] if stage == "stage_a" else f"stage_b:{cell['engine']}"
+                    name = cell["engine"] if stage == "stage_a" else f"stage_b:{cell.get('format', cell['engine'])}"
                     reached[name] = {
                         "engine": name,
                         "status": cell.get("status"),

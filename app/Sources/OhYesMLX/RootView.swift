@@ -23,6 +23,8 @@ struct RootView: View {
                     }
                 case .unsupported:
                     UnsupportedStateView(reason: model.hardware?.unsupportedReason)
+                case .moveToApplications:
+                    MoveToApplicationsStateView()
                 default:
                     shell
                 }

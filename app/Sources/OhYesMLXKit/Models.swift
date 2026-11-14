@@ -487,14 +487,15 @@ public struct JobEvent: Codable, Sendable, Equatable, Identifiable {
 
     public var id: Int { seq }
 
-    /// The payload's JSON, every key of it, for the file Export writes (AC-2, D8).
+    /// The payload re-serialised with every field the backend sent, for the file Export
+    /// writes (AC-2, D8).
     ///
     /// `JSONValue` models any JSON a backend sends, so this keeps keys `QuickSummary` does
     /// not model (`plan`, `engines`, `load`, `osaurus`, `harness`) instead of dropping them
-    /// the way an encode of the typed value would. It is the received value re-encoded
-    /// canonically, not the wire's own whitespace: the SSE and HTTP layers hand this client a
-    /// decoded event and are frozen by plan 05-05, so the frame's original bytes are gone by
-    /// the time an event exists here.
+    /// the way an encode of the typed value would. The bytes are this client's own canonical
+    /// re-serialisation, not the wire's: the SSE and HTTP layers hand this client a decoded
+    /// event, so the frame's original bytes are gone by the time an event exists here.
+    /// Integers stay integers on the way through.
     public var payloadData: Data? {
         guard let payload else { return nil }
         let encoder = JSONEncoder()

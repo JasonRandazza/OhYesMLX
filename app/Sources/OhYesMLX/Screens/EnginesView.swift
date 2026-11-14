@@ -29,9 +29,12 @@ struct EnginesView: View {
             Form {
                 Section {
                     ForEach(model.engines) { engine in
-                        EngineRow(model: model, engine: engine) {
-                            consent = engine
-                        }
+                        EngineRow(
+                            model: model,
+                            engine: engine,
+                            askConsent: { consent = engine },
+                            startInstall: { startInstall(engine) }
+                        )
                     }
                 }
 
@@ -80,7 +83,10 @@ struct EnginesView: View {
 private struct EngineRow: View {
     let model: AppModel
     let engine: EngineStatus
-    let install: () -> Void
+    /// Opens the consent sheet, whose confirmation is `startInstall`.
+    let askConsent: () -> Void
+    /// The one install-start path, shared by Install… and Try Again.
+    let startInstall: () -> Void
 
     private var activeJob: JobStatus? {
         guard let job = model.job, job.kind == .install, job.name == engine.name, job.state.isActive
@@ -160,7 +166,7 @@ private struct EngineRow: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Button("Install…", action: install)
+                Button("Install…", action: askConsent)
                     .disabled(!model.canStartJob)
                     .accessibilityHint(Text(model.oneSlotReason ?? ""))
             }
@@ -178,23 +184,20 @@ private struct EngineRow: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Try Again") {
-                retry()
+            HStack(spacing: 8) {
+                if let reason = model.oneSlotReason {
+                    Text(reason)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Try Again", action: startInstall)
+                    .disabled(!model.canStartJob)
+                    .accessibilityHint(Text(model.oneSlotReason ?? ""))
             }
-            .disabled(!model.canStartJob)
-            .accessibilityHint(Text(model.oneSlotReason ?? ""))
             .padding(.top, 2)
         }
         .font(.caption)
         .padding(.leading, 2)
-    }
-
-    private func retry() {
-        model.installConsent = true
-        Task {
-            await model.install(engine: engine.name)
-            model.installConsent = false
-        }
     }
 
     private var accessibilityLabel: String {

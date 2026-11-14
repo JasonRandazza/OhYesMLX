@@ -40,7 +40,7 @@ of "Stop now" is "Stop after this cell" with the number discarded.
   that interpreter's own site-packages (plan 05-06). Development: the path in `OYMLX_DEV_PYTHON`, a venv made
   by `scripts/dev_backend_venv.sh` whose site-packages holds a `.pth` naming the repo root. Neither found:
   the `couldnt_start` screen, naming which path was looked for.
-- **Argv:** `[python, "-I", "-m", "ohyesmlx.cli", "app"]` (the package has no `__main__.py`; `cli.py` has the `__main__` guard). Nothing else, and never the token (P5-2, P5-3).
+- **Argv:** `[python, "-I", "-B", "-m", "ohyesmlx.cli", "app"]` (the package has no `__main__.py`; `cli.py` has the `__main__` guard). Nothing else, and never the token (P5-2, P5-3). `-B` because the app bundle is signed and may sit on a read-only volume, so the backend never writes bytecode into it (P5-6, plan 05-06); the bundled `ohyesmlx` is precompiled at build time.
 - **Environment:** built, not inherited: `PATH=/usr/bin:/bin:/usr/sbin:/sbin` (launchd's default, P5-9),
   `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` from the parent, nothing else. No `PYTHON*` variable.
 - **Working directory:** `~/Library/Application Support/OhYesMLX`, created `0700` by the client before the
@@ -76,8 +76,12 @@ shows its `message` as the backend wrote it.
 
 ## The app model (`AppModel`, plan 05-02; screens in 05-04/05-05)
 
-Screens: `launching`, `couldntStart`, `unsupported`, `welcome`, `yourMac`, `engines`, `models`, `benchmark`,
-`results`. The flow and its edge cases are the Phase 5 prototype's (`prototype/phase5-flows`, never merged);
+Screens: `launching`, `couldntStart`, `unsupported`, `moveToApplications`, `welcome`, `yourMac`, `engines`,
+`models`, `benchmark`, `results`. `moveToApplications` is the App Translocation state (plan 05-06, AC-7):
+`AppModel` checks `bundlePath` for `/AppTranslocation/` before it spawns the backend and before any job can
+start, because engine venvs are made from `sys.executable`, a path inside the app that changes every launch
+there. The screen says "Move OhYesMLX to your Applications folder, then open it again" and offers only Quit.
+The flow and its edge cases are the Phase 5 prototype's (`prototype/phase5-flows`, never merged);
 Jason's answers to its seven questions (2026-11-13) are binding:
 
 1. **One slot:** while a job runs, every other job-starting control is disabled with the reason

@@ -65,6 +65,34 @@ struct UnsupportedStateView: View {
     }
 }
 
+/// AC-7: macOS is running the app from its translocated copy, so every path it would install
+/// into is a temporary one. Nothing is spawned until the app is moved.
+struct MoveToApplicationsStateView: View {
+    var body: some View {
+        CenteredState(
+            symbol: "arrow.down.app",
+            title: "Move OhYesMLX to your Applications folder, then open it again",
+            bodyText: "macOS is running OhYesMLX from a temporary, read-only copy because it was "
+                + "opened from where it was downloaded. Anything installed from here would "
+                + "disappear the next time you open the app."
+        ) {
+            Text("Drag OhYesMLX to Applications in Finder, then open it from there. "
+                + "If you had already installed mlx-lm or OptiQ, install them again on the "
+                + "Engines screen afterwards.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+            Button("Quit OhYesMLX") {
+                NSApplication.shared.terminate(nil)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+        }
+    }
+}
+
 struct BackendStoppedStateView: View {
     let status: Int32
     let stderrTail: [String]
