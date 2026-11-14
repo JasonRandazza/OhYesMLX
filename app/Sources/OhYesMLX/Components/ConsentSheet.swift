@@ -46,8 +46,12 @@ struct ConsentSheet: View {
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
-                    Text("Download")
-                        .foregroundStyle(.secondary)
+                    Text(
+                        plan.kind == "guided_download"
+                            ? "Download (estimated)"
+                            : "Download"
+                    )
+                    .foregroundStyle(.secondary)
                     Text(plan.sizeBytesEstimate.map(Format.size) ?? "Unknown")
                         .monospacedDigit()
                 }
@@ -65,7 +69,7 @@ struct ConsentSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Install") {
+                Button(plan.kind == "guided_download" ? "Open Download Page" : "Install") {
                     install()
                     dismiss()
                 }

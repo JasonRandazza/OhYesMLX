@@ -38,8 +38,14 @@ struct RootView: View {
             VStack(spacing: 0) {
                 lifecycleBanners
                 if model.showsInterruptedBanner, let interrupted = model.interruptedJob {
+                    // The banner names the pick, not its repo id (AC-6). It is a display copy:
+                    // Retry still re-sends the job's own repo through the model.
                     InterruptedBanner(
-                        job: interrupted,
+                        job: InterruptedJob(
+                            kind: interrupted.kind,
+                            name: model.displayName(for: interrupted.name),
+                            started: interrupted.started
+                        ),
                         retry: { Task { await model.retryInterrupted() } },
                         dismiss: { model.dismissInterrupted() }
                     )
@@ -154,105 +160,13 @@ struct RootView: View {
         case .engines:
             EnginesView(model: model, initialConsentEngine: debugConsentEngine)
         case .models:
-            modelsPlaceholder
+            ModelsView(model: model)
         case .benchmark:
-            benchmarkPlaceholder
+            BenchmarkView(model: model)
         case .results:
-            resultsPlaceholder
+            ResultsView(model: model)
         default:
             EmptyView()
-        }
-    }
-
-    private var modelsPlaceholder: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(model.recommendations?.picks ?? []) { pick in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(pick.title) — \(pick.format), \(Format.size(pick.sizeBytes))")
-                        Text(pick.reason)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                        if pick.downloaded {
-                            Text("downloaded")
-                        }
-                        if let failure = model.modelRefusals[pick.modelID] {
-                            Text(failure.message)
-                        }
-                        if let low = model.lowDisk[pick.modelID] {
-                            Text("Free \(Format.size(low.amountToFree)) to download this model.")
-                        }
-                        HStack {
-                            Button("Download") {
-                                Task { await model.download(repo: pick.modelID) }
-                            }
-                            .disabled(!model.canStartJob)
-                            Button("Quick benchmark") {
-                                Task { await model.quickbench(repo: pick.modelID) }
-                            }
-                            .disabled(!model.canStartJob)
-                        }
-                    }
-                }
-                ForEach(model.recommendations?.excluded ?? []) { excluded in
-                    Text("\(excluded.modelID): \(excluded.reason)")
-                }
-                if let reason = model.oneSlotReason {
-                    Text(reason)
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: 680, alignment: .leading)
-        }
-    }
-
-    private var benchmarkPlaceholder: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                if let plan = model.quickPlan {
-                    Text("\(plan.repo) — \(plan.format)")
-                    Text("Stage A: \(plan.stageA.map(\.engine).joined(separator: ", "))")
-                    Text("Stage B: \(plan.stageB.map(\.repo).joined(separator: ", "))")
-                    Text(
-                        "Download \(Format.size(plan.downloadBytes)), "
-                            + Format.duration(Double(plan.estimateS))
-                    )
-                }
-                if let refusal = model.benchmarkRefusal {
-                    Text(refusal.message)
-                }
-                HStack {
-                    Button("Stop after this cell") {
-                        Task { await model.cancelJob(now: false) }
-                    }
-                    Button("Stop now") {
-                        Task { await model.cancelJob(now: true) }
-                    }
-                }
-                if let job = model.job {
-                    Text("\(job.kind.wireName) \(job.name): \(job.state.text) \(job.message)")
-                }
-                ForEach(model.benchmarkCells) { cell in
-                    Text("\(cell.engine): \(cell.status)\(cell.reason.map { ": \($0)" } ?? "")")
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: 680, alignment: .leading)
-        }
-    }
-
-    private var resultsPlaceholder: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(model.benchmarkCells) { cell in
-                    Text("\(cell.engine): \(cell.status)\(cell.reason.map { ": \($0)" } ?? "")")
-                }
-                ForEach(model.notEvictedLines, id: \.self) { line in
-                    Text(line)
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: 680, alignment: .leading)
         }
     }
 }
@@ -281,7 +195,7 @@ private enum SidebarItem: Int, CaseIterable, Identifiable {
         case .yourMac: return "desktopcomputer"
         case .engines: return "server.rack"
         case .models: return "shippingbox"
-        case .benchmark: return "gauge"
+        case .benchmark: return "gauge.with.needle"
         case .results: return "chart.bar.fill"
         }
     }
@@ -335,7 +249,10 @@ private enum SidebarItem: Int, CaseIterable, Identifiable {
         case .models: return model.enginesComplete
         case .benchmark: return model.modelsComplete
         case .results:
-            return model.benchmarkComplete
+            // Reachable once a model is downloaded: the screen's no-run state is a real state
+            // (it lists what was measured on this Mac), not an empty page.
+            return model.modelsComplete
+                || model.benchmarkComplete
                 || !model.benchmarkCells.isEmpty
                 || model.summary != nil
         }

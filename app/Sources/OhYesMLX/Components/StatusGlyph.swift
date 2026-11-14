@@ -5,12 +5,15 @@ enum StatusKind {
     case warning
     case fail
     case neutral
+    /// DESIGN.md §4.3's "Stopped by you": a `stop.circle` in secondary, never a number.
+    case stopped
 
     var symbol: String {
         switch self {
         case .pass, .warning: return "circle.fill"
         case .fail: return "xmark.circle.fill"
         case .neutral: return "minus.circle"
+        case .stopped: return "stop.circle"
         }
     }
 
@@ -19,7 +22,7 @@ enum StatusKind {
         case .pass: return .green
         case .warning: return .orange
         case .fail: return .red
-        case .neutral: return .secondary
+        case .neutral, .stopped: return .secondary
         }
     }
 }

@@ -323,6 +323,7 @@ def _cell_record(
     engine,
     fmt,
     artifact_dir,
+    repo,
     *,
     row=None,
     status=None,
@@ -334,10 +335,13 @@ def _cell_record(
     A measured cell takes ``row`` from ``report.summarize`` -- the one definition of a
     published figure -- and a skipped or failed one carries its own status and reason with
     no number at all. A skipped cell reporting zero would be a measurement it did not make.
+    *repo* is the catalog row the artifact came from: the chosen repo in stage A, the
+    sibling's in stage B, so a stage-B win names the format and repo that produced it.
     """
     return {
         "engine": engine,
         "format": fmt,
+        "repo": repo,
         "artifact_dir": artifact_dir,
         "status": (row or {}).get("status", status),
         "reason": (row or {}).get("reason", reason),
@@ -349,11 +353,11 @@ def _cell_record(
     }
 
 
-def _skipped(engine, fmt, artifact_dir, reason) -> dict:
-    return _cell_record(engine, fmt, artifact_dir, status="SKIPPED", reason=reason)
+def _skipped(engine, fmt, artifact_dir, repo, reason) -> dict:
+    return _cell_record(engine, fmt, artifact_dir, repo, status="SKIPPED", reason=reason)
 
 
-def _aborted(engine, fmt, artifact_dir) -> dict:
+def _aborted(engine, fmt, artifact_dir, repo) -> dict:
     """The cell a "Stop now" landed on: a status and a reason, and no number at all.
 
     "Stop now" is the server stopping the engine from outside, and ``abort`` answers True only
@@ -364,7 +368,7 @@ def _aborted(engine, fmt, artifact_dir) -> dict:
     run's unexpected error. This docstring is the one place the rationale is written; callers
     point at it.
     """
-    return _cell_record(engine, fmt, artifact_dir, status=ABORTED, reason=ABORTED_REASON)
+    return _cell_record(engine, fmt, artifact_dir, repo, status=ABORTED, reason=ABORTED_REASON)
 
 
 def _winner(cells) -> tuple[dict | None, list[str]]:
@@ -392,11 +396,13 @@ def _winner(cells) -> tuple[dict | None, list[str]]:
 
 
 def _best(summary, measured_at) -> dict | None:
-    """The best-for-you cell: AC-5's five fields, or None when nothing passed.
+    """The best-for-you cell: AC-5's five fields plus the winner's format and repo.
 
     Stage B is the comparison the summary exists for, so its cells decide when it ran; a run
     that stopped at stage A offers A's winner. Only a PASS cell with a decode rate is
-    eligible, which is what keeps a failed cell out of `Pick.measured_here`.
+    eligible, which is what keeps a failed cell out of `Pick.measured_here`. ``format`` and
+    ``repo`` are the winning cell's own, never the chosen row's: when a stage-B sibling
+    wins, the number belongs to the sibling and `measured_here` is keyed on it.
     """
     cells = (
         summary["stage_b"]["cells"]
@@ -413,6 +419,8 @@ def _best(summary, measured_at) -> dict | None:
     top = max(passed, key=lambda cell: cell["decode_tps"])
     return {
         "engine": top["engine"],
+        "format": top["format"],
+        "repo": top["repo"],
         "decode_tps": top["decode_tps"],
         "ttft_s": top["ttft_s"],
         "measured_at": measured_at,
@@ -635,7 +643,7 @@ def run(
                 payload={"label": BUSY},
             )
 
-    def measure_cell(engine, fmt, artifact_dir, cell_dir):
+    def measure_cell(engine, fmt, artifact_dir, repo, cell_dir):
         """One cell's own `run_cells` call, with Osaurus pinned and restored around it."""
         attempted = False
         pinned = False
@@ -657,7 +665,7 @@ def run(
                     pinned = True
                     summary["osaurus"]["pinned"] = True
                 if blocked is not None:
-                    return _skipped(engine, fmt, artifact_dir, blocked)
+                    return _skipped(engine, fmt, artifact_dir, repo, blocked)
             results = run_cells(
                 cli.build_cells(measure.Cell, cell_spec(fmt, engine, artifact_dir)),
                 decode,
@@ -681,19 +689,20 @@ def run(
                         summary["osaurus"]["during_run"] = str(during_run)
                 except Exception as error:
                     return _cell_record(
-                        engine, fmt, artifact_dir, status="FAIL", reason=str(error)
+                        engine, fmt, artifact_dir, repo, status="FAIL", reason=str(error)
                     )
                 if drift is not None:
                     return _cell_record(
                         engine,
                         fmt,
                         artifact_dir,
+                        repo,
                         status="FAIL",
                         reason="Osaurus changed its settings during the run: " + drift,
                     )
         except Exception as error:
             return _cell_record(
-                engine, fmt, artifact_dir, status="FAIL", reason=str(error)
+                engine, fmt, artifact_dir, repo, status="FAIL", reason=str(error)
             )
         finally:
             if attempted:
@@ -735,20 +744,21 @@ def run(
                 engine,
                 fmt,
                 artifact_dir,
+                repo,
                 status="FAIL",
                 reason="the harness returned no result for this cell",
             )
-        return _cell_record(engine, fmt, artifact_dir, row=rows[0])
+        return _cell_record(engine, fmt, artifact_dir, repo, row=rows[0])
 
-    def measured(engine, fmt, artifact_dir, cell_dir):
+    def measured(engine, fmt, artifact_dir, repo, cell_dir):
         """One cell's record, replaced by :func:`_aborted` when a stop landed while it ran."""
         try:
-            record = measure_cell(engine, fmt, artifact_dir, cell_dir)
+            record = measure_cell(engine, fmt, artifact_dir, repo, cell_dir)
         except Exception:
             if not abort():
                 raise
-            return _aborted(engine, fmt, artifact_dir)
-        return _aborted(engine, fmt, artifact_dir) if abort() else record
+            return _aborted(engine, fmt, artifact_dir, repo)
+        return _aborted(engine, fmt, artifact_dir, repo) if abort() else record
 
     try:
         send(
@@ -766,7 +776,7 @@ def run(
             reason = _skip_reason(name, osaurus, osaurus_app_running, port_in_use)
             if reason is not None:
                 summary["stage_a"]["cells"].append(
-                    _skipped(name, model.format, snapshot, reason)
+                    _skipped(name, model.format, snapshot, model.repo, reason)
                 )
                 step(
                     f"stage A: {name} skipped: {reason}",
@@ -779,7 +789,7 @@ def run(
                     },
                 )
                 continue
-            record = measured(name, model.format, snapshot, root / "A" / name)
+            record = measured(name, model.format, snapshot, model.repo, root / "A" / name)
             summary["stage_a"]["cells"].append(record)
             step(
                 f"stage A: {name} {record['status']}"
@@ -862,6 +872,7 @@ def run(
                                     top["engine"],
                                     sibling.format,
                                     sibling_snapshot,
+                                    sibling.repo,
                                     reason,
                                 )
                             )
@@ -885,6 +896,7 @@ def run(
                             top["engine"],
                             sibling.format,
                             sibling_snapshot,
+                            sibling.repo,
                             root / "B" / cell_id,
                         )
                         summary["stage_b"]["cells"].append(record)
@@ -947,7 +959,9 @@ def run(
             for engine_plan in shown.stage_a:
                 if engine_plan.engine not in reached:
                     summary["stage_a"]["cells"].append(
-                        _skipped(engine_plan.engine, model.format, snapshot, CANCELLED)
+                        _skipped(
+                            engine_plan.engine, model.format, snapshot, model.repo, CANCELLED
+                        )
                     )
             if summary["stage_b"]["engine"] is not None:
                 covered = {cell["format"] for cell in summary["stage_b"]["cells"]}
@@ -960,6 +974,7 @@ def run(
                                 fetch.plan(
                                     siblings[sibling_plan.repo], cache_dir
                                 ).snapshot_dir,
+                                sibling_plan.repo,
                                 CANCELLED,
                             )
                         )
@@ -980,6 +995,11 @@ def run(
             _best(summary, started_iso) if summary["ended"] == "finished" else None
         )
         _write_summary(root / SUMMARY_NAME, summary)
+        # One `result` per run, sent from the one place the summary is written, so every
+        # ending carries the same record the file does and the app's Results screen can show
+        # a cancelled run. It is emitted before the ending's own `error`/`done`, and it is
+        # the only `result`: a second copy per ending would be a second summary to drift.
+        send("result", f"quickbench {summary['ended']}", payload=summary)
 
     if summary["ended"] == "cancelled":
         send(
@@ -996,19 +1016,22 @@ def run(
             payload={"results_dir": str(root)},
         )
         return False
-    send("result", "quickbench finished", payload=summary)
     send("done", "quickbench finished")
     return True
 
 
 def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]:
-    """The newest finished summary per repo under *root*, keyed by repo id.
+    """The newest finished summary per repo a run measured, keyed by that repo.
 
-    This is what ``GET /recommendations`` fills ``Pick.measured_here`` from, and only a
-    summary whose own record says it finished is read: a cancelled run is a record of what
-    happened, never a recommendation (AC-5). A missing directory is no summaries, and a
-    file that cannot be read is skipped rather than failing the recommendations screen --
-    it is not a number, so nothing here is being silently approximated.
+    This is what ``GET /recommendations`` fills ``Pick.measured_here`` from, and the key is
+    the winning cell's own repo (``best.repo``): the chosen row when stage B did not beat
+    it, the sibling when the sibling won. A chosen repo that lost stage B is therefore
+    absent rather than carrying a number another artifact produced, and two finished runs
+    naming the same repo resolve to the newer one. Only a summary whose own record says it
+    finished is read: a cancelled run is a record of what happened, never a recommendation
+    (AC-5). A missing directory is no summaries, and a file that cannot be read is skipped
+    rather than failing the recommendations screen -- it is not a number, so nothing here
+    is being silently approximated.
     """
     found: dict[str, tuple[float, dict]] = {}
     root_path = pathlib.Path(root)
@@ -1021,7 +1044,10 @@ def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]:
             continue
         if not isinstance(payload, dict) or payload.get("ended") != "finished":
             continue
-        repo = payload.get("repo")
+        best = payload.get("best")
+        if not isinstance(best, dict):
+            continue
+        repo = best.get("repo")
         if not isinstance(repo, str) or not repo:
             continue
         try:

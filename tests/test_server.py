@@ -567,6 +567,8 @@ def test_recommendations_fills_measured_here_from_the_newest_quick_run(launch):
     """AC-5: the newest finished quickbench summary's `best` block is the pick's own run."""
     best = {
         "engine": "mlxlm",
+        "format": "oq4",
+        "repo": "org/small",
         "decode_tps": 60.0,
         "ttft_s": 0.2,
         "measured_at": "2026-11-02T10:00:00+00:00",
@@ -585,6 +587,38 @@ def test_recommendations_fills_measured_here_from_the_newest_quick_run(launch):
 
     picks = {pick["model_id"]: pick for pick in body["picks"]}
     assert picks["org/small"]["measured_here"] == best
+
+
+def test_measured_here_lands_on_the_repo_the_winning_cell_measured(launch):
+    """A stage-B sibling wins: the sibling's pick gets the number, the chosen repo none.
+
+    The summary is keyed by the chosen repo here on purpose: `/recommendations` must key
+    the map on `best.repo`, not on whatever key the summaries came in under.
+    """
+    best = {
+        "engine": "omlx",
+        "format": "oq4",
+        "repo": "org/sibling",
+        "decode_tps": 61.7,
+        "ttft_s": 0.17,
+        "measured_at": "2026-11-02T10:00:00+00:00",
+        "quick": True,
+    }
+    models = [a_model("org/chosen", 2 * 1024**3), a_model("org/sibling", 2 * 1024**3)]
+    listener = launch(
+        scan=Recorder(this_mac()),
+        detect=Recorder([status("mlxlm", installed=True, version="0.31.3")]),
+        load_catalog=Recorder(models),
+        summaries=lambda: {
+            "org/chosen": {"repo": "org/chosen", "ended": "finished", "best": best}
+        },
+    )
+
+    body = json.loads(request(listener, "/recommendations", token=TOKEN)[2])
+
+    picks = {pick["model_id"]: pick for pick in body["picks"]}
+    assert picks["org/chosen"]["measured_here"] is None, "the chosen repo did not win"
+    assert picks["org/sibling"]["measured_here"] == best
 
 
 def test_recommendations_leaves_measured_here_null_without_a_finished_quick_run(launch):
@@ -2275,3 +2309,30 @@ def test_a_second_stop_now_answers_202_without_a_second_stop(launch):
     assert stopper.calls == 1
     release.set()
     assert wait_until(lambda: listener.jobs.get(job_id).done)
+
+
+
+def test_measured_here_keeps_the_newer_of_two_runs_won_on_the_same_repo(launch):
+    """Two finished runs on different chosen repos whose winners both measured one sibling: the newer counts,
+    whatever order the summaries arrive in."""
+    def best(tps, when):
+        return {"engine": "omlx", "format": "oq4", "repo": "org/sibling", "decode_tps": tps,
+                "ttft_s": 0.2, "measured_at": when, "quick": True}
+
+    older = best(50.0, "2026-11-01T00:00:00+00:00")
+    newer = best(60.0, "2026-11-02T00:00:00+00:00")
+    models = [a_model("org/a", 2 * 1024**3), a_model("org/b", 2 * 1024**3),
+              a_model("org/sibling", 2 * 1024**3)]
+    for first, second in ((older, newer), (newer, older)):
+        listener = launch(
+            scan=Recorder(this_mac()),
+            detect=Recorder([status("mlxlm", installed=True, version="0.31.3")]),
+            load_catalog=Recorder(models),
+            summaries=lambda first=first, second=second: {
+                "org/a": {"repo": "org/a", "ended": "finished", "best": first},
+                "org/b": {"repo": "org/b", "ended": "finished", "best": second},
+            },
+        )
+        body = json.loads(request(listener, "/recommendations", token=TOKEN)[2])
+        picks = {pick["model_id"]: pick for pick in body["picks"]}
+        assert picks["org/sibling"]["measured_here"] == newer

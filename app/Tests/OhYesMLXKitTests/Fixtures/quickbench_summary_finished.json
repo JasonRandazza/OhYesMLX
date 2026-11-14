@@ -1,0 +1,163 @@
+{
+  "label": "quick: measured on this Mac",
+  "repo": "mlx-community/Qwen3.5-2B-4bit",
+  "format": "mlx affine 4-bit gs64",
+  "plan": {
+    "repo": "mlx-community/Qwen3.5-2B-4bit",
+    "format": "mlx affine 4-bit gs64",
+    "stage_a": [
+      {"engine": "mlxlm", "version": "0.31.3", "tested": true},
+      {"engine": "osaurus", "version": "0.25.33", "tested": false},
+      {"engine": "omlx", "version": "0.7.3", "tested": true},
+      {"engine": "optiq", "version": "0.5.13", "tested": true},
+      {"engine": "vmlx", "version": "1.6.82", "tested": false}
+    ],
+    "stage_b": [
+      {
+        "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+        "format": "oQ4 (mixed 4/5/6/8)",
+        "size_bytes": 1794528789,
+        "downloaded": false
+      }
+    ],
+    "download_bytes": 1794528789,
+    "osaurus": true,
+    "estimate_s": 630
+  },
+  "estimate_s": 630,
+  "actual_s": 704.512,
+  "ended": "finished",
+  "results_dir": "/Users/you/Library/Application Support/OhYesMLX/results/quickbench/20261114T143200Z",
+  "not_evicted": [],
+  "harness": {
+    "version": "0.5.0",
+    "source_sha256": "9f2c1d0b7a4e6f8c3b5d9a1e0f2c4b6d8a0e1f3c5b7d9a0e2f4c6b8d0a1e3f5c"
+  },
+  "engines": [
+    {"name": "mlxlm", "version": "0.31.3", "tested": true},
+    {"name": "osaurus", "version": "0.25.33", "tested": false},
+    {"name": "omlx", "version": "0.7.3", "tested": true},
+    {"name": "optiq", "version": "0.5.13", "tested": true},
+    {"name": "vmlx", "version": "1.6.82", "tested": false}
+  ],
+  "load": {
+    "stage_a": {"before": 1.42, "after": 1.55, "label": null},
+    "stage_b": {"before": 1.51, "after": 1.66, "label": "this Mac was busy"}
+  },
+  "osaurus": {"allowed": true, "pinned": true, "restored": true, "reason": null},
+  "stage_a": {
+    "caveat": "engines compared on one format only",
+    "cells": [
+      {
+        "engine": "mlxlm",
+        "format": "mlx affine 4-bit gs64",
+        "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit/snapshots/abc",
+        "status": "PASS",
+        "reason": null,
+        "decode_tps": 55.4,
+        "ttft_s": 0.21,
+        "runtime_version": "0.31.3",
+        "label": "quick: measured on this Mac",
+        "reused": false
+      },
+      {
+        "engine": "osaurus",
+        "format": "mlx affine 4-bit gs64",
+        "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit/snapshots/abc",
+        "status": "PASS",
+        "reason": null,
+        "decode_tps": 58.9,
+        "ttft_s": 0.19,
+        "runtime_version": "0.25.33",
+        "label": "quick: measured on this Mac",
+        "reused": false
+      },
+      {
+        "engine": "omlx",
+        "format": "mlx affine 4-bit gs64",
+        "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit/snapshots/abc",
+        "status": "PASS",
+        "reason": null,
+        "decode_tps": 61.7,
+        "ttft_s": 0.17,
+        "runtime_version": "0.7.3",
+        "label": "quick: measured on this Mac",
+        "reused": false
+      },
+      {
+        "engine": "optiq",
+        "format": "mlx affine 4-bit gs64",
+        "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit/snapshots/abc",
+        "status": "FAIL",
+        "reason": "the server did not answer within 60 s",
+        "decode_tps": null,
+        "ttft_s": null,
+        "runtime_version": "0.5.13",
+        "label": "quick: measured on this Mac",
+        "reused": false
+      },
+      {
+        "engine": "vmlx",
+        "format": "mlx affine 4-bit gs64",
+        "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit/snapshots/abc",
+        "status": "SKIPPED",
+        "reason": "quit vmlx first",
+        "decode_tps": null,
+        "ttft_s": null,
+        "runtime_version": null,
+        "label": "quick: measured on this Mac",
+        "reused": false
+      }
+    ],
+    "winner": "omlx",
+    "tie": [],
+    "note": null
+  },
+  "stage_b": {
+    "caveat": "formats compared on one engine only",
+    "engine": "omlx",
+    "cells": [
+      {
+        "engine": "omlx",
+        "format": "mlx affine 4-bit gs64",
+        "repo": "mlx-community/Qwen3.5-2B-4bit",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--mlx-community--Qwen3.5-2B-4bit/snapshots/abc",
+        "status": "PASS",
+        "reason": null,
+        "decode_tps": 61.7,
+        "ttft_s": 0.17,
+        "runtime_version": "0.7.3",
+        "label": "quick: measured on this Mac",
+        "reused": true
+      },
+      {
+        "engine": "omlx",
+        "format": "oQ4 (mixed 4/5/6/8)",
+        "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+        "artifact_dir": "/Users/you/.cache/huggingface/hub/models--RepublicOfKorokke--Qwen3.5-2B-oQ4/snapshots/def",
+        "status": "PASS",
+        "reason": null,
+        "decode_tps": 62.1,
+        "ttft_s": 0.16,
+        "runtime_version": "0.7.3",
+        "label": "quick: measured on this Mac",
+        "reused": false
+      }
+    ],
+    "note": null
+  },
+  "best": {
+    "engine": "omlx",
+    "format": "oQ4 (mixed 4/5/6/8)",
+    "repo": "RepublicOfKorokke/Qwen3.5-2B-oQ4",
+    "decode_tps": 62.1,
+    "ttft_s": 0.16,
+    "measured_at": "2026-11-14T14:44:16.512+00:00",
+    "quick": true
+  }
+}

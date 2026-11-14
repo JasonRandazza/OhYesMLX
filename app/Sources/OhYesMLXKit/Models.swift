@@ -265,23 +265,37 @@ public struct EngineStatus: Codable, Sendable, Equatable, Identifiable {
 public struct MeasuredHere: Codable, Sendable, Equatable {
     public let decodeTPS: Double
     public let engine: String
+    public let format: String?
     public let measuredAt: String
     public let quick: Bool
+    public let repo: String?
     public let ttftS: Double
 
     enum CodingKeys: String, CodingKey {
         case decodeTPS = "decode_tps"
         case engine
+        case format
         case measuredAt = "measured_at"
         case quick
+        case repo
         case ttftS = "ttft_s"
     }
 
-    public init(decodeTPS: Double, engine: String, measuredAt: String, quick: Bool, ttftS: Double) {
+    public init(
+        decodeTPS: Double,
+        engine: String,
+        measuredAt: String,
+        quick: Bool,
+        ttftS: Double,
+        format: String? = nil,
+        repo: String? = nil
+    ) {
         self.decodeTPS = decodeTPS
         self.engine = engine
+        self.format = format
         self.measuredAt = measuredAt
         self.quick = quick
+        self.repo = repo
         self.ttftS = ttftS
     }
 }
@@ -473,6 +487,21 @@ public struct JobEvent: Codable, Sendable, Equatable, Identifiable {
 
     public var id: Int { seq }
 
+    /// The payload's JSON, every key of it, for the file Export writes (AC-2, D8).
+    ///
+    /// `JSONValue` models any JSON a backend sends, so this keeps keys `QuickSummary` does
+    /// not model (`plan`, `engines`, `load`, `osaurus`, `harness`) instead of dropping them
+    /// the way an encode of the typed value would. It is the received value re-encoded
+    /// canonically, not the wire's own whitespace: the SSE and HTTP layers hand this client a
+    /// decoded event and are frozen by plan 05-05, so the frame's original bytes are gone by
+    /// the time an event exists here.
+    public var payloadData: Data? {
+        guard let payload else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(payload)
+    }
+
     public init(seq: Int, type: JobEventType, message: String, fraction: Double?, payload: JSONValue?) {
         self.seq = seq
         self.type = type
@@ -498,4 +527,260 @@ public struct BackendError: Codable, Error, Sendable, Equatable, LocalizedError 
 
 struct BackendErrorEnvelope: Decodable, Sendable {
     let error: BackendError
+}
+
+// The quickbench summary (`docs/interfaces/v5-quickbench.md`, the pinned block). It is the one
+// record a run leaves, on every ending, and the app reads it rather than re-deriving a number.
+
+public enum QuickEnding: String, Codable, Sendable {
+    case finished
+    case cancelled
+    case restoreFailed = "restore_failed"
+    case error
+}
+
+public struct QuickHarness: Codable, Sendable, Equatable {
+    public let version: String
+    public let sourceSHA256: String
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case sourceSHA256 = "source_sha256"
+    }
+
+    public init(version: String, sourceSHA256: String) {
+        self.version = version
+        self.sourceSHA256 = sourceSHA256
+    }
+}
+
+public struct QuickEngine: Codable, Sendable, Equatable {
+    public let name: String
+    public let version: String?
+    public let tested: Bool
+
+    public init(name: String, version: String?, tested: Bool) {
+        self.name = name
+        self.version = version
+        self.tested = tested
+    }
+}
+
+public struct QuickCell: Codable, Sendable, Equatable, Identifiable {
+    public let engine: String
+    public let format: String
+    public let repo: String
+    public let artifactDir: String
+    public let status: String
+    public let reason: String?
+    public let decodeTPS: Double?
+    public let ttftS: Double?
+    public let runtimeVersion: String?
+    public let label: String
+    public let reused: Bool
+
+    public var id: String { "\(format)/\(engine)/\(artifactDir)" }
+
+    enum CodingKeys: String, CodingKey {
+        case engine
+        case format
+        case repo
+        case artifactDir = "artifact_dir"
+        case status
+        case reason
+        case decodeTPS = "decode_tps"
+        case ttftS = "ttft_s"
+        case runtimeVersion = "runtime_version"
+        case label
+        case reused
+    }
+
+    public init(
+        engine: String,
+        format: String,
+        repo: String,
+        artifactDir: String,
+        status: String,
+        reason: String?,
+        decodeTPS: Double?,
+        ttftS: Double?,
+        runtimeVersion: String?,
+        label: String,
+        reused: Bool
+    ) {
+        self.engine = engine
+        self.format = format
+        self.repo = repo
+        self.artifactDir = artifactDir
+        self.status = status
+        self.reason = reason
+        self.decodeTPS = decodeTPS
+        self.ttftS = ttftS
+        self.runtimeVersion = runtimeVersion
+        self.label = label
+        self.reused = reused
+    }
+}
+
+public struct QuickStageA: Codable, Sendable, Equatable {
+    public let caveat: String
+    public let cells: [QuickCell]
+    public let winner: String?
+    public let tie: [String]
+    public let note: String?
+
+    public init(caveat: String, cells: [QuickCell], winner: String?, tie: [String], note: String?) {
+        self.caveat = caveat
+        self.cells = cells
+        self.winner = winner
+        self.tie = tie
+        self.note = note
+    }
+}
+
+public struct QuickStageB: Codable, Sendable, Equatable {
+    public let caveat: String
+    public let engine: String?
+    public let cells: [QuickCell]
+    public let note: String?
+
+    public init(caveat: String, engine: String?, cells: [QuickCell], note: String?) {
+        self.caveat = caveat
+        self.engine = engine
+        self.cells = cells
+        self.note = note
+    }
+}
+
+public struct QuickLoad: Codable, Sendable, Equatable {
+    public let before: Double
+    public let after: Double
+    public let label: String?
+
+    public init(before: Double, after: Double, label: String?) {
+        self.before = before
+        self.after = after
+        self.label = label
+    }
+}
+
+public struct QuickLoads: Codable, Sendable, Equatable {
+    public let stageA: QuickLoad?
+    public let stageB: QuickLoad?
+
+    enum CodingKeys: String, CodingKey {
+        case stageA = "stage_a"
+        case stageB = "stage_b"
+    }
+
+    public init(stageA: QuickLoad?, stageB: QuickLoad?) {
+        self.stageA = stageA
+        self.stageB = stageB
+    }
+}
+
+public struct QuickOsaurus: Codable, Sendable, Equatable {
+    public let allowed: Bool
+    public let pinned: Bool
+    public let restored: Bool?
+    public let reason: String?
+    public let duringRun: String?
+
+    enum CodingKeys: String, CodingKey {
+        case allowed
+        case pinned
+        case restored
+        case reason
+        case duringRun = "during_run"
+    }
+
+    public init(allowed: Bool, pinned: Bool, restored: Bool?, reason: String?, duringRun: String?) {
+        self.allowed = allowed
+        self.pinned = pinned
+        self.restored = restored
+        self.reason = reason
+        self.duringRun = duringRun
+    }
+}
+
+public struct QuickSummary: Codable, Sendable, Equatable {
+    public let label: String
+    public let repo: String
+    public let format: String
+    public let plan: QuickPlan
+    public let estimateS: Int
+    public let actualS: Double?
+    public let ended: QuickEnding
+    public let resultsDir: String
+    public let notEvicted: [String]
+    public let harness: QuickHarness
+    public let engines: [QuickEngine]
+    public let load: QuickLoads
+    public let osaurus: QuickOsaurus
+    public let stageA: QuickStageA
+    public let stageB: QuickStageB
+    public let best: MeasuredHere?
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case repo
+        case format
+        case plan
+        case estimateS = "estimate_s"
+        case actualS = "actual_s"
+        case ended
+        case resultsDir = "results_dir"
+        case notEvicted = "not_evicted"
+        case harness
+        case engines
+        case load
+        case osaurus
+        case stageA = "stage_a"
+        case stageB = "stage_b"
+        case best
+    }
+
+    public init(
+        label: String,
+        repo: String,
+        format: String,
+        plan: QuickPlan,
+        estimateS: Int,
+        actualS: Double?,
+        ended: QuickEnding,
+        resultsDir: String,
+        notEvicted: [String],
+        harness: QuickHarness,
+        engines: [QuickEngine],
+        load: QuickLoads,
+        osaurus: QuickOsaurus,
+        stageA: QuickStageA,
+        stageB: QuickStageB,
+        best: MeasuredHere?
+    ) {
+        self.label = label
+        self.repo = repo
+        self.format = format
+        self.plan = plan
+        self.estimateS = estimateS
+        self.actualS = actualS
+        self.ended = ended
+        self.resultsDir = resultsDir
+        self.notEvicted = notEvicted
+        self.harness = harness
+        self.engines = engines
+        self.load = load
+        self.osaurus = osaurus
+        self.stageA = stageA
+        self.stageB = stageB
+        self.best = best
+    }
+}
+
+extension QuickSummary {
+    /// The winning cell's own format, falling back to the chosen row's on a summary written
+    /// before the win named its artifact.
+    public var bestFormat: String {
+        best?.format ?? format
+    }
 }

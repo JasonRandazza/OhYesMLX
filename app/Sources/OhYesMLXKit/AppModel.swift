@@ -99,15 +99,44 @@ public struct BenchmarkCell: Sendable, Equatable, Identifiable {
     public let format: String
     public var status: String
     public var reason: String?
+    public var decodeTPS: Double?
+    public var ttftS: Double?
+    public var runtimeVersion: String?
 
     public var id: String { "\(stage)/\(engine)/\(format)" }
 
-    public init(stage: String, engine: String, format: String, status: String, reason: String?) {
+    public init(
+        stage: String,
+        engine: String,
+        format: String,
+        status: String,
+        reason: String?,
+        decodeTPS: Double? = nil,
+        ttftS: Double? = nil,
+        runtimeVersion: String? = nil
+    ) {
         self.stage = stage
         self.engine = engine
         self.format = format
         self.status = status
         self.reason = reason
+        self.decodeTPS = decodeTPS
+        self.ttftS = ttftS
+        self.runtimeVersion = runtimeVersion
+    }
+
+    /// One summary cell in stage *stage*, which is the same row the live progress built.
+    public init(stage: String, cell: QuickCell) {
+        self.init(
+            stage: stage,
+            engine: cell.engine,
+            format: cell.format,
+            status: cell.status,
+            reason: cell.reason,
+            decodeTPS: cell.decodeTPS,
+            ttftS: cell.ttftS,
+            runtimeVersion: cell.runtimeVersion
+        )
     }
 }
 
@@ -135,9 +164,10 @@ public final class AppModel {
     public private(set) var engineFailures: [String: EngineFailure] = [:]
     public private(set) var modelRefusals: [String: BackendError] = [:]
     public private(set) var lowDisk: [String: LowDisk] = [:]
-    public private(set) var benchmarkCells: [BenchmarkCell] = []
-    public private(set) var summary: JSONValue?
-    public private(set) var notEvicted: [String] = []
+    public private(set) var liveCells: [BenchmarkCell] = []
+    public private(set) var summary: QuickSummary?
+    /// The summary exactly as the backend sent it, which is what Export writes (AC-2, D8).
+    public private(set) var summaryData: Data?
     public private(set) var interruptedJob: InterruptedJob?
     public private(set) var launchError: String?
     public private(set) var backendStopped: Int32?
@@ -203,7 +233,8 @@ public final class AppModel {
 
     public var oneSlotReason: String? {
         guard let job, job.state.isActive else { return nil }
-        return "Busy: \(job.kind.wireName) \(job.name) is running"
+        let name = job.kind == .install ? job.name : displayName(for: job.name)
+        return "Busy: \(job.kind.wireName) \(name) is running"
     }
 
     public var canStartJob: Bool {
@@ -211,12 +242,92 @@ public final class AppModel {
     }
 
     public var notEvictedLines: [String] {
-        notEvicted.map { repo in
+        (summary?.notEvicted ?? []).map { repo in
             let pick = recommendations?.picks.first { $0.modelID == repo }
             let title = pick?.title ?? repo
             let size = pick.map { Format.size($0.sizeBytes) } ?? "size unknown"
             return "Left on disk: \(title) (\(size)) — it was in use. You can remove it from Models."
         }
+    }
+
+    /// The results rows: the summary once it lands, the live progress before that.
+    ///
+    /// One source per phase, never both. Live cells are what the Benchmark screen shows as they
+    /// land; a `result` replaces them with the summary's own cells, so the Results table and the
+    /// record on disk say the same thing.
+    public var benchmarkCells: [BenchmarkCell] {
+        guard let summary else { return liveCells }
+        return summary.stageA.cells.map { BenchmarkCell(stage: "A", cell: $0) }
+            + summary.stageB.cells.map { BenchmarkCell(stage: "B", cell: $0) }
+    }
+
+    public var notEvicted: [String] { summary?.notEvicted ?? [] }
+
+    /// The pick a busy reason names, so "Busy: download Qwen3.5 2B is running" is readable
+    /// and a repo with no recommendation row still names the repo id (AC-6).
+    public func displayName(for repo: String) -> String {
+        recommendations?.picks.first { $0.modelID == repo }?.title ?? repo
+    }
+
+    /// An engine's plain-language title, for a plan or a cell row. Unknown names are shown as
+    /// the backend wrote them.
+    public func engineTitle(_ name: String) -> String {
+        engines.first { $0.name == name }?.title ?? name
+    }
+
+    /// The cell a running benchmark is on: the first planned cell whose row has not landed.
+    ///
+    /// Derived, never guessed: the plan lists every cell in order and each one emits its own
+    /// progress row when it is done, so the first planned cell with no row is the one in
+    /// flight. A cell that was skipped emits a row too, so it stops being "next" as it should.
+    /// Stage B's engine is read from a landed stage-B row when there is one; before that the
+    /// winner is not the client's to name.
+    public var nextBenchmarkCell: (title: String, detail: String)? {
+        guard let plan = quickPlan, job?.kind == .quickbench, job?.state.isActive == true else {
+            return nil
+        }
+        let landed = Set(liveCells.map(\.id))
+        for planned in plan.stageA {
+            if !landed.contains("A/\(planned.engine)/\(plan.format)") {
+                return (engineTitle(planned.engine), "A · \(plan.format)")
+            }
+        }
+        let stageBEngine = liveCells.first(where: { $0.stage == "B" })?.engine
+        for sibling in plan.stageB {
+            let id = stageBEngine.map { "B/\($0)/\(sibling.format)" }
+            if id.map({ !landed.contains($0) }) ?? true {
+                let detail = stageBEngine.map { "B · \(engineTitle($0))" } ?? "B"
+                return (sibling.format, detail)
+            }
+        }
+        return nil
+    }
+
+    /// The downloaded picks, the list the Benchmark screen chooses from.
+    public var downloadedPicks: [Pick] {
+        (recommendations?.picks ?? []).filter(\.downloaded)
+    }
+
+    /// The Benchmark screen's default: the first downloaded Start-here pick, else the first
+    /// downloaded row, else nothing.
+    public var defaultBenchmarkPick: Pick? {
+        downloadedPicks.first(where: \.startHere) ?? downloadedPicks.first
+    }
+
+    /// The download's own byte counters from its latest progress payload (v5-onboarding.md).
+    ///
+    /// The backend sends `{"path", "bytes_done", "bytes_total"}` and the same pair as the
+    /// event's `fraction`; the two numbers are shown as sent rather than recomputed here.
+    public func downloadProgress(repo: String) -> (done: Int64, total: Int64)? {
+        guard let job, job.kind == .download, job.name == repo else { return nil }
+        for event in job.events.reversed() {
+            guard let payload = event.payload,
+                  let done = payload["bytes_done"]?.intValue,
+                  let total = payload["bytes_total"]?.intValue
+            else { continue }
+            return (done, total)
+        }
+        return nil
     }
 
     public func launch() async {
@@ -327,18 +438,35 @@ public final class AppModel {
     }
 
     public func quickbench(repo: String) async {
-        guard !unsupported else { return }
-        quickPlan = nil
+        guard await planBenchmark(repo: repo) else { return }
+        await startBenchmark()
+    }
+
+    /// The plan for *repo*, and nothing started: the Benchmark screen shows this first (D4).
+    ///
+    /// The previous plan is kept until the new one arrives, so a Start pressed while a plan is
+    /// being re-fetched runs the plan on screen rather than finding none.
+    @discardableResult
+    public func planBenchmark(repo: String) async -> Bool {
+        guard !unsupported else { return false }
+        benchmarkRefusal = nil
         do {
             quickPlan = try await backend.quickbenchPlan(repo: repo)
+            return true
         } catch let error as BackendError {
+            quickPlan = nil
             refusal = error
             benchmarkRefusal = error
-            return
+            return false
         } catch {
-            return
+            return false
         }
-        await start(.quickbench(repo: repo, osaurus: osaurusConsent))
+    }
+
+    /// Run the plan already on screen. A plan that is not there is a refusal, never a run.
+    public func startBenchmark() async {
+        guard let quickPlan else { return }
+        await start(.quickbench(repo: quickPlan.repo, osaurus: osaurusConsent))
     }
 
     public func cancelJob(now: Bool) async {
@@ -436,9 +564,9 @@ public final class AppModel {
         refusal = nil
         if args.kind == .quickbench {
             benchmarkRefusal = nil
-            benchmarkCells = []
+            liveCells = []
             summary = nil
-            notEvicted = []
+            summaryData = nil
         } else if args.kind == .install {
             engineFailures[args.name] = nil
         } else {
@@ -481,7 +609,13 @@ public final class AppModel {
         } catch let error as BackendError {
             refusal = error
         } catch {
-            return
+            // The stream ended without its `done`; the job's own state already says what it
+            // did, and the recommendations below are still asked for.
+        }
+        // AC-6: a download or an evict changes what is on disk, so the step ticks and the
+        // Benchmark picker are re-read from the backend rather than left on stale rows.
+        if args.kind == .download || args.kind == .evict {
+            await refreshRecommendations()
         }
     }
 
@@ -494,7 +628,8 @@ public final class AppModel {
         switch event.type {
         case .done:
             if status.state.isActive {
-                status.state = .finished
+                // A half-restored run sends `done` and no error; only its summary says so.
+                status.state = summary?.ended == .restoreFailed ? .failed : .finished
             }
             job = status
             defaults.removeObject(forKey: inflightKey)
@@ -514,10 +649,8 @@ public final class AppModel {
             }
             return
         case .result:
-            summary = event.payload
-            if let repos = event.payload?["not_evicted"]?.arrayValue {
-                notEvicted = repos.compactMap { $0.stringValue }
-            }
+            summaryData = event.payloadData
+            summary = summaryData.flatMap { try? JSONDecoder().decode(QuickSummary.self, from: $0) }
         case .progress:
             if args.kind == .quickbench {
                 updateBenchmarkCell(event)
@@ -547,7 +680,11 @@ public final class AppModel {
         case .evict:
             modelRefusals[args.name] = error
         case .quickbench:
-            benchmarkRefusal = error
+            // A cancel is an ending, not a plan refusal: keeping it here would replace the
+            // plan with a refusal banner when the user comes back to Benchmark (AC-4).
+            if error.code != "cancelled" {
+                benchmarkRefusal = error
+            }
         }
     }
 
@@ -566,16 +703,23 @@ public final class AppModel {
             status: status,
             reason: payload["reason"]?.stringValue
         )
-        if let index = benchmarkCells.firstIndex(where: { $0.id == cell.id }) {
-            benchmarkCells[index] = cell
+        if let index = liveCells.firstIndex(where: { $0.id == cell.id }) {
+            liveCells[index] = cell
         } else {
-            benchmarkCells.append(cell)
+            liveCells.append(cell)
         }
     }
 
     private func refreshHardware() async {
         if let value = try? await backend.hardware() {
             hardware = value
+        }
+    }
+
+    /// AC-6: the recommendations are re-read after a download or evict, and when Models opens.
+    public func refreshRecommendations() async {
+        if let value = try? await backend.recommendations() {
+            recommendations = value
         }
     }
 

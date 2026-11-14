@@ -517,10 +517,22 @@ def test_stage_b_reuses_the_chosen_rows_row_and_measures_each_sibling(tmp_path):
     assert summary["stage_b"]["engine"] == "mlxlm"
     reused, first_sibling, second_sibling = summary["stage_b"]["cells"]
     assert reused["reused"] is True
-    assert (reused["format"], reused["engine"]) == (CHOSEN.format, "mlxlm")
+    assert (reused["format"], reused["engine"], reused["repo"]) == (
+        CHOSEN.format,
+        "mlxlm",
+        CHOSEN.repo,
+    )
     assert reused["decode_tps"] == summary["stage_a"]["cells"][0]["decode_tps"]
-    assert (first_sibling["format"], first_sibling["reused"]) == (SIBLING.format, False)
-    assert (second_sibling["format"], second_sibling["reused"]) == (SIBLING_2.format, False)
+    assert (first_sibling["format"], first_sibling["reused"], first_sibling["repo"]) == (
+        SIBLING.format,
+        False,
+        SIBLING.repo,
+    )
+    assert (second_sibling["format"], second_sibling["reused"], second_sibling["repo"]) == (
+        SIBLING_2.format,
+        False,
+        SIBLING_2.repo,
+    )
     assert len(fakes.run_cells.calls) == 4, "the chosen row is reused, not measured twice"
 
 
@@ -702,8 +714,11 @@ def test_the_summary_is_a_record_of_the_whole_run(tmp_path):
         assert cell["status"] in ("PASS", "FAIL", "SKIPPED")
         assert "reason" in cell
         assert cell["label"] == "quick: measured on this Mac"
+        assert cell["repo"] in (CHOSEN.repo, SIBLING.repo, SIBLING_2.repo)
     assert summary["best"] == {
         "engine": "mlxlm",
+        "format": CHOSEN.format,
+        "repo": CHOSEN.repo,
         "decode_tps": 60.0,
         "ttft_s": 0.2,
         "measured_at": summary["best"]["measured_at"],
@@ -1208,6 +1223,84 @@ def test_a_restore_failed_ending_carries_the_summary_path_in_its_done(tmp_path):
     assert done["payload"] == {"results_dir": summary["results_dir"]}
 
 
+def test_every_ending_carries_the_summary_as_one_result_event_before_its_error(tmp_path):
+    """AC-1 (05-05): the app must show a cancelled run, and only the summary says it was one.
+
+    One `result` per run, from the one place the summary is written, so a console ending and
+    a file cannot disagree; `best` stays null on every non-finished ending.
+    """
+    cases = {
+        "finished": a_run(tmp_path / "finished"),
+        "cancelled": a_run(tmp_path / "cancelled", cancel_after=0),
+        "restore_failed": a_run(
+            tmp_path / "restore_failed",
+            engines_list=WITH_OSAURUS,
+            osaurus=True,
+            restore=False,
+        ),
+    }
+
+    for ending, (_ok, fakes, summary) in cases.items():
+        results = [event for event in fakes.events if event["type"] == "result"]
+        assert len(results) == 1, f"{ending}: one result event per ending"
+        assert results[0]["payload"] == summary, f"{ending}: the event is the written summary"
+        position = fakes.events.index(results[0])
+        terminal = [
+            index
+            for index, event in enumerate(fakes.events)
+            if event["type"] == "done"
+            or (event["type"] == "error" and event["payload"].get("results_dir"))
+        ]
+        assert terminal, f"{ending}: the ending carries a terminal event"
+        assert position < min(terminal), (
+            f"{ending}: the result event is sent before the ending's error/done"
+        )
+        if ending == "finished":
+            assert summary["best"] is not None
+        else:
+            assert summary["best"] is None
+
+
+def test_an_unexpected_raise_still_carries_the_summary_as_a_result_event(tmp_path):
+    """The summary is written on every ending, including the one that re-raises (AC-1)."""
+    events = []
+    cache = FakeCache(downloaded=(CHOSEN.repo,))
+
+    def run_cells(cells, workloads, **kwargs):
+        raise KeyboardInterrupt("the harness was interrupted from outside")
+
+    with pytest.raises(KeyboardInterrupt):
+        quickbench.run(
+            CHOSEN.repo,
+            confirmed=True,
+            models=MODELS,
+            statuses=ENGINES,
+            hw=SimpleNamespace(),
+            run_cells=run_cells,
+            download=cache.download,
+            evict=cache.evict,
+            downloaded=cache.downloaded,
+            port_in_use=PortProbe(),
+            osaurus_app_running=lambda: False,
+            load=FakeLoad(),
+            clock=FakeClock(),
+            emit=events.append,
+            cache_dir=str(tmp_path / "cache"),
+            results_dir=str(tmp_path / "quickbench"),
+            backup_dir=str(tmp_path / "backup"),
+            baseline_path=str(tmp_path / "baseline.json"),
+        )
+
+    written = json.loads(
+        next((tmp_path / "quickbench").glob("*/summary.json")).read_text(encoding="utf-8")
+    )
+    assert written["ended"] == "error"
+    assert written["best"] is None, "an errored run never recommends anything"
+    results = [event for event in events if event["type"] == "result"]
+    assert len(results) == 1, "the raising ending still sends its summary"
+    assert results[0]["payload"] == written
+
+
 def test_a_pin_that_refuses_skips_osaurus_with_that_reason(tmp_path):
     _ok, fakes, summary = a_run(
         tmp_path,
@@ -1294,12 +1387,20 @@ def test_latest_returns_the_newest_finished_summary_per_repo(tmp_path):
 
     write(
         "old",
-        {"repo": "org/a", "ended": "finished", "best": {"engine": "mlxlm"}},
+        {
+            "repo": "org/chosen",
+            "ended": "finished",
+            "best": {"engine": "mlxlm", "repo": "org/a"},
+        },
         mtime=1_000,
     )
     write(
         "new",
-        {"repo": "org/a", "ended": "finished", "best": {"engine": "optiq"}},
+        {
+            "repo": "org/chosen",
+            "ended": "finished",
+            "best": {"engine": "optiq", "repo": "org/a"},
+        },
         mtime=2_000,
     )
     write(
@@ -1313,7 +1414,7 @@ def test_latest_returns_the_newest_finished_summary_per_repo(tmp_path):
     found = quickbench.latest(root)
 
     assert set(found) == {"org/a"}
-    assert found["org/a"]["best"] == {"engine": "optiq"}
+    assert found["org/a"]["best"] == {"engine": "optiq", "repo": "org/a"}
 
 
 def test_latest_of_a_missing_root_is_no_summaries(tmp_path):
@@ -1327,7 +1428,28 @@ def test_the_summary_the_run_wrote_is_what_latest_reads(tmp_path):
 
     assert list(found) == [CHOSEN.repo]
     assert found[CHOSEN.repo]["best"]["engine"] == "mlxlm"
+    assert found[CHOSEN.repo]["best"]["repo"] == CHOSEN.repo
     assert found[CHOSEN.repo]["best"]["quick"] is True
+
+
+def test_a_stage_b_sibling_win_is_keyed_by_the_sibling_not_the_chosen_repo(tmp_path):
+    """The winner's repo is the one the number belongs to -- the chosen repo is not it."""
+
+    def run_cells(cells, _workloads, **_kwargs):
+        tokens = 70 if cells[0].label == SIBLING.format else 60
+        return [cell_result(cells[0], tokens=tokens)]
+
+    ok, _fakes, summary = a_run(tmp_path, run_cells=run_cells)
+
+    found = quickbench.latest(tmp_path / "quickbench")
+
+    assert ok is True
+    assert summary["repo"] == CHOSEN.repo
+    assert summary["best"]["format"] == SIBLING.format
+    assert summary["best"]["repo"] == SIBLING.repo
+    assert summary["best"]["decode_tps"] == 70.0
+    assert list(found) == [SIBLING.repo]
+    assert found[SIBLING.repo]["best"]["format"] == SIBLING.format
 
 
 # --- plan 045-02a AC-5: the Osaurus-app probe names its tool absolutely -----------------------
@@ -1531,10 +1653,17 @@ def test_a_stop_that_makes_the_cells_own_stop_raise_is_still_an_aborted_cell(tmp
 
 def test_an_aborted_cell_is_never_the_winner_even_with_a_number(tmp_path):
     aborted = quickbench._cell_record(
-        "mlxlm", "stock4bit", "/a", status=quickbench.ABORTED, reason=quickbench.ABORTED_REASON
+        "mlxlm",
+        "stock4bit",
+        "/a",
+        "org/two-b-stock",
+        status=quickbench.ABORTED,
+        reason=quickbench.ABORTED_REASON,
     )
     aborted["decode_tps"] = 99.0  # a number the status must still exclude
-    failed = quickbench._cell_record("optiq", "stock4bit", "/b", status="FAIL", reason="x")
+    failed = quickbench._cell_record(
+        "optiq", "stock4bit", "/b", "org/two-b-stock", status="FAIL", reason="x"
+    )
 
     assert quickbench._winner([aborted, failed]) == (None, [])
 

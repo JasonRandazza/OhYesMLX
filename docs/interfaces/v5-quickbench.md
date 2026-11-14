@@ -188,10 +188,10 @@ ending (finished, cancelled, restore failed, unexpected raise):
               "winner": str|null, "tie": [str], "note": str|null},
   "stage_b": {"caveat": "formats compared on one engine only", "engine": str|null,
               "cells": [cell], "note": str|null},
-  "best": {"engine": str, "decode_tps": float, "ttft_s": float,
+  "best": {"engine": str, "format": str, "repo": str, "decode_tps": float, "ttft_s": float,
            "measured_at": iso, "quick": true} | null
 }
-# cell: {"engine", "format", "artifact_dir", "status": "PASS|FAIL|SKIPPED|ABORTED",
+# cell: {"engine", "format", "repo", "artifact_dir", "status": "PASS|FAIL|SKIPPED|ABORTED",
 #        "reason": str|null, "decode_tps": float|null, "ttft_s": float|null,
 #        "runtime_version": str|null, "label": "quick: measured on this Mac",
 #        "reused": bool}
@@ -199,10 +199,16 @@ ending (finished, cancelled, restore failed, unexpected raise):
 ```
 
 `best` is non-null only on a finished run: a cancelled or half-restored run is a record of what
-happened, never a recommendation. `quickbench.latest(root)` returns the newest **finished** summary
-per repo, keyed by repo id, skipping a file it cannot read — and `GET /recommendations` hands each
-row's `best` to `recommend.pick(measured_here=...)`, which is the only way `Pick.measured_here` is
-ever filled (D5).
+happened, never a recommendation. `best`'s `format` and `repo` are the winning cell's own — the
+chosen row's in stage A, the sibling's when a stage-B sibling won — and every cell carries the
+catalog `repo` its artifact came from. Every ending sends that same summary as one `result` event, from
+the one place the file is written and before the ending's own `error`/`done`, so the app can show a
+cancelled run from the stream alone. `quickbench.latest(root)` returns the newest **finished** summary
+per repo, keyed by the repo the winning cell measured (the summary's `best.repo`): a stage-B
+sibling that wins is the repo that carries `measured_here`, the chosen repo it beat carries none,
+and two runs naming the same repo resolve to the newer one. A file it cannot read is skipped — and
+`GET /recommendations` hands each row's `best` to `recommend.pick(measured_here=...)`, which is the
+only way `Pick.measured_here` is ever filled (D5).
 
 The job kind is the same keystrokes the CLI uses: `ohyesmlx quickbench --repo R --yes [--osaurus]`
 prints the plan and starts nothing without `--yes`; the `quickbench` job kind takes `repo`,

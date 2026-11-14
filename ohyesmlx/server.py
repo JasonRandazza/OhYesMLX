@@ -570,18 +570,25 @@ class _Handler(BaseHTTPRequestHandler):
 
         ``measured_here`` is D5's one field this Mac can fill: the ``best`` block of the
         newest finished quickbench summary for that repo, read through
-        ``quickbench.latest`` -- a quick run on this Mac, never one of our M2 Max rows. A
-        repo with no finished quick run (or one whose every cell failed) keeps null.
+        ``quickbench.latest`` -- a quick run on this Mac, never one of our M2 Max rows. The
+        map is keyed by the repo the winning cell measured (``best.repo``), so a stage-B
+        sibling's win lands on the sibling's pick and the chosen repo that lost it keeps
+        null. A repo with no finished quick run on it (or one whose every cell failed) keeps
+        null.
         """
         hw = self.server.scan()
         statuses = self.server.detect()
         models = self.server.load_catalog()
         downloaded = frozenset(model.repo for model in models if fetch.downloaded(model))
-        measured = {
-            repo: summary["best"]
-            for repo, summary in self.server.summaries().items()
-            if isinstance(summary.get("best"), dict)
-        }
+        measured = {}
+        for summary in self.server.summaries().values():
+            best = summary.get("best")
+            if not (isinstance(best, dict) and isinstance(best.get("repo"), str)):
+                continue
+            held = measured.get(best["repo"])
+            # Two runs whose winners measured the same repo: the newer one (ISO measured_at) wins.
+            if held is None or str(best.get("measured_at", "")) > str(held.get("measured_at", "")):
+                measured[best["repo"]] = best
         picks = [
             dataclasses.asdict(pick)
             for pick in recommend.pick(

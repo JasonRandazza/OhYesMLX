@@ -127,4 +127,134 @@ final class DecodingTests: XCTestCase {
         XCTAssertThrowsError(try decoder.decode(Hardware.self, from: Data("{}".utf8)))
         XCTAssertThrowsError(try decoder.decode(JobEvent.self, from: Data("{\"seq\": 1}".utf8)))
     }
+
+    // MARK: - AC-2 (05-05) · the quickbench summary, typed
+
+    func testFinishedSummaryDecodes() throws {
+        let summary = try Fixtures.decode(QuickSummary.self, "quickbench_summary_finished.json")
+
+        XCTAssertEqual(summary.label, "quick: measured on this Mac")
+        XCTAssertEqual(summary.repo, "mlx-community/Qwen3.5-2B-4bit")
+        XCTAssertEqual(summary.ended, .finished)
+        XCTAssertEqual(summary.estimateS, 630)
+        XCTAssertEqual(try XCTUnwrap(summary.actualS), 704.512, accuracy: 1e-9)
+        XCTAssertEqual(summary.plan.stageA.count, 5)
+        XCTAssertEqual(summary.resultsDir.hasSuffix("20261114T143200Z"), true)
+        XCTAssertTrue(summary.notEvicted.isEmpty)
+        XCTAssertEqual(summary.harness.version, "0.5.0")
+        XCTAssertEqual(summary.engines.map(\.name), ["mlxlm", "osaurus", "omlx", "optiq", "vmlx"])
+        XCTAssertEqual(summary.load.stageB?.label, "this Mac was busy")
+        XCTAssertEqual(summary.osaurus.restored, true)
+
+        XCTAssertEqual(summary.stageA.caveat, "engines compared on one format only")
+        XCTAssertEqual(summary.stageA.winner, "omlx")
+        XCTAssertEqual(summary.stageA.cells.map(\.status), ["PASS", "PASS", "PASS", "FAIL", "SKIPPED"])
+        XCTAssertEqual(summary.stageA.cells.first?.decodeTPS, 55.4)
+        XCTAssertEqual(summary.stageA.cells.first?.ttftS, 0.21)
+        XCTAssertNil(summary.stageA.cells[3].decodeTPS, "a FAIL cell carries no figure")
+        XCTAssertEqual(summary.stageA.cells[3].reason, "the server did not answer within 60 s")
+        XCTAssertEqual(summary.stageB.caveat, "formats compared on one engine only")
+        XCTAssertEqual(summary.stageB.engine, "omlx")
+        XCTAssertEqual(summary.stageB.cells.map(\.reused), [true, false])
+
+        let best = try XCTUnwrap(summary.best)
+        XCTAssertEqual(best.engine, "omlx")
+        XCTAssertEqual(best.decodeTPS, 62.1)
+        XCTAssertTrue(best.quick)
+        XCTAssertEqual(best.format, "oQ4 (mixed 4/5/6/8)")
+        XCTAssertEqual(best.repo, "RepublicOfKorokke/Qwen3.5-2B-oQ4")
+        XCTAssertEqual(summary.stageB.cells.last?.repo, "RepublicOfKorokke/Qwen3.5-2B-oQ4")
+        XCTAssertEqual(summary.stageA.cells.first?.repo, "mlx-community/Qwen3.5-2B-4bit")
+        XCTAssertTrue(
+            summary.bestFormat.contains("oQ4"),
+            "the best card names the winning cell's format, not the chosen row's"
+        )
+    }
+
+    func testAnOlderSummaryWhoseBestNamesNoArtifactStillDecodes() throws {
+        let text = try Fixtures.text("quickbench_summary_finished.json")
+        let older = text.replacingOccurrences(
+            of: "\"format\": \"oQ4 (mixed 4/5/6/8)\",\n"
+                + "    \"repo\": \"RepublicOfKorokke/Qwen3.5-2B-oQ4\",\n"
+                + "    \"decode_tps\": 62.1,",
+            with: "\"decode_tps\": 62.1,"
+        )
+        XCTAssertNotEqual(older, text, "the fixture still carries the fields this removes")
+
+        let summary = try JSONDecoder().decode(QuickSummary.self, from: Data(older.utf8))
+
+        XCTAssertNil(summary.best?.format)
+        XCTAssertNil(summary.best?.repo)
+        XCTAssertEqual(summary.bestFormat, "mlx affine 4-bit gs64")
+    }
+
+    func testCancelledSummaryDecodesWithAnAbortedCellAndNoBest() throws {
+        let summary = try Fixtures.decode(QuickSummary.self, "quickbench_summary_cancelled.json")
+
+        XCTAssertEqual(summary.ended, .cancelled)
+        XCTAssertNil(summary.best, "a cancelled run recommends nothing")
+        XCTAssertEqual(summary.notEvicted, ["RepublicOfKorokke/Qwen3.5-2B-oQ4"])
+        XCTAssertNil(summary.load.stageB)
+
+        let aborted = try XCTUnwrap(
+            summary.stageB.cells.first { $0.status == "ABORTED" }
+        )
+        XCTAssertEqual(aborted.reason, "stopped by the user mid-cell; no number is reported")
+        XCTAssertNil(aborted.decodeTPS)
+        XCTAssertNil(aborted.ttftS)
+        XCTAssertEqual(
+            summary.stageA.cells.map(\.status),
+            ["PASS", "SKIPPED", "SKIPPED"]
+        )
+    }
+
+    func testASummaryMissingThePinnedKeysFailsDecoding() {
+        let decoder = JSONDecoder()
+        XCTAssertThrowsError(
+            try decoder.decode(QuickSummary.self, from: Data("{\"ended\": \"finished\"}".utf8))
+        )
+    }
+
+    func testPayloadDataKeepsKeysTheTypedSummaryDoesNotModel() throws {
+        // A key the client does not model is what a re-encode of the typed value would drop,
+        // and that is exactly what Export must not do: the file is the record, so a field the
+        // backend added after this client shipped still lands in it.
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: Fixtures.data("quickbench_summary_finished.json")
+            ) as? [String: Any]
+        )
+        object["future_field"] = ["added_by": "a later backend", "value": 7]
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        let event = JobEvent(
+            seq: 9,
+            type: .result,
+            message: "quickbench finished",
+            fraction: nil,
+            payload: try JSONDecoder().decode(JSONValue.self, from: data)
+        )
+        let payload = try XCTUnwrap(event.payloadData)
+        let written = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(written.keys),
+            [
+                "label", "repo", "format", "plan", "estimate_s", "actual_s", "ended",
+                "results_dir", "not_evicted", "harness", "engines", "load", "osaurus",
+                "stage_a", "stage_b", "best", "future_field",
+            ]
+        )
+        let future = try XCTUnwrap(written["future_field"] as? [String: Any])
+        XCTAssertEqual(future["added_by"] as? String, "a later backend")
+        XCTAssertEqual(future["value"] as? Int, 7, "the value survives as sent")
+
+        // The typed value is the same record minus that key, which is why Export does not use it.
+        let typed = try JSONDecoder().decode(QuickSummary.self, from: data)
+        let reencoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: try JSONEncoder().encode(typed)) as? [String: Any]
+        )
+        XCTAssertNil(reencoded["future_field"], "a re-encode of the typed value drops it")
+    }
 }

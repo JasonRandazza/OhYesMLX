@@ -103,13 +103,36 @@ final class AppModelTests: XCTestCase {
         )
     }
 
-    private func result(_ seq: Int, _ summary: [String: JSONValue]) -> JobEvent {
+    /// A summary payload in the pinned shape (`docs/interfaces/v5-quickbench.md`), taken from
+    /// the finished fixture with the caller's own ending and not_evicted. A non-finished run
+    /// never carries a best, which is the fixture's own rule applied to the new ending.
+    private func summaryPayload(
+        ended: String = "finished",
+        notEvicted: [String] = []
+    ) throws -> JSONValue {
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: Fixtures.data("quickbench_summary_finished.json")
+            ) as? [String: Any]
+        )
+        object["ended"] = ended
+        object["not_evicted"] = notEvicted
+        if ended != "finished" {
+            object["best"] = NSNull()
+        }
+        return try JSONDecoder().decode(
+            JSONValue.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+    }
+
+    private func result(seq: Int, ended: String = "finished", notEvicted: [String] = []) throws -> JobEvent {
         JobEvent(
             seq: seq,
             type: .result,
             message: "quickbench finished",
             fraction: nil,
-            payload: .object(summary)
+            payload: try summaryPayload(ended: ended, notEvicted: notEvicted)
         )
     }
 
@@ -178,12 +201,12 @@ final class AppModelTests: XCTestCase {
                     "reason": .null,
                 ])
             ),
-            result(3, ["ended": .string("finished")]),
+            try result(seq: 3),
             done(4, "quickbench finished"),
         ])
         await stack.model.quickbench(repo: quickbenchRepo)
         XCTAssertEqual(stack.model.screen, .results)
-        XCTAssertEqual(stack.model.summary?["ended"]?.stringValue, "finished")
+        XCTAssertEqual(stack.model.summary?.ended, .finished)
         XCTAssertEqual(stack.backend.startedJobs.last?.args, .quickbench(repo: quickbenchRepo, osaurus: false))
     }
 
@@ -648,7 +671,7 @@ final class AppModelTests: XCTestCase {
         await stack.model.launch()
         let left = "mlx-community/LFM2.5-8B-A1B-MLX-4bit"
         stack.backend.enqueue(events: [
-            result(1, ["ended": .string("finished"), "not_evicted": .array([.string(left)])]),
+            try result(seq: 1, notEvicted: [left]),
             done(2),
         ])
 
@@ -658,6 +681,183 @@ final class AppModelTests: XCTestCase {
         let line = try XCTUnwrap(stack.model.notEvictedLines.first)
         XCTAssertTrue(line.hasPrefix("Left on disk: LFM2.5 8B A1B MoE 4-bit"), line)
         XCTAssertTrue(line.contains("— it was in use. You can remove it from Models."), line)
+    }
+
+    // MARK: - AC-1/AC-2 (05-05) · a cancelled run reaches Results typed, with its raw bytes
+
+    func testACancelledSummaryTypesAndKeepsItsRawBytes() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+        // One key this client does not model: Export writes the payload as received, so a
+        // field the backend added after the client shipped still lands in the file.
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: try Fixtures.data("quickbench_summary_cancelled.json")
+            ) as? [String: Any]
+        )
+        object["future_field"] = ["added_by": "a later backend", "value": 7]
+        let cancelled = try JSONSerialization.data(withJSONObject: object)
+        let payload = try JSONDecoder().decode(JSONValue.self, from: cancelled)
+        stack.backend.enqueue(events: [
+            JobEvent(seq: 1, type: .result, message: "quickbench cancelled", fraction: nil, payload: payload),
+            failure(2, "quickbench was cancelled; nothing further was measured", code: "cancelled"),
+            done(3, "quickbench cancelled"),
+        ])
+
+        await stack.model.quickbench(repo: quickbenchRepo)
+
+        XCTAssertEqual(stack.model.screen, .results)
+        let summary = try XCTUnwrap(stack.model.summary)
+        XCTAssertEqual(summary.ended, .cancelled)
+        XCTAssertNil(summary.best, "a cancelled run recommends nothing")
+        XCTAssertEqual(summary.notEvicted, ["RepublicOfKorokke/Qwen3.5-2B-oQ4"])
+
+        // The rows come from the summary, not from the progress events before it.
+        XCTAssertEqual(
+            stack.model.benchmarkCells.map(\.status),
+            ["PASS", "SKIPPED", "SKIPPED", "PASS", "ABORTED"]
+        )
+        XCTAssertEqual(stack.model.benchmarkCells.last?.stage, "B")
+        XCTAssertEqual(
+            stack.model.benchmarkCells.last?.reason,
+            "stopped by the user mid-cell; no number is reported"
+        )
+        XCTAssertNil(stack.model.benchmarkCells.last?.decodeTPS)
+
+        // Export writes the payload as received: every key the payload carries survives,
+        // including one this client does not model.
+        let data = try XCTUnwrap(stack.model.summaryData)
+        let written = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertNotNil(written["plan"], "a key the typed value models is written")
+        let harness = try XCTUnwrap(written["harness"] as? [String: Any])
+        XCTAssertNotNil(harness["source_sha256"])
+        XCTAssertEqual(written["results_dir"] as? String, summary.resultsDir)
+        let future = try XCTUnwrap(
+            written["future_field"] as? [String: Any],
+            "a re-encode of the typed value would have dropped this key"
+        )
+        XCTAssertEqual(future["value"] as? Int, 7)
+    }
+
+    func testTheSummaryReplacesLiveCellsInTheResultsRows() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+        stack.backend.enqueue(events: [
+            progress(1, "stage A: mlxlm PASS", payload: cellPayload(
+                "A", "mlxlm", "mlx affine 4-bit gs64", "PASS", nil
+            )),
+            try result(seq: 2),
+            done(3),
+        ])
+
+        await stack.model.quickbench(repo: quickbenchRepo)
+
+        XCTAssertEqual(stack.model.liveCells.count, 1, "the live row is kept as it landed")
+        XCTAssertEqual(
+            stack.model.benchmarkCells.map(\.stage),
+            ["A", "A", "A", "A", "A", "B", "B"],
+            "once the summary lands, its cells are the rows"
+        )
+    }
+
+    func testAPayloadThatIsNotASummaryLeavesTheTypedValueEmpty() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+        stack.backend.enqueue(events: [
+            JobEvent(
+                seq: 1,
+                type: .result,
+                message: "quickbench finished",
+                fraction: nil,
+                payload: .object(["ended": .string("finished")])
+            ),
+            done(2),
+        ])
+
+        await stack.model.quickbench(repo: quickbenchRepo)
+
+        XCTAssertNil(stack.model.summary, "a summary the client cannot type is never a half one")
+        XCTAssertNotNil(stack.model.summaryData, "nor is its payload lost")
+    }
+
+    // MARK: - AC-6 (05-05) · the busy reason names the pick, and models re-read their rows
+
+    func testOneSlotReasonNamesThePickTitleAndFallsBackToTheRepoID() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+
+        stack.backend.enqueue(events: [progress(1, "Downloading", fraction: 0.1)], hold: true)
+        let download = Task { await stack.model.download(repo: quickbenchRepo) }
+        await waitUntil { stack.model.job?.events.count == 1 }
+        XCTAssertEqual(
+            stack.model.oneSlotReason,
+            "Busy: download Qwen3.5 2B 4-bit is running",
+            "the pick's title, not its repo id"
+        )
+        stack.backend.releaseJob([done(2)])
+        await download.value
+
+        stack.backend.enqueue(events: [progress(1, "Downloading", fraction: 0.1)], hold: true)
+        let unknown = Task { await stack.model.download(repo: "org/no-such-row") }
+        await waitUntil { stack.model.job?.events.count == 1 }
+        XCTAssertEqual(stack.model.oneSlotReason, "Busy: download org/no-such-row is running")
+        stack.backend.releaseJob([done(2)])
+        await unknown.value
+    }
+
+    func testDownloadAndEvictReRequestRecommendations() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+        let initial = stack.backend.recommendationsRequestCount
+
+        stack.backend.enqueue(events: [done(1)])
+        await stack.model.download(repo: downloadRepo)
+        XCTAssertEqual(stack.backend.recommendationsRequestCount, initial + 1)
+
+        stack.backend.enqueue(events: [done(2)])
+        await stack.model.evict(repo: downloadRepo)
+        XCTAssertEqual(stack.backend.recommendationsRequestCount, initial + 2)
+
+        stack.backend.enqueue(events: [done(3)])
+        await stack.model.install(engine: "optiq")
+        XCTAssertEqual(
+            stack.backend.recommendationsRequestCount,
+            initial + 2,
+            "an install changes no model row"
+        )
+    }
+
+    // MARK: - AC-4 · a plan is not a run
+
+    func testPlanningStartsNothingAndStartRunsThePlannedRepo() async throws {
+        let stack = try makeStack(plan: try Fixtures.quickPlan)
+        await stack.model.launch()
+
+        let planned = await stack.model.planBenchmark(repo: quickbenchRepo)
+        XCTAssertTrue(planned)
+        XCTAssertEqual(stack.model.quickPlan?.repo, quickbenchRepo)
+        XCTAssertTrue(stack.backend.startedJobs.isEmpty, "the plan started a job")
+
+        stack.backend.enqueue(events: [done(1)])
+        await stack.model.startBenchmark()
+        XCTAssertEqual(
+            stack.backend.startedJobs.last?.args,
+            .quickbench(repo: quickbenchRepo, osaurus: false)
+        )
+    }
+
+    func testAPlanRefusalNamesTheBackendMessageAndStartsNothing() async throws {
+        let stack = try makeStack()
+        await stack.model.launch()
+
+        let planned = await stack.model.planBenchmark(repo: downloadRepo)
+
+        XCTAssertFalse(planned)
+        XCTAssertNil(stack.model.quickPlan)
+        XCTAssertEqual(stack.model.benchmarkRefusal?.code, "bad_args")
+        XCTAssertTrue(stack.backend.startedJobs.isEmpty)
     }
 
     // MARK: - AC-2c · quit while a job runs offers Quit anyway
@@ -719,5 +919,113 @@ final class AppModelTests: XCTestCase {
         stack.backend.enqueue(events: [done(1)])
         await stack.model.quickbench(repo: quickbenchRepo)
         XCTAssertTrue(stack.model.benchmarkComplete)
+    }
+
+    // MARK: - 05-05 · the stub scenarios render without a backend
+
+    /// Each screenshot scenario drives the model to the screen it names, so a coordinator's
+    /// screenshot is of a state the model really reached rather than of a preview that lies.
+    func testEveryStubScenarioReachesItsScreen() async throws {
+        for scenario in StubScenario.allCases {
+            let model = scenario.makeModel()
+            await scenario.drive(model)
+            switch scenario {
+            case .welcome, .unsupported, .couldntStart, .backendStopped:
+                break
+            case .engines, .enginesConsent, .enginesBusy, .enginesFailed:
+                XCTAssertEqual(model.screen, .engines, scenario.rawValue)
+            case .models:
+                XCTAssertEqual(model.screen, .models, scenario.rawValue)
+                XCTAssertFalse(model.downloadedPicks.isEmpty, "the picker has a default")
+            case .modelsDownloading, .modelsLowDisk:
+                XCTAssertEqual(model.screen, .models, scenario.rawValue)
+            case .benchmarkPlan:
+                XCTAssertEqual(model.screen, .benchmark, scenario.rawValue)
+                XCTAssertEqual(model.quickPlan?.repo, StubScenario.stubRepo, scenario.rawValue)
+                XCTAssertTrue(model.benchmarkCells.isEmpty, "nothing has run in the plan frame")
+            case .benchmarkRunning:
+                XCTAssertEqual(model.screen, .benchmark, scenario.rawValue)
+            case .resultsFinished, .resultsCancelled:
+                XCTAssertEqual(model.screen, .results, scenario.rawValue)
+                XCTAssertNotNil(model.summary, scenario.rawValue)
+            case .interrupted:
+                break
+            }
+        }
+    }
+
+    func testTheRunningScenarioHasItsStopControlsAndLiveCells() async throws {
+        let model = StubScenario.benchmarkRunning.makeModel()
+        await StubScenario.benchmarkRunning.drive(model)
+
+        XCTAssertEqual(model.screen, .benchmark)
+        XCTAssertEqual(model.job?.state, .running)
+        XCTAssertEqual(model.liveCells.count, 3)
+        XCTAssertEqual(model.liveCells.map(\.status), ["PASS", "PASS", "SKIPPED"])
+        XCTAssertTrue(model.canStartJob == false, "the stop controls have the one slot")
+    }
+
+    func testTheFinishedResultsScenarioShowsABestAndTheCancelledOneDoesNot() async throws {
+        let finished = StubScenario.resultsFinished.makeModel()
+        await StubScenario.resultsFinished.drive(finished)
+        XCTAssertEqual(finished.screen, .results)
+        XCTAssertEqual(finished.summary?.ended, .finished)
+        XCTAssertEqual(finished.summary?.best?.engine, "omlx")
+        XCTAssertEqual(finished.summary?.best?.decodeTPS, 62.1)
+
+        let cancelled = StubScenario.resultsCancelled.makeModel()
+        await StubScenario.resultsCancelled.drive(cancelled)
+        XCTAssertEqual(cancelled.screen, .results)
+        XCTAssertEqual(cancelled.summary?.ended, .cancelled)
+        XCTAssertNil(cancelled.summary?.best)
+        XCTAssertEqual(
+            cancelled.summary?.stageA.cells.map(\.status),
+            ["PASS", "SKIPPED", "SKIPPED"],
+            "the engine it never reached is SKIPPED, not missing"
+        )
+        XCTAssertEqual(
+            cancelled.notEvictedLines,
+            [
+                "Left on disk: Qwen3.5 2B oQ4 (1.8\u{00A0}GB) — it was in use. "
+                    + "You can remove it from Models."
+            ]
+        )
+        XCTAssertTrue(
+            cancelled.benchmarkCells.contains { $0.status == "ABORTED" },
+            "the stopped cell is in the rows Results draws"
+        )
+    }
+
+    func testTheDownloadingScenarioExposesTheByteCounters() async throws {
+        let model = StubScenario.modelsDownloading.makeModel()
+        await StubScenario.modelsDownloading.drive(model)
+        await waitUntilAsync { model.downloadProgress(repo: StubScenario.stubRepo) != nil }
+
+        let counters = try XCTUnwrap(model.downloadProgress(repo: StubScenario.stubRepo))
+        XCTAssertEqual(counters.total, 1_400_000_000)
+        XCTAssertEqual(counters.done, 588_000_000)
+        XCTAssertEqual(model.job?.fraction, 0.42)
+    }
+
+    func testTheLowDiskScenarioCarriesTheRefusalsOwnNumbers() async throws {
+        let model = StubScenario.modelsLowDisk.makeModel()
+        await StubScenario.modelsLowDisk.drive(model)
+
+        let low = try XCTUnwrap(model.lowDisk[StubScenario.stubRepo])
+        XCTAssertEqual(low.freeBytes, 39_000_000_000)
+        XCTAssertEqual(low.neededBytes, 40_200_000_000)
+        XCTAssertEqual(low.amountToFree, 1_200_000_000)
+        XCTAssertEqual(model.hardware?.diskFreeBytes, 39_000_000_000, "the meter re-read the disk")
+    }
+
+    private func waitUntilAsync(
+        timeout: TimeInterval = 2,
+        _ condition: @MainActor () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
     }
 }
