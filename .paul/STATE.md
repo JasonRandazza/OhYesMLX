@@ -59,6 +59,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 |-------|--------|--------|---------|
 | README.md needs a full rewrite, including a lineage/acknowledgement section naming LMRE as the predecessor and linking its archived repo (`JasonRandazza/local-model-runtime-evaluation-harness`) | Docs 2026-10-09 | M | Jason's call: address the README as a whole, not piecemeal. The lineage wording to draw on is in the Deep Wiki charter record (`OhYesMLX Charter and Origin - 2026-09-14`) |
 | Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | **Disk has tightened: 40 GiB free on 2026-11-13** (was 238 GiB 2026-09-16). Phase 5 needs little (python-build-standalone ~100 MB, Swift build cache); revisit before any model fetch |
+| P5-11: the app cannot offer "Re-download" for a model whose files differ in size, because `Pick.downloaded` is a single bool | Phase 5 (threat-model §10 status) | S | A backend field (e.g. bytes on disk, or a present-but-different flag) plus the Models row copy; also in the Fable S4 scope |
 | Eight pre-`first_request_workload_id` run dirs cannot be loaded | Phase 5 | S | `load_run` refuses them by line number rather than defaulting the field. A schema migration, only if those columns are ever wanted |
 | Osaurus pin copies remain in run_grid.sh / run_grid_moe.sh / run_sweep_cache*.sh / run_accuracy_* / run_jang_* / run_sweep_prompt.sh | v3.1 2026-09-25 | S | Their semantics differ (idle-900 only, or the cache is the varied pin); listed in `scripts/osaurus-pin.sh`. Consolidate only where identical |
 | ~~Harness does not record `usage.cached_tokens`~~ **DONE 2026-09-29** | v3.1 2026-09-25 | S | `Observation.cached_tokens` (transport.py) reads `usage.prompt_tokens_details.cached_tokens` (oMLX/OptiQ/vMLX) or `usage.cached_tokens` (mlx-lm), `None` when unsaid; recorded per observation, not yet surfaced in a report or gate. Old records load as `None`. Osaurus sends neither (`docs/runtimes/osaurus.md:668`), so a `None` there means unsaid, not zero. |
@@ -82,10 +83,10 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-14 (Claude Opus 5.5 coordinator)
-Stopped at: Phase 5 built and reviewed end to end; `dist/OhYesMLX.app` + zip + SBOM build and pass check_bundle 9/9.
-Next action: (1) Jason re-adds `/etc/sudoers.d/oymlxtest` -> coordinator runs 05-06 AC-6 clean-account smoke of the built app; (2) with Jason's go-ahead, one live "Stop now" quickbench and one real download through the app; (3) /paul:verify Phase 5 UAT; (4) PHASE-5-SUMMARY and milestone close. Jason's calls: release version (0.3.0 vs a v5 bump), publishing a GitHub Release (outward-facing).
+Stopped at: Phase 5 first pass done and documented. Fable 5.2 review planned (`.paul/review/fable-5.2/PLAN.md`).
+Next action: open the session by walking Jason through HANDOFF "Start here" (8 items; 1–4 are time-critical because the Fable 5.2 Pro promotion ends 2026-11-16 23:59 PT). Then run the Fable plan (P0 dossiers by workers, F sections, V verification). Phase 5 close: clean-account smoke, live checks, UAT, P5-11.
 Resume file: `.paul/HANDOFF.md`
-Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 + a stdio shim. Jason to refresh it in the app (and register it for Claude Code if wanted).
+Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 (untested build; was 0.25.29 on 2026-11-02).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 

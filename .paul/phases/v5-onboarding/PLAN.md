@@ -133,6 +133,9 @@ Plans (2026-11-13, after the prototype gate; Jason's seven answers are binding a
 - 05-05 (wave 2) T5.4 + T5.5: Models / Benchmark / Results screens.
 - 05-06 (wave 3) T5.6: `.app` assembly with python-build-standalone (D6), ad-hoc signed zip (D7, no Developer account), P5-3/P5-4/P5-6/P5-12 re-verified on the bundled interpreter, clean-account smoke.
 05-04..05-06 are written when their dependencies land, against the code as built.
+Status 2026-11-14 (first pass): 05-01 `93d374c`, 05-02 `004171c`, 05-03 `99d2a55`, 05-04 `3495886`, 05-05 `bb762c6`,
+05-06 `101df7c`. Two review waves were fixed (`ac0de1b`, plus the wave-2 fixes in `101df7c`). Open: 05-06 AC-6 (the
+clean-account smoke), live Stop-now and download checks, UAT, and P5-11 re-download copy (threat-model §10 status table).
 
 ## Process gates (agreed 2026-10-29)
 

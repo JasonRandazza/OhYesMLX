@@ -30,10 +30,10 @@ runtime or their quantization is what's actually costing them speed and memory.
 
 | Attribute | Value |
 |-----------|-------|
-| Type | Application (CLI tool) |
+| Type | Application (CLI tool + SwiftUI onboarding app) |
 | Version | 0.3.0 released 2026-09-23; v3.1 Hardening (0.3.1) in progress |
-| Status | Active — Phases 1–4 of v3.1 complete (STATE.md is the live position) |
-| Last Updated | 2026-09-25 |
+| Status | Active — v5.0 Phase 5 (SwiftUI app) first pass built and reviewed; clean-account smoke, live checks and UAT open (STATE.md is the live position) |
+| Last Updated | 2026-11-14 |
 
 > This file is the 2026-09-14 charter. The requirement lists and metrics below are kept as
 > written then; `.paul/STATE.md` and `.paul/ROADMAP.md` hold what has shipped since.
@@ -56,7 +56,7 @@ runtime or their quantization is what's actually costing them speed and memory.
 
 ### Active (In Progress)
 
-- [ ] v5.0 Phase 5 — SwiftUI app and packaging (unsigned/ad-hoc build until an Apple Developer account exists).
+- [~] v5.0 Phase 5 — SwiftUI app and packaging. First pass built 2026-11-14 (05-01..05-06): `app/` Swift package, `scripts/build_app.sh` → ad-hoc-signed `.app` zip with bundled CPython 3.14.10 and an SBOM. Open: clean-account smoke, live Stop-now/download checks, UAT, P5-11 re-download copy.
 
 ### Planned (Next)
 
@@ -155,6 +155,8 @@ Testing that claim fairly is the sharpest single reason this project should exis
 | Accuracy (v2) | lm-evaluation-harness | `local-chat-completions` against the same endpoints. |
 | Process | PAUL 1.4.0 | `PLAN → APPLY → UNIFY`. |
 | Delegation | Command Code (`cc-agent`) on `deepseek/deepseek-v4.1-flash` | Orchestrated and reviewed by Claude Opus 5. |
+| App (v5.0) | SwiftUI, Swift 6 package `app/` (macOS 14+), no package dependencies | A client only; the Python backend stays the source of truth. |
+| Bundled runtime (v5.0) | python-build-standalone CPython 3.14.10+20261026 | Pinned and hash-verified by `scripts/fetch_python_standalone.sh` (D6). |
 
 ## Links
 
@@ -165,4 +167,4 @@ Testing that claim fairly is the sharpest single reason this project should exis
 
 ---
 *PROJECT.md — Updated when requirements or context change*
-*Last updated: 2026-11-13 after v5.0 Phase 4.5*
+*Last updated: 2026-11-14 after the v5.0 Phase 5 first pass*

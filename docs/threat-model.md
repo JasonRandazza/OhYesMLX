@@ -586,3 +586,24 @@ Each line must be checkable by a test or by a manual step that can fail.
 | P5-10 | The app may show or persist the backend's stderr lines as they are, and must never add request headers or the token to them. | 04-01 audit #3, T-11 |
 | P5-11 | Copy: a model whose files differ in size from the catalog is offered as "re-download", not reported as corrupt. | UAT-001 |
 | P5-12 | An SBOM of the bundled interpreter and every pinned engine dependency (names, versions, hashes from T-01) ships with each release. | 045-01 audit deferred #3, T-01 |
+
+### Status at the Phase 5 first pass (2026-11-14)
+
+Checked by the coordinator on the bundle `scripts/build_app.sh` produces (`101df7c`), with
+`scripts/check_bundle.sh` where noted. "Clean account" means the `oymlxtest` run of 05-06 AC-6, which
+is still to come (it needs Jason's sudoers step).
+
+| Id | Status | Evidence |
+|---|---|---|
+| P5-1 | Met | The token's raw value is read only in `HTTPBackend`'s Authorization builder (grep). `BackendToken` prints `<redacted>` (LauncherTests). |
+| P5-2 | Met | The argv is exactly `[python, -I, -B, -m, ohyesmlx.cli, app]`; the env is built, not inherited; the token comes only from the stdout pipe (LauncherTests). |
+| P5-3 | Met | check_bundle P5-3 on the bundled interpreter: no user site, no cwd, PYTHONPATH ignored. |
+| P5-4 | Met | check_bundle P5-4: HTTPS to huggingface.co returns 200 with CERT_REQUIRED, using macOS's `/etc/ssl/cert.pem`; no CA file is bundled. |
+| P5-5 | Met on this account; clean account pending | App Support reads `drwx------`; the launcher creates it 0700 before the spawn. |
+| P5-6 | Met | Run from a read-only UDRO image, the backend serves and `codesign --verify --deep --strict` still passes. The whole bundled tree is precompiled (unchecked-hash) and the backend runs `-B`; before that fix, child interpreters wrote stdlib bytecode into the bundle. |
+| P5-7 | Met | A second `open -n` of the .app focuses the first: one app, one backend. `flock` on `app.lock`. |
+| P5-8 | Met | Quit closes stdin and waits; with a job running there is no signal unless the user clicks Quit anyway after 150 s (LauncherTests, AppModelTests). A menu Quit leaves no process. |
+| P5-9 | Met | check_bundle P5-9: the backend's PATH is launchd's default and it carries no PYTHON* variable. |
+| P5-10 | Met | The stderr tail is shown as written (Couldn't start / The backend stopped); the backend never writes the token there. |
+| P5-11 | **Partly met** | The app never says "corrupt". It cannot offer "Re-download" because `Pick.downloaded` is a single bool: the client cannot tell "absent" from "present with different sizes". This needs a backend field. Open. |
+| P5-12 | Met | `scripts/make_sbom.py` lists the interpreter (tag, url, sha256), ohyesmlx (commit, source sha256), the Swift toolchain, and 105 pinned packages with hashes. |

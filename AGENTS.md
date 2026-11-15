@@ -117,6 +117,9 @@ touch, and "touch nothing else."
 A ticket closes only when the coordinator has **personally observed** the diff and a
 green test run — `/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python -m pytest -q`
 (the repo has no venv with pytest; that one carries `pytest` and `tokenizers`).
+For `app/` (Swift), the green run is `cd app && OYMLX_DEV_PYTHON=$HOME/.local/share/ohyesmlx/app-dev-venv/bin/python swift test`
+(`scripts/dev_backend_venv.sh` makes that venv), and a UI change also needs the coordinator's screenshots of its
+`OYMLX_STUB_SCENARIO` states in light and dark. A packaging change needs `scripts/check_bundle.sh dist/OhYesMLX.app` all PASS.
 **A worker's report is not evidence**, and neither is a worker's *justification* just because
 its tests pass: a drift worker's code and tests were right while its stated reason for the
 threshold was false, and only running it against real rows showed that. Conversely, treat a
