@@ -96,7 +96,9 @@ The bench was started on 2026-11-14 by the previous session:
 `scripts/fleet/model-bench.py --out reports/paid-fleet/model-bench-2026-11-14-kimi --reps 3 --jobs 6 moonshotai/kimi-k3.1-pro`
 (18 graded runs, the same battery that approved the current routes).
 
-1. `cd ~/AI/Agent-Environment && python3 scripts/fleet/model-bench.py --summarize reports/paid-fleet/model-bench-2026-11-14-kimi`.
+1. **Bench done 2026-11-14: `moonshotai/kimi-k3.1-pro` 18/18 graded passes, 0 collateral deletions, median 80.2 s/run**
+   (`python3 scripts/fleet/model-bench.py --summarize reports/paid-fleet/model-bench-2026-11-14-kimi`; $/run shows n/a until
+   step 3 adds its price). It meets the pass bar, so go straight to step 2.
    **Pass bar:** at least 17/18 graded passes and **zero** collateral deletions (the 2026-09-24 standard). If it is
    unfinished, wait. If it failed, Kimi does not get the route; use `mimo-pro` for verification and tell Jason.
 2. That repo has **another session's uncommitted edits** (`AGENTS.md`, `docs/deepwiki-documentation-policy.md`). Do not

@@ -19,7 +19,7 @@ are time-critical. Items 5–8 can be done any time this week.
 
 Already settled with Jason on 2026-11-14, so do not re-ask: the budget is the current Fable allowance plus **1 Fable
 reset**, with **4 full resets** (expiring Dec 10) kept mostly for after the promotion. **Kimi K3.1 Pro is approved** as
-the main worker; its route is added in P0-1, after its bench passes. **MiMo v2.6 Pro** builds the dossiers.
+the main worker; its bench already passed (18/18, 0 collateral deletions, 2026-11-14), so P0-1 only adds the route. **MiMo v2.6 Pro** builds the dossiers.
 
 1. **Choose the order.** Recommended: Fable review first (it is the only time-limited item). The live Phase 5 checks
    (item 5) go before P0 or after V, never overlapping workers.
