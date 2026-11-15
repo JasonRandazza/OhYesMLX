@@ -1,155 +1,213 @@
 ---
-description: "Plan for a token-efficient whole-project review of OYMLX with Claude Fable 5.2 as the reviewer, Opus as orchestrator and Command Code workers for preparation and verification"
+description: "Executable plan for a token-efficient whole-project review of OYMLX with Claude Fable 5.2 as reviewer, Opus as orchestrator, MiMo v2.6 Pro building dossiers and Kimi K3.1 Pro as the main verification worker"
 type: Plan
 about: "OhYesMLX"
 ---
 
-# Fable 5.2 review of OYMLX — plan
+# Fable 5.2 review of OYMLX — executable plan
 
-Written 2026-11-14 by the Opus coordinator at Jason's request. Execute it in the session after Jason's
-to-do list (HANDOFF "Start here") is done. This is a review, not a phase: its output is a verified findings
-list, and fixes go through normal PAUL plans afterwards.
+Written 2026-11-14 by the Opus coordinator. Amended the same day after Jason confirmed his budget and worker
+choices. Everything here is decided. The next session executes it in order and asks Jason only the four numbered
+checkpoint questions (marked **ASK**). The order files are already written in `.paul/review/fable-5.2/orders/`.
 
-## 0. The constraint that shapes everything
+This is a review, not a phase: its output is a verified, ranked findings list (`FINDINGS.md`). Fixes go through
+normal PAUL plans afterwards, and they need no Fable.
 
-**The Pro-plan Fable 5.2 promotion ends Sunday 2026-11-16 at 11:59 PM PT.** Until then Fable 5.2 runs inside
-the plan for up to 50% of the weekly limit. Afterwards, Pro bills Fable to usage credits (Anthropic help article
-"Claude Fable 5.2 launch offers"; Notebookcheck 2026-11-09). Jason reports 5 resets available. Confirm that
-count in Settings → Usage before relying on it: the published offer gives Pro one reset and Max/Ultra one
-to three, which expire 2027-03-08.
+## 0. Budget and deadline (Jason's usage panel, 2026-11-14)
 
-Two consequences follow:
-
-- **Every Fable token must go to judgment, not reading.** Command Code workers do all the reading, mapping and
-  verification, and they cost nothing scarce.
-- **Preparation must be finished before the first Fable call.** Dossiers are built in parallel by workers, and
-  Fable sections then run back to back in priority order, so the most valuable sections land first if the
-  window closes.
-
-## 1. The shape: Opus orchestrates, Fable reviews in sections, workers prepare and verify
-
-**Not one massive pass.** The source is about 16.5K lines of Python, 5.7K of Swift and 2K of packaging scripts
-(about 250K tokens before 26K lines of tests). An agentic reviewer re-reads as it goes, so a whole-repo pass would
-be millions of tokens, mostly re-reads. It would also run against context limits on the way. One failure would
-lose everything, and it could not stop at a reset boundary.
-
-**Fable is not the orchestrator.** Orchestration is waiting, routing and bookkeeping, and doing that at Fable's
-price wastes it. The Opus session that runs this plan spawns Fable once per section as a subagent:
-`Agent(model: "fable", run_in_background: true)`. Opus reads only the findings file each one writes.
-
-**Section sizing.** A section is sized so Fable reads a curated dossier of about 15–25K tokens, plus about
-40–80K tokens of targeted source ranges the dossier names. It writes one findings file.
-
-| Role | Who | Why |
+| Item | What it does | Expires |
 |---|---|---|
-| Orchestrator | Claude Opus 5.5 (this plan's session) | It routes, gates and makes the final verdicts. It reads findings, not code. |
-| Reviewer | Claude Fable 5.2, one subagent per section | The scarce, high-judgment pass, aimed at what workers cannot see. |
-| Dossier builders | Command Code `implement --route mimo-pro` (MiMo v2.6 Pro, an approved route) | Mechanical but careful reading: maps, contracts, known issues. 1M context, about $0.0036/M cache read. |
-| Verifiers | Kimi K3.1 Pro if Jason approves a trial route; otherwise `mimo-pro` | Each finding is reproduced with a failing test, or refuted with evidence. |
-| Red-test writers / fixers | `implement` (DeepSeek V4.1 Flash, the default) | Proven on this repo (18/18), cheapest, and strongest on Vals among the approved routes. |
+| Fable 5.2 inside the Pro plan | Fable may use up to 50% of the weekly limit | **Tue 2026-11-17 2:59 AM EST** (= Mon Nov 16 11:59 PM PT) |
+| **1 Fable reset** | Refills the 5-hour limit and the Fable allowance, and gives back what Fable used of the weekly limit. It does not reset the whole week. | Tue 2026-11-17 2:59 AM EST (the same moment) |
+| **4 full resets** | Reset the whole usage week | First expires Wed 2026-12-10 5:00 PM EST |
 
-### Worker model choice (research 2026-11-14)
+So the Fable capacity inside the promotion is **the current allowance plus one Fable reset**, about two Fable
+allowances. The full resets outlive the promotion and are worth more afterwards (Opus orchestration, the Phase 5
+close-out). Policy:
 
-Approved Command Code routes are a closed world (`fleet-provider-routing`): only `deepseek`, `mimo`,
-`mimo-pro`, `glm` and the explicit-only routes may run. Kimi K3.1 Pro and Qwen 3.8 Max are available in
-Command Code but **not approved**; adding one is a policy change that needs Jason's yes.
+1. Spend the **Fable reset first**, the moment Fable's allowance or the 5-hour window runs out. It expires with the
+   promotion, so it is free to use and lost if unused.
+2. Use **at most one full reset** for Fable, and only if S1–S3 are not all done by the time both allowances are spent.
+   Keep the other three for after the promotion.
+3. **No Fable section starts after Mon 2026-11-16 11:30 PM EST.** A section takes roughly 20–45 minutes, and a
+   half-run section wastes its reads. Anything left falls back to Kimi (§6).
 
-| Model (Command Code id) | Vals Index (Nov 9, 2026) | Cost per Vals task | Notes |
-|---|---|---|---|
-| Kimi K3.1 Pro (`moonshotai/kimi-k3.1-pro`) | 62.5% | $6.44 | #4 on Artificial Analysis (55.1). Strongest on Terminal-Bench 4.0 (65.7–67.2). $2 / $10 per M. **Best verifier candidate.** |
-| DeepSeek V4.1 Flash (`deepseek`, approved) | 61.3% | $0.66 | Beats both Qwen Max and MiMo Pro on Vals at a fraction of the cost; this repo's proven implementer. |
-| GLM 5.3 | 59.9% | $8.52 | Not a candidate (price). |
-| Qwen 3.8 Max 0902 (`qwen/qwen3.8-max-0902`) | 59.1% | $8.73 | **Dominated**: below Kimi and DeepSeek Flash, and the most expensive per task. Max Prime is the same model served faster, so no gain in quality. Skip both. |
-| MiMo v2.6 Pro (`mimo-pro`, approved) | 57.8% | $0.43 | Cheapest strong long-context reader; already this repo's `review` route. |
+Opus's own usage counts against the same 5-hour window, so the orchestrator stays lean: it reads findings and
+verdicts, never whole source files.
 
-Sources: Vals AI Index leaderboard (vals.ai, 2026-11-09), Artificial Analysis via benchlm/benchmarklist, the
-OpenRouter comparison page for pricing. These are general benchmarks; this repo's own answer is
-`scripts/fleet/model-bench.py` (see step P0).
+## 1. Roles (decided)
 
-**Recommendation:** use MiMo v2.6 Pro for dossiers (approved; reading is its strength and it is very cheap), and
-Kimi K3.1 Pro for verification if Jason approves a trial route. Skip Qwen 3.8 Max and Max Prime. Without Kimi,
-verification runs on `mimo-pro` and red tests on `deepseek`, and the plan still works.
+| Role | Who | How it runs |
+|---|---|---|
+| Orchestrator, final verdicts | Claude Opus 5.5 (the session running this plan) | Dispatches, gates, spot-checks, and writes FINDINGS.md |
+| Reviewer | **Claude Fable 5.2**, one background subagent per section | `Agent(model: "fable", run_in_background: true)`; writes only its findings file |
+| Dossier builder | **MiMo v2.6 Pro** (approved route `mimo-pro`) | `CC_ROUTE=mimo-pro .paul/orders/dispatch.sh implement …` |
+| **Main worker**: verifier, red-test writer, later fixer | **Kimi K3.1 Pro** (`moonshotai/kimi-k3.1-pro`), approved by Jason 2026-11-14 as a new route `kimi-pro` | `CC_ROUTE=kimi-pro .paul/orders/dispatch.sh implement …` once P0-1 has added the route |
+| Fallback worker | DeepSeek V4.1 Flash (`deepseek`, the default) | Used if Kimi is rate-limited or fails its bench |
 
-## 2. Sections, in priority order
+Why these (research 2026-11-14, Vals Index of Nov 9 and Artificial Analysis):
 
-Priority is risk times value: what could hurt a user's Mac first, then the project's core value (numbers
-that are true), then the newest code.
+- **Kimi K3.1 Pro** scores 62.5% at $6.44 per task; it is #4 overall on Artificial Analysis (55.1) and first on
+  Terminal-Bench 4.0.
+- **DeepSeek V4.1 Flash** scores 61.3% at $0.66 per task.
+- **Qwen 3.8 Max** scores 59.1% at $8.73 per task, so both models above beat it, and it costs more per task. **Skip it and
+  Max Prime**, which is the same model served faster.
+- **MiMo v2.6 Pro** scores 57.8% at $0.43 per task, with a 1M context and a $0.0036/M cache read: an excellent reader
+  for dossiers.
 
-| # | Section | Code (lines) | The questions Fable is asked |
-|---|---|---|---|
-| S1 | **Security and trust boundaries** | server.py 1051, the security-relevant ranges of engines/fetch/cli/runtimes, the Swift launcher, threat-model §§1–10 | Can anything on or off this Mac drive the API, an installer, a download or a file write to do harm? Are the T-findings really closed? Is anything missing from the threat model? |
-| S2 | **Measurement integrity** (the core value) | transport 519, measure 1603, coherence 94, sample 303, token_counter 116, the summary/grid paths of report.py | Can a published or quick number be wrong, mislabelled, attributed to the wrong artifact or run, or survive a failed coherence gate? Does "vary one thing" hold in code? |
-| S3 | **The SwiftUI app** | app/Sources 5.7K | State-machine races, concurrency (MainActor, async), the launcher's process handling, honesty of every label, accessibility, fidelity to DESIGN.md. |
-| S4 | **Onboarding backend** | engines 1340, fetch 1310, quickbench 1059, catalog 305, recommend 209, hardware 167 | Install, download and evict correctness under failure; quickbench's one-axis rules; the fit math; disk safety. |
-| S5 | **Runtime lifecycle and host safety** | runtimes.py 3811, osaurus_settings 411 | Ports, orphans, the Osaurus pin/restore, the ledger, never touching the user's processes. |
-| S6 | **Packaging and release** | build_app/check_bundle/fetch/make_sbom/smoke scripts, Info.plist, gatekeeper.md | Signing, the SBOM's truth, translocation, what a user's first launch actually meets. |
+**Fable is not the orchestrator, and there is no single whole-repo pass.** About 250K tokens of source (16.5K Python,
+5.7K Swift and 2K script lines, plus 26K lines of tests), read agentically, is millions of tokens, mostly re-reads.
+It could not stop at a reset, and one failure would lose it all. Sections over curated dossiers put Fable's tokens
+on judgment.
 
-Not given to Fable: docs-versus-code drift and tests that cannot fail. Workers do those as a cheap sweep (W1),
-and Fable sees only the summary in each dossier.
+## 2. Sections (priority order)
 
-If the window closes early, S1–S3 are the minimum worth having. S4–S6 then fall back to a Kimi or `mimo-pro`
-review using the same dossiers.
+| # | Section | If the window closes early |
+|---|---|---|
+| S1 | Security and trust boundaries (server, installers, fetch, ledger, launcher, signing, threat model) | Must do |
+| S2 | Measurement integrity (transport, measure, coherence, report paths, canary, quickbench numbers) | Must do |
+| S3 | The SwiftUI app (AppModel, launcher, client, views, a11y, design fidelity) | Must do |
+| S4 | Onboarding backend (engines, fetch, quickbench, catalog, recommend, hardware; P5-11 known) | Kimi fallback |
+| S5 | Runtime lifecycle and host safety (runtimes, Osaurus pin) | Kimi fallback |
+| S6 | Packaging and release (build/check/fetch/SBOM scripts, plist, gatekeeper doc) | Kimi fallback |
 
-## 3. Steps
+The exact scope, contracts, scan patterns and open questions per section are in `orders/dossier-S<n>.md`.
 
-### P0 — before any Fable call (workers only; about 1–2 hours of wall time, no Fable tokens)
+## 3. Timeline (EST, which is what Jason's panel shows)
 
-1. **Kimi trial route** (only if Jason approved it): run `scripts/fleet/model-bench.py` on
-   `moonshotai/kimi-k3.1-pro` with the standard three tasks and price it with `route-cost`. Add it as a trial route
-   per the fleet skill's policy-change steps (`paid-routes.sh`, installer, DECISIONS.md). If it fails the bench,
-   use `mimo-pro`.
-2. **Dossiers, S1–S6, in parallel**: one `cc-agent implement --route mimo-pro` per section, each writing
-   `.paul/review/fable-5.2/dossier-S<n>.md`, at most about 25K tokens each, in a fixed structure:
-   - **Map**: every file and function in scope with `file:line` ranges, from `graphify query`/`explain`.
-   - **Contracts**: the pinned shapes and rules that bind this code, as pointers into `docs/interfaces/*` and
-     AGENTS.md, quoting only the binding sentences.
-   - **Already known; do not re-report**: accepted risks (threat-model §9), deferred items (STATE, PHASE
-     summaries), and fixed findings from every `.paul/review/*` round, each with its commit.
-   - **Hotspots**: the 10–20 ranges where a bug would hurt most, each with one line on why.
-   - **Mechanical scan results**: grep findings (subprocess with `shell=True`, `os.system`, unbounded reads, `chmod`,
-     `tempfile` misuse, `force_` unwraps, `try!`, `DispatchQueue.main.sync`, and so on), each with a location.
-   - **Test inventory**: which tests guard which hotspot, and which hotspots have none.
-   - **Open questions for Fable**: 5–10 specific, falsifiable questions.
-3. **W1 sweep** (`mimo-pro`, parallel): docs-versus-code drift for `docs/interfaces/*` against the code, and a list of
-   tests that cannot fail (asserting a fake's echo, never red-checked). It writes `.paul/review/fable-5.2/W1-sweep.md`.
-   Workers are not trusted blindly: Opus spot-checks three claims from each dossier against the code before the
-   dossier goes to Fable. A dossier with a false map line is rebuilt.
+| When | Step | Fable? |
+|---|---|---|
+| Session start, Sat 11/14 evening or Sun 11/15 morning | HANDOFF "Start here" with Jason (about 15 min) | no |
+| +0:15 | P0-1 Kimi route, P0-2 dossiers ×6 and W1 dispatched in parallel, P0-3 Fable ping | ping only |
+| about +1:30 | P0-4 Opus spot-checks the dossiers; rebuild any bad one | no |
+| Sun 11/15 | F: S1 → S2 → S3, with V verification pipelined on Kimi as each lands | yes |
+| Sun 11/15 or Mon 11/16 | F: S4 → S5 → S6 if the allowance remains (otherwise the Kimi fallback) | yes |
+| **Mon 11/16 11:30 PM** | **The last Fable section may start** | — |
+| Tue 11/17 onward | V finishes; FINDINGS.md; fix plans via PAUL (Kimi or DeepSeek workers) | no |
 
-### F — Fable sections (S1 first, then in order)
+Live Phase 5 checks (Stop now, a download) must not overlap any worker or Fable run (AGENTS.md). Do them before P0 or
+after V, whichever Jason picks.
 
-For each section, Opus spawns one background Fable subagent with the **standing brief** (§4) followed by one
-line naming the section and its dossier. The brief is byte-identical across sections, so it is a cached prefix.
-Fable writes `.paul/review/fable-5.2/S<n>-findings.md` and returns only "done, N findings".
+## 4. Steps
 
-Between sections, Opus checks plan usage (Jason can read Settings → Usage). Calibrate after S1: if S1 used X%
-of the window, run sections back to back until the window is about 80% spent, then use a reset. Never start a
-section that cannot finish in what is left; a half-run section wastes its reads.
+### P0-1 — Add the `kimi-pro` route (coordinator, in `~/AI/Agent-Environment`)
 
-### V — verification (pipelined: starts as soon as each section's findings land)
+The bench was started on 2026-11-14 by the previous session:
+`scripts/fleet/model-bench.py --out reports/paid-fleet/model-bench-2026-11-14-kimi --reps 3 --jobs 6 moonshotai/kimi-k3.1-pro`
+(18 graded runs, the same battery that approved the current routes).
 
-For each finding, one verifier worker (Kimi trial route, or `mimo-pro`) writes
-`.paul/review/fable-5.2/verify/S<n>-F<k>.md`, ending in one of:
+1. `cd ~/AI/Agent-Environment && python3 scripts/fleet/model-bench.py --summarize reports/paid-fleet/model-bench-2026-11-14-kimi`.
+   **Pass bar:** at least 17/18 graded passes and **zero** collateral deletions (the 2026-09-24 standard). If it is
+   unfinished, wait. If it failed, Kimi does not get the route; use `mimo-pro` for verification and tell Jason.
+2. That repo has **another session's uncommitted edits** (`AGENTS.md`, `docs/deepwiki-documentation-policy.md`). Do not
+   touch or commit them; stage only your own files.
+3. Add the route the way the existing ones are defined:
+   - `scripts/fleet/paid-routes.sh`: a `kimi-pro) model='moonshotai/kimi-k3.1-pro' ;;` case in `paid_route_model`,
+     and `kimi-pro` in the routes loop.
+   - `scripts/fleet/cc-agent.sh`: the usage string.
+   - `policies/provider-fleet.json`: a route entry marked **explicit-only** ("approved by Jason 2026-11-14 for the
+     Fable 5.2 review and its fixes"). Do not add it to the fallback order or to any profile default.
+   - `scripts/fleet/route-cost.py`: a PRICING entry from the bench's own events (`route-cost <events.ndjson>`);
+     if Command Code's cache-read price cannot be derived, enter OpenRouter's $2/$10 per M and mark it provisional.
+   - A `DECISIONS.md` row, plus `reports/paid-fleet/kimi-route-adoption-2026-11-14.md` with the bench table.
+4. Re-run `scripts/install-orca-agent-layer.sh`, then `--check`. Verify with
+   `cc-agent implement --route kimi-pro --check-only`, which must print `READY: … model=moonshotai/kimi-k3.1-pro`.
 
-- **CONFIRMED**: a red test that fails on `main`, written in an Orca worktree by an `implement` worker. It is
-  not merged; the fix comes later.
-- **CONFIRMED (no test possible)**: concrete evidence (a command and its output, or a code path), with a reason.
-- **REFUTED**: the code or test that shows the claim is false.
+### P0-2 — Dossiers and W1 (MiMo v2.6 Pro, all seven in parallel, background)
 
-Opus reads the verdicts, re-checks every High and every REFUTED one personally, and writes the final ranked list
-`.paul/review/fable-5.2/FINDINGS.md`. This is AGENTS.md's rule applied to Fable too: a reviewer's report is not
-evidence.
+```sh
+cd ~/Dev/active/OhYesMLX
+export CC_AGENT_MAX_TURNS=200
+for s in S1 S2 S3 S4 S5 S6; do
+  (CC_ROUTE=mimo-pro .paul/orders/dispatch.sh implement .paul/review/fable-5.2/orders/dossier-$s.md \
+     .paul/review/fable-5.2/orders/dossier-$s.log &)
+done
+(CC_ROUTE=mimo-pro .paul/orders/dispatch.sh implement .paul/review/fable-5.2/orders/W1-sweep.md \
+   .paul/review/fable-5.2/orders/W1-sweep.log &)
+```
 
-### After — fixes
+Arm one 5-minute progress Monitor across all seven: stall if a dossier file does not exist by 15 minutes. All seven
+orders share the byte-identical brief `orders/_dossier-brief.md` as their prefix, after the project PREAMBLE, so they
+are cache reads. Outputs: `.paul/review/fable-5.2/dossier-S1.md` … `dossier-S6.md`, and `W1-sweep.md`.
 
-Group confirmed findings into PAUL plans (audit → APPLY with `implement` workers → review → unify), as in Phase 5.
-None of this needs Fable, so it can happen after the promotion ends.
+### P0-3 — Fable ping (seconds of Fable)
 
-## 4. The standing brief for every Fable section (keep it byte-identical)
+Spawn `Agent(model: "fable")` with "Reply with only your exact model id." If the answer is not Fable 5.2, the fallback
+is §6-a. Also ask Jason (**ASK 1**) for the usage panel's 5-hour % and weekly % now. This is the baseline for
+calibration.
+
+### P0-4 — Dossier gate (Opus, about 15 minutes total)
+
+For each dossier, open three random Map lines and two "Already known" lines and check them against the code and git.
+Any false line means rebuilding that dossier with a note saying what was wrong; do not hand a bad map to Fable. Also
+check that each is under 30K tokens (characters / 4).
+
+### F — Fable sections (S1 first, one at a time)
+
+For each section, spawn **one** background subagent:
+
+```
+Agent(
+  description: "Fable review S<n>",
+  model: "fable",
+  run_in_background: true,
+  prompt: <the standing brief in §5, byte-identical> + "\n\nSECTION: S<n>. Dossier: .paul/review/fable-5.2/dossier-S<n>.md. Findings file: .paul/review/fable-5.2/S<n>-findings.md. W1 sweep (for context only): .paul/review/fable-5.2/W1-sweep.md"
+)
+```
+
+Sections run **sequentially**: one Fable at a time keeps the usage readable and stops cleanly at a boundary. While a
+section runs, Opus starts verification of the previous section on Kimi, so the two overlap.
+
+**Calibration after S1 (ASK 2):** Jason reads the panel again. Let `x` = the weekly % S1 used, and `w` = the 5-hour %
+it used. Then:
+
+- **Sections that fit in this allowance** ≈ (50% − weekly Fable % already used) / x. **Sections per 5-hour window** ≈ 90 / w.
+- Run until either budget would be exceeded by the next section. Then use the **Fable reset** (**ASK 3**: Jason
+  triggers it in Settings → Usage) and continue.
+- If both allowances are spent before S3 is done, **ASK 4**: offer one full reset for the rest of S1–S3. S4–S6 never
+  use a full reset; they fall back to Kimi.
+
+Each Fable section returns only `done, <N> findings, coverage <c>/<t>`. If coverage is below 80%, do not rerun it on
+Fable; the uncovered hotspots go to the Kimi fallback.
+
+### V — Verification (Kimi K3.1 Pro, pipelined)
+
+Create one worktree for all verification tests:
+`orca worktree create --repo path:"$(git rev-parse --show-toplevel)" --name fable-verify --base-branch main --setup skip --json`
+(branch `review/fable-verify`). For each finding `S<n>-F<k>`, write an order of `orders/_verify-brief.md` + the
+finding's text, and dispatch it in that worktree:
+
+```sh
+cat .paul/review/fable-5.2/orders/_verify-brief.md <(sed -n '/^### F<k>/,/^### F/p' .paul/review/fable-5.2/S<n>-findings.md) \
+  > /tmp/verify-S<n>-F<k>.md
+(cd ~/orca/workspaces/OhYesMLX/fable-verify && CC_ROUTE=kimi-pro CC_AGENT_MAX_TURNS=120 \
+   ~/Dev/active/OhYesMLX/.paul/orders/dispatch.sh implement /tmp/verify-S<n>-F<k>.md /tmp/verify-S<n>-F<k>.log &)
+```
+
+Parallelism: up to 4 Python verifiers at once. Swift verifiers run **one at a time**, because SwiftPM locks `.build`.
+Each writes `.paul/review/fable-5.2/verify/S<n>-F<k>.md`, ending in a `VERDICT:` line, **inside the worktree**
+(`~/orca/workspaces/OhYesMLX/fable-verify/…`). Opus reads them there and copies the reports into the main checkout with FINDINGS.md.
+
+Opus then:
+- re-runs every CONFIRMED red test itself;
+- reads every REFUTED verdict, and every High, against the code;
+- writes `.paul/review/fable-5.2/FINDINGS.md`: ranked, each finding with its verdict, test, and severity after
+  check.
+
+**A Fable finding is not a fact until its verifier and Opus say so** (AGENTS.md).
+
+### After
+
+Group CONFIRMED findings into PAUL plans (audit → APPLY with `kimi-pro` workers, `deepseek` for trivial ones → two-axis
+review → unify). The red tests on `review/fable-verify` become each fix's first test. P5-11 is already known; it joins
+the S4 fixes.
+
+## 5. The standing brief for every Fable section (byte-identical; it is the cached prefix)
 
 ```
 You are the final, most senior reviewer of OhYesMLX (OYMLX), a Mac tool that benchmarks local LLM serving
 and now ships a SwiftUI onboarding app over a Python localhost backend. Your job is judgment, not reading:
-cheaper agents already mapped this section for you.
+cheaper agents already mapped this section for you in a dossier.
 
 Rules of the project that outrank convenience: vary one thing at a time; a fast cell that emits garbage
 is a FAILED cell; never report an unreconciled number; one definition of everything; nothing the user owns
@@ -161,6 +219,7 @@ Token discipline:
    Never read a file over 400 lines whole. Never read tests unless a finding depends on one.
 3. Do not re-report anything in the dossier's "Already known" list.
 4. Stop when you have covered every hotspot and open question. Breadth over polish.
+5. Write ONLY the findings file named below. Do not edit code, run servers, engines, or test suites.
 
 Report ONLY defects a senior engineer would act on: correctness, security, data loss, a misleading
 number or label, a race, a broken contract, a missing safety check. No style, no naming, no
@@ -173,24 +232,26 @@ number or label, a race, a broken contract, a missing safety check. No style, no
 - Evidence: the code path, quoted minimally
 - Confidence: 0-100, and what would raise it
 - Fix direction: one or two sentences
+- Test idea: the smallest test that would fail today
 
-End the file with "Coverage:" listing each hotspot and open question as covered / not covered.
+End the file with "Coverage:" listing each dossier hotspot and open question as covered / not covered.
 Return to the orchestrator only: "done, <N> findings, coverage <c>/<t>".
 ```
 
-## 5. What this costs, roughly
-
-- **Fable:** six sections at about 60–120K input (mostly first reads, then cache) plus 5–15K output each. The real
-  number comes from the S1 calibration, not from this estimate.
-- **Opus:** small; it reads about six findings files and the verdicts, plus spot-checks.
-- **Command Code:** six dossiers at cents each on MiMo Pro, W1 at cents, verification at about $0.5–3 per
-  section on Kimi. Jason has a large Command Code allotment; it is the right place to spend.
-
 ## 6. Fallbacks
 
-- If `Agent(model: "fable")` does not resolve to Fable 5.2 (check `/model` in Claude Code first), Jason starts
-  a Fable 5.2 Claude Code session in this repo (confirm the exact model id in `/model`; it is probably `claude-fable-5-2`) for each section and pastes the standing brief plus the section line.
-  Opus continues to orchestrate the dossiers and verification.
-- If the promotion window closes mid-run, the remaining sections run on Kimi K3.1 Pro (or `mimo-pro`) with the same
-  brief and dossiers, and their findings are marked "non-Fable".
-- If a dossier is wrong, rebuild it. Do not let Fable spend tokens rediscovering the map.
+- **a. `model: "fable"` is not Fable 5.2.** Jason opens a Fable 5.2 Claude Code session in this repo (confirm the exact id
+  in `/model`) and pastes §5 plus the section line, once per section. Opus keeps P0, V and FINDINGS.
+- **b. The promotion window closes, or the budget runs out.** The remaining sections run on Kimi with the same §5 brief and
+  dossier as an order file: `CC_ROUTE=kimi-pro .paul/orders/dispatch.sh implement <§5 + section line>.md`. It is
+  `implement` (not `review`) because it must write its findings file. Their findings are marked "non-Fable" in
+  FINDINGS.md.
+- **c. Kimi rate-limited or failed the bench.** Verification on `mimo-pro`, red tests on `deepseek`.
+- **d. A bad dossier.** Rebuild it; never let Fable rediscover the map.
+
+## 7. Done means
+
+- `FINDINGS.md` exists, every finding has a verdict, and Opus has re-checked every High and every REFUTED.
+- The `review/fable-verify` branch holds one red test per CONFIRMED-with-test finding (unmerged).
+- STATE.md gains a row for the review. HANDOFF names the fix plans to write. The Deep Wiki project page's next step
+  is updated, and a decision note is proposed to Jason (not written) if the review changes direction.

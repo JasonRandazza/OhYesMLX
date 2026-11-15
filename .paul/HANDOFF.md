@@ -15,19 +15,19 @@ Jason asked for this explicitly. **Before any other work**, explain each item be
 is, why it matters, and exactly what to type or click. Then wait for him. Items 1–4 unblock the Fable review and
 are time-critical. Items 5–8 can be done any time this week.
 
-**Time-critical (the Fable 5.2 Pro promotion ends Sunday 2026-11-16 at 11:59 PM PT):**
+**Time-critical. The Fable 5.2 Pro promotion and Jason's Fable reset both expire Tue 2026-11-17 2:59 AM EST.**
 
-1. **Confirm Fable 5.2 capacity.** Open Claude Settings → Usage. Note the weekly usage remaining, how many Fable
-   resets are available (Jason believes 5; the published Pro offer is 1, and Max/Ultra get 1–3), and that
-   Fable 5.2 appears in Claude Code's `/model`. *Why:* the plan calibrates how many review sections fit per window.
-2. **Approve or decline a Kimi K3.1 Pro trial route for Command Code.** Kimi K3.1 Pro is the strongest worker
-   model available (Vals 62.5%; Qwen 3.8 Max is weaker and pricier). It is not an approved fleet route, and adding
-   one is a policy change that is Jason's call. *If yes:* the agent benchmarks it with `model-bench.py` (about $1)
-   and uses it to verify Fable's findings. *If no:* the plan uses MiMo v2.6 Pro, which is already approved.
-3. **Choose the order.** Recommended: the Fable review **first** (it is the only time-limited item), and the Phase 5
-   closing checks (items 4–6) in the same sitting while workers build dossiers. The live checks must not run while
-   workers run, so they go before P0 or after it.
-4. **Re-add the test-account sudo rule** for the clean-account smoke (05-06 AC-6):
+Already settled with Jason on 2026-11-14, so do not re-ask: the budget is the current Fable allowance plus **1 Fable
+reset**, with **4 full resets** (expiring Dec 10) kept mostly for after the promotion. **Kimi K3.1 Pro is approved** as
+the main worker; its route is added in P0-1, after its bench passes. **MiMo v2.6 Pro** builds the dossiers.
+
+1. **Choose the order.** Recommended: Fable review first (it is the only time-limited item). The live Phase 5 checks
+   (item 5) go before P0 or after V, never overlapping workers.
+2. **Know the four checkpoints** the plan will ask him for during the review: the usage panel's 5-hour % and weekly %
+   at the start (ASK 1) and after S1 (ASK 2); triggering the Fable reset when told (ASK 3); and whether to spend one
+   full reset if S1–S3 are not done when both allowances are gone (ASK 4).
+3. **Stay reachable** Sun 11/15 to Mon 11/16. No Fable section starts after Mon 11:30 PM EST.
+4. **Re-add the test-account sudo rule** for the clean-account smoke (05-06 AC-6) whenever convenient:
    `echo 'jrazz ALL=(oymlxtest) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/oymlxtest`, then remove it after the
    run: `sudo rm /etc/sudoers.d/oymlxtest`.
 
@@ -47,7 +47,7 @@ are time-critical. Items 5–8 can be done any time this week.
 
 ## Then: the Fable 5.2 review
 
-Execute `.paul/review/fable-5.2/PLAN.md`. Opus orchestrates, Fable 5.2 reviews six sections (S1 security, S2
+Execute `.paul/review/fable-5.2/PLAN.md` (executable as written; the order files are in `orders/`). Opus orchestrates, Fable 5.2 reviews six sections (S1 security, S2
 measurement integrity, S3 SwiftUI app, S4 onboarding backend, S5 runtime lifecycle, S6 packaging) as background
 subagents. Command Code workers build each section's dossier first and verify every finding afterwards. The plan
 explains why there is no single massive pass and why Fable does not orchestrate.

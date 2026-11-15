@@ -2,6 +2,7 @@
 # Dispatch a work order to Command Code with the cached preamble in front.
 #
 #   .paul/orders/dispatch.sh implement order-file.md [logfile]
+#   CC_ROUTE=mimo-pro .paul/orders/dispatch.sh implement order-file.md [logfile]   # one-run route override
 #
 # The preamble is byte-identical on every call, so it lands as a prompt-cache
 # prefix at $0.003/M instead of $0.15/M. Order text goes AFTER it — never before, or the
@@ -15,4 +16,4 @@ role=$1
 order=$2
 log=${3:-/dev/stdout}
 here=$(dirname "$0")
-cc-agent "$role" "$(cat "$here/PREAMBLE.md" "$order")" >"$log" 2>&1
+cc-agent "$role" ${CC_ROUTE:+--route "$CC_ROUTE"} "$(cat "$here/PREAMBLE.md" "$order")" >"$log" 2>&1
