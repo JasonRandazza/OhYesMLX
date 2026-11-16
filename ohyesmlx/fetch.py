@@ -708,14 +708,28 @@ def download(
         return _refuse(send, "busy", "another download is already running")
 
     created: dict[str, list[str]] = {"blobs": [], "links": [], "dirs": []}
+    # `done` is the caller's signal that this download is over, so it is held until the ledger
+    # is written and the lock released: a caller that starts the next download on `done` must
+    # find both already settled (Fable S1-F5).
+    held: list[tuple] = []
+
+    def send_holding_done(kind, *args, **kwargs):
+        if kind == "done":
+            held.append((kind, args, kwargs))
+        else:
+            send(kind, *args, **kwargs)
+
     try:
         return _download(
-            planned, send, created, ledger_path, open_url, hardware, sleep, clock, cancel
+            planned, send_holding_done, created, ledger_path, open_url, hardware, sleep, clock,
+            cancel,
         )
     finally:
         if any(created.values()):
             _record(ledger_path, planned, created, clock, send)
         _release_lock(lock_path)
+        for kind, args, kwargs in held:
+            send(kind, *args, **kwargs)
 
 
 def _record(ledger_path, planned: Planned, created: dict, clock, send) -> None:
