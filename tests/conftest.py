@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from ohyesmlx import fetch
+from ohyesmlx import fetch, runtimes
 
 
 @pytest.fixture(autouse=True)
@@ -34,3 +34,10 @@ def _no_real_lock_dir(monkeypatch):
         return acquire(path)
 
     monkeypatch.setattr(fetch, "_acquire_lock", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_own_identity(monkeypatch):
+    """``runtimes._OWN_IDENTITY`` caches this process's identity; a test that fakes
+    ``_process_identity`` must not leave its fake cached for the next test (05-09)."""
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {})
