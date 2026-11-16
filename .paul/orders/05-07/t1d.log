@@ -1,0 +1,38 @@
+I’m locating the engine-environment logic and checking the worktree’s current changes.
+The source now scopes lab paths by engine. I’m reproducing the baseline and reading only the affected tests and call sites.
+The lab-path failures are stale calls without `engine=`. The version failures come from command resolution changing the argv seen by the test double, so I’m checking whether that double or the source is wrong.
+The newer Fable tests define the intended command-resolution behavior; I’m using them to distinguish stale fixtures from a source regression.
+I found no source regression: the version failures are host-dependent `shutil.which` results leaking through `Rig`, and the Osaurus capture fixture lacks the newly tracked `smeltMode`. I’m updating those fixtures and the stale engine-scoped calls.
+I’m adding the missing tracked setting to the Osaurus fixture, then updating the manifest and refusal cases.
+
+
+The direct manifest checks now name `mlxlm`. I’m updating the machine-local override cases, including the old two-engine PATH expectation.
+
+
+The stale calls are updated. I’m running both affected test files before the full suite.
+Both affected files pass: 343 tests. I’m running the full suite and reviewing the final diff before committing.
+The full suite passes: 1381 passed, 2 skipped, 1 xfailed. I’m staging all Task 1 changes and creating the requested single commit.
+The commit succeeded. I’m verifying the worktree is clean and capturing the committed diff stat.
+Committed `8824447` (`paul(05-07-t1): complete measurement integrity fixes`). Worktree is clean.
+
+**Test updates**
+- `test_a_successful_pip_install_records_its_venv_bin_and_engine_env_prefixes_it` — passes `engine="optiq"`.
+- `Rig`, covering `test_start_returns_a_handle_only_after_the_model_id_appears`, `test_vmlx_starts_without_a_key_and_records_the_version_it_read`, `test_osaurus_starts_when_the_settings_match_the_baseline`, `test_version_absence_says_why`, `test_vmlx_version_does_not_come_from_a_flag_that_errors`, and `test_vmlx_version_absence_says_which_way_it_was_absent` — stubs `shutil.which` so host PATH cannot rewrite fake command keys. These were fixture failures, not source regressions.
+- `test_capture_reads_every_tracked_measurement_key` — adds `concurrency.smeltMode: "disabled"` to `CONFIG_RUNTIME`.
+- `test_a_lab_path_is_prefixed_to_path_and_the_rest_of_the_environment_passes_through`, `test_a_lab_path_that_does_not_exist_is_refused_naming_the_engine`, `test_the_machine_local_file_overrides_the_manifests_lab_path_for_one_engine`, `test_a_missing_machine_local_file_leaves_the_manifest_alone`, `test_a_lab_path_that_must_not_join_path_is_refused_at_start`, `test_a_lab_path_nobody_else_can_write_is_still_prefixed`, and `test_a_lab_path_owned_by_another_user_is_refused_at_start` — pass `engine="mlxlm"`.
+- `test_a_lab_path_only_in_the_machine_local_file_is_prefixed` and `test_a_machine_local_lab_path_that_does_not_exist_is_refused_naming_the_engine` — pass `engine="optiq"`.
+- `test_the_manifest_lab_path_still_applies_to_an_engine_the_local_file_omits` — passes `engine="mlxlm"` and expects only mlx-lm’s manifest prefix, not OptiQ’s local prefix.
+
+No further `ohyesmlx/runtimes.py` changes were needed; `tests/test_paths.py` was untouched.
+
+**Verification**
+- Red baseline: `21 failed, 1360 passed, 2 skipped, 1 xfailed`.
+- Affected files: `343 passed`.
+- Full suite: `1381 passed, 2 skipped, 1 xfailed in 47.52s`.
+- Diff stat: `9 files changed, 673 insertions(+), 101 deletions(-)`.
+- Not verified: live engine starts or real lab-path resolution.
+
+model                     turns      input    cacheRd   output  cache%        USD
+moonshotai/kimi-k3.1-pro     16    1464381    1352960    15383   92.4%   0.647264
+
+== cc-agent: git status ==

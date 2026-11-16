@@ -1,0 +1,88 @@
+I'll start by reading the plan and findings, then check out the red tests.
+Now the ACs and Task 2 from the plan.
+
+Now let me copy the red tests and read them.
+
+
+Now let me understand the exact `http.client` internals before choosing a drain mechanism.
+
+Now a local experiment to establish exactly how `read1` behaves on a non-blocking `HTTPResponse`.
+
+The non-blocking `read1` path corrupts chunked framing (case 3 desynced), so it's out. Let me probe whether `peek` under a temporarily non-blocking socket is safe as a pure readiness probe.
+
+Two facts established: `peek` under a temporarily non-blocking socket returns instantly, and non-blocking `read1` corrupts chunk framing. Let me confirm the mid-body behaviour and read the token accounting code.
+
+F1 confirmed: with a non-empty buffer, `read1` never touches the socket. Now let me check what existing tests and the interface doc pin for the usage split.
+
+
+
+
+Now step 1: confirm the red tests fail.
+Red confirmed: 4 fail, 1 passes (the f2 control). Now the baseline suite.
+Now I'll implement the drain in `ohyesmlx/transport.py`. Two helpers plus a three-line restructure of the wait.
+
+Now the S2-F5 guard on the usage split.
+
+Now the stalled-partial-event test. Let me see the file tail first.
+
+
+
+Now the red-check: drop the framing predicate (the naive drain), and watch the new test fail as predicted.
+
+Predicted symptom exactly: 10 s and `incomplete SSE stream` instead of the 1 s deadline. Restoring the predicate.
+Let me verify the drain against the awkward write splits (partial body, terminator alone, split size line, extensions, large stream) with a local harness.
+
+
+The extension case reveals my predicate is stricter than `http.client`, which strips `;ext` before parsing the size — bytes then sit buffered forever. Fixing the predicate to match.
+
+
+Both failures are harness bugs (raw `abc` body, missing `[DONE]`). Fixing.
+
+All eight patterns pass, including the whole-response-held-open case at 1 ms. Now the full suite.
+
+
+
+
+
+
+Done. Committed as `6cd7b88` on `fix/05-07-t2`; not pushed.
+
+## AC-5 (S2-F2) — drained reader, bounded waits
+
+```
+pytest -q tests/test_fable_s2_f2.py tests/test_fable_s2_f5.py tests/test_transport*.py
+→ 49 passed in 28.54s
+```
+Red before the fix: `4 failed, 1 passed in 4.68s` (f2's control test passed by design; the other two f2 tests timed out at the 3 s deadline). Both named red tests are byte-identical to `review/fable-verify` (`git diff review/fable-verify --` on them is empty) and are now green unedited.
+
+**Mechanism** — `ohyesmlx/transport.py`:
+
+- `_buffered_bytes(response, socket)` answers "does the reader hold bytes select() cannot see" with `response.fp.peek(1)`, and makes the socket **non-blocking for that one call only**, restoring `settimeout(None)` in a `finally` before anything parses. `peek` performs at most one raw read; on a non-blocking socket an empty kernel answers `None` immediately, so the probe cannot wait, and it only *fills* the buffer — it makes no framing decision.
+- `_read1_stays_in_buffer(response, buffered)` decides whether the drain's `read1` can run without a socket read: mid-chunk (`chunk_left > 0`) any buffered byte is drainable; at a boundary it requires the 2-byte terminator, a whole chunk-size line (extension stripped at `;`, as `_read_next_chunk_size` does) and at least one body byte — or the terminal chunk's trailer. Otherwise the loop `select()`s, where the deadline still applies. That is why a blocking `read1` never waits on an empty buffer: it is only called when http.client's next step is already in the buffer.
+- `Connection: close` not used. TTFT/ITL stamps unchanged — the same `time.monotonic()` calls in the parse block.
+
+Two measured facts drove the choice (probed on local sockets, venv CPython 3.13.13): leaving the socket non-blocking across `read1` **corrupts chunk framing** — `readline` then returns a short size line (`b"2"`) as complete and the stream desyncs; and `read1` with a non-empty buffer returns only buffered body bytes, never touching the socket, even when fewer than `chunk_left`.
+
+New test in `tests/test_transport.py`: `test_a_partial_event_that_stalls_ends_at_the_deadline_and_not_in_a_read` (one chunk holding half an event, then a 10 s hold) plus its `_StalledStream` helper and `import socket`; no existing test edited. Red-checked by dropping the framing predicate: `1 failed in 10.05s`, `'incomplete SSE stream' != 'request timed out'` — restored, green.
+
+## AC-6 (S2-F5) — usage split refused when the stream refutes it
+
+The branch now also requires `not (accounting_reasoning_text and usage_reasoning_tokens == 0)`. With `reasoning_text="think think"`, three content deltas and `reasoning_tokens: 0`: no counter → `resolve_token_accounting` returns INCOMPARABLE (`completion_tokens=None`); with the reconciling 400+100 counter → `DERIVED_REASONING_CONTENT`, `completion_tokens=100`. Both red f5 tests green.
+
+## Suite
+
+Baseline before changes: **1369 passed, 2 skipped, 4 failed** (the four red tests). After: **1374 passed, 2 skipped in 50.02s**.
+
+Diff: `transport.py +93/−11`, `tests/test_transport.py +75`, plus the two red files copied verbatim (169 + 113 lines). Nothing else touched; `results/` clean.
+
+## Not verified
+
+- No live runtime or measurement — the drain is proven against local sockets, and the framing reasoning is against CPython 3.13.13's `http.client`; 3.11/3.12 untested (the project supports 3.11+).
+- A server that splits a *chunk header* and then stalls still blocks inside `read1`; that is pre-existing (today's loop also calls `read1` there) and the deadline cannot interrupt it. I did not change it.
+- The extra non-blocking `recv` per loop iteration was not costed on a live stream. When a write boundary lands exactly after a chunk terminator the drain deliberately waits on `select` instead of reading (correct, no block; it means such an event is stamped on the next arrival, as before).
+- Chunk extensions are covered by the predicate and my local harness, not by a committed test (the order allowed exactly one).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     48    4855337    4716032    66545   97.1%   0.074971
+
+== cc-agent: git status ==

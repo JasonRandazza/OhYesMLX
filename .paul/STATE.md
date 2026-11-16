@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [05-07 closed 2026-11-16 (`05-07-SUMMARY.md`): Fable plan A, 14 findings incl. 3 High, merged to main; 1412 tests. Next: 05-08 (plan B, app SSE stream)]
+  ✓        ○        ○     [05-08 (Fable plan B: app job lifecycle + event stream, 16 findings, S3-F1 High) created + audited 2026-11-16 (3 must-have, 4 recommended applied), APPLY next; 05-07 closed and on main]
 ```
 
 ## Performance Metrics
@@ -49,6 +49,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 | 2026-11-09: 045-02a AC-7 drift check is an injectable `run()` keyword; one existing quickbench test (`test_the_host_pinned_between_pin_and_restore_shows_no_drift`) is edited to inject it at its tmp config dir | v5.0 Phase 4.5 | Jason's call at a BLOCKED from the part-B worker: the plan's 'existing tests unmodified' and 'live config vs pinned baseline' could not both hold, because that test pins a tmp config dir while the default check reads the real ~/.osaurus. No test reads the real Osaurus settings. |
 | 2026-11-14: Fable 5.2 review: Opus orchestrates; Fable 5.2 reviews 6 sections as background subagents over MiMo-v2.6-Pro-built dossiers; **Kimi K3.1 Pro approved by Jason as the main worker** (new explicit-only route `kimi-pro`, added after its bench); Qwen 3.8 Max skipped. Budget: the current Fable allowance + 1 Fable reset (both expire 2026-11-17 2:59 AM EST); at most 1 of 4 full resets for Fable | v5.0 review | `.paul/review/fable-5.2/PLAN.md`, order files in `orders/` |
 | 2026-11-15: Fable 5.2 review done: 75 findings, 73 CONFIRMED / 2 REFUTED by DeepSeek red tests the coordinator re-ran; **4 High** (S2-F1 FAILED cells print figures; S3-F1 app SSE stream never dispatches; S5-F1 mlx-lm control runs from OptiQ lab venv, mlx 0.32.4 vs 0.32.2; S5-F2 cold_load_s includes probe+lsof), 36 Medium, 35 Low; fix plans A–G proposed. Fable ran headless (`claude -p --model claude-fable-5-2`; `Agent(model:"fable")` is 5.1); verification on DeepSeek, not Kimi (Command Code window) | v5.0 review | `.paul/review/fable-5.2/FINDINGS.md`; tests on `review/fable-verify` (unmerged) |
+| 2026-11-16: Enterprise audit performed on .paul/phases/v5-onboarding/05-08-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 1. Verdict: conditionally acceptable | v5.0 review fixes | backend-owned lock tells "still finishing" from "already running", lock fd non-inheritable; `done` published only after the slot is freed; SSE split on bytes |
 | 2026-11-16: Jason: yes to recording the mlx core version on every row and to attesting Osaurus's per-model `disableThinking` app setting (05-07) | v5.0 review fixes | `mlx_version` read from the serving process's mapped site-packages (lsof); `config/osaurus-settings-baseline.json` records every `model_options_*`, the served model's entry is gated and recorded as `host_model_options` |
 | 2026-11-16: 05-07 closed: per-engine lab PATH (control no longer starts OptiQ's mlx 0.32.4), cold_load_s spawn-to-ready, FAIL cells carry no figure, SSE drain, six row/report fixes; S5-F1 audit: 2 of 216 mlx-lm rows affected (app quickbench 11-02/11-03, uncited) | v5.0 review fixes | `05-07-SUMMARY.md`, `docs/research/2026-11-16-mlx-lm-lab-path-audit.md` |
 | 2026-11-16: Enterprise audit performed on .paul/phases/v5-onboarding/05-07-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 review fixes | OptiQ version probe keeps its lab bin; SSE drain never blocks; S5-F1 audit does not trust lab-paths.json birth time; S5-F2 constant measured later, after canaries for Osaurus 0.25.33 / vMLX 1.6.84 (coordinator call, Jason asked) |
@@ -91,8 +92,8 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 Last session: 2026-11-16 (Claude Opus 5.5 coordinator)
 Stopped at: 05-07 closed and merged to main (local, not pushed). Command Code: weekly 88% (resets ~11-20), monthly 46% (12-06) — Jason asked to be mindful; prefer coordinator-direct or Antigravity.
-Next action: `/paul:plan` 05-08 (plan B: app job lifecycle and event stream; S3-F1 High first, `FableS3F1Tests`), then C (05-09).
-Resume file: `.paul/phases/v5-onboarding/05-07-SUMMARY.md`
+Next action: `/paul:apply` 05-08 (audited). Workers: coordinator-direct + Claude subagents (Sonnet/Opus by task); no Command Code (weekly 88%).
+Resume file: `.paul/phases/v5-onboarding/05-08-PLAN.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).

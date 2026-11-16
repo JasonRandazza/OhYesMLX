@@ -1,0 +1,24 @@
+I'll start by reading the plan, findings, and the red tests to understand what's being asked.
+The red tests are already staged. Let me read them along with the findings sections.
+Now let me confirm the red tests fail and read the findings.
+Red confirmed: 5 failed, 9 passed. Now let me read the relevant source sections.
+Now let me read `Runtime.start`, `Runtime.version`, and the smelt mode code.
+
+
+Let me look at the rest of the relevant code: `Runtime.__init__`, `build_command`, `await_ready`, base `check_host_state`, and existing tests.
+Existing `_engine_env` tests assert the old every-engine prefix behaviour. Let me read them.
+
+Existing `_engine_env` tests assert the every-engine prefix. Let me check whether `review/fable-verify` already updated them, and check the baseline suite state.
+I have the shape. Let me read the remaining pieces I need: `Runtime.__init__`, the osaurus imports, config dir, `LSOF`, and where smelt mode is tested.
+
+Let me check the exact failure of the second f1 test — its filter logic looks suspicious.
+Now let me read the remaining pieces I need: `build_command`, OptiQ's commands, and the engines.py docstrings.
+Let me verify the staged red tests match `review/fable-verify` exactly, and check the "every engine start" docstrings.
+Let me check `load_baseline`, `_serving_pid`, TRACKED_KEYS consumers, and the smelt sentinel usage.
+
+
+Let me check what the checked-in baseline test requires and what the host currently holds.
+Before writing anything, I need to verify a contradiction in the red tests. Let me check test 2's assertion arithmetic and the existing tests the specified fix would break.
+
+Terminated.
+Terminated: 15

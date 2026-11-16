@@ -1,0 +1,52 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Error: You've reached your 5-hour usage limit. Resets in 2h 41m (6:11 PM).
+Keep going with /extra (pay-as-you-go at API cost, zero markup) or /upgrade.
+
+model                     turns      input    cacheRd   output  cache%        USD
+moonshotai/kimi-k3.1-pro     31    3893785    3726848    15433   95.7%   1.233574
+
+== cc-agent: git status ==
+ M ohyesmlx/measure.py
+ M ohyesmlx/report.py
+AM tests/test_fable_s2_f3.py
+AM tests/test_fable_s2_f4.py
+AM tests/test_fable_s2_f6.py
+A  tests/test_fable_s2_f7.py
+A  tests/test_fable_s2_f8.py
+A  tests/test_fable_s2_f9.py
+ ohyesmlx/measure.py       | 34 +++++++++++++++++++++++-----------
+ ohyesmlx/report.py        | 25 ++++++++++++++++++++++---
+ tests/test_fable_s2_f3.py |  6 +++---
+ tests/test_fable_s2_f4.py | 15 ++++++---------
+ tests/test_fable_s2_f6.py | 19 +++++++++++++++----
+ 5 files changed, 69 insertions(+), 30 deletions(-)

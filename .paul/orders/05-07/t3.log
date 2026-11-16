@@ -1,0 +1,22 @@
+I'll start by reading the plan, findings, and contract, then bring in the red tests.
+Now the findings and contract.
+Let me see the rest of the lost-visit contract and pull in the red tests.
+
+Now let me confirm red and read the concrete source ranges.
+Red confirmed: 8 failed, 5 passed (the 5 passing are the controls). Now the source regions.
+
+
+Now the report and sample side.
+Let me look at the test harness fakes to understand what the red tests drive.
+
+Now let me inspect the specific report/measure helpers I need, plus transport's timeout vocabulary.
+Let me check what the record writer stores, since test 2 asserts the second build appears nowhere in it.
+Let me read the Harness carefully — test 2's `SECOND not in line` looks like it may conflict with test 1.
+Let me look at `CellResult` and the `_set_status` call sites.
+Red confirmed (8 failed / 5 passed). Now let me read the render and helper regions I need.
+Let me check several remaining details in one pass.
+I have the shape of five of the six. Let me probe the two ambiguous spots: whether `coherence.is_coherent` flags the test's salad, and the transport's timeout error text.
+
+
+Terminated.
+Terminated: 15

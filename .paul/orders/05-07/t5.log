@@ -1,0 +1,34 @@
+I’m checking the governing plan, finding, and repository state.
+I found the audit criteria. Next I’m narrowing the lab-path window and enumerating runs with `mlxlm` observations.
+
+The only post-install candidates are the two app quickbench runs; the October 29 canary predates OptiQ’s lab install. I’m validating that against headers, row counts, and runtime logs.
+The November logs name OptiQ’s `site-packages`; the October 29 canary logs name the dedicated control venv. I’m now collecting the complete per-run inventory without dumping observation payloads.
+Both app runs are directly confirmed affected, with one `mlxlm` row each. I’m checking registration timing, source-hash provenance, and research citations before writing the note.
+
+The inventory is 47 runs and 216 `mlxlm` rows: 2 affected rows, 214 unaffected, and none undetermined. I’m validating the final timing details and the clean test baseline.
+The baseline is clean at 1368 passed, 2 skipped. The lab-path reader landed before the October 30 install; I’m resolving the earliest conservative activation bound, then writing the audit.
+
+I’m writing the audit with the complete 47-row inventory and direct log evidence for every post-change candidate.
+
+
+The note is written. I’m reconciling every table row against its source file and checking the read-only inputs before committing.
+
+The reconciliation found all 47 rows with matching starts, counts, and harness digests. I’m correcting the citation wording to exclude the audit note itself, then running the final suite.
+
+The audit now excludes itself correctly from citation results. I’m running the final test suite and input-cleanliness checks.
+All 1368 tests pass, and the read-only inputs are unchanged. I’m committing only the audit note on `fix/05-07-t5`.
+The commit check caught one extra blank line at EOF; I’m removing it and recommitting.
+
+
+Committed `2034657` with `docs/research/2026-11-16-mlx-lm-lab-path-audit.md`.
+
+- **47 runs / 216 mlx-lm rows:** 2 affected runs (2 rows), 45 unaffected (214 rows), **0 undetermined**.
+- Affected: `20261102T225004Z` and `20261103T164018Z`; cold/warm logs directly name OptiQ’s `site-packages`.
+- No pre-existing `docs/research/` citations of affected runs. Nothing discarded or modified.
+- Tests: **1368 passed, 2 skipped**, both baseline and final.
+- `git -C /Users/jrazz/Dev/active/OhYesMLX status --porcelain results/` is empty; quickbench mtimes unchanged. Worktree clean; no push or merge.
+
+model                     turns      input    cacheRd   output  cache%        USD
+moonshotai/kimi-k3.1-pro     23    2864851    2704128    31246   94.4%   1.174732
+
+== cc-agent: git status ==

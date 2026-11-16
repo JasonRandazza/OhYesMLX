@@ -1,0 +1,42 @@
+I'll start by orienting myself: read the plan and findings, then check the current state of the code.
+
+
+
+
+
+
+
+
+
+
+
+
+The three red tests fail as claimed (5 failed, 1 control passed). Now I'll make the source edits.
+
+
+
+
+
+
+All green. Committing on the worktree branch.
+Done — committed as `a6605d2` on `fix/05-07-t4`, not pushed.
+
+**Per AC**
+
+- **AC-1 (S2-F1)** — `pytest -q tests/test_fable_s2_f1.py`: 2 passed. Both cases (five garbage samples; 2-of-5 lost requests) now carry `decode_tps`/`ttft_s` as None with `status: FAIL` and the reason intact. The test drives the real `measure._set_status` and the real `report.summarize` inside `measure_cell`, so the verdict and row are real, not stubbed.
+- **AC-13 (S2-F11)** — `pytest -q tests/test_fable_s2_f11.py`: 2 passed. Ordering is `best.measured_at` (mtime only as fallback for a summary with no parseable stamp, which the pre-existing `test_latest_returns_the_newest_finished_summary_per_repo` needs); a newer finished run that measured a repo without a winning cell drops the older win.
+- **AC-14 (S4-F5)** — `pytest -q tests/test_fable_s4_f5.py`: 2 passed. `_winner` and `_best` now share `_tied_with`, the single band; 71.0 vs 72.1 keeps the reused baseline, 60 vs 70 takes the sibling.
+- **Suite** — `.../test-venv/bin/python -m pytest -q`: **1380 passed, 2 skipped**. Baseline I measured on this branch without the three new files: **1374 passed, 2 skipped** (the order's 1370 is stale); +6 new tests.
+
+**Red-check** — stashed the fix, `git checkout HEAD -- ohyesmlx/quickbench.py`: 5 failed, 1 passed (the same five, same symptoms, e.g. `'a 1.5% gap was ranked as a win'` and `'the older run was served because its summary file has the newer mtime'`). Restored; 1380 passed.
+
+**Tests edited** — none. The three files came from `review/fable-verify` unedited; no existing `test_quickbench.py` assertion stated the old defect, and the S4-F5 control (sibling clears the band) passed before and after, so nothing needed inverting.
+
+**Diff stat** — `ohyesmlx/quickbench.py` +104/−29; three new test files (+345).
+
+**Not verified** — no real quickbench run, server, or app render; the Swift views still print `decodeTPS` when non-nil, which now just never happens on a non-PASS cell (no Swift change was in scope). `latest` was exercised only against synthetic summaries, not the real `Application Support/OhYesMLX/quickbench/` tree. Tie handling between two non-baseline siblings keeps the raw max (AC-14 constrains only the baseline).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     22    1319095    1240832    21689   94.1%   0.028475
+
+== cc-agent: git status ==
