@@ -171,19 +171,26 @@ class _Job:
         self.cancel_requested = False
         self.abort_requested = False
         self.streams = 0
+        self._held_done: dict | None = None
         self._registry = registry
 
     def append(self, event: dict) -> None:
-        """Store one module event and wake the stream; end the job at the cap or on ``done``."""
-        terminal = False
+        """Store one module event and wake the stream; the module's ``done`` is held, not stored.
+
+        ``done`` means the slot is free, so the module's own ``done`` waits in ``_held_done``
+        until :meth:`finish` has freed the slot. At the cap the stream ends (readers see
+        ``done``) but the slot stays held until the worker thread returns; a quickbench is
+        also asked to stop mid-cell, since its engine is still resident.
+        """
         with self.condition:
-            if self.done:
+            if self.done or self._held_done is not None:
                 return
             if event.get("type") == "done":
-                self._store(event)
-                terminal = True
+                self._held_done = event
             elif len(self.events) >= MAX_EVENTS - 2:
                 self.cancel_requested = True
+                if self.kind == "quickbench":
+                    self.abort_requested = True
                 self._store(
                     _event(
                         "error",
@@ -192,14 +199,25 @@ class _Job:
                     )
                 )
                 self._store(_event("done", "job ended at the event cap", None))
-                terminal = True
+                self.done = True
+                self.condition.notify_all()
             else:
                 self._store(event)
-            if terminal:
-                self.done = True
+                self.condition.notify_all()
+
+    def finish(self, message: str) -> None:
+        """The one release site: free the slot, then publish ``done`` to the stream.
+
+        Called when the job's worker thread returns (or never started). Publishes the held
+        module ``done``, or a synthesized one carrying *message* if the module never sent one.
+        """
+        self._registry.finished(self)
+        with self.condition:
+            if self.done:
+                return
+            self._store(self._held_done or _event("done", message, None))
+            self.done = True
             self.condition.notify_all()
-        if terminal:
-            self._registry.finished(self)
 
     def _store(self, event: dict) -> None:
         stored = dict(event)
@@ -690,7 +708,7 @@ class _Handler(BaseHTTPRequestHandler):
             ).start()
         except Exception as error:
             # AC-2: the slot was claimed, so a failure before the thread runs must end the
-            # job here. `append`'s terminal `done` is what frees it.
+            # job here. `finish` is what frees it.
             job.append(
                 _event(
                     "error",
@@ -698,7 +716,7 @@ class _Handler(BaseHTTPRequestHandler):
                     {"code": "internal"},
                 )
             )
-            job.append(_event("done", "the job ended before it started", None))
+            job.finish("the job ended before it started")
             self._respond("internal", str(error))
             return
         self._write_json(202, {"job_id": job.id})
@@ -727,6 +745,7 @@ class _Handler(BaseHTTPRequestHandler):
         and adds nothing of its own. The end line is written however the call ended.
         """
         ok = False
+        message = "the job ended without a done event"
         try:
             if job.kind == "install":
                 ok = self.server.install(
@@ -755,12 +774,9 @@ class _Handler(BaseHTTPRequestHandler):
             job.append(
                 _event("error", str(error) or "the job failed unexpectedly", {"code": "internal"})
             )
-            job.append(_event("done", "the job ended after an unexpected error", None))
+            message = "the job ended after an unexpected error"
         finally:
-            if not job.done:
-                # The guard, not a second contract: the module owns its ending, and this only
-                # frees the slot if one returned without it.
-                job.append(_event("done", "the job ended without a done event", None))
+            job.finish(message)
             _log_job(
                 {"job": job.id, "ok": ok is True, "code": _job_code(job), "time": _now()}
             )
