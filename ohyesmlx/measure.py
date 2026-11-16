@@ -183,6 +183,11 @@ RESULTS_FILENAME = "results.jsonl"
 MIN_CONTENT_DELTAS = 2
 
 INCOHERENT_PREFIX = "incoherent output: "
+# The phrases of the reasons written when requests never came back or the runtime never started.
+# The coherence gate had nothing to judge on such a row, so the report says it was "not reached"
+# rather than "pass" (S2-F6). Each phrase is the one its reason below is built with.
+START_FAILED = "did not start"
+REQUESTS_FAILED = "measured requests failed"
 
 # transport.py's empty-content failure: the stream closed without a single content delta.
 # It is measure's only signal that a response emitted nothing in the content channel, and it
@@ -664,8 +669,8 @@ def run_cells(
         elif outcome == "skip":
             unmeasurable.add(cell.id)
         elif outcome == "retry":
-            # "retry" keeps the reason the failed visit wrote, and the next visit tries again.
-            lost[cell.id] = cell_results[0].reason
+            # "retry" keeps the lost visit's own reason, and the next visit tries again.
+            lost[cell.id] = cell_results[0].lost_visit_reason
 
         write_jsonl(results, results_path, run=run)
         # A cooldown after a visit that started no runtime and took no sample is 30
@@ -843,10 +848,11 @@ def _visit(
         except RuntimeStopError:
             raise
         except Exception as error:  # noqa: BLE001 - a runtime that will not load is a result
-            reason = f"runtime {cell.runtime!r} did not start: {type(error).__name__}: {error}"
+            reason = f"runtime {cell.runtime!r} {START_FAILED}: {type(error).__name__}: {error}"
             for result in results:
+                result.lost_visit_reason = reason
                 if result.observations:
-                    result.status, result.reason = "FAIL", reason
+                    _set_status(result)
                 else:
                     _na(result, reason)
             return "retry"
@@ -858,11 +864,21 @@ def _visit(
         # is its one definition. It is stamped on each row beside the start's own facts, so the
         # record says what this cell sent rather than what the run's ordinary cell would have.
         seed = runtime.request_seed(mtp_depth)
+        version_mismatch = False
         for result in results:
             result.request_seed = seed
             if result.cold_load_s is None:
                 result.cold_load_s = handle.cold_load_s
                 result.runtime_version = handle.version
+            elif handle.version != result.runtime_version:
+                result.status = "FAIL"
+                result.reason = (
+                    f"runtime version changed between visits: {result.runtime_version!r} "
+                    f"and {handle.version!r}"
+                )
+                version_mismatch = True
+        if version_mismatch:
+            return "skip"
 
         # The second half of the `on` pin, and the earliest it can be asked: the log exists now
         # and no request has been made yet. The start's own facts stay on the row while the
@@ -945,6 +961,26 @@ def _first_warmup_latency(results: list[CellResult]) -> float | None:
     return first.total_s if came_back(first) else None
 
 
+# A server that accepted the connection and never answers costs the transport's whole deadline
+# (600 s) per request. Two timeouts in a row end the workload's visit: the row is already FAIL,
+# and the warmup cap plus the measured quota would otherwise spend hours proving it (S2-F8).
+HUNG_AFTER_TIMEOUTS = 2
+HUNG_REASON = f"{HUNG_AFTER_TIMEOUTS} consecutive requests timed out; the engine is not answering"
+NOT_JUDGED = (START_FAILED, REQUESTS_FAILED, HUNG_REASON)
+
+
+def _timed_out(observation: Observation) -> bool:
+    """Whether a failed request failed on the transport's deadline (``reason="timeout"``)."""
+    error = (observation.error or "").lower()
+    return not observation.ok and ("timed out" in error or "timeout" in error)
+
+
+def _hung(result: CellResult) -> bool:
+    """Whether this row's latest requests, warmups included, are consecutive timeouts."""
+    tail = (result.warmup_observations + result.observations)[-HUNG_AFTER_TIMEOUTS:]
+    return len(tail) == HUNG_AFTER_TIMEOUTS and all(_timed_out(o) for o in tail)
+
+
 def _workload_visit(
     handle,
     result: CellResult,
@@ -981,6 +1017,11 @@ def _workload_visit(
                            counter=counter, seed=seed),
         )
         for _ in range(quota):
+            if _hung(result):
+                if not result.observations:
+                    last = result.warmup_observations[-1]
+                    result.status, result.reason = "FAIL", f"{HUNG_REASON}: {last.error}"
+                break
             observations, span = _batch(handle, workload.messages,
                                         max_tokens=workload.max_tokens, concurrency=concurrency,
                                         counter=counter, seed=seed)
@@ -1028,6 +1069,8 @@ def _warmup_window(
                                     concurrency=concurrency, counter=counter, seed=seed)
         result.warmup_observations.extend(observations)
         rates.append(_warmup_rate(observations, span, concurrency=concurrency))
+        if _hung(result):
+            return None if fixed else False
         if fixed:
             if len(rates) >= warmup:
                 return None
@@ -1233,13 +1276,22 @@ def _set_status(result: CellResult) -> None:
         # failed visit wrote stands. Only the next visit can move this.
         return
 
+    # The gate runs before the transport and metric checks, over the responses that came back.
+    # A response that answered only in the reasoning channel carries no content window, so asking
+    # for its metrics first would report the missing window and bury the garbage that is the reason
+    # there is nothing to publish.
+    incoherent = _incoherent(result.observations)
+    if incoherent is not None:
+        result.status, result.reason = "FAIL", incoherent
+        return
+
     failures = [
         observation for observation in result.observations if not came_back(observation)
     ]
     if failures:
         result.status = "FAIL"
         result.reason = (
-            f"{len(failures)} of {len(result.observations)} measured requests failed; "
+            f"{len(failures)} of {len(result.observations)} {REQUESTS_FAILED}; "
             f"first: {failures[0].error}"
         )
         return
@@ -1248,14 +1300,6 @@ def _set_status(result: CellResult) -> None:
         # Every measured response produced neither content nor reasoning. No output is not
         # bad output, so this cell gets its own reason and never an incoherence verdict.
         result.status, result.reason = "FAIL", STILL_THINKING
-        return
-
-    # The gate runs before the metric check. A response that answered only in the reasoning
-    # channel carries no content window, so asking for its metrics first would report the
-    # missing window and bury the garbage that is the reason there is nothing to publish.
-    incoherent = _incoherent(result.observations)
-    if incoherent is not None:
-        result.status, result.reason = "FAIL", incoherent
         return
 
     missing = next(
