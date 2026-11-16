@@ -34,6 +34,7 @@ from __future__ import annotations
 import filecmp
 import json
 import os
+import plistlib
 import sys
 from pathlib import Path
 
@@ -44,6 +45,16 @@ DEFAULT_CONFIG_DIR = Path.home() / ".osaurus" / "config"
 # The drift guard's baseline: beside the package in a checkout, under Application Support in
 # an installed app. `writable_root` is the one definition of which of the two this is.
 BASELINE_PATH = writable_root() / "config" / "osaurus-settings-baseline.json"
+
+# The app's own preferences, where Osaurus keeps per-model options that no config file and no
+# start command shows: `model_options_<model id>` holds a JSON blob whose `options` carry
+# `disableThinking` (and, for some models, `reasoningEffort`). The thinking switch decides
+# whether the served model emits a reasoning run at all, so it is attested per model (Fable
+# S5-F9, Jason 2026-11-16). docs/runtimes/osaurus.md section 3.6 has the decoded shape.
+# ponytail: reads the plist file, not cfprefsd; a just-toggled switch can lag until the app
+# flushes it. Upgrade: `defaults export com.dinoki.osaurus -` if that lag is ever seen.
+PREFERENCES_PLIST = Path.home() / "Library" / "Preferences" / "com.dinoki.osaurus.plist"
+MODEL_OPTIONS_PREFIX = "model_options_"
 
 # The two host files `pin` backs up and edits: the caches live in one, the idle residency
 # policy in the other. A backup of one without the other could not restore a host.
@@ -72,6 +83,7 @@ TRACKED_KEYS: tuple[tuple[str, str], ...] = (
     ("server-runtime.json", "cache.longPromptMultiplier"),
     ("server-runtime.json", "concurrency.maxConcurrentSequences"),
     ("server-runtime.json", "concurrency.continuousBatching"),
+    ("server-runtime.json", "concurrency.smeltMode"),
     ("server-runtime.json", "memorySafety.mode"),
     ("server-runtime.json", "memorySafety.slider"),
     ("server-runtime.json", "mtp.mode"),
@@ -127,8 +139,60 @@ def capture_osaurus_settings(config_dir: Path | None = None) -> dict[str, object
     return settings
 
 
+def capture_model_options(plist_path: Path | None = None) -> dict[str, object] | str:
+    """Every model's per-model options from the app plist, keyed by model id.
+
+    Never raises. No plist is no options (``{}``: the app has saved none); a plist that
+    cannot be read is :data:`UNREADABLE`, and one model whose blob does not decode is
+    :data:`UNREADABLE` for that model alone.
+    """
+    path = plist_path if plist_path is not None else PREFERENCES_PLIST
+    try:
+        payload = plistlib.loads(path.read_bytes())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return UNREADABLE
+    options: dict[str, object] = {}
+    for key, blob in payload.items():
+        if not isinstance(key, str) or not key.startswith(MODEL_OPTIONS_PREFIX):
+            continue
+        try:
+            decoded = json.loads(blob)
+            options[key[len(MODEL_OPTIONS_PREFIX):]] = decoded.get("options", MISSING)
+        except (TypeError, ValueError, AttributeError):
+            options[key[len(MODEL_OPTIONS_PREFIX):]] = UNREADABLE
+    return options
+
+
+def model_options_for(model_id: str, captured: dict[str, object] | str) -> object:
+    """One model's entry in a :func:`capture_model_options` result, with the sentinels."""
+    if not isinstance(captured, dict):
+        return captured
+    return captured.get(model_id, MISSING)
+
+
+def load_baseline_model_options(path: Path | None = None) -> dict[str, object] | str | None:
+    """The per-model options recorded with the baseline; ``None`` when there is no baseline.
+
+    A baseline recorded before model options were attested has no such object, and that is
+    returned as :data:`MISSING` rather than as "no options": the gate cannot vouch for a
+    switch the baseline never saw.
+    """
+    payload = _load_baseline_payload(path)
+    if payload is None:
+        return None
+    return payload.get("model_options", MISSING)
+
+
 def load_baseline(path: Path | None = None) -> dict[str, object] | None:
     """Return the recorded baseline, or None when none has been recorded."""
+    payload = _load_baseline_payload(path)
+    return None if payload is None else payload["settings"]
+
+
+def _load_baseline_payload(path: Path | None = None) -> dict | None:
+    """The whole baseline document, validated, or None when none has been recorded."""
     target = path if path is not None else BASELINE_PATH
     try:
         text = target.read_text()
@@ -143,7 +207,7 @@ def load_baseline(path: Path | None = None) -> dict[str, object] | None:
     settings = payload.get("settings") if isinstance(payload, dict) else None
     if not isinstance(settings, dict):
         raise ValueError(f"invalid Osaurus baseline at {target}: missing settings object")
-    return settings
+    return payload
 
 
 def write_baseline(
@@ -153,10 +217,9 @@ def write_baseline(
     """Record the host's current settings as the baseline, and return them."""
     target = path if path is not None else BASELINE_PATH
     settings = capture_osaurus_settings(config_dir)
+    document = {"settings": settings, "model_options": capture_model_options()}
     target.parent.mkdir(parents=True, exist_ok=True)
-    _write_atomic(
-        target, (json.dumps({"settings": settings}, indent=2, sort_keys=True) + "\n").encode()
-    )
+    _write_atomic(target, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())
     return settings
 
 

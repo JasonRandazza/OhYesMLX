@@ -497,6 +497,8 @@ default instead, that default lives here.
 
 ### 3.6 `~/Library/Preferences/com.dinoki.osaurus.plist` — the surface nothing looks at
 
+> **Attested since 05-07 (2026-11-16):** `osaurus_settings.capture_model_options` reads this plist; the baseline records every model's options, `Osaurus.host_model_options` refuses a start whose served model's entry drifted, and the row records it as `host_model_options` (Fable S5-F9).
+
 This is the third surface, and **the one `ohyesmlx/osaurus_settings.py` cannot see at all**.
 
 Decoded from the plist (E2; key names are `model_options_<modelID>`):

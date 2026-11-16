@@ -387,7 +387,7 @@ LAB_ENGINES = ("mlxlm", "optiq")
 def check_lab_dir(path: str) -> None:
     """Refuse *path* unless it is an absolute directory this user owns and others cannot write.
 
-    A lab path becomes the front of PATH for every engine start (``runtimes._engine_env``)
+    A lab path becomes the front of PATH for its own engine's start (``runtimes._engine_env``)
     and is written into the machine-local file by :func:`record_lab_path`, so a directory
     another account or group can write is a directory that picks which ``mlx_lm.server``
     the harness runs. ``os.stat`` follows symlinks on purpose: the directory the process
@@ -415,8 +415,9 @@ def lab_paths(path=LAB_PATHS_FILE, *, read=None) -> dict[str, str]:
 
     One reader for one file, because two callers need the same answer and a second copy of
     the validation would be a second place for the two to disagree: ``runtimes._engine_env``
-    prefixes these directories to PATH, and :func:`detect_all` looks in them first -- so a
-    canary of a lab copy reports that copy's version rather than the global install's.
+    prefixes each directory to its own engine's PATH, and :func:`detect_all` looks in them
+    first -- so a canary of a lab copy reports that copy's version rather than the global
+    install's.
 
     A missing file is ``{}``: no lab copies is the ordinary state of a machine that has not
     frozen anything. Everything else is refused by ``ValueError`` naming the file and the

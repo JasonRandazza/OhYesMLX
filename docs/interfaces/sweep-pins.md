@@ -185,6 +185,14 @@ reading `4/4`.
 Three additions, all of them annotations and none of them floors — the same rule drift follows:
 a window that was short is a result, and dropping it would delete the only row that says so.
 
+**Which visit was lost does not matter (05-07, Fable S2-F7).** A lost *later* visit is recorded and
+judged exactly like a lost first one: its reason goes to `lost_visit_reason`, and `_set_status`
+judges the row on the samples the surviving visits hold. Before 05-07 a lost second visit wrote
+`FAIL` over a row whose every sample was healthy, while the mirror case was a ranked `PASS` — the
+verdict depended on the order of two identical facts. This relaxes no floor: a row whose samples
+fail a floor is still `FAIL`, and the short-window note still says how many batches landed.
+Stored rows are not re-judged; `load_run` reads the status that was recorded.
+
 ```python
 CellResult.lost_visit_reason: str | None   # the failed visit's reason, kept where _set_status
                                            # cannot overwrite it. None = no visit was lost.

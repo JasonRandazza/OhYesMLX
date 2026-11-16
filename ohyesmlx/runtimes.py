@@ -81,10 +81,10 @@ from pathlib import Path
 
 from . import stderr_json, writable_root
 from .osaurus_settings import (
-    DEFAULT_CONFIG_DIR as OSAURUS_CONFIG_DIR,
-    MISSING as OSAURUS_MISSING,
-    UNREADABLE as OSAURUS_UNREADABLE,
+    capture_model_options,
     capture_osaurus_settings,
+    load_baseline_model_options,
+    model_options_for,
     describe_drift,
     diff_against_baseline,
     load_baseline,
@@ -391,10 +391,9 @@ SEED = 0
 
 # Osaurus's `concurrency.smeltMode` is the one place its expert behaviour is decided, and it is
 # host state: the enum is `engineSelected | disabled | flashMoE | ssdStreaming`
-# (docs/runtimes/osaurus.md:298, and the same four words are in the app binary's key table). It
-# is NOT one of `osaurus_settings.TRACKED_KEYS`, so the drift gate does not attest it and the
-# refusal below reads it directly. Only `disabled` is a state in which nothing about experts is
-# being changed underneath the cell.
+# (docs/runtimes/osaurus.md:298, and the same four words are in the app binary's key table).
+# `osaurus_settings.TRACKED_KEYS` attests it; only `disabled` is a state in which nothing about
+# experts is being changed underneath the cell.
 OSAURUS_SMELT_DISABLED = "disabled"
 
 # Loopback-only key for a run-owned oMLX. Not a shared secret, and not user state.
@@ -468,67 +467,101 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _engine_env(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
-    """The ambient environment, with each pinned engine's lab bin directory prefixed to PATH.
+def _engine_env(manifest_path=None, lab_paths_path=None, *, engine=None) -> dict[str, str]:
+    """The ambient environment, with only *engine*'s lab bin prefixed to PATH.
 
-    The one place a lab path becomes something a process sees, and :func:`_spawn` and
-    :func:`_run` are its only two callers. A pinned (lab) copy is how a published table keeps
-    the build it was measured on while the global install drifts (Decision 135): five of the
-    six start commands begin with a bare name (``mlx_lm.server``, ``optiq``, ``vmlx``,
-    ``osaurus``, ``omlx``), and a bare name resolves on PATH -- both in the spawned server and
-    in every helper command :func:`_run` carries out for the same runtime, so the version
-    probe and the stop command reach the same tree the server came from.
+    A pinned (lab) copy keeps the build a published table measured while the global install
+    drifts (Decision 135). The machine-local file overrides the manifest for that engine. With
+    no engine named, no lab path is read and the ambient environment is returned unchanged.
 
-    An engine's lab directory is the machine-local file's entry for it when there is one, and
-    the manifest's ``lab_path`` otherwise: the manifest is committed and therefore ships
-    ``lab_path: null`` everywhere, and the file under the app's Application Support directory
-    is what this Mac actually has (``engines.lab_paths``). The per-engine override is what
-    keeps one machine's frozen copy out of every other machine's manifest.
+    A named lab path that is absent or is not a private directory refuses that engine's start
+    rather than silently falling back to a global install nothing vouched for. Other engines'
+    lab copies are neither prefixed nor validated here.
 
-    A lab path that is not there is refused, naming the engine, rather than skipped: whichever
-    source named it says this build lives here, and falling back to the global install would
-    measure a build nothing vouched for and record it under the pinned version. A lab path
-    that is there but is not a private directory is refused the same way, by
-    ``engines.check_lab_dir``: PATH decides which binary every start reaches. Engines with
-    no lab path add nothing, so a machine with neither source set leaves every command
-    byte-identical to the one recorded before the manifest existed.
-
-    *manifest_path* and *lab_paths_path* are the two loaders' own parameters, present so a
-    test can drive this with scratch files; the two callers take the shipped ones. A
-    machine-local file that is not JSON, or names an engine it may not, raises out of here
-    as ``ValueError`` rather than becoming "could not run": it is a configuration defect,
-    and swallowing it would take a cell from a build nothing vouched for.
-
-    The import below is local because the dependency runs the other way at module level:
-    ``engines`` imports ``RUNTIMES`` from this module, and only this function needs the
-    manifest, so a function-scoped import is where the cycle stops.
+    *manifest_path* and *lab_paths_path* let tests drive the two loaders with scratch files.
+    The local imports keep the module-level dependency one way: ``engines`` imports
+    ``RUNTIMES`` from this module.
     """
-    from .engines import check_lab_dir, lab_paths, load_manifest
+    env = dict(os.environ)
+    if engine is None:
+        return env
+
+    from .engines import check_lab_dir
+
+    lab_path = _lab_paths(manifest_path, lab_paths_path).get(engine)
+    if lab_path is None:
+        return env
+    resolved = os.path.expanduser(lab_path)
+    if not os.path.exists(resolved):
+        raise RuntimeStartError(
+            f"{engine}: {lab_path!r} is named as this engine's lab copy, and there is "
+            f"nothing at {resolved}. Refusing to start {engine} from whatever the global "
+            "install is instead."
+        )
+    try:
+        check_lab_dir(resolved)
+    except ValueError as error:
+        raise RuntimeStartError(str(error)) from error
+    ambient = env.get("PATH")
+    env["PATH"] = os.pathsep.join([resolved] + ([ambient] if ambient else []))
+    return env
+
+
+def _lab_paths(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
+    """Each engine's lab directory as configured: the machine-local file's entry, else the
+    manifest's ``lab_path``. The one place the two sources are combined; unexpanded."""
+    from .engines import lab_paths, load_manifest
 
     manifest = load_manifest() if manifest_path is None else load_manifest(manifest_path)
     local = lab_paths() if lab_paths_path is None else lab_paths(lab_paths_path)
-    prefixes = []
+    found = {}
     for name, entry in manifest.items():
         lab_path = local.get(name, entry.get("lab_path"))
-        if lab_path is None:
-            continue
-        resolved = os.path.expanduser(lab_path)
-        if not os.path.exists(resolved):
-            raise RuntimeStartError(
-                f"{name}: {lab_path!r} is named as this engine's lab copy, and there is "
-                f"nothing at {resolved}. Refusing to start {name} from whatever the global "
-                "install is instead."
-            )
-        try:
-            check_lab_dir(resolved)
-        except ValueError as error:
-            raise RuntimeStartError(str(error)) from error
-        prefixes.append(resolved)
-    env = dict(os.environ)
-    if prefixes:
-        ambient = env.get("PATH")
-        env["PATH"] = os.pathsep.join(prefixes + ([ambient] if ambient else []))
-    return env
+        if lab_path is not None:
+            found[name] = lab_path
+    return found
+
+
+def _engine_command(
+    engine: str | None, command: tuple[str, ...]
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Resolve an engine command and build the environment its child must receive.
+
+    An engine's bare program becomes absolute only when its own engine PATH resolves it. The
+    process helpers then recognize that absolute lab directory and prefix exactly that one
+    directory, so the child can find the rest of its venv without exposing it to other engines.
+    """
+    env = _engine_env() if engine is None else _engine_env(engine=engine)
+    # Only an engine with a lab copy has its program pinned to an absolute path; every other
+    # command is handed on exactly as the runtime wrote it.
+    if engine is not None and env.get("PATH") != os.environ.get("PATH"):
+        index = 0
+        while index < len(command):
+            token = command[index]
+            name = token.partition("=")[0]
+            if token != "env" and not ("=" in token and name.isidentifier()):
+                break
+            index += 1
+        if index < len(command):
+            resolved = shutil.which(command[index], path=env.get("PATH"))
+            if resolved is not None:
+                command = (
+                    *command[:index],
+                    os.path.abspath(resolved),
+                    *command[index + 1 :],
+                )
+    if command and os.path.isabs(command[0]):
+        directory = os.path.dirname(command[0])
+        for lab_path in _lab_paths().values():
+            if os.path.expanduser(lab_path) == directory:
+                entries = env.get("PATH", "").split(os.pathsep)
+                if not entries or entries[0] != directory:
+                    ambient = env.get("PATH")
+                    env["PATH"] = os.pathsep.join(
+                        [directory] + ([ambient] if ambient else [])
+                    )
+                break
+    return command, env
 
 
 def _resolve_program(command: tuple[str, ...], env: dict[str, str]) -> tuple[str, ...]:
@@ -569,7 +602,7 @@ def _resolve_program(command: tuple[str, ...], env: dict[str, str]) -> tuple[str
 def _run(command: tuple[str, ...], timeout_s: float):
     """Run a short-lived helper command. ``None`` if it could not be run at all."""
     try:
-        env = _engine_env()
+        command, env = _engine_command(None, command)
         return subprocess.run(
             _resolve_program(command, env),
             capture_output=True,
@@ -595,7 +628,7 @@ def _spawn(command: tuple[str, ...], log_path: Path) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "ab", buffering=0) as log:
         try:
-            env = _engine_env()
+            command, env = _engine_command(None, command)
             process = subprocess.Popen(
                 _resolve_program(command, env),
                 stdin=subprocess.DEVNULL,
@@ -727,6 +760,40 @@ def _serving_pid(spawned: int, port: int) -> int:
     if listeners is not None and len(listeners) == 1 and spawned not in listeners:
         return listeners[0]
     return spawned
+
+
+# The package directory a Python runtime's mlx core is loaded from, and the dist-info beside it
+# that names its version. Matched against the files the serving process has open.
+_MLX_PACKAGE = "/site-packages/mlx/"
+_MLX_DIST_INFO = re.compile(r"^mlx-(\d[^-]*)\.dist-info$")
+
+
+def _mlx_version(pid: int) -> str:
+    """The mlx core version the process at *pid* has loaded, or ``unknown: <why>``.
+
+    Read from what the running server actually mapped -- ``lsof`` lists ``mlx/core`` and
+    ``libmlx`` under the site-packages the interpreter imported them from -- not from the
+    command line or PATH. Two venvs can both report mlx-lm 0.31.3 over different mlx cores
+    (Fable S5-F1: 0.32.4 in OptiQ's lab venv, 0.32.2 in the control's), and only the loaded
+    files say which one served the cell. A runtime that carries no Python mlx package
+    (Osaurus is Swift) answers ``unknown`` with that reason. Never raises.
+    """
+    result = _run((LSOF, "-n", "-P", "-p", str(pid), "-Fn"), VERSION_TIMEOUT_S)
+    if result is None or result.returncode != 0:
+        return "unknown: lsof could not list the serving process's files"
+    for line in result.stdout.splitlines():
+        if line.startswith("n") and _MLX_PACKAGE in line:
+            site = line[1:].split(_MLX_PACKAGE)[0] + "/site-packages"
+            try:
+                entries = sorted(os.listdir(site))
+            except OSError:
+                return f"unknown: cannot list {site}"
+            for entry in entries:
+                match = _MLX_DIST_INFO.match(entry)
+                if match:
+                    return match.group(1)
+            return f"unknown: no mlx dist-info in {site}"
+    return "unknown: the serving process has no Python mlx package loaded"
 
 
 def _read_log(path: Path) -> str:
@@ -949,24 +1016,8 @@ def _log_path(name: str) -> Path:
 
 
 def osaurus_smelt_mode() -> object:
-    """The host's ``concurrency.smeltMode``, which decides Osaurus's expert behaviour.
-
-    Not one of ``osaurus_settings.TRACKED_KEYS``, so the drift gate does not attest it and it is
-    read here instead: the same file, and the same two sentinels, so an unreadable host is
-    visibly unreadable rather than indistinguishable from a default one. The enum is
-    ``engineSelected | disabled | flashMoE | ssdStreaming`` (:data:`OSAURUS_SMELT_DISABLED`) --
-    one of them changes how many experts are resident, and none of them is visible in a start
-    command.
-    """
-    payload = _read_json_object(OSAURUS_CONFIG_DIR / "server-runtime.json")
-    if payload is None:
-        return OSAURUS_UNREADABLE
-    cursor: object = payload
-    for part in ("concurrency", "smeltMode"):
-        if not isinstance(cursor, dict) or part not in cursor:
-            return OSAURUS_MISSING
-        cursor = cursor[part]
-    return cursor
+    """The host's tracked ``concurrency.smeltMode``, including capture sentinels."""
+    return capture_osaurus_settings()["server-runtime.json:concurrency.smeltMode"]
 
 
 def vmlx_mtp_refusal(artifact_dir: str) -> str | None:
@@ -1972,6 +2023,11 @@ class Handle:
     # expert-streaming flag on a model they cannot stream and fall back without failing
     # anything. ``None`` on a handle built without a spawn.
     log_path: str | None = None
+    # The mlx core the serving process loaded (:func:`_mlx_version`), and for Osaurus the app's
+    # per-model options for the served model (:meth:`Runtime.host_model_options`). Both are
+    # read after readiness, outside the load window. ``None`` on a handle built without a start.
+    mlx_version: str | None = None
+    host_model_options: object = None
 
     @property
     def memory_pid(self) -> int:
@@ -2122,6 +2178,7 @@ class Runtime:
         command = self.version_command()
         if not command:
             return "unknown: no version command"
+        command, _env = _engine_command(self.name, command)
         result = _run(command, VERSION_TIMEOUT_S)
         if result is None:
             return "unknown: version command could not be run"
@@ -2168,6 +2225,14 @@ class Runtime:
 
     def check_host_state(self) -> None:
         """Refuse to start when host state this runtime cannot pin has moved."""
+
+    def host_model_options(self, model_id: str) -> object:
+        """Host-side options for the served model that no start command shows, or ``None``.
+
+        Asked after readiness, because the served model's id is only known then. Only Osaurus
+        has such a surface (its app plist); every other runtime answers ``None``.
+        """
+        return None
 
     def build_command(
         self,
@@ -2314,9 +2379,10 @@ class Runtime:
             concurrency=concurrency,
         )
         log_path = _log_path(self.name)
-        started = _now()
         pid = None
         try:
+            command, _env = _engine_command(self.name, command)
+            started = _now()
             pid = _spawn(command, log_path)
             resolved = self.await_ready(
                 pid=pid,
@@ -2324,7 +2390,9 @@ class Runtime:
                 artifact_dir=artifact_dir,
                 model_id=model_id,
             )
+            cold_load_s = _now() - started
             version = self.version()
+            host_model_options = self.host_model_options(resolved)
         except BaseException as start_error:
             if pid is not None:
                 try:
@@ -2339,9 +2407,9 @@ class Runtime:
         _RUN_STARTED_PIDS.add(pid)
         serving_pid = _serving_pid(pid, self.port)
         _RUN_STARTED_PIDS.add(serving_pid)
-        # AC-6: the ledger entry is written after the load time is taken, so no measured
-        # cold_load_s contains the `ps` calls, and a failed write never fails the start.
-        cold_load_s = _now() - started
+        mlx_version = _mlx_version(serving_pid)
+        # AC-4: cold_load_s ends at readiness; the version probe, listener lookup, mlx probe and
+        # ledger write follow it. A failed ledger write never fails the start.
         stop_command = self.stop_command()
         try:
             _record_running_engine(pid, serving_pid, self.port, stop_command)
@@ -2359,6 +2427,8 @@ class Runtime:
             scratch=scratch,
             api_key=self.api_key(),
             log_path=str(log_path),
+            mlx_version=mlx_version,
+            host_model_options=host_model_options,
         )
 
 
@@ -2635,9 +2705,8 @@ class Osaurus(Runtime):
         """Refuse ``on``; accept ``off`` only where the host is not changing how many experts
         are resident.
 
-        The one setting is ``concurrency.smeltMode`` (:data:`OSAURUS_SMELT_DISABLED`), which is
-        not one of ``osaurus_settings.TRACKED_KEYS`` and is therefore read here rather than
-        through the drift gate. Both reasons are below.
+        The one setting is ``concurrency.smeltMode`` (:data:`OSAURUS_SMELT_DISABLED`), read
+        through the same tracked capture the drift gate attests. Both reasons are below.
         """
         if stream_experts is None:
             return None
@@ -2690,6 +2759,30 @@ class Osaurus(Runtime):
         return _ordered(
             (hub_repo_name(artifact_dir),), (model_id,), name_forms(artifact_dir)
         )
+
+    def host_model_options(self, model_id: str) -> object:
+        """The app plist's options for the served model, refused when they left the baseline.
+
+        ``disableThinking`` decides whether the model emits a reasoning run at all, and it lives
+        in the app's preferences, not in the attested config files (Fable S5-F9). Only the
+        served model's entry is compared -- toggling another model is not this cell's drift.
+        No recorded baseline means no gate, as in :meth:`check_host_state`. A baseline recorded
+        before options were attested holds ``<missing>`` for every model, so it refuses a model
+        the app now has options for until the baseline is recorded again. The entry is returned
+        for the row either way, sentinels included.
+        """
+        live = model_options_for(model_id, capture_model_options())
+        recorded = load_baseline_model_options()
+        if recorded is None:
+            return live
+        expected = model_options_for(model_id, recorded)
+        if expected != live:
+            raise RuntimeStartError(
+                f"Osaurus's per-model options for {model_id!r} drifted from the recorded "
+                f"baseline (app plist model_options_{model_id}): baseline {expected!r}, "
+                f"host {live!r}. disableThinking decides whether the model reasons at all."
+            )
+        return live
 
     def check_host_state(self) -> None:
         """Refuse to start when the host drifted from the recorded baseline.
