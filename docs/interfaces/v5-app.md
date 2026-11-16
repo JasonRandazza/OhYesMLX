@@ -44,6 +44,14 @@ ABORTED cell never wins and is never compared. If the engine had not yet written
 abort arrived, nothing is stopped, the cell runs to its own end and is still recorded `ABORTED`: the worst case
 of "Stop now" is "Stop after this cell" with the number discarded.
 
+**Stop now during a load (plan 05-09, S5-F5).** The engine is in the ledger from its spawn: `Runtime.start`
+writes the entry (pid, identity, port) right after `_spawn` and before it awaits readiness, and writes it again
+after readiness with `serving_pid` (replace by pid, no duplicate). The first write is timed and taken out of
+`cold_load_s`. So a Stop now (or a launch after a killed backend) during the load already finds and stops the
+engine. A start that fails and whose own cleanup succeeds forgets the entry; one whose cleanup fails keeps it.
+A `RuntimeStopError` from a cell ends the quickbench run (summary `ended: "error"`, no later cell started, the
+Osaurus restore still run) rather than being recorded as one `FAIL` cell.
+
 ## The launcher (`BackendLauncher`, plan 05-02)
 
 - **Interpreter.** Production: `<App>.app/Contents/Resources/python/bin/python3`, with `ohyesmlx` installed in

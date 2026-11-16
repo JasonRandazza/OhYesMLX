@@ -146,7 +146,14 @@ ABORT_STOP_ERROR_CODE = "abort_stop_failed"
 # install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
 # on a case-sensitive volume they are two different files. Matched by full executable path
 # and never by the name `osaurus`: `osaurus mcp` is a user's long-running client (AGENTS.md).
-OSAURUS_APP_BUNDLES = ("/Applications/osaurus.app", "/Applications/Osaurus.app")
+# Both spellings are recognised under `/Applications` and under `~/Applications` (a Homebrew
+# `--appdir`, or a user without admin rights): one tuple, so the resident sweep and the CLI
+# fallback below cannot disagree about where the app may live.
+OSAURUS_APP_BUNDLES = tuple(
+    os.path.join(base, name)
+    for base in ("/Applications", os.path.expanduser("~/Applications"))
+    for name in ("osaurus.app", "Osaurus.app")
+)
 OSAURUS_APP_EXECUTABLES = tuple(
     os.path.join(bundle, "Contents", "MacOS", "osaurus") for bundle in OSAURUS_APP_BUNDLES
 )
@@ -171,6 +178,11 @@ ENGINE_BUNDLE_EXECUTABLES: dict[str, tuple[str, ...]] = {
     ),
 }
 _RUN_STARTED_PIDS: set[int] = set()
+
+# Pids :func:`_process_alive` has reaped. A reaped pid is free for reuse, and ``kill(pid, 0)``
+# then answers for whoever holds the number, so a pid in this set is "gone" for the rest of the
+# process -- until :func:`_spawn` is handed the same number for a new child (Fable S5-F11).
+_REAPED_PIDS: set[int] = set()
 
 # The two states the cache pin may take. `None` is not a third state: it is the absence of the
 # pin, and it must never read as "off" -- the runs measured before the pin existed ran each
@@ -639,6 +651,7 @@ def _spawn(command: tuple[str, ...], log_path: Path) -> int:
             )
         except OSError as error:
             raise RuntimeStartError(f"could not start {command[0]}: {error}") from error
+    _REAPED_PIDS.discard(process.pid)
     return process.pid
 
 
@@ -646,14 +659,20 @@ def _process_alive(pid: int) -> bool:
     """Whether *pid* is still running, reaping it first when it is our own child.
 
     Without the reap an exited child stays a zombie, and ``kill(pid, 0)`` keeps
-    succeeding on it -- so a stopped runtime would look alive forever.
+    succeeding on it -- so a stopped runtime would look alive forever. A pid this reaped stays
+    gone (:data:`_REAPED_PIDS`): once ``waitpid`` has collected it the number belongs to
+    whoever the kernel hands it to next, and every caller routes through here, so none of them
+    signals a stranger's process group.
     """
+    if pid in _REAPED_PIDS:
+        return False
     try:
         reaped, _status = os.waitpid(pid, os.WNOHANG)
     except OSError:
         pass
     else:
         if reaped == pid:
+            _REAPED_PIDS.add(pid)
             return False
     try:
         os.kill(pid, 0)
@@ -665,6 +684,11 @@ def _process_alive(pid: int) -> bool:
 
 
 def _resident_osaurus_pids() -> tuple[int, ...]:
+    """Every live Osaurus app process, this run's own included.
+
+    An app this run started that is still alive at a new start is one whose stop failed: it
+    still holds its weights, so it blocks the start like any other (Fable S5-F3).
+    """
     result = _run((PS, "-axo", "pid=,args="), STOP_TIMEOUT_S)
     if result is None:
         raise RuntimeStartError(
@@ -676,7 +700,7 @@ def _resident_osaurus_pids() -> tuple[int, ...]:
         argv0 = argv.split(maxsplit=1)[:1]
         if pid_text.isdigit() and argv0 and argv0[0] in OSAURUS_APP_EXECUTABLES:
             pid = int(pid_text)
-            if pid not in _RUN_STARTED_PIDS and _process_alive(pid):
+            if _process_alive(pid):
                 pids.append(pid)
     return tuple(pids)
 
@@ -1890,19 +1914,20 @@ def _record_running_engine(
     pid: int,
     serving_pid: int,
     port: int,
-    stop_command: tuple[str, ...] = (),
 ) -> None:
     """Record one spawned engine in this process's ledger file.
 
     Both pids are recorded with their own ``ps`` identity: ``osaurus serve`` spawns a
     launcher that exits once the app is listening, so the pid that can be found again is the
     serving one, and a launcher whose identity is already unreadable is recorded without an
-    identity rather than failing the start. Called after ``cold_load_s`` is taken, never
-    between the spawn and readiness: the ``ps`` calls are part of the ledger, and a measured
-    load time must not contain them. Raises when the entry cannot be written;
-    :meth:`Runtime.start` logs that and keeps the start alive.
+    identity rather than failing the start. :meth:`Runtime.start` writes it twice: right after
+    the spawn, with ``serving_pid == pid``, so a load that is interrupted already leaves an
+    engine a launch can recover (Fable S5-F5); and again after readiness with the serving pid
+    (replace by pid, no duplicate). It times the first write and takes it out of
+    ``cold_load_s``. Raises when the entry cannot be written; :meth:`Runtime.start` logs that
+    and keeps the start alive.
 
-    *stop_command* is not stored: a stop command is derived from the port when it is needed
+    A stop command is not stored: it is derived from the port when it is needed
     (:func:`_stop_command_for_port`), never read back from disk (Fable S5-F13).
 
     A file at this process's path that this process did not write is an earlier process's
@@ -2508,15 +2533,22 @@ class Runtime:
         runtimes that carry a cap and ignored by the three that do not. :meth:`Omlx.start_command`
         is where that rule and its reason are written.
         """
-        if not _port_is_free(self.port):
-            raise RuntimeStartError(
-                f"port {self.port} is already held by a listener this run did not "
-                f"start; refusing to start {self.name} over it"
-            )
+        # One model resident: every runtime's port is checked, not only this one's. An unreadable
+        # port is reported busy by `_port_is_free`, so the message does not claim a listener.
+        for name, port in (
+            (self.name, self.port),
+            *((n, r.port) for n, r in RUNTIMES.items() if r.port != self.port),
+        ):
+            if not _port_is_free(port):
+                raise RuntimeStartError(
+                    f"port {port} ({name}) is not free, or could not be read; refusing to "
+                    f"start {self.name} while another engine may be resident; "
+                    f"check `{LSOF} -nP -iTCP:{port} -sTCP:LISTEN`"
+                )
         resident_osaurus = _resident_osaurus_pids()
         if resident_osaurus:
             raise RuntimeStartError(
-                "resident Osaurus app process(es) not started by this run: "
+                "resident Osaurus app process(es): "
                 + ", ".join(str(pid) for pid in resident_osaurus)
             )
         self.check_host_state()
@@ -2535,13 +2567,22 @@ class Runtime:
             command, _env = _engine_command(self.name, command)
             started = _now()
             pid = _spawn(command, log_path)
+            # AC-5: the engine is in the ledger before it is awaited, so a harness killed or a
+            # "Stop now" pressed mid-load still names it. The write (a `ps` and a file) is timed
+            # and taken out of cold_load_s below. A failed write never fails the start.
+            ledger_started = _now()
+            try:
+                _record_running_engine(pid, pid, self.port)
+            except Exception as error:
+                stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
+            ledger_s = _now() - ledger_started
             resolved = self.await_ready(
                 pid=pid,
                 log_path=log_path,
                 artifact_dir=artifact_dir,
                 model_id=model_id,
             )
-            cold_load_s = _now() - started
+            cold_load_s = _now() - started - ledger_s
             version = self.version()
             host_model_options = self.host_model_options(resolved)
         except BaseException as start_error:
@@ -2553,6 +2594,9 @@ class Runtime:
                     raise RuntimeStopError(
                         f"start failed: {start_error}; cleanup failed: {cleanup_error}"
                     ) from start_error
+                # Cleaned up: nothing is left to recover. When cleanup failed the entry stays,
+                # so the next launch can stop the engine.
+                _forget_running_engine(pid)
             _remove_scratch(scratch)
             raise
         _RUN_STARTED_PIDS.add(pid)
@@ -2563,7 +2607,7 @@ class Runtime:
         # ledger write follow it. A failed ledger write never fails the start.
         stop_command = self.stop_command()
         try:
-            _record_running_engine(pid, serving_pid, self.port, stop_command)
+            _record_running_engine(pid, serving_pid, self.port)
         except Exception as error:
             stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
         return Handle(
