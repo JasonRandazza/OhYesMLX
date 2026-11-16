@@ -1,0 +1,74 @@
+
+I'll look at the D5 wording decision and the existing recommend tests before writing a failing check.
+The finding is a pure-arithmetic contradiction, so a pytest can reproduce it. Let me confirm the pinned interface wording (not the whole doc) and check the verify directory.
+I'll match the existing report format.
+Writing the reproduction test now.
+
+Both fail, including the finding's suggested 8 GiB/1.82 GB case. Let me print the actual sentences and confirm the arithmetic from the module itself.
+I'll parameterize the cases so the controls are visible alongside the two red ones.
+
+The controls pass (3) and the contradictions fail (5). Now I'll check the sentences are actually surfaced, and start the full suite for the count.
+
+
+
+
+
+Suite count: 42 failed / 1383 passed / 2 skipped, all failures in verifier `test_fable_*` files; my file accounts for 5 of the failures and 3 passes. Now I'll write the report.
+
+
+
+Verified S4-F6.
+
+- **Added** `tests/test_fable_s4_f6.py` — 5 failing cases, 3 passing controls. The failing ones reproduce the finding exactly: on 8 GiB the 1.82 GB row is offered while the module's own sentence states a 3.6 GB peak against a 3.58 GB budget; on 16 GiB the 4.78 GB tight row prints "4.5 GB to spare" while that sentence says 9.6 GB vs 9.3 GB; and every printed spare is `budget − size`, not the 2×/1.25× line that decided the fit.
+- **Added** `.paul/review/fable-5.2/verify/S4-F6.md` — code path with line numbers, the three multipliers, D5 check (PLAN D5 and the interface pin only the fit lines, not the spare arithmetic), and severity.
+- **No shipped code changed.** Suite: 42 failed / 1383 passed / 2 skipped; all failures are `tests/test_fable_*` verifier files, this file contributing 5 failed + 3 passed (baseline 37/1380/2).
+
+VERDICT: CONFIRMED (test: `tests/test_fable_s4_f6.py::test_the_peak_the_memory_sentence_states_is_above_budget_only_for_a_left_out_row[8-gib-1.82-gb-tight]`). Severity Medium agrees — misleading user-facing copy, no wrong fit decision or record.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     20    1923051    1819264    38014   94.6%   0.043834
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py

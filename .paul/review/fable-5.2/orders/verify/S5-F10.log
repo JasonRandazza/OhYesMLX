@@ -1,0 +1,165 @@
+I'll start by reading the cited code and the dossier entry for S5-F10.
+The `_run` and `_engine_env` code match the claim. Let me find the dossier entry and the stop paths.
+
+Let me read the dossier entry for S5-F10 and check the exact line ranges.
+
+I've confirmed `_engine_env`, `_run`, `_listener_pids` and `_shutdown`. Now let me check `Handle.stop`, its callers, and which runtimes have stop commands.
+Let me check the runtime stop commands, the server call sites, and existing tests that drive `_engine_env` with scratch files.
+
+Let me look at `_process_alive`/`_signal_tree` and the `_run` refusal test to design a safe test.
+Let me read the rest of `_shutdown` and the ledger entry format so my test can't signal anything real.
+I have the code path. Let me check who catches what around `Handle.stop` and the launch/Stop-now paths.
+
+Let me check exact line numbers and the module seams available for a safe test.
+
+Confirmed the code path. Let me check the remaining call sites the finding names (measure, app) and the S5-F1 test style.
+I have the full path. Let me confirm the measure/stop call contexts and run the baseline suite.
+Baseline is 71 failed / 1398 passed / 2 skipped. Let me confirm all failures are in the new `test_fable_*` files (pre-existing verifier tests), not the main suite.
+All 71 failures are pre-existing verifier tests asserting unfixed bugs; the shipped suite is green. Let me verify my premise about how to drive `_engine_env` from a scratch file without touching the real Application Support directory.
+I've confirmed the mechanism. Now I'll write the test file for the three sub-claims.
+I left a garbled expression in the third test; let me fix that.
+Now let me run the test file against the current code to see which claims reproduce.
+The closure recursed into the patched global. Let me capture the original function at bind time.
+
+The third claim fails exactly as predicted. Let me see the first two failures in detail.
+All three sub-claims reproduce. Let me red-check each one by temporarily fixing the code and confirming the tests go green, then restoring.
+Test 1 encodes the stronger "real answer" requirement, so catching ValueError alone isn't the fix. Let me red-check against the actual fix direction — a plain environment for helpers.
+Let me verify the "no catch" claim at each call site precisely, then restore.
+Let me read `_stop_orphan` fully to confirm the ledger-deletion part.
+Test 4 passed too easily — with an empty ledger, the loop never runs. Let me strengthen it with a real ledger entry and check how `measure` handles a `Handle.stop` failure.
+
+
+All four fail. Now the red-check in the fix direction: plain env for `_run` plus per-engine env.
+Red-check confirmed: 3 of the 4 tests flip green with the stated fix direction (`_run` under a plain environment), and the 4th (per-engine prefixing) needs F1's engine identity. Let me restore code and confirm the working tree is clean.
+`runtimes.py` is byte-identical to HEAD. Let me verify the strongest sub-claim — that the `ValueError` genuinely escapes both stop callers — with a direct check against the real call chain.
+Confirmed the `ValueError` escapes both stop callers. Now let me verify two sub-details: which engines actually have a stop command, and whether launch recovery really dies.
+Let me read the S1-F7 finding to judge how reachable the triggering defect is.
+All four tests fail as claimed. Let me check the S4-F2 drift scenario the finding cites, and add one test for the recovery pass.
+Let me verify one consequence the finding doesn't state: what happens for the five engines *without* a stop command.
+Important refinement: for the five engines without a stop command, the `None` is not a clean answer either — the stop hangs 30s and then fails. Let me add that as a test and note the finding's third clause needs correcting.
+That edit collapsed two docstrings; let me read the region and repair it properly.
+
+Now let me add the no-stop-command case I just measured, which the finding does not state.
+That broke the signature. Let me repair it and insert the new test above.
+
+
+
+That fifth test passes only because I stubbed the timeout — it proves nothing. Let me replace it with the real observable defect: the port probe reports a free port as busy.
+
+All five fail. Now the red-check in the fix direction again, now including the port probe.
+Red-check is clean: 4 of 5 flip green with the stated minimal fix, and the 5th needs F1's per-engine identity. Let me confirm the untouched baseline is unchanged and the suite state matches.
+Baseline was 71 failed; now 77 with my 5 added. Let me check the sixth.
+Parallel verifiers are adding files concurrently. Let me confirm the shipped suite (excluding all verifier test files) is fully green.
+Shipped suite is green: 1368 passed, 2 skipped. Now let me write the report.
+Let me verify the two citations I made for the refuted claims before finalizing.
+Let me correct a citation — that `except Exception` is in the *start* path, not the stop path. I need to trace what a `ValueError` from `Handle.stop` actually does.
+
+
+Let me confirm the scope of that `except Exception` — per cell or per run.
+
+
+
+The `except Exception` is per cell in quickbench. Let me check whether the CLI grid path re-raises.
+Let me correct clause 6 in the report with the accurate exception scopes.
+Let me verify the "next cell starts beside the survivor" claim before leaving it in — that is F3's claim, and I should not assert it unverified.
+Under a lab defect `_port_is_free` returns False, so `Runtime.start` would refuse with a *wrong* message. Let me test that.
+Something answered `False` there — I need to disambiguate a real listener from the lab defect.
+Confirmed: under the lab defect a **free** port 8081 is reported as held, so a start is refused with a false message. Let me add that as a test.
+I clipped the next function's signature. Let me repair it.
+
+All six fail. Let me redo the red-check across the full set and restore.
+The start test still fails under the minimal fix — I need to know why before claiming it.
+The red-check failing here suggests 8081 is genuinely held right now. Let me check.
+8081 is free, so the red-check failure is suspicious. Let me trace what `start` actually hits under the patch.
+Let me re-run the red-check and debug that one test directly.
+
+Red-check shows the port refusal correctly disappears — the test then trips its own Popen guard. Let me make the guard informative instead of fatal.
+
+
+Now the red-check again, and confirm the tests flip green.
+Red-check is clean: 5 of 6 flip green with the stated minimal fix; the sixth needs F1's per-engine identity. Let me update the report with this new finding and final numbers.
+Let me verify the two citations I added (`_port_is_free` line range, `quickbench` lines) and the final state.
+Let me fix the `_port_is_free` citation — it starts at 678, not 670.
+
+Done. Verdict: **CONFIRMED**, severity Medium agreed.
+
+I wrote two files and touched nothing else — `ohyesmlx/` is byte-identical to HEAD.
+
+**The six tests** (all fail on current code, `tests/test_fable_s5_f10.py`):
+- malformed `lab-paths.json` → `ValueError` escapes `_run`, `Handle.stop` and `stop_own_engines` both
+- missing lab dir + a stop command → `RuntimeStopError: cannot identify listeners ...; refusing handoff cleanup`
+- `_port_is_free` answers **False for a free port**, so the five engines *without* a stop command wait the full 30 s and then raise anyway (measured: 30.0 s)
+- the same `None` also refuses a **start**, claiming "port 8081 is already held by a listener" on a free port — not in the finding, found while testing
+- an Osaurus spawn refused with a message about OptiQ
+- `ValueError` escaping `stop_own_engines`'s `except RuntimeStopError`
+
+**Two clauses of the finding are wrong.** Launch recovery does not die — `cli.py:1077-1080` catches `Exception` and emits `orphan_stop_failed`; what it leaves is F4's silent ledger unlink. And `Handle.stop` raising `ValueError` becomes a CLI run abort (`measure.py:650-653`) or a FAIL cell (`quickbench.py:703-706`), not an unhandled traceback. The finding also narrows the reach too far: it says "every engine that has a stop command", and only Osaurus has one — but the other five fail too, just by a costlier path.
+
+**Red-check done:** replacing `_run`'s `_engine_env()` with `dict(os.environ)` — the finding's own fix — turns 5 of 6 green. The sixth needs F1's per-engine identity, as expected. Then restored.
+
+Suite: baseline was 71 failed / 1398 passed / 2 skipped, all failures in pre-existing `test_fable_*` verifier files; shipped suite alone is 1368 passed, 2 skipped, unchanged. Not verified: no real engine or pid, and the trigger was written directly rather than reached by a user.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     84    6255830    6156800    72545   98.4%   0.076852
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py

@@ -1,0 +1,115 @@
+I'll verify each finding separately, writing one report and one test file per finding. Let me start by orienting on the cited code and the dossiers.
+No existing S6 tests, so I'll write all three. Let me read the dossier entries and the cited code.
+
+
+
+
+
+
+
+
+All three are textually confirmed so far. Writing the three test files now.
+Now I'll run each test file individually.
+
+
+
+
+
+
+Now I'll write the three reports.
+
+
+Now I'll actually run the red-checks I claimed in the reports, against in-memory patched copies.
+All red-checks bite. Let me check the full-suite result.
+
+
+All three verified: **S6-F9, S6-F10, S6-F11 — CONFIRMED, severity Low (agree)**.
+
+**Files added (nothing else touched):**
+- `.paul/review/fable-5.2/verify/S6-F9.md` — no script touches `com.apple.quarantine`; `check_bundle.sh:143` mounts the local `$APP` and `:158` opens it; `smoke_clean_account.sh:163` installs a `.whl`; the translocation test injects the `/AppTranslocation/…` literal (`AppModelTests.swift:274`).
+- `.paul/review/fable-5.2/verify/S6-F10.md` — `engines.py:813-828` pip argv has no `--no-cache-dir`; `AppModel.swift:221/:235` default to `UserDefaults.standard` and `:776-779` writes `inflightJob`; `gatekeeper.md:71-87` lists three places and neither pip's cache nor the plist.
+- `.paul/review/fable-5.2/verify/S6-F11.md` — `check_bundle.sh:120-122` calls `urlopen` before the `CERT_REQUIRED`/`check_hostname` asserts at `:125-126`; the sole failure line is `:132`; `URLError`/`get_default_verify_paths` appear nowhere in the script.
+- `tests/test_fable_s6_f9.py`, `tests/test_fable_s6_f10.py`, `tests/test_fable_s6_f11.py` — 5 tests, all passing on current code (characterisation of the defects), red-checked via in-memory patches: each fails when the gap is closed.
+
+**Verification:** baseline before my files: **99 failed, 1409 passed, 3 skipped**; after: **99 failed, 1414 passed, 3 skipped**. Every failure is another verifier's `tests/test_fable_s*` expected-fix test — no non-`test_fable_` test fails. S6-F11's third test runs the block's own source against a closed local port and observes `URLError: Connection refused` with empty stdout.
+
+**Not verified:** nothing was quarantined, unzipped, moved, or launched; no engine install or pip cache was observed (pip's default path is from pip's docs); the real TLS-rejection leg was not produced — only a connection-level `URLError`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     26    1442850    1381376    22842   95.7%   0.027070
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f10.py
+?? tests/test_fable_s6_f11.py
+?? tests/test_fable_s6_f2.py
+?? tests/test_fable_s6_f4.py
+?? tests/test_fable_s6_f5.py
+?? tests/test_fable_s6_f6.py
+?? tests/test_fable_s6_f7.py
+?? tests/test_fable_s6_f8.py
+?? tests/test_fable_s6_f9.py

@@ -1,0 +1,77 @@
+I'll start by reading the cited code ranges and the dossier entries for the four findings.
+Now let me read the dossier entries and check existing test patterns.
+
+
+
+
+
+
+
+
+
+
+Now let me pin the exact line numbers I'll cite, then write the four test files.
+I'll write the four test files now, starting with F5 (fetch ordering) and F6 (event cap frees the slot).
+
+The F6 and F7 tests as written assert today's behavior — a repro test must fail on current code. Let me fix both to encode the required invariant.
+Now I'll run each new test file to see whether the claim reproduces.
+All four repro tests fail on current code. Let me check each failure is for the claimed reason, not an incidental error.
+Tests reproduce all four. Now let me check two details my reports need: whether evict takes the same lock (F5's "evict wins the lock race" sub-claim), and quickbench's cancel points (F6).
+Confirmed: evict takes the same lock, so its "wins the lock race" sub-claim isn't reachable. Let me look at an existing verify report for format, then write the four.
+Reports next. First, the suite baseline with the verifier files excluded.
+The full suite is slower than 30s; I'll run it with a longer bound.
+Baseline: 1368 passed, 2 skipped. Now the full suite with every verifier file present.
+Let me pin the remaining line numbers and check the `_discard`/detect details for the reports.
+
+One refinement to the F8 test: include the foreign snapshot the scenario describes, so it shows the asymmetry (blobs kept, ref removed).
+
+
+
+
+
+
+
+Now I'll write the four verification reports.
+
+
+Let me capture the F7 post-failure state concretely with a scratch probe (same fake seams, no real install).
+
+
+
+
+
+Now the final checks: rerun the four files, verify each report's tail, and confirm only allowed files changed.
+All four findings verified.
+
+**Changed (new files only, no existing code touched):**
+- `tests/test_fable_s1_f5.py`, `_f6.py`, `_f7.py`, `_f8.py`
+- `.paul/review/fable-5.2/verify/S1-F5.md` … `S1-F8.md`
+
+**Results — each repro test fails on unmodified `714e8f6` with the claimed symptom:**
+- **F5 CONFIRMED** — at `done`, the lock file is present and the ledger lacks the repo; `_Job.append` also frees the slot at that instant. One refinement: an evict cannot "win the lock race" — it takes the same lock and is refused `busy` until after `_release_lock`.
+- **F6 CONFIRMED** — after `MAX_EVENTS`, `registry.claim(second)` returns `None` (accepted) although the first quickbench call never returned and `abort_requested` is false.
+- **F7 CONFIRMED** — all steps exit 0, `record_lab_path` raises on `{"bogus": "/x"}`, the job ends `internal`, and the venv `engines/mlxlm-0.31.3` survives with no lab path recorded.
+- **F8 CONFIRMED** — after a foreign rewrite of `refs/main` plus a foreign snapshot, evict keeps the blob and snapshot but deletes the ref.
+
+Severity: agree with Low on all four. No servers, models, downloads or the app were started; the F5/F8 tests use `test_fetch`'s fake transport and scratch cache.
+
+Baseline (verifier files excluded): **1368 passed, 2 skipped**. With every verifier file present: **18 failed, 1376 passed, 2 skipped** — 4 failures are mine, 14 pre-date this dispatch. I did not verify a real HTTP/SSE round trip (F5), a real quickbench event count (F6), real pip/venv or `detect_all` (F7), or a real `huggingface-cli` rewrite (F8); each report states this.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     31    2705303    2645632    32506   97.8%   0.036391
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py

@@ -10,6 +10,18 @@ Written 2026-11-14 by the Opus coordinator. Amended the same day after Jason con
 choices. Everything here is decided. The next session executes it in order and asks Jason only the four numbered
 checkpoint questions (marked **ASK**). The order files are already written in `.paul/review/fable-5.2/orders/`.
 
+**Amended at execution, 2026-11-14 evening (these override the sections below):**
+- `Agent(model: "fable")` resolves to `claude-fable-5-1` (the API response's model field). Fable sections therefore run headless:
+  `claude -p --model claude-fable-5-2 --allowedTools Read Grep Glob Write --output-format json "<§5 + section line>"`, in the
+  background, logging to `orders/fable-S<n>.json`. The CLI warns `unrecognized_model`; the API serves `claude-fable-5-2`.
+- Command Code's 5-hour window went from 6% to 70% during P0-2 (7 parallel MiMo Pro workers; S2 spawned its own subagents).
+  So: **verification runs on `deepseek`, at most 2 at a time, after the Command Code window resets**; `kimi-pro` only for
+  High re-checks. Dossier S2 was stopped at 16 minutes of silence and is rebuilt alone, with no subagents.
+- Command Code budget (Jason, 2026-11-15: weekly 42%, monthly 24%): High/Medium findings get one DeepSeek verifier each
+  (`orders/run_verify.sh`); **Lows are batched, one DeepSeek run per section** (`orders/run_verify_batch.sh`). Fable runs one
+  section per Anthropic 5-hour window unless Jason reports headroom (`orders/run_fable.sh S<n>`).
+- Kimi's GOAT price is $2.00/$10.00 per M with $0.20 cache reads: bench mean $0.087/run, about 10× `mimo-pro`.
+
 This is a review, not a phase: its output is a verified, ranked findings list (`FINDINGS.md`). Fixes go through
 normal PAUL plans afterwards, and they need no Fable.
 

@@ -1,0 +1,93 @@
+I'll start by reading the dossier entry and the cited code ranges.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now I'll write the verifier's test file. It encodes the invariant the finding claims is violated (so it must fail on current code to reproduce).
+
+
+
+
+
+
+
+
+
+
+
+
+Both tests fail with the reported symptom. Now let me run the full suite for the count.
+
+
+
+
+
+Done. Report at `.paul/review/fable-5.2/verify/S4-F2.md`, test at `tests/test_fable_s4_f2.py`.
+
+**What I changed**
+- Added `tests/test_fable_s4_f2.py` (two checks, self-contained fixture; no production code touched).
+- Added `.paul/review/fable-5.2/verify/S4-F2.md`.
+
+**Verification**
+- The two new tests fail on the current code with the finding's symptom: detection reports the engine `installed: true, tested: true`, `install` answers `error code=already_installed` and runs 0 steps, and the app's PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) cannot reach the detected script (`shutil.which` → `None`, `_resolve_program` → unchanged, no `ENGINE_BUNDLE_EXECUTABLES` entry).
+- Full suite: **1368 passed, 2 skipped, 0 failed** with no verifier files; **30 failed, 1379 passed, 2 skipped** with all verifier files present — 28 of those belong to other verifiers' pre-existing files, 2 are mine by design.
+- Live read-only check on this Mac: `detect_all()` reports mlxlm installed/tested at `~/.local/share/ohyesmlx/mlx-lm-0.31.3/bin/mlx_lm.server` while `lab-paths.json` records `optiq` only.
+
+**Two precision notes in the report:** for mlxlm the missing token is `python` (not `mlx_lm.server`), and on a machine with another pip engine's lab record the start does not ENOENT — it aliases to that venv instead. Verdict: CONFIRMED, severity agrees at Medium.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     39    2752672    2660352    27314   96.6%   0.038217
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py

@@ -1,0 +1,71 @@
+I'll start by reading the cited code and the dossier entry for finding S3-F4.
+The code matches the citation. The dossier grep found nothing, so let me find the dossier files and the F4 entry.
+Let me read the dossier entries and the original finding text.
+The claim is clear. Now I need the app test harness structure to build a reproducible test. Let me examine AppModel's job/apply machinery and the stub backend used in existing tests.
+
+Now let me look at the Backend protocol, StubBackend, and how AppModelTests wire up a model and drive events.
+Now let me read the AppModel class declaration/init and the existing cancel test to match the test harness conventions.
+
+Let me check the init, `translocated`, and the fixtures accessible to tests.
+
+Let me look at a sibling verifier test file for style, then write the test.
+Now I have everything I need. Let me check `launch()` briefly, then write the test.
+Let me confirm the `JobEvent` initializer signature before writing.
+I'll write the failing test now.
+Now I'll run just this test.
+The test fails exactly as the finding predicts: `.stoppingAfterCell` restored, `done` discarded, slot pinned Busy. Let me red-check that the test discriminates — temporarily apply the finding's fix direction, confirm green, then revert and confirm red again.
+
+Green with the fix direction. Now I'll revert AppModel.swift and re-confirm red.
+Test is red again on restored code, and the revert left AppModel.swift clean. Let me collect the line-number evidence for the downstream symptoms (quit path, disabled controls) for the report.
+
+
+The mechanism and consequences are all confirmed in code. Let me check the verify directory for existing report format.
+
+Format matches the sibling reports. Before writing the report, I'll run the full app suite to state the baseline and confirm nothing else is affected by my test file.
+12 failures in 90 — I need to attribute them. Let me list the failing test names.
+All 12 failures are the review-batch verifier tests. Let me establish the exact baseline by temporarily moving my new file out and re-running.
+Baseline: 89 cases, 8 failures, all in pre-existing S3-F1/S3-F2 verifier files. Let me pin the last exact line numbers for the report.
+I have all the evidence. Writing the verification report.
+Let me verify the final workspace state and the report's cited test line numbers.
+One citation needs correcting: the precondition assertion starts at line 100, not 106.
+Final confirmation run of the one test on the restored tree.
+**S3-F4 is CONFIRMED.** Report: `.paul/review/fable-5.2/verify/S3-F4.md`.
+
+What I did:
+- Added `app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift` — a stub backend whose `cancel` suspends until the test has delivered `done`, reproducing the exact interleaving.
+- On current code the test fails with 4 assertions: job restored to `.stoppingAfterCell` (active) after `done` set `.finished`; the `done` event is discarded; `oneSlotReason` reads "Busy: download Qwen3.5 2B 4-bit is running"; `canStartJob` is false.
+- Red-check: temporarily applied the finding's fix direction (re-read `job` after the await) → test passed; reverted with `git checkout` → test failed identically again. `git diff` is empty; no code left changed.
+- Suite baseline without my file: **89 cases, 8 failures**, all in pre-existing `FableS3F1Tests`/`FableS3F2Tests`. With it: **90 cases, 12 failures** (those 8 plus my 4); every pre-existing app test passes.
+
+Not verified: the GUI symptoms (disabled buttons, quit path) were read from `BenchmarkView.swift:15,80,89`, `AppModel.swift:263-270,569` and `BackendLauncher.swift:28,380-387`, not observed in a running app; and I did not measure race frequency.
+
+`VERDICT: CONFIRMED (test: app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift::testACancelThatReturnsAfterDoneDoesNotReactivateTheJob)` — severity Medium agrees; the slot is pinned until restart.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     32    2070427    1996544    20220   96.4%   0.029204
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

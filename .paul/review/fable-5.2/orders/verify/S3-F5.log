@@ -1,0 +1,82 @@
+I'll start by reading the dossier and code ranges cited in the finding.
+The dossier doesn't have an "F5" heading — let me find how it labels findings and look for the relevant entry.
+Found the map. Let me read the cited code and the dossier's AppModel/hotspot sections.
+Now the Python side and the launcher's quit path.
+Let me check the slot-freeing semantics in `server.py`, the AppModel's init/protocols, and existing test fakes.
+The backend's slot is freed only at `done` — that half checks out. Now let me look at the test fakes so I can write a minimal one.
+
+
+
+`StubScript` has a `hold` mechanism — let me see its API and release path.
+
+
+
+I have everything I need. Writing the test file now.
+Now let me run just this test.
+`payload` takes a `JSONValue`, not a dictionary. Fixing.
+
+Reproduced on all three points. Let me check `_rollback`'s cost to sanity-check the gap's length, and confirm the app's quit entry point.
+
+
+The claim reproduces. Let me red-check that the test discriminates — temporarily apply the fix direction and revert.
+
+The red-check exposed a flaw in my own test: it pinned the buggy state. I'll assert on the gap itself (error delivered, done not) rather than on `.cancelled`.
+Now: current code should fail, patched code should pass. Running both.
+
+
+
+
+The test discriminates. Reverting.
+Now the full app suite to report the baseline honestly.
+Let me verify the scope claim — that only install has real work between `error` and `done`.
+
+
+
+One more check for severity: what does closing stdin do to the backend?
+
+The interface doc says EOF is the parent-death signal — let me find where the backend reads stdin.
+
+Let me measure the suite baseline without my file, to report honestly.
+Let me re-read my test file to quote it accurately in the report.
+Now the report.
+
+
+**S3-F5: CONFIRMED** — Medium agreed.
+
+- **Test:** `app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift` — queues an install `error` with the stream held open; during the pause `canStartJob` is `true`, `oneSlotReason` is `nil`, and `requestQuit` passes `jobRunning: false` (3 failures on current code).
+- **Confirmed backend half:** `server.py:176-202` frees the slot only at `done`; `:684` answers `409`; `engines.py:1234-1236`/`:1272-1279` run `_rollback` between the two events, and `:1118-1119` does the `rmtree`.
+- **Red-check:** removed the state flip at `AppModel.swift:691` → test passed; reverted with `git checkout` (diff empty).
+- **One correction to the finding:** SIGTERM is caught (`cli.py:1173-1181`) and re-enters the 120 s graceful shutdown, so only a rollback over 15 s reaches SIGKILL. Only install has a real window; fetch/quickbench send `error` and `done` adjacently.
+- **Suite:** baseline 90 cases/12 failures (all pre-existing untracked verifier files); with mine 91/15. No tracked test fails. No production code changed.
+
+Report written to `.paul/review/fable-5.2/verify/S3-F5.md`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     44    3232904    3139840    26578   97.1%   0.039326
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

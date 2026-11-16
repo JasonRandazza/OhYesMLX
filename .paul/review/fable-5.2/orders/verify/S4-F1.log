@@ -1,0 +1,90 @@
+I'll start by reading the cited code ranges and the dossier entry for S4-F1.
+The dossier grep found nothing — let me locate the dossier file and check its format.
+Dossier entries aren't keyed by finding ID — let me find the S4 entry covering stage B, and check what `runtimes` does on an occupied port.
+Line 1662 hints the start path does kill residents on the port. Let me read that section and the quickbench `run` signature plus an existing stage-B test to model a reproduction.
+The code path is clear so far. Let me confirm the start path's pre-start cleanup (for the severity question) and find existing quickbench tests to model my repro on.
+
+Key detail: `Runtime.start` refuses on an occupied port rather than stopping the occupant. Let me find the Osaurus stale-instance sweep and see how `run_cells` handles a start refusal.
+
+The start path refuses on an occupied port and on a resident Osaurus app rather than stopping them. Let me check the remaining stop/sweep paths to fully close the severity question.
+
+Now let me look at the existing quickbench tests to model the repro, and check what's already in the verify directory.
+
+Let me read the test fixtures (FakeRunCells, catalog constants) at the top of the file.
+I have the fixtures. Let me confirm the Osaurus pin ordering inside `measure_cell` before `run_cells`, which decides the real impact of the missing check.
+Now let me check how the existing Fable verify tests import fixtures, so mine matches convention.
+I have what I need. Let me look at one existing verify report for format, then write the test.
+Let me read the tail of `run` for the return value and terminal event handling.
+Now I'll write the reproduction test file.
+
+Both reproduce. Let me capture the full first failure and confirm the Osaurus pin count on current code.
+The `Cell` type has no `.format` — let me check its fields and fix that assertion.
+
+
+
+Both reproduce. Now let me find existing test coverage for the start-refusal guard to cite as evidence for the severity check.
+
+
+
+
+Existing green tests at `test_runtimes.py:2481` and `:2502` already pin the refusal behaviour. Let me confirm what status `run_cells` gives a start failure so the report is precise.
+Now the full suite for the baseline and final counts.
+
+All 30 failures are verifier reproduction files; none is a pre-existing test. Let me confirm the pre-existing suite is green without them.
+Let me confirm what the real Osaurus `pin` touches, so the report states the side effect accurately.
+All evidence is in hand. Writing the verify report.
+
+Done. Added two files, no existing code touched.
+
+**`.paul/review/fable-5.2/verify/S4-F1.md`** — report. **`tests/test_fable_s4_f1.py`** — two repro tests (port goes busy after stage A; Osaurus app opens after stage A), built on the existing `test_quickbench` fakes.
+
+Verified:
+- Both tests fail on current code with the reported symptom (`assert 'PASS' == 'SKIPPED'`): stage-B cells are measured because `quickbench.py:844-901` never calls `_skip_reason` (stage A does at `:776`).
+- The finding's severity mechanism is refuted: `runtimes.py:2295-2305` refuses an occupied port / resident Osaurus app before spawning, so no stop path or orphan sweep touches the user's process (existing green tests `test_runtimes.py:2481`, `:2501`). The real cost is `N/A` instead of `SKIPPED`, plus the Osaurus path pin/restoring live user settings before the refusal.
+- Baseline (pre-existing files, `--ignore-glob='tests/test_fable_*'`): `1368 passed, 2 skipped`. Full suite: `30 failed, 1379 passed, 2 skipped`; all 30 failures are `test_fable_*` reproduction files, mine included.
+- Not verified: the fix itself (forbidden), and anything live — no server, engine, model, or app was started.
+
+`VERDICT: CONFIRMED (test: …)` with `SEVERITY-CHECK: lower to Medium`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     40    2849583    2756480    27762   96.7%   0.038892
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py

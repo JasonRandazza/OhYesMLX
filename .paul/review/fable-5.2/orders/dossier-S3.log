@@ -1,0 +1,68 @@
+I'll start by mapping the app source tree and checking what's in scope.
+Let me get the complete file list and start locating functions via graphify.
+The graph gives me the symbol map. Now I'll extract declaration lines per file for the Map section, and start parallel greps for the mechanical scan patterns.
+Good start. Now I'll grab the remaining declarations and complete the mechanical scan patterns.
+Map skeleton is in place. Now I'll finish the mechanical scan patterns and pull the contracts in parallel.
+Now I'll pull the threat-model §10 status table, the contracts, and the "already known" sources.
+Now I'll gather the "already known" material and the interface contract shapes.
+Good material. Now I'll pull the review logs, phase summary deviations, and the AppModel core methods.
+The review logs give me a rich findings list. Now I'll check which findings were fixed and when, then examine AppModel's core methods.
+Commit `ac0de1b` fixed the wave-1 findings. I need to determine the current status of the wave-2 findings against the working tree. Let me verify each one.
+Several wave-2 findings look fixed in the current tree. Let me pin down which commits fixed them and check the remaining open ones.
+Commit `101df7c` carries the wave-2 fixes. Now I'll read the remaining core methods (launch, quit, inflight) and the contracts' AppModel section.
+Now I'll read the HTTPBackend SSE path and the launcher's line-delivery fix, plus the v5-app AppModel contract.
+The wave-1 fixes are confirmed in the tree. Now I'll pull the remaining contracts and the test inventory.
+Now I'll pull the DESIGN fixes/accessibility sections, the JSON shapes the client decodes, and the label copy in the screens.
+Now I'll fill the remaining gaps: SSE parser, app entry/termination, StubBackend scenario driver, and the JSON shape pin locations.
+Almost done with evidence. Final verification batch: force-unwrap scan, StatusGlyph colors, BenchmarkCellRow, RootView structure.
+All scan patterns are covered. Let me do a final read pass over the view files for accurate map lines and hotspots, then start writing the dossier.
+Last read batch before writing: ResultsView top, FullWindowStates stderr, ConsentSheet, QuickSummary.
+I have nearly everything. Quick final reads for map accuracy, then I'll write the dossier in stages.
+One last verification batch for open questions and a few remaining line pins, then I'll write the dossier.
+One more check — where the global `refusal` is displayed (Q1's 409 busy requirement), then I'll write.
+Let me pin the remaining internal function ranges for the Map section.
+All ranges are pinned. Now I'll write the dossier in stages, starting with the header and the Map.
+Let me verify QuickCell's fields and ResultCellRow before continuing — I made a claim about TTFT figures I need to check.
+QuickCell lacks `stage` and has `label`/`reused` — I'll correct the map lines before continuing.
+Now sections 2 and 3 — contracts and already-known findings.
+Now the Hotspots and Mechanical scan sections.
+Finally, the test inventory and open questions.
+The dossier is drafted. Two claims in §7 need tightening for precision — let me fix them.
+Let me verify the exact line numbers cited in the open questions, then do the final size check.
+
+
+
+Done. Wrote `.paul/review/fable-5.2/dossier-S3.md` — **58,123 characters** (~16K tokens, inside the 15–25K target), 799 lines, all seven required parts in order. Nothing else touched; no tests run (the order forbids it — the coordinator runs `swift test`).
+
+How I verified: every map range was confirmed with `grep -n`/`sed -n` against the working tree (= `714e8f6`, app tree unchanged since `101df7c`); each §3 finding was checked against current source before I called it fixed (wave-1 fixes in `ac0de1b`, wave-2 fixes in `101df7c`, `fee692b` recording the fix order). Mechanical scan ran every listed pattern; all Python patterns are "none — Swift-only scope".
+
+The three map lines I'm least sure of:
+1. `StubBackend.swift:321-468` (`makeBackend`) and the fixture boundaries at `:470-936` — starts from the declaration grep, ends inferred from next-declaration.
+2. `Models.swift:570-706` (QuickCell…QuickOsaurus block boundaries) — starts confirmed, ends inferred.
+3. `BenchmarkView.swift:133-253` (`planSections`) — start confirmed at `:133`, end inferred from `diskAfter` at `:255`.
+
+Sharpest items for the reviewer (§7): two quick clicks race the unclaimed job slot and a losing `409 busy` renders only on Engines; `cancelJob`'s post-await stale write can pin a finished job at "Stopping…"; install Retry bypasses the consent gate; "Best on your Mac" over-claims a quick run; `BenchmarkCellRow` breaks the DESIGN §4.3/§5 row-as-one-element rule.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     35    3930113    3787904    60775   96.4%   0.128372
+
+== cc-agent: git status ==
+ M .paul/review/fable-5.2/PLAN.md
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S4.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/_fable-brief.txt
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log
+?? .paul/review/fable-5.2/orders/fable-S1.err
+?? .paul/review/fable-5.2/orders/fable-S1.json
+ .paul/review/fable-5.2/PLAN.md | 9 +++++++++
+ 1 file changed, 9 insertions(+)

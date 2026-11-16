@@ -1,0 +1,100 @@
+I'll read the dossier entry and the cited code ranges.
+The dossier grep found nothing — let me locate the dossier files and get exact line numbers.
+Line numbers match the finding. Let me read the dossier's F8 entry (S4-findings.md likely) and the exact run-function lines.
+Let me read the dossier's F8 entry and the run/measured code.
+The claim's confidence relies on whether catalog rows sharing a `base` can carry different `engines`. Let me check `catalog.siblings` and the real catalog.
+The catalog is a dict, not a list. Let me inspect its shape and group rows by base.
+No current base carries differing `engines` lists — so the trigger is latent. I'll check the test conventions and whether stage B has any guard at all.
+The code is plainly unfiltered, and `run` accepts an injected `models` list — so a synthetic two-row base can exercise it. I'll read the test fixtures to build the smallest reproduction.
+The fixtures already support per-row engine lists. Let me read a stage-B test to copy the exact `run` invocation.
+
+I have the fixtures. Let me check how the existing Fable S4 verifier tests import the quickbench helpers.
+
+
+Let me check whether the catalog contract guarantees per-base engine uniformity, which decides how severe this latent path is.
+Important: a catalog test asserts every row lists exactly all five engines. Let me read it.
+This looks decisive for severity. Let me confirm every production caller feeds `catalog.load()` to quickbench.
+
+Both production callers pass `catalog.load()`, and `test_catalog.py:428-433` pins every shipped row to all five engines — the trigger cannot exist in shipped data. I'll still write the synthetic reproduction the finding proposes.
+
+It reproduced: the sibling is downloaded and measured. Let me capture the full stage-B record as evidence.
+
+The plan counts the sibling's 3 GB and its cell unconditionally. Now I'll run the full suite in the background since it exceeds the foreground timeout.
+While that runs, let me confirm no other guard exists on the stage-B path.
+
+Baseline without my file: 43 failed, 1384 passed, 2 skipped (all failures are other verifier tests). Now the full suite including mine.
+
+
+
+
+Delta is exactly my test (44 vs 43). Let me check the existing verify reports' format before writing mine.
+
+All facts are pinned. Writing the report.
+
+
+Verified S4-F8. The mechanism is real; the trigger is not in shipped data.
+
+**Changed**
+- `tests/test_fable_s4_f8.py` — synthetic two-row base (`mlxlm`-only chosen row, `optiq`-only sibling); asserts the sibling is not downloaded, not measured, and appears as `SKIPPED`.
+- `.paul/review/fable-5.2/verify/S4-F8.md` — the report.
+
+**Reproduction:** the test fails on current code with `downloads == ['org/two-b-oq4']`; the same fixture's summary shows the sibling measured on `mlxlm` as `PASS`, 60 tok/s — the finding's worst case. Plan prices the sibling's 3 GB into `download_bytes` and its cell into `estimate_s` (330) with no conditional field (`PlannedSibling` has no `engines`). No gate exists: the only engine-list read in `quickbench.py` is the stage-A filter at `:292`.
+
+**Reachability:** none today. All 12 catalog rows list all five engines (0 bases with divergent lists), and `test_catalog.py:428-433` pins that invariant. Both production callers pass `catalog.load()`; `run(models=…)` is the test seam only.
+
+**Suite:** baseline on `714e8f6` (same tree minus my file) 43 failed, 1384 passed, 2 skipped; with my file 44 failed, 1384 passed, 2 skipped — the delta is exactly the new reproduction test. I left it failing because the order forbids fixing code; a green suite here would mean the finding did not reproduce.
+
+**Not verified:** no engine, model, or app was started, so whether a real engine half-loads an unlisted format is unknown.
+
+VERDICT: CONFIRMED (test: tests/test_fable_s4_f8.py::test_stage_b_skips_a_sibling_that_does_not_list_the_winner_engine)
+SEVERITY-CHECK: lower to Low — mechanism real, but unreachable without a catalog edit that breaks `test_catalog.py:428-433`; defense-in-depth only.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     35    2134321    2053888    19108   96.2%   0.029691
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py

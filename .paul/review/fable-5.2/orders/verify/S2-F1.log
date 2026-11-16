@@ -1,0 +1,44 @@
+I'll read the cited code ranges, the dossier, and the surrounding structures in parallel.
+Code matches the claim's quoted lines. Now I'll read the dossier entry and `report.summarize`'s handling of FAIL rows.
+The dossier grep hit the wrong section. I'll find the actual S2-F1 entry and check `_row`'s status handling.
+`_row` carries timings irrespective of status. Now I'll check how `measure_cell` joins `report.summarize` to `_cell_record`, and find the actual dossier entry for F1.
+Let me read `run()` and `measure_cell` fully to see how to drive it with a stubbed `run_cells`.
+Now I'll look at an existing quickbench test with a stubbed `run_cells` plus the CellResult/Observation constructors.
+I'll check the Observation dataclass and an existing "incoherent output" FAIL construction in tests.
+`Observation` lives in `transport`. I'll read the existing helpers and an incoherence test setup.
+I have the pieces. Let me confirm the harness helper's return shape and `_per_request`'s decode computation, so the FAIL row actually gets a timing from my observations.
+Let me pin the Swift line numbers and check `decodeTPS`'s definition, plus see what other verifier files exist.
+
+
+Now I'll check `measure.decode_tps`'s token-source handling and how tests inspect the summary cells.
+I'll check whether tests already import one another's helpers, and see the conftest setup.
+Baseline first, then the test. I'll run the full suite now to record the starting count.
+Baseline: 1371 passed, 2 skipped, 1 failed — the failure is a parallel verifier's new `test_fable_s1_f1.py`, not existing code. Now I'll write my reproduction test.
+
+
+Both fail. Let me see test 1's exact failure, and fix test 2's stub to carry the failed-request reason `_set_status` would actually write.
+Test 1 reproduces the symptom exactly: `300.0` tok/s on a FAIL cell. Now I'll correct test 2's stubbed reason to the branch `_set_status` writes for failed requests.
+
+
+I'll make the live-event surface assert the corrected state too, so the test is fix-compatible.
+
+
+The stub hardcodes the FAIL verdict. I'll make it run the real `measure._set_status` gate so the result is literally what the harness produces, not my assertion of it.
+
+Both fail on the exact symptom after the real `_set_status` gate. Now I'll verify the finding's scope claim — that `_winner`/`_best` filter PASS while the two Swift cell views don't.
+Scope confirmed: `_winner` and `_best` both filter PASS. Let me pin the docstring lines and then run the full suite.
+All evidence is in. I'll write the verification report.
+
+Wrote `.paul/review/fable-5.2/verify/S2-F1.md` and added `tests/test_fable_s2_f1.py`.
+
+**Verdict: CONFIRMED.** Both tests drive `quickbench.run` with a real `CellResult` passed through `measure._set_status` and fail on the reported symptom: `a FAIL cell published 300.0 tok/s` (incoherent case) and `the survivors' median 300.0 tok/s` (2-of-5-failed case). The summary record and the `result` event both carry it; `quickbench.py:348-349` copies with no status test under a docstring promising "no number at all". Swift render sites (`ResultsView.swift:246-247`, `BenchmarkView.swift:341`) read the field unconditionally, while `_winner`/`_best` remain PASS-filtered as claimed.
+
+**Suite:** baseline 1371 passed / 2 skipped / 1 failed (a parallel verifier's `test_fable_s1_f1.py`); with my file 1371 passed / 2 skipped / 3 failed — the two additions are the intended red reproductions, and I did not fix the code per the order, so no red-check-then-restore applies. Not verified: the Swift views were read, not run; no `swift test` or screenshot.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     27    1625441    1564928    17019   96.3%   0.023983
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s2_f1.py

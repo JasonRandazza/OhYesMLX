@@ -1,0 +1,89 @@
+I'll start by reading the cited code and the dossier entry.
+Now let me read the dossier entry for S5-F7 and the `osaurus_settings.restore` implementation.
+Let me look at `osaurus_settings.restore` and `_put_back` to confirm what a False return means.
+Let me check whether existing tests drive shell scripts, and get the pytest baseline.
+Let me see the existing shell-driving pattern in the S5-F6 verifier test.
+
+Let me check how callers use `osaurus_restore_check`, to ground the "exits 0, caller prints DONE" half of the claim.
+The claim is clear. Let me write the verifier test file.
+
+Now let me run only this file to see the reproduction.
+All five defect assertions fail and the success guard passes. Let me see the first two failures in full to confirm they fail on the status/trap assertions, not on a harness precondition.
+Every failure is on the intended assertion. Now the full suite for the count.
+
+Let me confirm the real `restore()` returning False is covered by an existing test, so my report is precise about what I stubbed versus what is already proven.
+Now the report.
+
+
+**S5-F7 CONFIRMED.** Both halves reproduce.
+
+Wrote `tests/test_fable_s5_f7.py` (6 tests: 5 fail on current code, 1 green guard) and `.paul/review/fable-5.2/verify/S5-F7.md`. No other file touched, no code changed.
+
+- (a) With `restore()` returning `False`: `RESTORE FAILED: …` prints, then the trailing `trap` at `osaurus-pin.sh:83` makes `osaurus_restore_check` return **0** and replaces the `INT` handler with `echo ABORTED; sweep; exit 130` — restore no longer attempted.
+- (b) Real `kill -INT $$` after `osaurus_pin`: exit 130, output is only `ABORTED 17:21:12 -- restoring Osaurus settings`; `osaurus_restore` (`:28`) discards the boolean, and `|| return 1` fires only on an exception.
+- Extra for the fix: returning non-zero is not enough — `run_canary.sh:41-42` has `set -u` only and ends on `echo DONE`; `run_grid_35b.sh:52` discards the status. Callers need `|| exit 1` or `set -e`.
+
+Suite: baseline **64 failed, 1389 passed, 2 skipped**; with my file **70 failed, 1391 passed, 2 skipped** (excluding it: 65/1390 — the extra is `test_fable_s5_f8.py`, which landed mid-run). Did not verify the real `restore()` mismatch (stubbed `False`; already proven at `test_osaurus_settings.py:300-343`), any real `~/.osaurus` state, or that a fix keeps the wording `RESTORE FAILED`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     18    1063445     993536    16880   93.4%   0.023595
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py

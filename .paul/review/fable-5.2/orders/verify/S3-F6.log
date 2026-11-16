@@ -1,0 +1,78 @@
+I'll start by reading the cited code and the dossier entry for S3-F6.
+The dossier grep came back empty — let me check the file naming and locate the exact lines.
+Dossier exists — my grep just missed the format. Let me pull the F6 entry and the surrounding AppModel machinery.
+The dossier search returns nothing for "F6" — let me check its structure.
+
+Now let me look at the AppModel init, the Backend protocol, and an existing test pattern.
+Let me check a sibling verifier test for the stub-backend pattern, and the test helper file.
+
+
+Let me read `launch`, the public start entry points, and the benchmark script helpers.
+Let me check `Package.swift`, `BackendError`, `payloadData`, and the plan fixture.
+
+Let me confirm no other screen renders the generic `refusal`, and check the hardware fixture's `supported` flag.
+
+
+Let me check the `setError` call pattern, the summary fixture's `ended`, and `QuickPlan.repo`.
+
+Now I have everything I need. Writing the verifier test file.
+Running just the new tests.
+Both fail with exactly the predicted symptoms. Let me capture the precise line numbers for the report and confirm the working tree is clean apart from my one file.
+Adding only that one file. Now running the full app suite to report the count and baseline.
+21 failures total — I need to separate mine from the other verifiers' tests. Let me list which tests failed.
+
+
+
+No tracked file changed. Writing the report.
+
+Two line references are slightly off — fixing them.
+
+
+
+
+
+S3-F6 is reproduced. I added one test file and one report; no source file was touched.
+
+**Changed**
+- `app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift` — two tests over the private `start()` funnel via public API only:
+  - a backend whose first `startJob` suspends and whose later calls answer `409 busy`; a second start while the first POST is in the air deletes the winner's `inflightJob` record, and after the winner completes `job.state == .running` with no record behind it.
+  - a completed quickbench, then a refused `startBenchmark()`: `summary`/`summaryData` are gone, `benchmarkRefusal` is nil, only the Engines-only `refusal` is set.
+- `.paul/review/fable-5.2/verify/S3-F6.md` — claim, reproduction, line-numbered code path, what I did not verify.
+
+**Verified**
+- `cd app && swift test --filter FableS3F6` → 2 tests, 6 assertion failures on unchanged `HEAD`; the passing intermediate assertions confirm the state (`job == nil`, `canStartJob == true` during the POST, `refusal?.code == "busy"`, the first run's summary was real before the wipe).
+- Full suite: 93 tests, 21 assertion failures — 6 mine, 15 from the F1/F2/F4/F5 verifier files already untracked in this worktree. `git diff` on tracked files is empty.
+- Read-not-run: the `URLError` variant of the benchmark wipe (`AppModel.swift:632-635` sets nothing) and human double-click timing.
+
+`VERDICT: CONFIRMED` — severity Medium agreed.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     34    2146107    2073472    27453   96.6%   0.033587
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

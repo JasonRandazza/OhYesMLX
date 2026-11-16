@@ -1,0 +1,72 @@
+I'll build the S1 security dossier. Starting with orientation: file sizes, graphify map, and the state files I need for "already known".
+
+Graphify gives me anchors. Now I'll get function indexes for the big files and start reading server.py in slices.
+Indexes are in hand. Reading server.py in slices now.
+
+
+server.py done. Now engines.py security ranges.
+
+engines.py ranges done. Now fetch.py — guards, ledger, download, evict.
+
+
+
+
+
+
+Now the Swift side and the app parser.
+
+
+Now the threat model — the whole thing, in two slices.
+
+Threat model mapped. Now the "already known" sources — STATE, phase summaries, review logs.
+
+
+
+
+Review logs captured. Now the contracts — interfaces shapes, DESIGN.md app sections, and fixing commits.
+Now the mechanical scan. Running the pattern greps over the S1 scope.
+
+One grep round used fixed-string mode by mistake — re-running the dotted patterns correctly.
+
+Swift scan clean. Now test inventory — locating the tests that guard each security area.
+
+
+
+
+Before writing, I'll verify three things: commit `4b35ef8`, the 2026-09-23 review's relevance to S1 files, and the W1-sweep log's findings.
+
+One more fix-sha to pin — 045-02a part B (T-02/T-05).
+All material gathered. Writing the dossier in stages — map first.
+Map written. Now Contracts and Already-known sections.
+Now Hotspots and the Mechanical scan.
+Final section needs a couple of test-coverage verifications first.
+
+Dossier complete. Getting its size for the report.
+One map range needs correcting before I hand it over — the guided-tables line undercounts `_PIP_PACKAGES`.
+Done. Dossier written and nothing else touched.
+
+- **Path:** `.paul/review/fable-5.2/dossier-S1.md` (seven parts in order, all T-findings mapped to their closing code and fixing shas)
+- **Size:** 83,474 characters (~20–23K tokens, inside the 15–25K target)
+- **Three map lines I'm least sure of:**
+  1. `runtimes.py:569-586 — _run` — end boundary inferred from the next `def` at :588; its except-clause tail (:582-586) seen only in a windowed read.
+  2. `engines.py:876-901 — install constants block` — the header comment starts at :866 and the first constant (`DEFAULT_ENGINES_DIR`) is at :879; the stated start is approximate grouping, not a def boundary.
+  3. `cli.py:823-838 — the app subcommand parser block` — start (:823) and `return parser` (:839) are grep-confirmed, but the add_argument closing line itself was not read.
+
+**Not verified (by design, per the order):** no suite run (the coordinator runs it), no live probe, no red-check — there is nothing claimed fixed here, only mapped. The §7 Q3 stale-ledger/pid-recycle path and Q8's unbounded `_real_open` are suspicions, not proven defects.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     32    3846612    3709312    64724   96.4%   0.129389
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log

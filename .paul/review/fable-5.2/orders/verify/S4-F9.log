@@ -1,0 +1,88 @@
+I'll start by reading the cited code range and the dossier entry for this finding.
+The dossier grep found nothing. Let me look at the dossier directory and search for the S4 dossier.
+
+
+Now I understand the claim. Let me read the `run` function's signature and the surrounding setup, plus `fetch.download`'s contract.
+
+The claim's shape is clear. Let me read `run`'s signature and the existing quickbench tests to see how to fake a sibling download failure.
+Now I'll read the test fixtures so my new test matches the existing conventions.
+Let me check `_skipped` and whether tests import helper modules across files.
+
+I'll check `fetch.ledger_for` and `engines._job_event` so the fake's error event matches the real shape.
+Let me read the tail of `run` to see the return value and summary write.
+
+I have everything I need. Writing the verification test as a new file.
+Running only the new test file to see whether the claim reproduces.
+Both tests fail with exactly the reported symptoms. Let me check whether the secondary fact (fetch ledgers the `.incomplete` on a False return) has an existing test I can cite, then run the suite for the baseline.
+The full run includes other verifiers' intentionally-red files. Let me get the true checked-in baseline by excluding all verification test files.
+Baseline is clean: 1368 passed, 2 skipped. Let me confirm the refusal codes the finding names actually exist in `fetch`.
+Let me look at the existing verify reports to match their format.
+
+Let me confirm how a partial alone is judged by `fetch.downloaded` so the severity check is grounded.
+Let me dump the run's actual outcome for the report's evidence section.
+
+
+Let me verify the report's claim that a later Remove path can evict the residue, then confirm I touched nothing else.
+Both files are in place and no tracked file was changed. Verification summary:
+
+**Report:** `.paul/review/fable-5.2/verify/S4-F9.md` — verdict **CONFIRMED**.
+
+**Test added:** `tests/test_fable_s4_f9.py` — two tests, both fail on the current tree with the reported symptoms:
+- `test_a_failed_sibling_download_is_evicted_or_recorded`: after a refused sibling download the run ends `finished`, `evicts=[]`, `not_evicted=[]`, and the ledgered `.incomplete` stays on disk.
+- `test_a_refused_sibling_download_keeps_the_refusals_code_in_the_cell_reason`: the skipped cell's reason is bare `"org/two-b-oq4 could not be downloaded"`; the `busy` code emitted through `_discard` never reaches it.
+
+Cause is exactly as claimed: the failure branch (`quickbench.py:869-889`) precedes `outstanding.add` (`:890`), the per-cell evict is gated `if fetched` (`:915`), and the run-level sweep only walks `outstanding` (`:944`). The residue's ledger entry is real — `fetch.fetch_file` records it (`fetch.py:1124-1135`) and `download`'s `finally` persists it (`:715-718`), already pinned by `tests/test_fetch.py:1075-1076`.
+
+**Counts:** checked-in suite (all `tests/test_fable_*` ignored) — 1368 passed, 2 skipped. Review tree excluding my file — 44 failed (other verifiers' intentional reds), 1384 passed, 2 skipped. My file contributes 2 of those reds by design; per the order, code was not fixed.
+
+**Not verified:** no real download/network/server/engine/app, and the cancel-during-download variant (deferred by the finding to S4-F4). Severity check: agree with Medium.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     26    1567999    1488768    22581   94.9%   0.029900
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py

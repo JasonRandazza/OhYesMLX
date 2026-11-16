@@ -1,0 +1,110 @@
+I'll read the cited code ranges and the dossier entry for S5.
+The dossier's F1 at line 277 is a different finding (cleanup failure). Let me check the dossier for the lab-PATH entry and read the full `_engine_env`.
+The dossier at lines 465-466 already names this as open. Let me read the full `_engine_env` docstring and the dossier's §7 Q6 discussion.
+Now let me verify the actual PATH resolution on this machine: does OptiQ's lab bin carry a `python`, and what mlx versions do the two venvs have?
+The machine facts match the claim exactly. Now let me check the callers and the version path.
+Facts on this Mac match the claim exactly. Let me check the manifest helpers, the version stamping, and whether anything else pins the mlx-lm venv.
+The manifest order matters here. Let me check the committed manifest and the exact ordering of prefixes.
+The machine facts match the claim precisely. Let me check the version stamping and the Runtime constructor, then write the failing test.
+The machine facts line up. Let me confirm the version strings without importing mlx, and check whether any runner's PATH export survives.
+Machine facts confirm. Let me check `LAB_ENGINES`/`check_lab_dir` and verify both venvs print the same version string.
+Both venvs print `0.31.3` — the stamp is identical, exactly as claimed. Let me write the test.
+Now let me run just this test file to see the current behaviour.
+Both leak tests fail on the current code. Let me confirm the exact runtime PATH this Mac's harness produces, and check the mlx-lm venv requirement in AGENTS.md.
+Definitive repro on the real machine. Now let me test the decisive nuance: does the runner scripts' PATH export save it?
+The runner-script mitigation fails too — `_engine_env` prepends OptiQ's bin ahead of the ambient venv. Let me check actual result rows and OptiQ's own command.
+Let me confirm OptiQ's start command and check the main checkout's result rows for the pre/post-lab-copy timeline.
+Interesting — the mlxlm canary is dated 2026-10-29, before `lab-paths.json` was written on 2026-10-30 13:24. Let me check for any mlx-lm row measured after that.
+No mlx-lm cell has been measured since the lab copy was recorded. Let me confirm the row's actual content and the full stop-command path.
+Let me verify the `_spawn`/`_run` callers' access to runtime identity, and check the row's version field.
+`runtime_version: 0.31.3` in the row, no mlx core version. Let me check the start command's recording and the `_spawn` call site context.
+Now let me confirm the venv semantics — whether `<optiq>/bin/python` really uses OptiQ's site-packages — and check the stale docstring lines.
+
+
+Both venvs carry identical `mlx_lm` 0.31.3 but different `mlx` cores (0.32.4 vs 0.32.2) — decisive. Let me check whether any row records which interpreter ran, and whether `python` has a bundle fallback.
+Let me confirm no mlx-lm rows exist after the lab copy, and check `_resolve_program` has no `python` fallback.
+Let me check how `lab-paths.json` gets written, and confirm the stale docstring claim.
+
+Let me check the MTPLX command and then run the full suite for a count.
+
+
+
+The registry confirms `python` is the only start command that collides with a venv's binary. Let me check for other lab-paths sources and the test run.
+No code anywhere records the mlx core version. Let me check the background suite result.
+Pre-existing failures come from other verifiers' test files. Let me establish the baseline without mine.
+
+While that runs, let me write the report.
+
+
+Baseline: 53 failed / 1384 passed without my file; 55/1386 with it (my 2 fail, my 2 pass). Now the red-check — confirming the test targets the leak and greens under a per-engine filter.
+Now let me quantify how the leak actually changes a measured cell — the decisive question of whether it's High or Lower.
+Confirmed decisively: even with every runner script's venv export in place, OptiQ's venv wins. Now the report.
+Let me verify the claims I made about the docstring enumeration and re-run my test file one last time.
+S5-F1 verified. **CONFIRMED**, severity lowered to Medium.
+
+What I proved:
+- `_engine_env` (`runtimes.py:508-531`) builds one `prefixes` list over all `manifest.items()` with no engine argument, then one PATH — so every engine's lab bin goes to every spawn.
+- On this Mac, `lab-paths.json` holds only `{"optiq": …/optiq-0.5.13/bin}`, and `shutil.which("python", path=_engine_env()["PATH"])` returns **OptiQ's venv python**. OptiQ's venv is a real venv (`python -> python3.14`) with `mlx_lm 0.31.3` on **mlx 0.32.4**; the control venv has `mlx_lm 0.31.3` on **mlx 0.32.2**. Both print `0.31.3` from `python -m mlx_lm --version`, so `parse_version` cannot distinguish them.
+- The runner scripts' `export PATH="…/mlx-lm-0.31.3/bin:$PATH"` does **not** save it — `_engine_env` prepends ahead of ambient, so OptiQ wins even with the export in place.
+- No source or row records the mlx core version anywhere.
+
+Two corrections to the finding, both narrowing it: `mlxlm` is the **only** start command that is a generic name (the other five are unique); and **no mlx-lm cell has been measured since the lab copy appeared** — `lab-paths.json` was born 2026-10-30 13:24, the only mlx-lm canary is 2026-10-29 16:15. So no published row is contaminated yet, which is why I lowered High to Medium; the defect goes live on the next control cell.
+
+`tests/test_fable_s5_f1.py` (4 checks, 2 fail on current code, 2 are controls). Baseline 53 failed/1384 passed without my file; 55/1386 with it. Red-check done by removing the leaked prefix from the produced PATH rather than editing source. Report at `.paul/review/fable-5.2/verify/S5-F1.md`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     42    2674066    2600704    29556   97.3%   0.036540
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py

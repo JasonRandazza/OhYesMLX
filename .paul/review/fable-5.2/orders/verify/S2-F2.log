@@ -1,0 +1,49 @@
+I'll start by reading the cited code and the dossier entry for S2-F2.
+Let me check the dossier file and the rest of the stream loop.
+The dossier doesn't use that ID format. Let me grep it for the transport claim.
+Let me read the top of `transport.py` for the signature and imports, and check existing transport tests.
+Let me look at the existing transport tests to reuse their fake-server pattern.
+
+The hazard hinges on `HTTPResponse.read1` over a buffered `fp`. Let me confirm the stdlib internals in the test venv.
+The stdlib confirms the mechanism: `_get_chunk_left` calls `fp.readline()` on the 8 KiB `BufferedReader`, then `read1` returns one chunk. Baseline is 43 passed in `tests/test_transport.py`. Now I'll write the test with a raw-socket server so I control framing exactly.
+
+Reproduced: the control completes promptly; the held-open case times out with `content_event_count=0`. Let me confirm the bytes really were sitting in the reader, and measure the silent keep-alive inflation.
+
+Decisive: after `getresponse()` all 412 body bytes are in the `BufferedReader` while `select()` reports nothing, and a 5 s held connection stamps every token at 5.006 s. Let me check the verify directory conventions.
+
+Let me add a second reproduction isolating the mid-stream stamping shift (a), separate from the tail stall (b).
+
+
+The third test passed — I need to check whether the two stamps really collapsed at the close. Let me instrument it.
+
+Run 0 shows the shift; runs 1–2 let the client wake between two separate sends. I'll make the body a single `sendall` so the wake cannot fall between writes.
+
+Deterministic across 5 runs. Let me capture both failure messages verbatim.
+Both failures match the claim. Now the full suite for counts.
+
+Let me confirm the request sends no `Connection: close`, and pin where `total_s` propagates.
+
+
+I have everything I need. Writing the report.
+Let me add the suite counts section the standing order requires.
+
+S2-F2 is confirmed.
+
+**Changed:** added `tests/test_fable_s2_f2.py` (control + two reproductions) and `.paul/review/fable-5.2/verify/S2-F2.md`. No tracked file modified, no code fixed.
+
+**Evidence:** with a 492-byte chunked SSE response sent in one `sendall`, all 412 body bytes sit in `HTTPResponse.fp` while `select()` on the socket reports nothing — `chat(timeout_s=3)` returns `request timed out`, `content_event_count=0`. Holding the connection open 5 s and calling with `timeout_s=10` returns `ok=True` with `ttft_s=5.006`, `last_content_s=5.006`, `total_s=5.01`. Two deltas written together are stamped 0.50 s apart when the close finally wakes `select`. The existing transport suite can't see it: its fake server sends `Connection: close` (`tests/test_transport.py:62-64`).
+
+**Verified:** `pytest -q tests/test_fable_s2_f2.py` → `2 failed, 1 passed`, identical on 5 runs; suite baseline without my file `1371 passed, 2 skipped, 5 failed` (all other verifiers'), with it `1372 passed, 2 skipped, 7 failed`. Not verified: whether any current Osaurus/vMLX run has moved a published number — no runtime was started.
+
+VERDICT: CONFIRMED (test: tests/test_fable_s2_f2.py::test_a_whole_response_arriving_in_one_write_is_read_without_waiting_for_more_bytes, tests/test_fable_s2_f2.py::test_a_delta_already_buffered_is_stamped_when_the_next_bytes_arrive)
+SEVERITY-CHECK: agree
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     30    1994025    1904128    38924   95.5%   0.042551
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py

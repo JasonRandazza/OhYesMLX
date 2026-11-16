@@ -1,0 +1,60 @@
+I'll orient with the code graph and file sizes first, then build the dossier.
+runtimes.py is 3,811 lines — I'll map its structure via grep and graphify rather than reading it whole.
+I have the full function inventory. Now I'll pull docstrings for the one-line map entries, and run the mechanical scan patterns in parallel.
+Now the second half of docstrings plus the remaining scan patterns.
+Scan patterns mapped. Now the Python-generic mechanical patterns and the test inventories.
+Fixing two scan patterns that used wrong escaping, and pulling the rest of the test names.
+Now I'll read the lifecycle core ranges to ground the map and hotspots.
+
+
+Now osaurus_settings.py and the env/resolver helpers.
+
+Contracts next: AGENTS.md hazards with line numbers, interface docs, and runtime hazard docs.
+Now the "already known" sources — threat-model sections, STATE, phase summaries, prior review findings.
+
+Now prior review findings and phase-summary deviations relevant to this scope.
+Let me pin down fix commits and the summaries' Deviations/Carried-forward items.
+
+
+A few grounding reads left: env/resolver, evidence helpers, and the threat-model 7.4 rows naming this code.
+Let me compute exact function ranges mechanically and grab the two evidence-helper docstrings.
+
+Two quick verifications — the plist claim in osaurus.md and the fix-commit identities.
+
+Final grounding: complete untruncated scan hits, constant lines, and MlxLm's start command.
+
+All grounding is done. Writing the dossier in stages — stage 1: header and the map.
+Stage 2: contracts and the already-known ledger.
+Stage 3: hotspots and the mechanical scan.
+Stage 4: test inventory and open questions, plus a correction to one scan line.
+
+Final accuracy pass — verifying the few claims I haven't pinned exactly.
+Three small corrections for accuracy.
+
+
+
+Done. Wrote `.paul/review/fable-5.2/dossier-S5.md` — 75,493 characters (~18–20K tokens), all seven parts in order. Only that file was created; no other file touched, no server/engine/app started, no test suite run (per the order — the coordinator runs it).
+
+Verified: every map range computed mechanically from def boundaries then confirmed with `sed -n`/`grep -n`; fix shas confirmed via `git log -S` (e.g. `_resident_osaurus_pids` + cleanup chaining + handoff refusal all in `ef01396`; ledger in `9bc9388`; `_entry_stop_command` in `93d374c`); scan patterns run exhaustively over the three scope files (`pkill`/`pgrep`/`plist`/`shell=True`/`eval`/`exec`/bare-except all zero hits). Findings listed, not fixed — including the three mandated open questions (name-vs-identity signalling, cross-port double residency, restore skipped when a runner exits outside the trap), plus the invisible `com.dinoki.osaurus.plist` `disableThinking` surface the drift gate can't see and the dropped-orphan-entry asymmetry.
+
+Three map lines I'm least sure of:
+1. `ohyesmlx/runtimes.py:213-302` — the MTP-depth rationale comment block: anchors verified (:211 end of KV block, :268-269 values), internal grouping approximate.
+2. `ohyesmlx/runtimes.py:1-93` — head block; imports confirmed through :90, so the 91-93 boundary is inferred.
+3. `ohyesmlx/osaurus_settings.py:31-92` — constants block; :42/:46/:64 verified, the end at :92 (MISSING/UNREADABLE) is from the windowed read, not a grep.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     35    4198359    4058112    64511   96.7%   0.131741
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log

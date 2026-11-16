@@ -1,0 +1,57 @@
+I'll start by reading the cited code and the dossier entry for S1-F2.
+Now let me read the dossier entry and the existing test from S1-F1 for the harness conventions.
+The dossier grep came back empty. Let me check the dossier files directly.
+
+
+
+
+
+
+
+Now let me check the baseline suite and probe the actual syscall behaviour for a root-owned pid.
+
+
+
+
+
+Let me check the startup recovery path to see whether anything else clears these files.
+
+
+Now let me read the identity and orphan-stop functions so the ledger test's fabricated entry is shaped correctly.
+Let me check whether anything else would catch a leftover engine (the "two models resident" consequence), to judge severity.
+Now I'll write the verification test file.
+Now I'll run only the new tests to see the reported symptom.
+
+Both fail as reported. Now I'll confirm the failures come from the pid-alone probes by patching only those probes in a throwaway process (no repo edits).
+Let me check where the orphan sweep is actually invoked, and confirm the lock path is persistent.
+Now the full suite, to report the count against the baseline.
+
+The full-suite count moved by one beyond my two new failures, so let me separate the project's own tests from the parallel verifiers' untracked reproductions.
+The mechanism is confirmed. Now I'll write the verification report.
+
+
+Confirmed S1-F2, no code changed.
+
+- `tests/test_fable_s1_f2.py` — two red tests: a `download.lock` naming pid 1 is never reclaimed (`_acquire_lock` → `False`), and `running-engines/1.json` is skipped at every sweep (file survives, `_shutdown` never called).
+- `.paul/review/fable-5.2/verify/S1-F2.md` — report with the code path (`fetch.py:354-390`, `:706-708`, `:1216-1220`; `runtimes.py:612-631`, `:1890-1891`), the measured `PermissionError` probe (`_pid_alive(1)`/`_process_alive(1)` both True at uid 501), and a green-direction check that patched only the probes: lock reclaimed, ledger swept.
+
+Suite: project's own tests `1368 passed, 2 skipped, 0 failed`; full tree `12 failed, 1374 passed, 2 skipped` (start: `11 failed, 1373 passed`), the two new failures being this finding's reproductions. Not verified: real pid reuse across a crash/reboot, and the "two models resident" end state (reasoned from `Runtime.start`'s per-port guard only).
+
+`VERDICT: CONFIRMED`; `SEVERITY-CHECK: agree` on Low, with the finding's "no wrong number" parenthetical corrected in the report.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     33    1966478    1834624    28857   93.3%   0.042596
+
+WARNING: definitions present before this run are missing or fewer after it.
+Review before accepting — a green test suite does not cover this.
+   1 def test_the_higher_visits_peak_drops_the_other_visits_error
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py

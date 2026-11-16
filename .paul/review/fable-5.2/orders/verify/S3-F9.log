@@ -1,0 +1,107 @@
+I'll start by reading the cited code ranges and the dossier entry for S3-F9.
+Let me pull the dossier entry for F9 and the cited code ranges in parallel.
+The dossier grep found nothing for F9. Let me check both the dossier and findings files.
+
+Now let me read the model types at the cited lines.
+The stub fixture does carry `label: "this Mac was busy"`. Let me check whether any view renders `.load`, `.tie`, or that label, and read the backend's `tie`/`_best` logic.
+Confirmed the grep: only `Models.swift` (init) and no view. Now let me read the backend's winner/tie/best logic.
+Both greps are decisive for the code claim. Now let me check the pinned interfaces, the comps copy, and the existing app test patterns.
+Let me check the dossier's "already known" section, the test inventory, and how the existing app tests are structured.
+The dossier has no prior record of this finding. Let me check whether the app target is testable at all, and what the pinned app interface requires of the results screen.
+Now let me check the design doc and prior review waves to see whether this was already reported or pinned as intended behaviour.
+
+Let me see how AppModel handles the summary and whether log events surface, plus check a prior verify report's format.
+The view lives in the executable target — let me confirm whether it's testable and check the remaining evidence: `BUSY` constant, log handling, and the fixture.
+Let me verify how the `.log` line surfaces in the UI, and confirm the stub's tie value.
+Let me confirm the remaining mitigations and constants before writing the test.
+I have the code picture. Let me pin the exact line numbers and confirm no view renders backend log events.
+Let me confirm the benchmark screen never renders the job's message (the other possible route for the busy line) and that no screen reads `summary`.
+Evidence is complete on the code side. Let me check how prior verifiers handled the "test must fail" instruction and what the app test baseline is.
+Let me check the one partial-surfacing path — `job.message` on EnginesView — and confirm the test venv.
+Let me verify the exact substrings I'd assert on, and check who consumes `resultsCells`.
+The view target isn't a test dependency, so let me confirm what a full `swift test` would do before running it.
+Let me confirm the stage_b load recording and whether `_best` consults the tie at all.
+Now I have the full picture. Let me check the decode pattern and SwiftPM's skip support before writing the test.
+I have everything needed. Writing the test file now — it must live in the Kit test bundle, and the view target isn't linked by that bundle, so I'll pair behavioural assertions on the decoded summary with a mechanical scan of the view sources.
+Now let me run just the new test.
+The tie test fails as reported, but my contention scan passed for the wrong reason — let me see which unrelated `load` matched.
+The contention scan passed because "load" matched "download"/"reload" — a vacuous pass. Let me tighten the predicate and verify it against the real sources.
+The word-boundary predicate gives zero hits for all three. Let me fix the test to use it.
+
+Both claim assertions fail as reported. Now let me confirm the scanner is actually capable of detecting a reader (a positive control that touches nothing in the repo), and start the suite runs.
+The scanner detects planted readers. Now let me establish the suite baseline: full app suite with my file, and the same without it.
+Let me get the exact executed/failed counts and the baseline without my file.
+
+99 tests, 26 failures. Let me confirm the baseline without my file, per the red-check requirement.
+The count line didn't match. Let me rerun the baseline properly.
+The grep matched nothing — let me capture the output to see what happened.
+Baseline established: 95 tests / 24 failures without my file; 99 / 26 with it. Let me add a coverage assertion so the scan can't pass or fail vacuously on a wrong root.
+Now the red-check proper: temporarily plant a reader in `ResultsView.swift`, watch the two scan assertions flip to pass, then revert.
+The grep found nothing — likely a build failure. Let me look at the output.
+My plant was in the wrong scope. Let me restore and plant inside a valid scope instead.
+Red-check passes both ways: 2 failures on real code, 0 with the reader planted. Restoring the file.
+Sources are byte-clean. Let me confirm the test still fails on the restored code, then check the "no test possible / no view test" question — the results-screen findings.
+Red state confirmed on restored code. Let me check one false-negative path in my scan — a view reading the load via a differently named accessor — and tighten the contention assertion.
+Let me widen the contention predicate so a differently-named accessor still registers, then finalize the test.
+
+
+Now the last evidence check — whether the run-time log line also carries the busy label (a partial mitigation that would lower severity), and whether it reaches any screen.
+`job.events` is consulted at AppModel:352 — let me confirm that's not a UI surface.
+Let me confirm the exact final suite counts and the `status.message` line, then write the report.
+Baseline 95/24, with mine 99/26 — the 4 new tests add exactly 2 failures. Let me check the Python suite too (I added no Python file, but the order says run the project's test command).
+Let me verify the exact cited line numbers before writing the report.
+All cited lines check out exactly. Now writing the report.
+Let me verify the negative-control claim I made in the report is accurate, and confirm the final repo state.
+Two statements in my report need correcting — let me verify the file count and the control-scan figures.
+Three inaccuracies to correct in my report: the file count (13, not 11), the negative-control figures, and the "rest of app/Sources" claim.
+Now let me correct the negative-control passage — I need to state what I actually measured.
+Let me fix the remaining awkward sentence about the failures and confirm the report's claims hold.
+
+Verified: 26 errors, all in `FableS3F1..F9`, every product suite green. Let me do a final read of the report and confirm the test file is complete.
+The verdict line still says "11 files" — let me correct it.
+Final confirmation run of the target test and the repo state.
+S3-F9 is **CONFIRMED** at Medium.
+
+**What the code does:** `quickbench.py:631-644` labels a contended stage `this Mac was busy`; `:831-832` records a tie list of ≥2 engines inside the 5% noise floor. The client decodes both (`Models.swift:630`, `:656-660`, `:719`) and renders neither — a whole-word scan of all 13 files in `app/Sources/OhYesMLX` finds **0 hits** for `load`/`tie`/`busy`. The best card (`ResultsView.swift:89-99`) says "Best on your Mac" with no qualifier, and `:143` badges by `cell.engine == winner` alone, so a tie still produces one "fastest in stage". The other route for the label is closed too: `record_load`'s log event dies at `AppModel.swift:707-708` (`case .log: break`), and the one view rendering `job.message` is gated to installs.
+
+`_best` (`:398-428`) never consults `tie`, so a tie still yields a single `best` — that's why the card needs a qualifier rather than withholding.
+
+**Files written:** `.paul/review/fable-5.2/verify/S3-F9.md` and `app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift`. No production code touched (`git diff --stat` empty).
+
+**Verification:** 4 new cases — 2 assert the summary arrives intact (decoder + shipped fixture), 2 assert the view target has a reader; the latter fail: `Executed 4 tests, with 2 failures`. Suite baseline **95/24** without my file, **99/26** with it (same 24 plus exactly these 2); all product suites green, all 26 failures are the `FableS3F1..F9` verification files. Red-check done both ways: planted `summary.load`/`summary.a.tie` reads → 4 passed, reverted → 2 failed as before.
+
+Two caveats worth flagging: I could not instantiate the view (the executable target isn't linked by the test bundle), so the scan proves *no reader exists*, not what a fixed screen looks like; and I found and fixed a vacuous pass mid-way — a bare `contains("load")` matched "Download" in `ModelsView.swift` and made the contention case pass on unfixed code.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     63    4342759    4240128    78747   97.6%   0.075363
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

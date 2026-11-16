@@ -1,0 +1,44 @@
+I'll read the cited code and dossier entry first.
+The dossier grep missed; let me locate the file and read the earlier part of the stream parser.
+Now let me find the F5 dossier entry under a different heading form.
+The dossier is a context map, not per-finding. Let me read `resolve_token_accounting` and the existing transport tests to model my test on the established fake-SSE harness.
+Let me see how `test_transport.py` fakes an SSE stream and how it exercises usage reasoning tokens.
+
+
+I have the full branch. Let me check `_TOKEN_SOURCES`, and whether any existing test pins the current usage-split behavior with non-empty reasoning text.
+Let me look at an existing fable verifier test to follow its structure.
+The claim is clear and the code path matches it: lines 445-466 take the usage split whenever `usage_reasoning_tokens is not None`, subtracting a reported zero from the total, while `reasoning_text` (line 387) is never consulted on that branch, and the timing window is the content-only one (line 421-426). I'll write the reproduction test now.
+
+Both tests fail with exactly the claimed symptom. Now let me get the suite baseline and current count.
+
+
+Full evidence in hand: `report.py:5` computes `decode_tps = completion_tokens / (last_content_s − ttft_s)`, and `_token_source` only labels the row. Let me check an existing verifier report's shape before writing mine.
+One severity input is worth checking: do the captured runtime docs show any usage block with non-zero reasoning text and `reasoning_tokens: 0`?
+
+OptiQ is the only runtime that emits the field, and it derives it from its own reasoning classification — no captured block shows the contradictory shape. Let me tighten one test name to match exactly what it shows.
+
+Now I'll write the verification report.
+
+**S2-F5: CONFIRMED.**
+
+Reproduced with `tests/test_fable_s2_f5.py` (real stdlib SSE server; two reasoning + three content deltas; `usage: {completion_tokens: 500, completion_tokens_details: {reasoning_tokens: 0}}`). The observation comes back `completion_tokens=500, reasoning_tokens=0, token_source='usage'` with `reasoning_text='think think'`, `text='one two three'` — the usage branch at `transport.py:445-466` makes `visible_exact = 500 − 0` while the timing window is the content channel's (`:415-426`), and `reasoning_text` (`:387`) is never read on that branch. A second test shows a counter whose 400+100 reconciles with the runtime's total is still never consulted, because `resolve_token_accounting` is on the else branch only.
+
+Downstream, `report.py:5` turns that count into `decode_tps` over the content window, and `_token_source` only labels the row.
+
+- Report: `.paul/review/fable-5.2/verify/S2-F5.md`
+- Baseline: 7 failed / 1372 passed / 2 skipped (other verifiers' findings); with mine: 9 failed / 1372 passed / 2 skipped. No tracked file changed.
+- Severity: agree with Medium — no runtime in `docs/runtimes/` is observed emitting the contradictory block (OptiQ, the only emitter of `reasoning_tokens`, derives it from its own classification), so it is latent, not retroactively wrong.
+
+Not verified: no real server observed emitting this shape; the 5× inflation is arithmetic from the reproduced counts, not a rendered report.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     22    1089392    1038592    13367   95.3%   0.018756
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py

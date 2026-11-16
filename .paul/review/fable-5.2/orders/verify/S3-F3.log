@@ -1,0 +1,80 @@
+I'll start by reading the cited code ranges and the dossier entry for S3.
+The dossier grep found nothing — let me locate the right dossier file.
+
+
+Now I need the typed models, the Results screen's state handling, where `job.message` renders, and the restore path on the Python side.
+
+
+Now the startup recovery path, and how the app tests drive the model, so I can write a reproduction test.
+
+
+
+
+The model-level reproduction is clear. Let me check the fixture helpers and the stub's event queue.
+
+
+
+
+I have enough to write the reproduction. Let me check the existing verify reports' format and one thing in the S3 dossier about F3's related-question context.
+
+I have the full picture. Writing the reproduction test now.
+
+Reproduced the state loss. But `quickbench.py:733-740` also emits an `error` event before `done` — I need to check how the app routes that, because it may already set `.failed` and render a message.
+Important: `benchmarkRefusal` IS rendered (`BenchmarkView.swift:39-40, 115-128`). That changes the finding. Let me confirm the real event order and whether the app surfaces the startup recovery.
+Let me confirm the recovery path uses the same backup directory and check the exact pin/restore entry points.
+The Python docstring itself (lines 532-535) pins the `error` event as part of the contract. Rewriting the test to model the real stream.
+
+The real-stream test needs the cell's progress event, which the backend emits right after the restore error. Fixing the event order.
+
+All three pass. Now the full app suite for the baseline count.
+
+All failures are the other verifiers' (S3-F1, S3-F2); mine pass. Let me pin the app-path default for the backup directory and the stderr surfacing, then write the report.
+
+
+Now the report.
+
+
+
+S3-F3 is **refuted**. The finding omitted the event the backend documents itself as sending.
+
+What I found:
+
+- `quickbench.py:707-740` sends an `error` event with `code: "restore_failed"` (and the backup path) **before** the `result` and `done` — the module's own docstring (`:532-535`) states this as the contract. `AppModel.apply`'s `.error` branch (`:689-699`) sets `.failed` and routes the message into `benchmarkRefusal`, which `BenchmarkView.swift:39-40, 115-128` renders as a warning banner. So the job is not `.finished` and the restore is not "never stated".
+- "One added field makes `try?` return nil" is false: `JSONDecoder` ignores unknown keys (the repo's own `testACancelledSummaryTypesAndKeepsItsRawBytes` pins that). A **rename** does break the all-or-nothing decode, but that only matters to Results' presentation, not the job state.
+- What remains true: Results (the screen the user lands on) never mentions the restore and shows a misleading line — "ended without a result" when the summary decodes, "has not finished yet" when it does not; the two Benchmark promises ("settings are restored") are unconditional; a stage-B failure leaves no line in the summary record; `summary.osaurus` is read by no view. `_recover_startup` may silently repair the pin on the next launch, with its outcome only in stderr.
+
+Files written (no production change):
+- `.paul/review/fable-5.2/verify/S3-F3.md`
+- `app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift` — 3 tests, all pass
+
+Verification: focused run `swift test --filter FableS3F3Tests` → 3/0. Full suite: 89 tests, the same 8 failures as baseline (86 tests) — all in the other verifiers' S3-F1/S3-F2 files; no pre-existing test regressed. I did not run the app or any Python backend, so the view and event-order claims are code-path evidence, stated as such in the report.
+
+VERDICT: REFUTED. SEVERITY-CHECK: lower to Low — the headlined harm does not exist; the residue is misleading Results copy and unconditional "restored" promises while the backend's exact message sits one screen away on Benchmark.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     38    3440307    3319424    45505   96.5%   0.055394
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

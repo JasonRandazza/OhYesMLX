@@ -1,0 +1,79 @@
+I'll start by reading the cited code and the dossier entry for S4.
+Confirmed the cited lines. Now let me look at `run`'s signature, the `cancel`/`abort` wiring, and `fetch.download`'s signature.
+Now let me read `run`'s signature/docstring and how the server maps Stop/Stop-now onto `cancel`/`abort`.
+Let me look at the `_discard`/`_emitter` helpers, `download`'s cancel handling, and the existing quickbench test harness so I can write the smallest reproduction.
+Let me examine the quickbench test harness to build a minimal stage-B reproduction.
+I'll read the test scaffolding so my new test matches the house style.
+I'll read `a_run` to reuse the harness, plus the server's cancel/shutdown wait bound.
+I have the failure path confirmed by reading. Let me check an existing verifier test for house conventions, then run the baseline.
+Baseline recorded: 30 failed / 1379 passed / 2 skipped (the 30 are other verifiers' red repro tests). Let me confirm how `cancel`/`abort` reach `run_cells` so I describe the gap precisely.
+Confirmed: `cancel()` is probed only at 772, 845, 891; `abort()` only inside `measured`. Let me capture the shutdown timeout constants for the report.
+
+
+
+Let me verify the lock span and the `cancel` default in `download` so the report's claims are exact.
+I have what I need. Writing the reproduction test now.
+Now I'll run just this test file, expecting all three to fail with the reported symptom.
+All three fail. Let me confirm the first two fail on the intended assertion, not something incidental.
+The tests are red for exactly the reported reason. Now I'll confirm they can go green under the finding's fix direction, using a throwaway copy — the repo code stays untouched.
+
+
+The tests pass against the fix direction. Now the full suite count for the report.
+
+All failures are verifier repro files; none is a shipped-code test. Writing the report.
+
+S4-F4 is **CONFIRMED**. Two new files, no shipped code touched:
+
+- `tests/test_fable_s4_f4.py` — three tests: Stop heard during a stage-B sibling download, Stop now heard, and the download's progress reaching the caller.
+- `.paul/review/fable-5.2/verify/S4-F4.md` — the report, ending with the verdict and severity lines.
+
+What the code shows: `quickbench.py:864-866` calls `download(sibling.repo, True, cache_dir=..., emit=_discard)` with no `cancel=`, while `run` holds both probes (`:510-511`). `fetch.download`'s default `cancel` is `_never_cancelled`, and its lock spans the whole transfer (`fetch.py:707`, `:718`); `cancel()` is next read at `:891`, and skipped entirely if the download fails (`:889`). Progress is discarded by the empty `_discard` (`:146-152`), leaving only the single "downloading" event.
+
+Red-check: all three fail on unmodified code — recorded kwargs are `['cache_dir', 'confirmed', 'emit', 'repo']` with `emit=<function _discard>`, and the stage-B event list is just the two "downloading" lines. I then applied the finding's fix direction to a throwaway copy in the scratchpad only, where the same three tests report `3 passed`, so they are not vacuous.
+
+Not verified: that a wired cancel returns within one chunk read in a real transfer, and that the app renders forwarded progress. Suite: 30 failed / 1379 passed / 2 skipped at start; 36 failed after my file, because parallel verifiers keep adding red repro files — every failure is a `tests/test_fable_*` verifier test, none shipped-code.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     25    1783952    1704576    24339   95.6%   0.031624
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py

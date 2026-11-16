@@ -1,0 +1,145 @@
+NOTE: Mon 02:55 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll start by reading the cited code and the dossier entry.
+The dossier grep found a different F2. Let me locate the right dossier entry.
+
+Now let me read build_app.sh and make_sbom.py at the cited ranges, and check the cache state on this machine.
+The cache exists, so I can check the divergence claim empirically. Let me extract the real tarball to the scratchpad and diff it against the cached tree.
+Tarball sha matches the pin. Now I'll diff the cached unpacked tree against a fresh extraction of that exact tarball.
+Divergence is real: 13 differences, all `__pycache__` entries. Now let me confirm exact line numbers and look for existing tests of these scripts.
+Now let me check the existing F1 test for style, the SBOM fields, and whether a dist bundle exists.
+Let me look at how the existing F1 test handles the missing-artifact case, so my test matches its conventions.
+Divergence confirmed empirically (13 differences, all pyc additions/rewrites). Now I'll write the test: it plants a marker in a fake cache tree and asserts the script does not hand that tree back to the build.
+
+Two of my auxiliary assertions have wrong literals. Let me see the first test's actual failure first.
+The primary test fails with exactly the reported symptom. Now let me fix my two auxiliary assertions' literals.
+Two auxiliary assertions had wrong literals, and my `root == unpacked/"python"` equality would wrongly fail the very fix the finding proposes. Let me rewrite the file properly.
+
+Both passed — that's my relative-path bug, not a refutation. `parents[4]` points at the unpacked dir, not the python root.
+
+
+Fails with the exact reported symptom. Now the red-check the reverse way: confirm the test discriminates, by running the same scenario against a scratchpad copy of the script with the proposed fix applied (repo untouched).
+
+The test discriminates correctly. Now let me capture the divergence evidence precisely for the report.
+
+Tarball has 3 pycs; the cache tree has 51. Let me enumerate what use added.
+Let me confirm nothing worse than bytecode is in the cached tree today, then run the full suite.
+No `.pth`, no `.py` changes — divergence today is bytecode-only, matching the finding's stated confidence. Now the full suite.
+89 failures are other verifiers' intentional red tests. Let me establish the real baseline by excluding the review test files.
+Baseline established: 1368 passed, 2 skipped. Let me confirm the delta and check for an existing report format.
+Let me check a recent report's structure to match conventions.
+Now I'll write the report.
+Let me verify a couple of claims I made in the report, and clean up the scratch dir.
+
+That refines my causation claim — the version read accounts for far more than I wrote. Let me compute the exact residue.
+
+This sharpens the causation materially — 42 of 48 pycs are the version read's own, and the residue is exactly 9. Let me identify what that residue implies.
+That materially changes my causation paragraph — I must correct it. Let me test whether a venv creation explains the 9-path residue.
+
+A venv created from the cache tree explains all 48 pycs exactly. Let me determine the sequence, since the cache tree lacks the 3 pycs the tarball already ships.
+
+
+
+The venv hypothesis reproduces the cache exactly. Let me confirm the rewritten encodings pycs too, then correct the report.
+That's a significant refinement. Let me test whether the tarball's own pycs are stale against its own sources.
+The tarball's own 3 pycs are stale, and the first plain run rewrites them. This is a real refinement of the finding's account. Let me correct the report's causation section.
+
+Let me fix the stale preceding sentence and verify the "guaranteed to differ" claim about engine installs.
+
+Confirmed `{python} -I -m venv` with no `-B`. Let me verify the vendored environment claim, then check the whole report reads correctly.
+Let me correct one over-claim in the closing paragraph — the app writes into the bundle's tree, not the cache, unless someone points it at the cache.
+
+Everything is in place. Only the two intended files are new; no existing code was touched.
+
+## What I changed
+
+- `tests/test_fable_s6_f2.py` (new, 2 tests) — the finding's own test idea made runnable without a build.
+- `.paul/review/fable-5.2/verify/S6-F2.md` (new) — the report, ending in the verdict lines.
+
+## Verified
+
+**Mechanism.** `fetch_python_standalone.sh:70` admits the cached tree on `-x "${UNPACKED}/python/bin/python3"` alone; the sha256 gate (`:48-68`) ends one line earlier. `build_app.sh:55` dittos that root into the bundle; `:116` passes the *tarball's* pin to `make_sbom.py:137-144`. No digest of the copied tree exists in either script.
+
+**Divergence, measured.** The cached tarball is byte-identical to the pin. Extracting it fresh and diffing against the cached tree: 13 paths, all `__pycache__` — 3 pycs of 1692 files in the tarball, 51 of 1740 in the cache. Nothing worse today: no `.pth`, 1061 `.py` on both sides, `site-packages` identical.
+
+**One correction to the finding's account.** I traced the 48 additions rather than accepting "some run no build step performs": `build_app.sh:33-34`'s version read writes 42 of them, and one `-I -m venv` from the same tree writes a superset of all 51. So the build itself is the mutator, which makes the finding stronger, not weaker. Separately, the tarball's own 3 `encodings` pycs are already stale against their own sources (header mtime 1793023270 vs source 1704067200) and any non-`-B` run rewrites them.
+
+**Red check, both directions.** Current code: the planted `.pth` reaches the root the build copies — fails with that message. Scratchpad copy with `:70` patched to unpack fresh: marker gone, passes. I also caught my own false green — a bad `parents[4]` made the first version pass; the reported run is from the corrected one.
+
+**Suite.** Baseline `--ignore-glob='tests/test_fable_*.py'`: 1368 passed, 2 skipped. Whole tree: 89 failed / 1399 passed / 3 skipped, all 89 belonging to other findings' deliberate red tests.
+
+Not verified: I did not run `build_app.sh`, so I did not observe a bundle carrying a planted file — the link is one `ditto` over a printed variable. No `dist/` exists here, so nothing about the shipped 0.3.0 artifact.
+
+VERDICT: CONFIRMED (test: tests/test_fable_s6_f2.py::test_the_tree_the_build_copies_is_the_tarball_and_nothing_else)
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     50    3131132    3057920    36856   97.7%   0.084538
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py

@@ -59,3 +59,5 @@ used for durations (vs monotonic), `except` around a number computation.
 Extra open questions: can a FAIL/ABORTED/SKIPPED cell contribute a number anywhere; can a number be attributed to a
 different artifact, runtime version or workload than produced it; is TTFT ever measured on the wrong channel; can
 two runs with different pins be joined.
+
+COST RULE for this run: do NOT spawn subagents, explore agents, or parallel helpers; do all reads yourself, sequentially. Write the dossier in stages so a partial file exists early.

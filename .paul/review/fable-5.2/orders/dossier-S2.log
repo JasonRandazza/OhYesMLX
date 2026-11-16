@@ -1,0 +1,81 @@
+I'll build the S2 measurement-integrity dossier. Starting with orientation: the review directory state and the code graph.
+The graph confirms the main symbols. Now I'll get precise function maps and file sizes for the in-scope files.
+Now the report.py function map, then I'll start reading the core measurement files.
+Function maps are in hand. Now I'll read the core files, starting with transport.py (in chunks) plus the two small modules.
+Continuing transport.py and reading token_counter.py.
+Now measure.py in chunks — the core of this section.
+
+
+
+measure.py is mapped. Now sample.py and canary.py.
+Now the report.py summary/grid/join paths — starting with the header and summarize/render_grid.
+
+
+
+
+
+
+Now the sweep join path and its guard.
+Now quickbench.py — the record/winner/best paths first.
+
+
+I have the core code. Let me read quickbench.py's head (constants and helpers) before writing the dossier skeleton.
+Before writing the skeleton, I need to fill one gap — report.py lines 2111-2244 (end of `_recommendation`, sweep constants).
+The map is complete. Now I'll write the dossier skeleton with Section 1 (Map) filled in, then append the remaining sections in stages.
+Skeleton is in place. Now gathering Section 2 material — the contract docs.
+
+
+
+Now the AGENTS.md quotes and the threat-model §9/§10 sections for "Already known".
+
+Now the "Already known" sources — STATE.md and the phase summaries.
+
+Extracting the Deviations sections from the phase summaries to mine "Already known" items.
+
+
+
+Now the w2 review logs and the git history for fixing commits.
+
+
+Now the mechanical scan (Section 5) — running the pattern greps over the S2 files.
+
+
+Now the test inventory — finding guarding tests by hotspot theme.
+
+
+
+A few final verifications before writing the remaining sections.
+
+
+All material gathered. Writing Sections 2 (Contracts) and 3 (Already known) into the dossier.
+The request was rejected because it was considered high risk
+Error: the model declined this request (not retried automatically); rephrase it to continue.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     51    7000811    6795776    40933   97.1%   0.149267
+
+== cc-agent: git status ==
+ M .paul/review/fable-5.2/PLAN.md
+ M .paul/review/fable-5.2/orders/dossier-S2.md
+?? .paul/review/fable-5.2/S1-findings.md
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S2.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S4.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/_fable-brief.txt
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.killed-stall.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log
+?? .paul/review/fable-5.2/orders/fable-S1.err
+?? .paul/review/fable-5.2/orders/fable-S1.json
+ .paul/review/fable-5.2/PLAN.md              | 9 +++++++++
+ .paul/review/fable-5.2/orders/dossier-S2.md | 2 ++
+ 2 files changed, 11 insertions(+)

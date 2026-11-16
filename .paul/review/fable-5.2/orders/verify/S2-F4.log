@@ -1,0 +1,87 @@
+I'll start by reading the cited code and the dossier entry for S2-F4.
+
+
+
+
+
+
+
+
+
+
+
+I have the mechanism. Let me check the remaining consumers of the memory dict and the test helpers I can reuse.
+Now let me check the contract's documented memory shape and how a `None` peak is rendered.
+
+Let me check all the places `peak_mb` surfaces, plus the quickbench path.
+
+Let me verify no code anywhere reads the memory dict's `error`, and check the baseline test count.
+Baseline recorded: `9 failed, 1372 passed, 2 skipped` — the 9 failures are other verifiers' new tests. Let me check how sibling tests import helpers.
+Baseline recorded. Now I'll write the reproduction test.
+
+Two of three reproduced. The third assertion was inverted, and the first has a start/stop race. Let me fix both.
+
+
+Two of three links fail on current code. Let me verify the accepted-case distinction and check nothing downstream reads `error`.
+Two of three links reproduce. Let me confirm nothing else surfaces the sampler's health, and check what the raw record keeps.
+Let me confirm the format-axis ordering really reads `peak_mb`, which is what makes a low peak consequential.
+Let me pin the exact line numbers and check whether the still-alive case is documented as accepted.
+Let me confirm the miss path is reachable — how `footprint` can return nothing under load.
+Both defect links reproduce. But test 3 over-constrains the fix — let me check whether dropping the losing visit's error is actually consequential.
+`_highest_peak` keeps the disowned visit's error when it wins; it only drops it when the clean visit wins — which is harmless. So the finding's sub-claim is half-wrong. Let me rewrite test 3 to prove reachability instead.
+
+One genuine failure remains — the defect link. Let me confirm the test is satisfiable under the proposed fix, then check whether the current behaviour is deliberate.
+Let me fix the probe's import path.
+The probe wrapper needs to take a single result, not a list.
+
+The fix is satisfiable and clean cases hold. Now the red-check: confirm the failing test's symptom is the reported one, and that it isn't masking an unrelated break.
+Let me verify the report directory and check how a `None` peak would render, since the fix direction depends on it.
+Let me check the sibling verification reports for format, and run the scans one more way to be thorough.
+Let me read the peak caveat text and check no existing test pins the current behaviour.
+Let me check that one pin and confirm nothing depends on the current behaviour.
+Let me check whether the miss path is documented as observed, and whether any guard compares the sampler's window against the measured one.
+Let me substantiate the severity by checking whether a low peak actually wins a format-axis ordering.
+
+Let me capture a clean baseline excluding my file and confirm no other test changed state.
+Let me confirm the blast radius — whether this peak reaches the app or only the CLI report.
+Let me confirm one nuance: whether the raw record keeps the error even though the published row drops it.
+
+Let me confirm the defect is broader than stated (the still-alive case publishes a peak too), which strengthens rather than refutes.
+Both error kinds publish a bare peak. I have everything I need. Let me write the report.
+Let me verify the report's claims about failure counts, since I wrote a specific attribution.
+The baseline is moving — parallel verifiers are adding files. Let me re-measure.
+Baseline moved from 9 to 11 as new verifier files landed. Let me correct the report to be accurate and robust.
+Let me also correct the test-file counts claimed in the report body.
+Final verification of both deliverables.
+S2-F4 is confirmed. Only two files written: `tests/test_fable_s2_f4.py` and `.paul/review/fable-5.2/verify/S2-F4.md`. No package code touched.
+
+**The chain holds link for link, and breaks at `report.py:865`:**
+
+1. `sample.py:270-274` — three consecutive `None` reads set `error` and `return`, so the loop is gone for good.
+2. `sample.py:290-291` — `peak_mb = max(...)` over the samples taken *before* that.
+3. `report.py:865` — `(result.memory or {}).get("peak_mb")`, and nothing in the package ever reads `memory["error"]` (AST pass over all 18 modules found no read).
+
+**Reproduction:** two of three tests pass on current code (proving links 1 and 3), and the defect test fails exactly as reported — `peak_mb=4096.0` on a PASS row with no note. The fix direction is satisfiable and doesn't over-constrain: `_why_none` already words a missing peak and `_number` already renders `—`.
+
+**Two corrections to the finding's evidence:**
+- `_highest_peak` only drops the error in the *harmless* direction (clean visit wins). When the disowned visit wins, the error survives intact — it's the path that carries it to the row, not a second hole.
+- The still-alive error publishes a bare peak identically, so the finding's "distinct from the accepted case" framing is wrong on the publishing behaviour, though its fix covers both.
+
+**Severity: agree Medium.** The consequence is real — a format-axis ordering by `peak_mb` is permitted and I demonstrated the disowned row winning at 4096.0 against a clean 9150.0. But the trigger is unobserved in the corpus, it can only under-estimate, and `results.jsonl` keeps the error so the row stays recoverable.
+
+**Not verified:** I never ran `footprint` under a real decode, so I haven't seen the three-miss path fire in the wild; that needs a real run. The sampler behaviour is proven through its own monkeypatch seam.
+
+**Suite:** baseline excluding my file is 11 failed / 1372 passed / 2 skipped — all 11 are parallel verifiers' reproductions, none pre-existing. With my file: 12 / 1374 / 2. The passed count never moved. (`test_report.py` + `test_sample.py` alone: 249 passed.)
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     56    3590815    3452928    55586   96.2%   0.064393
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py

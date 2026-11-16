@@ -1,0 +1,36 @@
+I'll read the cited code and dossier first.
+Now let me read the dossier entry and the helper functions `_shutdown`/`_ledger_entries`.
+Let me read the shutdown and ledger helpers.
+Let me trace the call sites for `stop_orphaned_engines` and `stop_own_engines`.
+Let me check the existing `stop_own_engines` tests and the CLI/server wiring.
+
+Let me confirm there's no other cleanup of the own-pid ledger at startup, and get exact line numbers for the report.
+The claim's cited lines check out. Now I'll write the reproduction test file.
+
+Now I'll run only the new file to see the red state.
+The core test fails exactly as the finding predicts. Let me add one check of the asymmetry — the orphan path drops the same entry.
+
+
+The core failure is stable. Let me verify the remaining premises: the Osaurus stop command recorded in the ledger, and where `_recover_startup` runs.
+
+All premises check out. Now I'll run the full suite to establish the baseline and the count with the new file.
+
+A parallel verifier's `test_fable_s2_f1.py` also fails — that file isn't mine. Let me confirm my change set.
+Let me pin the exact remaining line numbers for the report.
+
+
+
+**S1-F1: CONFIRMED.** Changed nothing tracked; added `tests/test_fable_s1_f1.py` and `.paul/review/fable-5.2/verify/S1-F1.md`.
+
+- Red test: `test_stop_now_does_not_signal_a_stale_own_pid_ledger_entry` fails on unmodified `714e8f6` — `stop_own_engines` calls `_shutdown(39197, 59999, ('osaurus','stop'))` for a planted `<own pid>.json` with no `_recorded_identity` check, while `_stop_orphan` drops the same entry.
+- Supporting green checks pin the two other steps: `_record_running_engine` merges the stale entry forward (`runtimes.py:1770`), and the startup sweep skips a live owner, which is the backend itself (`:1890-1891`).
+- Suite: baseline `1368 passed, 2 skipped`; with my file `1371 passed, 2 skipped, 1 failed` (the reproduction). The full run also showed a parallel verifier's `test_fable_s2_f1.py` failures — not mine, untouched.
+- Not verified: pid reuse itself (the test plants the file; collision frequency unmeasured), and no real process was signalled. Severity check: agree with Medium.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     25    1463372    1406208    14092   96.1%   0.021248
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s2_f1.py

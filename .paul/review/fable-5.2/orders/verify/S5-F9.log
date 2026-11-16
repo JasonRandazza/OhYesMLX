@@ -1,0 +1,163 @@
+I'll start by reading the cited code, the dossier entry, and checking what already exists in the verify directory.
+Now let me read the dossier entry and the cited runtimes.py code.
+
+
+Now let me check the dossier's "already known" section and the Osaurus runtime doc for `disableThinking`.
+Now let me check whether anything in the code touches the plist or `smeltMode` in measure.py.
+
+
+Now let me examine the measure flow around the refusal to confirm that `None` bypasses the check entirely.
+I need to see the existing test conventions and the config-dir constant before writing my test.
+Now let me check whether grid scripts pin `stream_experts`, and whether any row records host settings.
+The claim has two halves. Let me check how prior verifiers in this worktree handled the red-test/suite tension, and confirm the row records no smelt mode.
+Two halves to prove. Let me check the row-level record and whether published Osaurus MoE rows exist without a pin.
+Let me read the drift gate, the existing S5-F8 test (adjacent, avoid duplicating), and the row fields.
+Now let me check the real host surfaces and the app source, since AGENTS.md says source is the authority.
+
+Both halves are live on this host. Let me look at how a row is built, to test the record half precisely.
+Let me check the row/header field list and probe the Osaurus bundle for `disableThinking`, since AGENTS.md says source is the authority.
+Both keys are real in the shipped binary. Let me check the base `stream_experts_missing` and whether the Swift app reads the plist.
+
+Let me check the row record and transport's timing channel, so the "nothing in the artifact names why" half is precise.
+The grids run an Osaurus column. Let me confirm their exact command has no `--stream-experts`.
+The MoE grid runs Osaurus cells with no `--stream-experts`, so the default path is the ordinary one. Let me check `CellResult`'s fields to prove the row can't carry the host state.
+Let me check the run header construction and the jsonl row fields.
+Let me read the JSONL row writer and probe the Osaurus bundle for whether `disableThinking` reaches the serving path.
+The record carries no host settings. Let me check the plist evidence class in the runtime doc and whether a baseline exists.
+Now let me confirm the exact imports in runtimes and the test venv baseline.
+
+Baseline: 70 failed, 1391 passed — other verifiers' red tests. Let me confirm none are pre-existing suite failures.
+One non-verifier failure — let me check if it's environmental.
+`test_server.py` passes in isolation — a cross-test artifact, not a pre-existing failure. Now I'll write the test for both halves of F9.
+I left some junk in that file (a dead `scripts` variable and a wrongly-written plistlib assertion). Let me clean those up before running.
+
+Now let me run just this test file.
+Seven pass; I need the real `Cell` shape.
+`Cell` takes `label`, not `model`. Let me fix and drop the unused stub class, since `run_cells` isn't needed for a row-shape check.
+
+All 8 pass, which by the order's own rule means the claim isn't reproduced by that file — I've written characterisation tests that pass *because* the defect exists. The finding names the right shape: a test that asserts the setting **is** attested, which fails today. Let me restructure so there are genuine red tests.
+
+Both RED tests fail exactly as claimed, and the 7 characterisations pass. Now the required red-check: show the mechanism is what's missing, not my test rig. Let me prove it by monkeypatching in a fix at runtime (not editing source).
+
+
+Red-check passes. Now let me confirm the live host facts for the report, and check the `measure.py` grep the finding cites.
+Let me check the published corpus in the main checkout, which bears on severity.
+303 published Osaurus rows exist. Let me check whether any measured a model whose `disableThinking` is on.
+
+
+Important nuance to check: does a row record `reasoning_text`, so a reader could at least see reasoning occurred?
+Let me verify exactly which `Osaurus` methods exist, and confirm the plist claim's evidence class in the doc.
+Let me check the Osaurus doc's own account of smeltMode, to test whether the hazard is real or theoretical.
+
+
+Let me check whether a row records the resolved Osaurus model id, which bears on whether the plist is even joinable to a row.
+
+One important check: the doc's own note on whether thinking switches actually bite. Let me read that context in full.
+This is a significant counter-fact for (a). Let me read the doc's §3.6 and the 0.25.18 note together to see if the report contradicts itself.
+Let me check the host's smeltMode history and whether any results dir snapshots host settings.
+Both halves confirmed. Let me run the full suite to state the delta against baseline.
+Failure count rose by 5, not 2. Let me diff the failure lists to find cross-test pollution from my file.
+My test file is polluting `test_runtimes.py` via a monkeypatched module attribute leak. Let me find the exact failures.
+Those two look unrelated. Let me verify whether my file causes them or they're ordering flakiness.
+Not my file — `test_runtimes.py` passes both alone and alongside mine. Let me confirm the earlier baseline also had them, and that they're order-dependent.
+The count drifts between runs (75, 76) with `test_runtimes.py` appearing only sometimes — pre-existing flakiness from other verifiers' concurrent files, not mine. Let me quantify precisely.
+The 2 `test_runtimes.py` failures are pre-existing order-dependent flakiness (they pass alone and alongside my file). Now let me do the red-check with an inline command instead of the extra script, since the order permits exactly one report file.
+Red-check confirms the cause. Let me clean up a temp file I created outside the workspace and verify my footprint.
+
+Let me check the dossier for prior coverage of this gap, so I don't claim novelty wrongly.
+Let me read the dossier's §7 Q4 in full — it bears on whether (a) is a new finding or a restatement.
+A key nuance to pin down: the same runtime doc says request-side thinking switches were found *inert*, while §3.6 says the plist switch decides reasoning. Let me check that, and whether rows carry `reasoning_text`.
+Let me check whether any readable resource in the Osaurus bundle names these keys, and whether the committed baseline currently matches this host.
+Let me verify what the runtime doc claims about `smeltMode`'s effect, and check the citation at `:298` that runtimes.py points to.
+The `:298` citation in `runtimes.py:2648` is stale (the enum is at doc:375). Let me check what evidence supports smeltMode's effect.
+Let me verify the enum values exist in the shipped binary, since the doc citation at `:298` is stale.
+All four enum literals and both keys exist in the shipped binary. Now let me write the report.
+Let me verify the last claims in the report before finalising — the flakiness count and the reasoning-text mitigation figure.
+
+My corpus figures were from a truncated sample. Let me correct the report with the full numbers.
+Let me verify the "No Python source ships in this bundle" claim, which I asserted loosely.
+That one `.py` is a font-generation script in a third-party bundle, unrelated to serving. Let me tighten that sentence.
+Now let me run the final full suite and confirm my footprint is exactly two files.
+A tracked file shows as modified — I must check what changed and revert it if it's not mine.
+This isn't mine — I never touched `runtimes.py`. Let me check when it changed and whether a parallel verifier is mid red-check.
+Another verifier is temporarily editing `runtimes.py` for their own red-check (`_engine_env` — S5-F1's subject). It's reverted now. Let me confirm and correct my report's explanation of the flaky counts.
+`runtimes.py` is clean again — a parallel verifier's temporary red-check edit, now reverted. Let me make my report's flakiness note accurate about that cause.
+Let me do a final verification pass on the report's factual claims and confirm the verdict lines are exactly as specified.
+
+
+Both deliverables are in place and nothing else is touched.
+
+**CONFIRMED.** Two halves, both reproduced:
+
+**(b) `smeltMode`** — the sharper one, and a genuine defect. `osaurus_settings.TRACKED_KEYS` covers 23 keys over exactly two filenames and holds no `smeltMode`. The ad hoc reader `osaurus_smelt_mode` is called only at `runtimes.py:2654`, *after* `if stream_experts is None: return None` at `:2642-2643` — so a cell with no `--stream-experts` pin never asks the host anything. All three grid runners leave that flag out; only `run_sweep_streaming.sh` names it. A capture at `disabled` and one at `ssdStreaming` diff to `()`.
+
+**(a) the plist** — real as an absence. Nothing in the package reads `~/Library/Preferences/com.dinoki.osaurus.plist`; `TRACKED_KEYS` has no plist surface. AGENTS.md:92's "and an app plist" is unenforced. But the runtime doc contradicts its own mechanism: a 0.25.18 probe (`docs/runtimes/osaurus.md:60-64`) found `modelOptions.disableThinking` **inert** — identical 1,706-character reasoning. Different delivery path (request option vs stored preference), so not strictly contradictory, but it's the repo's only behavioural probe and it found nothing. I've flagged that rather than repeat the finding's confidence.
+
+I found three things worth your attention: `runtimes.py:2648` cites `docs/runtimes/osaurus.md:298` for the smelt enum, but that line is inside the `osaurus bench` usage block — the enum is at `:375`. The host sits at `smeltMode: "disabled"` today (schema 5; the harness's backup is schema 3), so (b) is latent, not active. And none of the 13 measured models across 303 published Osaurus rows is one of the three with `disableThinking` on — though 2,394 of 3,016 observations do carry `reasoning_text`, which partly mitigates (a) since a reader can see reasoning occurred.
+
+Verification: `tests/test_fable_s5_f9.py`, 2 failed / 7 passed, deterministic across four runs. Red-check confirmed by appending the one key to `TRACKED_KEYS` in memory — it turns green, and absent again on restoration. Suite baseline I started from: 70 failed / 1,391 passed. That count is not stable because this worktree is shared — I caught a parallel verifier's temporary edit to `_run` in `runtimes.py` at 17:58 (since reverted), which explains the two transiently-failing `test_runtimes.py` tests; both pass with the source clean.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     88    8229849    8107776    71971   98.5%   0.085817
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py

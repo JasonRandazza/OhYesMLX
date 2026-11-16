@@ -1,0 +1,112 @@
+I'll start by reading the cited code and the dossier entry.
+Let me read the exact cited ranges in the code.
+Confirmed the shape at a glance. Now let me check `download`'s signature and how `hardware` is injected, plus `plan`/`default_cache_dir`.
+The claim is plain in the code. Now I'll look at the existing fetch test harness and a sibling fable test for the pattern.
+Let me check fetch's imports and the `_scan_hardware` default, plus the existing hardware test that pins root-only semantics.
+fetch doesn't import `shutil` at all — its only free-space source is `hardware()`. Let me confirm how the server invokes `download` and what `cache_dir` it passes.
+Now let me check whether the `tests` module is importable so I can reuse the existing fetch harness, and look at a sibling fable test that drives fetch.
+
+Let me check `plan` for any filesystem requirement on a nonexistent cache dir, and `disk_needed`.
+
+Now I'll write the reproducing test. Three checks: the cache volume full (must refuse), the root full but cache roomy (must not refuse), and the per-file guard at :1146.
+Now let me run only the new tests and confirm they fail for the claimed reason.
+All three fail. Let me see the first test's failure text in full to confirm the mechanism.
+All three fail for the claimed reason. Let me look at an existing verify report to match the house format and see how they handled suite counts.
+The tests are red for the right reason. Now let me check which production paths can reach a non-default cache, so the report states the exposure precisely.
+
+
+One correction: the fake's "external volume" must be the scratch root, since a fix will ask its nearest *existing* parent (the cache dir doesn't exist yet). Let me fix that.
+
+Now a scratch probe to prove the three assertions are satisfiable by the finding's fix direction, without editing repo code.
+
+
+
+
+
+Satisfiable under the fix. Let me re-run the three tests after the fake correction.
+Now the full suite, to state the baseline and the count with my file included.
+The 36 failures are the review's red proof tests. Let me measure the baseline without any `test_fable_*` file.
+Baseline is green (1368 passed, 2 skipped). Let me confirm the "volumes is scanned but unused" half of the finding across Python and the app.
+Let me confirm what happens when the write actually hits ENOSPC mid-body — the finding says it "dies".
+
+
+
+
+Let me check whether any interface doc pins the disk budget to the root volume (which would make the finding REFUTED-as-intended rather than a defect).
+
+
+
+Two message-strings do inline `1.2` arithmetic; let me use the real `disk_needed` so the diagnostic numbers are exact.
+
+
+
+All evidence gathered. Writing the report.
+Let me verify the exact line numbers and the `disk_needed` value I quoted.
+Two numbers in my report snippets are wrong; let me capture the exact messages.
+
+
+
+
+Let me verify the report's tail and that I touched exactly two files.
+
+Done. Two new files, nothing else touched.
+
+**Added**
+- `tests/test_fable_s4_f3.py` — three checks: cache volume full / root roomy (must refuse), root full / cache roomy (must not refuse), and the per-file re-check at `fetch.py:1146`.
+- `.paul/review/fable-5.2/verify/S4-F3.md` — the report.
+
+**Verified**
+- All three fail on current code for the claimed mechanism, e.g. `the cache volume has 500 bytes free and this download needs 1200; it was accepted because the root volume reads 214748364800`.
+- Claim confirmed by reading: `fetch.py:819,1146` read `hardware().disk_free_bytes`, which `hardware.py:151-152` defines as `/`'s free bytes; `cache_dir` is never turned into a free-space query (`fetch` doesn't import `shutil`); `server.py:594,603` hand the same root number to `recommend`; `Hardware.volumes` has no consumer in `ohyesmlx/`.
+- Satisfiability proven without editing code: a scratch probe re-ran the same three scenarios with the number supplied as `shutil.disk_usage(nearest existing parent of cache_dir).free` through the existing `hardware` seam — all three assertions hold.
+- Suite: baseline `1368 passed, 2 skipped` (review proof files ignored); full `pytest -q` → `36 failed, 1379 passed, 2 skipped`, every failure inside a `tests/test_fable_*.py` file, none elsewhere. The red is the point of this order — no fix was made.
+
+One precision recorded in the report: `disk_free_bytes` being `/`'s free space is deliberate and pinned (`.paul/orders/v5-t1-2-disk-budget.md:7`, `tests/test_hardware.py:247`), so the defect is in the consumers, as the finding's fix direction says.
+
+VERDICT: CONFIRMED, SEVERITY-CHECK: agree — Medium.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     52    5410087    5288448    38664   97.8%   0.057310
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py

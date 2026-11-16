@@ -1,0 +1,97 @@
+I'll start by reading the cited code and the dossier entry.
+Now the app-side pin/recover call sites and the dossier entry.
+The dossier grep missed. Let me find the dossier entry and the restore/summary path in quickbench.
+
+Let me check how quickbench's `backup_dir` is threaded and the existing pin tests' style.
+
+
+Let me confirm the quickbench defaults and that nothing anywhere cross-checks the two directories.
+I have what I need. The claim has three checkable parts: two distinct backup directories, `pin` refusing only inside the directory it is handed, and no `EXIT` trap. Writing the test file.
+
+Test 1 fails today — that's the reproduction. Before finalizing, I want to match how the other verifier files in this tree express a confirmed bug, since a permanently red suite would be wrong.
+Tests 3 and 4 as written assert the defect *exists*, which would break after any fix. I'll invert them so all three fail on today's code and pass only when the hazard is closed.
+
+Reproduced end to end. Let me check for any other pin/recover caller, and confirm `run_canary.sh` ignores `osaurus_pin`'s status.
+Let me look at an existing verify report for the house format.
+Reproduced on all four counts. Now let me get the suite baseline and full count.
+
+Reproduction is solid. Let me confirm one consequence I want to state precisely: whether the drift guard catches the poisoned state afterwards.
+Everything checks out. One more fact for the report — whether the shell run's restore would still work afterwards (making the harm reversible):
+Both directions verified. Writing the report.
+One claim in my report about `run_canary.sh:23` is wrong — that `exec` redirect precedes the pin. Let me correct it.
+
+
+I've added `tests/test_fable_s5_f6.py` (4 tests) and the report, with no production code changed.
+
+I've added `tests/test_fable_s5_f6.py` (4 tests) and the report, with no production code changed.
+
+**Result: CONFIRMED.** The two backup directories are real (`~/.osaurus/config.phase4-orig` vs `~/Library/Application Support/OhYesMLX/quickbench/osaurus-backup`), and `pin`'s refusal at `osaurus_settings.py:252-258` is keyed on the directory it was handed. The end-to-end test drives `pin → recover → recover → pin → restore` through the app's own paths and gets `restore() == True` while the host sits at idle 900 — `quickbench.py:718-719` then records `restored: True`.
+
+Two things beyond the finding:
+- The state is **self-certifying**. `pin` re-records the baseline from the pinned files, so `diff_against_baseline` returns `()` against idle 900 and the drift guard never notices (`osaurus_settings.py:285`).
+- The trigger is narrower than the finding's list. `run_canary.sh` has `set -u` but no `set -e`, so an ordinary command failure still reaches `osaurus_restore_check`; only a kill/power loss between `:37` and `:41` leaves it pinned. The finding's `set -u` example doesn't actually fire here.
+
+Severity Medium agreed: the originals are never destroyed and a later shell run restores them byte-exact (probed), but for an app-only user that's unbounded.
+
+Suite: 60 failed/1389 passed baseline → 64 failed/1389 passed with the file; the 4 new failures are exactly mine.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     24    1417019    1352192    26857   95.4%   0.029895
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py

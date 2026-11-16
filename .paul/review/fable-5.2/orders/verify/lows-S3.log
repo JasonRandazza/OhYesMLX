@@ -1,0 +1,120 @@
+I'll start by orienting myself in the worktree and reading the cited code for each finding.
+Let me read the dossier entries and the cited code.
+
+
+
+
+
+
+
+
+
+Now let me check the fixtures available and the QuickPlan shape.
+
+
+
+
+
+Let me start a baseline test run in the background while I write the tests.
+
+
+
+
+
+Now I'll write the test files, starting with F11.
+
+
+
+
+
+
+
+
+Let me check for other cancel entry points and the severity scale.
+
+
+
+
+
+
+
+
+Now I'll write the six reports.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+All seven findings verified. Reports are in `.paul/review/fable-5.2/verify/S3-F11.md` … `S3-F17.md`, each ending in one verdict and one severity-check line.
+
+| ID | Verdict | Reproduction |
+|---|---|---|
+| F11 | CONFIRMED | `FableS3F11Tests` — stream never ends; 190 reconnects in 0.5 s |
+| F12 | CONFIRMED | `FableS3F12Tests` — `shouldExit` false, `onQuitComplete` never fired after the backend exits with "Quit anyway" offered |
+| F13 | CONFIRMED (no test) | model accepts the escalation (`FableS3F13Tests` passes); the block is `BenchmarkView.swift:80/89/95-98`, cited |
+| F14 | CONFIRMED | `FableS3F14Tests` — `app.lock` as a directory yields `.alreadyRunning`, not `.couldntStart` |
+| F15 | CONFIRMED (a tested) | `FableS3F15Tests` — Retry starts an install with `installConsent == false`; (b) cited (`AppModel:684`, `server.py:752-763`, `cli.py:1157/1168`) |
+| F16 | CONFIRMED (no test) | pid-reuse race has no injectable seam; `BackendLauncher.swift:99-101` unguarded, callers `:395`, `:402` |
+| F17 | CONFIRMED | `FableS3F17Tests` — A's plan survives B's failed fetch, no refusal set |
+
+Suite: baseline **101 tests / 29 failures** (15 other verifiers' Fable tests plus a flaky `LauncherTests.testEOFBeforeTheLaunchLine…`, which passed on the second run). After: **107 tests / 36 failures** — the 8 extra assertion failures are my five reproductions; F13's test passes by design, and no production file was touched. The suite therefore cannot be green: these tests are meant to fail on the current code.
+
+Not verified: no backend, engine, model or app was started, so nothing live was run — F11 uses a fake transport, F12/F15 call `backendExited` directly, and F13's UI disable is read rather than exercised. No test file for F16, and no `BLOCKED.md`; the only ambiguity (Retry vs `v5-app.md:89-92`) is reported rather than guessed.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     65    6286940    6155136    55416   97.9%   0.071486
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

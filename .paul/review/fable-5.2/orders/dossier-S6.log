@@ -1,0 +1,58 @@
+I'll build the S6 packaging/release dossier. Starting by orienting on the scope files and their sizes.
+Reading the packaging scripts and config files now.
+
+Now reading the smoke client (in parts), Info.plist, gatekeeper doc, and .gitignore.
+
+
+Now reading BackendLauncher.swift's production-path code.
+
+Code scope covered. Now pulling the contract documents — threat-model §9/§10, PLAN D6/D7, and the 05-06 plan/summary.
+
+
+Now the "already known" sources: Deviations/Carried-forward sections in the phase summaries and the review logs.
+
+
+
+
+Wave-2 findings and git history in hand. Now the mechanical scans and precise line ranges.
+
+
+
+
+Final contract checks before writing the dossier.
+All material gathered. Writing the dossier in stages — Map first.
+Map done. Appending §2 Contracts and §3 Already known.
+Appending §3 Already known.
+Appending §4 Hotspots and §5 Mechanical scan.
+Appending §6 Test inventory and §7 Open questions.
+Final precision pass on the AppModel map ranges, then I'll size the file.
+Done. Dossier written — nothing else touched, nothing fixed (per the order).
+
+- **Path:** `.paul/review/fable-5.2/dossier-S6.md`
+- **Size:** 68,204 characters (~17K tokens; target 15–25K)
+- **Tests:** not run — this order forbids the suites ("never run the test suites (the coordinator does)") and no code changed. All line numbers were grep/sed-confirmed against the working tree at `714e8f6`.
+
+Three map lines I'm least sure of:
+1. `scripts/smoke_clean_account.py:309-414` — the `Client` method sub-ranges (`request 321-339`, `post_job 341-350`, `follow 352-414`): starts are exact, ends are "next def − 1" derivations.
+2. `scripts/check_bundle.sh:138-257` step groupings (`:138-156`, `:158-170`, `:172-198`, `:201-207`, `:209-231`, `:234-250`) — narrative boundaries I chose inside one `if` block, not syntax boundaries.
+3. `BackendLauncher.swift:277-528` — `LaunchSession` per-method ends (e.g. `readLines 417-445`, `deliverLine 447-466`) derived from reading, not grep; starts grep-confirmed.
+
+The four mandated open questions (sign-without-verify, moved-app-after-pip-engines, SBOM-vs-ships, gatekeeper promises) are Q1–Q4; Q5–Q8 add the check_bundle P5-9 env FAIL dead-end, the AC-6 wheel-vs-bundle smoke gap, compileall coverage, and P5-4's network dependence.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     33    3639034    3499136    59119   96.2%   0.124886
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S4.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log

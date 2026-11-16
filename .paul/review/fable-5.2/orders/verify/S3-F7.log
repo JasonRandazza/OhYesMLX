@@ -1,0 +1,57 @@
+I'll start by reading the cited code ranges and the dossier entry for S3-F7.
+The dossier grep found nothing — let me check the dossier file layout and find F7.
+
+The dossier exists but doesn't use an "F7" label. Let me search it for the relevant content.
+Let me read the finding's context — AppModel's head, adopt/quit paths, and the app-level `alreadyRunning` handling.
+The code path is clear. Now I need the exact shapes to write a test: `BackendLauncher` init, `LauncherProcess`, `Backend` protocol, and existing test patterns.
+Now I need `LaunchLine`'s shape and how `LaunchSession` consumes the child's stdout, so a fake process can satisfy it.
+Let me check `readLines`, the `Backend` protocol, and whether existing tests already have a stub backend I can reuse.
+
+Let me verify that a second `flock` in the same process (different fd) fails on macOS — the mechanism the finding depends on.
+
+Let me check `StubBackend`'s initializer and confirm the app test toolchain.
+Let me read the F7 entry in the findings file to quote it exactly.
+I have the full picture. Now I'll write the test in a new file.
+Now I'll run just the new test. It should fail on current code — that's the reproduction.
+Reproduced exactly: `alreadyRunning == true` and the screen stuck at `.launching`. Now let me get the full-suite baseline with my test skipped, then run everything.
+The suite already carries 21 failures — likely other verifiers' intentional red tests. Let me identify them.
+
+The reproduction is complete and isolated. Now I'll write the verification report.
+
+Confirmed S3-F7. No production code touched.
+
+- **Reproduction:** `app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift` drives the real `BackendLauncher`/`LaunchSession` with a live child double (a real `flock` held by the session), gets `.couldntStart` while the runner is alive, then calls `relaunch()`. It fails on current code exactly as claimed: `alreadyRunning == true` (the `NSApp.terminate` precondition at `OhYesMLXApp.swift:40-49`) and `screen` stuck at `.launching` because `reload()` was never reached.
+- **Suite:** baseline 93 tests / 21 failures (other verifiers' red tests); with mine 94 / 23 — the same 21 plus this test's two assertions.
+- **Report:** `.paul/review/fable-5.2/verify/S3-F7.md`, ending `VERDICT: CONFIRMED (test: …)` and `SEVERITY-CHECK: agree`. The only unexercised step is the GUI-side `NSApp.terminate` itself, noted in the report.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     21    1376533    1298304    26031   94.3%   0.031248
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

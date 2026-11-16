@@ -1,0 +1,105 @@
+I'll start by reading the existing dossier §1-§3 so I can append §4-§7 consistently.
+Dossier read. Now I'll run the mechanical scans against the scoped files, starting with the dangerous-call patterns.
+Now the timing-source pattern — `time.time()` vs monotonic — which matters most in a measurement harness.
+All timing is monotonic — no `time.time()`. Now let me count the arithmetic/statistics pattern hits so §5 stays proportionate.
+Let me pull the exact `max(`/`min(`/`round(` hits so §5 lists real lines, not comment prose.
+Now let me locate the `except` blocks and check which sit around number computations.
+
+Now let me confirm the most safety-critical ranges I'll cite as hotspots. Starting with the status gate and metric formulas.
+Now the report rows where a number could leak onto a non-PASS cell.
+Now let me verify how a FAIL row's number is suppressed in the renderings — that's the load-bearing claim in §4.
+Now the quickbench number-attribution paths.
+
+Important lead: `_cell_record` takes `decode_tps` off the row regardless of status. Let me confirm `summarize` keeps numbers on FAIL rows.
+Let me verify the transport channel decision and failure path.
+
+Now the join guards that decide whether two runs with different pins can be joined.
+Let me check `PIN_FIELDS` — whether a join can compare pins but miss the artifact or runtime version.
+Let me check the sampler's peak reading and stop path, plus token_counter's reconciliation.
+Now canary's verdict logic and the warmup/batch rate paths.
+Let me verify the warmup window, record shape, and recommendation paths.
+Now let me survey the test files to build §6's inventory.
+Let me collect the test function names for the files that guard S2 hotspots.
+
+
+Let me examine the `_visit` structure and the stage loops, where attribution risk concentrates.
+
+Let me check the stage-B loop and the summary skeleton where the pin/harness hash lands.
+
+
+Let me check `clock` default in quickbench (a `time.time()` used for durations would be a defect) and the ABSENT_PINS table.
+Found a real scan hit: `quickbench` uses `time.time` for a duration. Let me check `order_rows` and the numeric rendering.
+Let me check coherence's mode, and confirm the `report._row` status we saw — whether `render_markdown` suppresses figures for FAIL.
+
+Let me verify the drift note and the `or 0` sites so my §5 lines are precise.
+
+
+
+Let me check whether anything reads a summary cell's `decode_tps` without checking status — that's a real attribution path.
+Let me check two things that could be real attribution defects: quickbench's FAIL cells carrying numbers, and the canary record path.
+Let me check whether a FAIL cell in quickbench's summary carries a number — that's the "can a FAIL contribute a number" question.
+Let me verify the contract prose about whether a failed cell may carry a number.
+Let me confirm the remaining ranges I'll cite: `_visits`, percentile, and the SSE loop timing.
+
+
+
+
+
+Let me check whether the app renders a quickbench cell's number for a FAIL cell — relevant to "can a FAIL cell contribute a number".
+Let me check whether the app renders a quickbench cell's number regardless of status — that decides whether the `_cell_record` divergence is user-visible.
+Real lead — `ResultsView.swift:246` renders a cell figure without an obvious status check. Let me confirm.
+Let me check whether any test covers a FAIL quickbench cell carrying a number — my main candidate finding.
+Let me confirm the FAIL-cell-with-number path by reading the fake harness used in tests.
+Let me check the seed pin — if it's per-runtime, guard 1 could refuse every cross-runtime grid.
+I have what I need. Appending §4–§7 to the dossier now.
+Let me correct one line citation and verify the file.
+
+Two precision fixes: the docstring line, and moving the §1 correction inside §4 so §1–§3 stay untouched.
+
+The dossier is complete. Final size check.
+Done — appended §4–§7 to `.paul/review/fable-5.2/dossier-S2.md` (70,649 characters, 425 lines, 7 sections). §1–§3 untouched; one correction to §1's `PIN_FIELDS` count is noted inline in §4 rather than editing §1.
+
+§4 has 21 hotspots, §5 lists hits per pattern with `path:line — pattern` (no source pasted), §6 maps each hotspot to its guarding tests or "none", §7 has 10 falsifiable questions.
+
+Three things worth flagging in the §4–§7 content:
+
+- **`quickbench.py:322-353`** — `_cell_record`'s docstring says a failed cell carries "no number at all", but the code copies `decode_tps` from the row with no status test, and `report.summarize` retains values on non-PASS rows by design. The app prints that number beside the status unguarded (`ResultsView.swift:246`). No test asserts the FAIL case. This is §7 Q1.
+- **`measure.py:1063-1070`** — `_warmup_rate` sums `completion_tokens or 0` after checking only `came_back`, so a returned request with a null token count silently contributes 0 tokens to the batch aggregate instead of refusing the step (§7 Q7).
+- **`quickbench.py:508`** — `clock=time.time` is used for `actual_s` durations while every measurement path uses `time.monotonic` (§7 Q9).
+
+The three map lines I am least sure of:
+
+1. `transport.py:110-114` / `:117-145` — §1 says `_connection` is "HTTPConnection over `_parts`" and `_call_before_deadline` "runs a blocking call on a daemon thread, waits on a deadline". I confirmed both by reading, but I did not verify the `_parts` call inside `_connection` produces the *path* tuple element `_parts` returns rather than a modified one.
+2. `measure.py:1201-1207` — §1 says "one TokenCounter per cell id, cached; construction failure recorded and the cell goes N/A". I read `_token_counter`'s caching and error capture, but not the call site that converts the recorded error into N/A, so the "goes N/A" half is inferred.
+3. `report.py:1555-1588` — §1 says `_check_workload_pins` compares "same shape set, same `messages` and `max_tokens` per shape". I read the docstring and signature at `:1555-1562` and the `ignore_messages` argument, but not the loop body, so the claim that every other field of every shape is compared is from the docstring, not the code.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     60    5898300    5736192    50899   97.3%   0.072064
+
+== cc-agent: git status ==
+ M .paul/review/fable-5.2/PLAN.md
+ M .paul/review/fable-5.2/orders/dossier-S2.md
+?? .paul/review/fable-5.2/S1-findings.md
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S2.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S4.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/_fable-brief.txt
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2-cont.log
+?? .paul/review/fable-5.2/orders/dossier-S2-cont.md
+?? .paul/review/fable-5.2/orders/dossier-S2.killed-stall.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log
+?? .paul/review/fable-5.2/orders/fable-S1.err
+?? .paul/review/fable-5.2/orders/fable-S1.json
+ .paul/review/fable-5.2/PLAN.md              | 9 +++++++++
+ .paul/review/fable-5.2/orders/dossier-S2.md | 2 ++
+ 2 files changed, 11 insertions(+)

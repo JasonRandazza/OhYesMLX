@@ -1,0 +1,139 @@
+NOTE: Mon 02:31 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll start by reading the build script and the dossier entry for this finding.
+Let me read the dossier entry for S6-F1.
+Let me check the fetch script, the cache directory, and whether a built bundle exists.
+The build script confirms the lines cited. Now let me gather the decisive binary evidence — the reviewer could not read the pyc flag word, but I can.
+
+The compileall `if not force:` skip logic matches the finding exactly. Now let me pin the exact line numbers, and check the timestamp pycs against their sources' mtimes.
+The pycs split into two mtime groups — 16:35 (cache interpreter's) and 17:09 (compileall's). Let me verify the mechanism: the cache tree's pycs, the header/source mtime agreement, and the zip round-trip.
+The mechanism is confirmed in the shipped bundle. Now let me verify the upstream cause (the version read at :33 has no `-B`), the venv child path, and whether a normal unzip shifts mtimes.
+The chain is confirmed at the artifact level. Now let me test the transfer claim — the one the reviewer could not verify (confidence 50) — with a real unzip-and-stat.
+Python's `zipfile` doesn't restore mtimes at all. Let me test the two real macOS unarchivers (`ditto -x -k` and `unzip`) and parse the zip extra fields properly.
+The zip does carry full Unix mtimes. Let me test both real macOS unarchivers to settle the reviewer's confidence-50 sub-claim.
+Both native macOS unarchivers restore mtimes to the second — so that sub-claim doesn't hold. Let me check the flags semantics in the bundled importlib, and how peer verifiers shaped their test files.
+The compileall skip and pyc flags match the finding precisely. Let me confirm which modules the build's own version-read imports, and test the venv-rewrite half of the chain on a copy.
+The import closure matches the timestamp pyc set exactly. Now let me verify the copied-vs-compiled split structurally and run the rewrite experiment on a scratch copy.
+All 51 timestamp pycs in the bundle are exactly the cache tree's — the causal chain is proven. Now the second half: does a non-`-B` child actually rewrite them once stale? Let me run both arms on a scratch copy.
+
+
+
+
+Fifty-one pycs changed in both arms with no flags flip — I need to see exactly what changed before drawing conclusions.
+A decisive result: the child `python -m venv` rewrote all 51 timestamp pycs. Let me pin the exact venv line number, then run the seal-break experiment on a scratch copy of the app.
+The chain is proven in the artifact. Now let me reproduce it end-to-end from a pristine tarball, so the causation is not inference.
+Reproduced from a pristine tarball: 3 pycs → 42, all timestamp-flagged, from exactly the build's version read. Now the compileall skip on that same tree.
+All 42 dirty timestamp pycs survived `compileall` unchanged, while 1,019 got hash pycs. Now the seal-break: does a non-`-B` child rewrite them, and do the sizes differ from the originals?
+
+`cp -R` without `-p` reset the sources' mtimes — which is why even my "preserved" arm rewrote all 51. Let me run a proper `cp -Rp` control and then the seal test.
+The control is decisive: with mtimes intact, a child `venv` changes nothing; with mtimes shifted, all 51 timestamp pycs are rewritten. Now let me prove the seal break and check the venv's stdlib sharing.
+The venv shares the base stdlib and CodeResources seals the pycs. Let me prove the seal actually breaks when a stale pyc is rewritten inside a copy.
+The seal broke ("a sealed resource is missing or invalid") — the flags stay 0 because a rewrite produces another timestamp pyc. Let me capture the exit code properly and confirm the content change.
+The full chain is proven. Now let me settle the two remaining sub-claims: `ditto`'s mtime behaviour, and whether Archive Utility (the normal double-click path) loses them.
+Let me test Archive Utility — the normal double-click path the finding's confidence-50 sub-claim concerns.
+
+
+Let me try Archive Utility's actual invocation and check the fix-side claims.
+Both native unarchivers restore mtimes; Archive Utility needs a GUI session. Let me confirm the import-time revalidation code and the test environment.
+The full causal chain is proven. Let me verify the compileall skip reproduces in the test interpreter, then write the test.
+The mechanism is fully reproduced. Let me write the test file.
+
+The version-tag path was wrong in my helper — let me have `py_compile` report its own cfile.
+
+My helper dropped the `-I -B -m compileall` prefix. Let me fix it to take the argv after the interpreter token.
+
+Both tests now fail on the current code — reproducing the finding. Let me confirm they fail for the right reasons, not from a parsing bug.
+Both tests fail for exactly the right reasons — the parsed argv lacks `-B` and `-f`. Now the red-check the other direction: patched copy must make them pass.
+
+I've met the red check: both tests fail on current code, and pass with the fix applied to a copy of `build_app.sh`. Let me clean up and run the whole test suite.
+
+
+88 failures — most are peer verifiers' red tests. Let me establish the baseline properly.
+The red check is complete. Let me write the report.
+
+
+Confirmed S6-F1, with the reviewer's diagnostic corrected on one point.
+
+**What the finding gets right, now measured instead of inferred:** the shipped `dist/OhYesMLX.app` carries **51 of 1079 pycs with a zero flags word** (timestamp-based), spread across `json`, `pathlib`, `re`, `encodings`, `importlib`, `sysconfig`, `compression` and 29 top-level modules — the reviewer's confidence 80 were unavailable binary reads.
+
+The causation is proven, not correlated:
+- All 51 timestamp pycs in the bundle are exactly the cache tree's 51; `json/__pycache__` holds the cache's four (`flags=0`, 16:35) plus `tool` and `__main__` (`flags=1`, 17:09) — the two `compileall` actually compiled. Two writers, one fingerprint.
+- From a pristine tarball, `build_app.sh:33-34` verbatim took 3 pycs → 42, all timestamp, from an import closure matching the flagged modules.
+- `compileall` with the script's own flags left **all 42** untouched (`{0: 42, 1: 1019}`); adding `-f` flips them all.
+
+The consequence is real: a child `python3 -I -m venv` (the `engines.py:797` command) rewrote all 51 pycs in a copy whose source mtimes had moved, and `codesign --verify --deep --strict` then exited 1 — "a sealed resource is missing or invalid". With mtimes intact (`cp -Rp`), the same venv changed nothing.
+
+**Where the reviewer is wrong:** the confidence-50 sub-claim that a normal unzip makes them stale does not hold. `ditto -x -k` and `/usr/bin/unzip` both restore mtimes to the second, and the zip carries full Unix mtimes in its InfoZIP extra field. Archive Utility's Finder path I could not exercise without a GUI session, so that stays untested. `cp -R` without `-p` does trigger it — I hit that accidentally before making it a deliberate arm.
+
+Two tests added in `tests/test_fable_s6_f1.py`, both parsing their argv from `build_app.sh` itself so they track edits to the script. Red check done both ways: fail on current code with the reported symptom, pass against a patched copy with `-B` at :33 and `-f` at :76. Baseline 1368 passed / 2 skipped excluding all peer verifier files; my file contributes 2 failures and 1 skip (no `dist/` in this worktree). No tracked file touched.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     53    3946889    3847424    73816   97.5%   0.141503
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py

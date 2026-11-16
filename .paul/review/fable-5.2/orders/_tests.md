@@ -1,0 +1,75 @@
+- **S2-F1**: `test: tests/test_fable_s2_f1.py::test_a_failed_incoherent_cell_publishes_no_figure, tests/test_fable_s2_f1.py::test_a_failed_cell_with_two_lost_requests_publishes_no_survivor_median`
+- **S3-F1**: `test: app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift::testEventsOverTheRealTransportDispatchADoneEvent`
+- **S5-F1**: `test: tests/test_fable_s5_f1.py::test_the_mlx_lm_control_does_not_get_another_engines_lab_bin_on_path`
+- **S5-F2**: `test: tests/test_fable_s5_f2.py::test_cold_load_s_does_not_include_the_version_probe_or_lsof`
+- **S1-F1**: `test: tests/test_fable_s1_f1.py::test_stop_now_does_not_signal_a_stale_own_pid_ledger_entry`
+- **S2-F2**: `test: tests/test_fable_s2_f2.py::test_a_whole_response_arriving_in_one_write_is_read_without_waiting_for_more_bytes, tests/test_fable_s2_f2.py::test_a_delta_already_buffered_is_stamped_when_the_next_bytes_arrive`
+- **S2-F3**: `test: tests/test_fable_s2_f3.py::test_an_update_between_visits_cannot_leave_a_pass_row`
+- **S2-F4**: `test: tests/test_fable_s2_f4.py::test_a_pass_row_publishes_a_bare_number_for_a_peak_the_sampler_disowned`
+- **S2-F5**: `test: tests/test_fable_s2_f5.py::test_zero_usage_reasoning_over_a_real_reasoning_stream_is_not_taken`
+- **S3-F2**: `test: app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift::testADownloadResultDoesNotReplaceTheBenchmarkSummary`
+- **S3-F4**: `test: app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift::testACancelThatReturnsAfterDoneDoesNotReactivateTheJob`
+- **S3-F5**: `test: app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift::testTheJobIsStillRunningDuringTheRollbackThatFollowsAnError`
+- **S3-F6**: `test: app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift::FableS3F6Tests.testASecondStartWhileTheFirstIsInTheAirDeletesTheWinnersCrashRecord`
+- **S3-F7**: `test: app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift::testRetryingFromCouldntStartDoesNotTreatTheLiveBackendAsASecondInstance`
+- **S3-F8**: `test: app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift::testAppDeathDoesNotFreeTheLockWhileTheBackendIsAlive`
+- **S3-F9**: `test: app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift::testTheResultsScreenShowsTheContentionLabel + ::testATiedStageIsNotBadgedAsOneFastestEngine`
+- **S3-F10**: `test: app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift::testDownloadCompletionRefreshesFreeDisk + ::testEvictCompletionRefreshesFreeDisk`
+- **S4-F1**: `test: tests/test_fable_s4_f1.py::test_a_port_that_goes_busy_after_stage_a_is_not_driven_in_stage_b, tests/test_fable_s4_f1.py::test_an_osaurus_app_opened_after_stage_a_is_not_pinned_for_stage_b`
+- **S4-F2**: `test: tests/test_fable_s4_f2.py::test_an_app_venv_with_no_lab_record_is_startable_or_installable_again`
+- **S4-F3**: `test: tests/test_fable_s4_f3.py::test_a_full_cache_volume_is_refused_even_when_the_root_volume_has_room`
+- **S4-F4**: `test: tests/test_fable_s4_f4.py::test_a_stage_b_sibling_download_hears_stop`
+- **S4-F5**: `test: tests/test_fable_s4_f5.py::test_best_keeps_the_baseline_when_the_sibling_is_inside_the_tie_band`
+- **S4-F6**: `test: tests/test_fable_s4_f6.py::test_the_peak_the_memory_sentence_states_is_above_budget_only_for_a_left_out_row[8-gib-1.82-gb-tight]`
+- **S4-F7**: `test: tests/test_fable_s4_f7.py::test_a_partly_downloaded_row_is_judged_on_what_is_left`
+- **S4-F9**: `test: tests/test_fable_s4_f9.py::test_a_failed_sibling_download_is_evicted_or_recorded`
+- **S5-F3**: `test: tests/test_fable_s5_f3.py::test_start_refuses_when_a_failed_stop_left_another_engine_resident`
+- **S5-F4**: `test: tests/test_fable_s5_f4.py::test_an_orphan_whose_port_cannot_be_read_keeps_its_ledger_file`
+- **S5-F5**: `test: tests/test_fable_s5_f5.py::test_the_ledger_names_the_engine_before_readiness_is_awaited`
+- **S5-F6**: `test: tests/test_fable_s5_f6.py::test_a_crashed_shell_pin_does_not_let_the_app_report_the_pinned_state_restored — restore() returns True with the host at idle 900; ::test_a_pin_refuses_over_a_backup_in_another_directory — the second pin succeeds into its own directory; ::test_the_shell_pin_and_the_app_pin_name_one_backup_directory; ::test_the_shell_pin_restores_on_a_plain_exit`
+- **S5-F7**: `test: tests/test_fable_s5_f7.py::test_a_failed_restore_check_exits_non_zero`
+- **S5-F8**: `test: tests/test_fable_s5_f8.py::test_pin_replaces_the_committed_baseline_with_the_live_host`
+- **S5-F9**: `test: tests/test_fable_s5_f9.py::test_RED_the_capture_attests_concurrency_smelt_mode`
+- **S5-F10**: `test: tests/test_fable_s5_f10.py::test_a_stop_is_not_refused_by_a_lab_path_that_is_not_there`
+- **S6-F1**: `test: tests/test_fable_s6_f1.py::test_the_builds_version_read_cannot_write_bytecode and tests/test_fable_s6_f1.py::test_the_builds_compileall_replaces_the_bytecode_it_copies`
+- **S6-F2**: `test: tests/test_fable_s6_f2.py::test_the_tree_the_build_copies_is_the_tarball_and_nothing_else`
+- **S6-F3**: `no test: the P5-6 step exists only inside `scripts/check_bundle.sh`, whose run launches the app and writes Application Support — both forbidden to this role — and this worktree has no `dist/` bundle; the same mechanism was applied to the shipped artifact in the main checkout, with the two-sided result quoted above`
+- **S6-F4**: `test: tests/test_fable_s6_f4.py::test_a_venv_whose_interpreter_moved_with_the_app_is_not_installed[mlxlm]`
+- **S6-F5**: `test: tests/test_fable_s6_f5.py::test_the_smoke_spawns_the_venv_console_script_with_no_interpreter_flags`
+- **S6-F6**: `test: tests/test_fable_s6_f6.py::test_a_dirty_worktree_does_not_stamp_a_bare_git_commit`
+- **S6-F8**: `test: tests/test_fable_s6_f8.py::test_the_build_produces_the_digest_the_release_doc_promises`
+- **S1-F2**: `test: tests/test_fable_s1_f2.py::test_a_lock_whose_owner_pid_belongs_to_another_process_is_reclaimed; tests/test_fable_s1_f2.py::test_a_dead_owners_ledger_file_is_swept_when_its_pid_is_alive_again`
+- **S1-F3**: `test: tests/test_fable_s1_f3.py::test_a_mid_body_timeout_is_retried_and_never_escapes_download`
+- **S1-F4**: `test: tests/test_fable_s1_f4.py::test_a_valid_four_byte_prefix_is_deleted_when_the_cumulative_budget_runs_out`
+- **S1-F5**: `test: tests/test_fable_s1_f5.py::test_done_arrives_while_the_lock_is_still_held_and_the_ledger_is_unwritten`
+- **S1-F6**: `test: tests/test_fable_s1_f6.py::test_the_cap_must_not_free_the_slot_while_the_module_call_still_owns_the_engine`
+- **S1-F7**: `test: tests/test_fable_s1_f7.py::test_a_lab_paths_refusal_after_the_pip_steps_rolls_the_venv_back`
+- **S1-F8**: `test: tests/test_fable_s1_f8.py::test_evict_keeps_a_refs_main_that_no_longer_holds_the_ledger_revision`
+- **S2-F6**: `test: tests/test_fable_s2_f6.py::test_a_transport_failure_beside_garbage_is_not_published_as_coherence_pass`
+- **S2-F7**: `test: tests/test_fable_s2_f7.py::test_the_two_lost_visits_are_judged_alike`
+- **S2-F8**: `test: tests/test_fable_s2_f8.py::test_a_hung_engine_is_not_retried_to_the_end_of_the_run`
+- **S2-F9**: `test: tests/test_fable_s2_f9.py::test_a_stamped_column_beside_a_legacy_one_says_so_or_refuses`
+- **S2-F10**: `test: tests/test_fable_s2_f10.py::test_a_raising_restore_after_a_failed_pin_names_the_backup_directory`
+- **S2-F11**: `test: tests/test_fable_s2_f11.py::test_a_repo_the_newest_run_measured_and_lost_does_not_keep_an_older_win`
+- **S3-F3**: `REFUTED (test: app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift::testARestoreFailureIsFailedAndStatedEvenWhenTheSummaryDoesNotDecode — the backend's own `error` event sets `.failed` before the summary and `BenchmarkView.swift:39-40,115-128` renders its restore message; ::testAnAddedUnknownFieldKeepsTheTypedRestoreFailure — added fields decode)`
+- **S3-F11**: `test: app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift::testEventsGivesUpOnARefusedPort`
+- **S3-F12**: `test: app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift::testBackendExitingWhileQuitAnywayOfferedCompletesTheQuit`
+- **S3-F13**: `no test: the `.disabled(stopping)` is a SwiftUI modifier in the `OhYesMLX` executable target, which the kit test target cannot import; the kit-level test shows the model still accepts "Stop Now" after "Stop After This Cell", so the view's single `stopping` flag is the whole of the block`
+- **S3-F14**: `test: app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift::testAppLockThatCannotBeOpenedIsNotAlreadyRunning`
+- **S3-F15**: `test: app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift::testRetryOfAnInterruptedInstallDoesNotStartWithoutConsent`
+- **S3-F16**: `no test: the window is between Foundation reaping the child and `Darwin.kill`, which has no deterministic trigger and no syscall seam to inject; the evidence is the unguarded call at `BackendLauncher.swift:99-101` and its forceKill/quitWait callers`
+- **S3-F17**: `test: app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift::testPlanFailureClearsThePreviousModelsPlan`
+- **S4-F8**: `test: tests/test_fable_s4_f8.py::test_stage_b_skips_a_sibling_that_does_not_list_the_winner_engine`
+- **S4-F10**: `test: tests/test_fable_s4_f10.py::test_an_emitter_that_raises_on_the_error_event_still_rolls_the_venv_back`
+- **S4-F11**: `test: tests/test_fable_s4_f11.py::test_the_users_own_partial_of_a_sibling_survives_the_runs_eviction`
+- **S4-F12**: `test: tests/test_fable_s4_f12.py::test_a_sweep_eviction_that_raises_is_recorded_in_not_evicted`
+- **S4-F13**: `test: tests/test_fable_s4_f13.py::test_an_empty_lock_naming_no_pid_is_held_not_reclaimed`
+- **S4-F14**: `test: tests/test_fable_s4_f14.py::test_a_wrong_bytes_blob_of_the_right_size_is_planned_for_measurement`
+- **S5-F11**: `test: tests/test_fable_s5_f11.py::test_handle_stop_never_signals_the_group_of_a_pid_it_already_reaped`
+- **S5-F12**: `test: tests/test_fable_s5_f12.py::test_zero_is_refused_like_the_message_says`
+- **S5-F13**: `test: tests/test_fable_s5_f13.py::test_stop_now_does_not_execute_a_stop_command_read_from_the_ledger`
+- **S5-F14**: `test: tests/test_fable_s5_f14.py::test_resident_osaurus_pids_sees_a_home_directory_install`
+- **S6-F7**: `REFUTED (on Darwin 27.2.1 `ps eww -p <pid> -o command=` prints the full environment of an ad-hoc-signed process — the class `build_app.sh:95` puts the bundled `python3` in (`codesign`: `flags=0x2(adhoc)`, no platform identifier) — and fed that live dump the script's own block at `check_bundle.sh:214-231` prints two PASS with `COUNT=0`, so the `*)` branch is not taken, "all checks PASS" is reachable, and `docs/threat-model.md:606` is consistent with the check; the false statement is the comment at `:209-212`, which reads `ps eww` against Apple platform binaries (`/bin/sh`, `/bin/sleep`, Finder) that hide it; the surviving substring/PYTHON* weakness is real and proved by `tests/test_fable_s6_f7.py`)`
+- **S6-F9**: `test: tests/test_fable_s6_f9.py::test_no_gate_loads_a_quarantined_zip_the_way_a_downloader_does`
+- **S6-F10**: `test: tests/test_fable_s6_f10.py::test_an_engine_install_leaves_pips_default_cache_and_the_doc_does_not_say_so`
+- **S6-F11**: `test: tests/test_fable_s6_f11.py::test_one_failure_line_covers_both_a_dead_network_and_a_bad_certificate`

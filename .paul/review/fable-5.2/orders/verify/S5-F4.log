@@ -1,0 +1,131 @@
+I'll start by orienting on the cited code.
+I have the dossier and the cited code. Now let me look at existing ledger tests and the `_listener_pids` / `_run` helpers to build a faithful test.
+Now let me check `_listener_pids`, `_engine_env`'s environment handling, and the test file's imports.
+Let me check the verify directory and an existing verifier test for the conventions in use.
+Let me see an existing report's shape, then write the test.
+I have the code path. Now I'll write the reproduction test in a new file.
+Let me clean up that first test — I used a hack instead of the monkeypatch fixture.
+Now let me run just that file to see what the code does.
+Both predicted failures reproduce, and the control passes. Now let me get concrete evidence for the identity-mismatch half of the claim: does `ps -o lstart=` really render differently under different `TZ`/`LC_ALL`?
+This is decisive: the same pid renders three different `lstart` strings. Let me check the S5 findings report for F10, and confirm the exact return/unlink line numbers.
+Let me confirm the `lsof`→`None` chain through the real `_run`/`_engine_env`, so the "unreadable port" half isn't only a mock.
+Both failures reproduce. Now let me prove the "unreadable port" branch reaches `None` through the **real** code path (no `_listener_pids` fake), which is F10's environment refusal.
+Let me prove the identity mismatch through the **real** `_process_identity` with a real pid, varying only `TZ` — this is the finding's "diffing `ps -o lstart=` under two TZ values".
+Now let me confirm the severity mechanics: does a later run of the *same* runtime refuse the port, while a *different* runtime proceeds?
+
+Now the red-check equivalent for a verification order: a counterfactual in memory (no file edited) that keeps the file when identity can't be proved, to show the test discriminates on exactly that.
+I should check that the counterfactual's third case didn't actually signal anything — it reached real `_shutdown`.
+Let me redo the control case with `_shutdown` faked, and verify nothing real could be signalled.
+The counterfactual confirms the test discriminates on exactly the unproved-entry path. Now let me check the stderr-silence claim and read F3 for the severity interaction.
+Claim fully reproduced. Now let me run the full suite for the baseline and confirm no existing test asserts the drop-and-delete as *required* behaviour for these two cases.
+Critical detail: two existing green tests pin the drop-and-delete. Let me verify that and read the contract text.
+The written contract at `v5-hardening.md:27-34` explicitly mandates the drop, and two green tests pin it. Let me build the strongest form: the whole chain with **real** `_run`, `_listener_pids` and `_engine_env`, no port-probe mock.
+Let me confirm no measurement is running before I run the full suite, then get the count.
+Only my own worker process matched — nothing is measuring. Running the full suite now.
+Let me confirm every failure is a verifier test and none is a pre-existing module test.
+There's one non-`test_fable_` failure. Let me identify it.
+
+All 59 are verifier files. Let me reconcile that earlier count of 1.
+Clean: all 59 failures are verifier reproduction tests. Now the baseline with the verifier tests excluded.
+One problem with my own test: I assert stderr silence, but the finding's fix direction *adds* a stderr line — so the correct fix would fail my test. Let me drop that assertion.
+
+Production code is untouched (md5 matches the recorded baseline). Now let me test the finding's *second* sub-claim — that a DST change moves the rendered hour — which its own confidence only puts at 50.
+Let me check one amplifying detail: the module's own documented "recorded without an identity" entry, when the launcher is alive.
+One more amplification found. Let me verify no other recovery path exists, so "never recoverable" is accurate.
+
+
+
+Let me confirm nothing else sweeps stale ports at launch — which is what makes "never recoverable" true.
+Let me pin the exact line numbers of each early return.
+Let me check the DST half of the finding's claim, since `ps` renders via `localtime()`.
+`localtime()` uses the offset in effect at that instant, not today's. Let me verify that properly — it bears on the finding's DST sub-claim.
+Let me verify the finding's DST sub-claim is genuinely refuted, and confirm my test file is the only addition.
+Only pre-existing verifier artifacts from the parallel run, no production edits. Now writing the report.
+Let me verify the claims I made in the report that I haven't yet checked exactly — the `_record_running_engine` line numbers and the two-test pass.
+The contract quote is at line 33, not 29-34. Let me correct that citation.
+Also fix the `_record_running_engine` line range I cited (the null-identity write is at 1765, docstring at 1757-1758).
+Let me tidy that wrapping and re-verify the final state.
+Let me add the null-identity probe (which I ran but didn't place in the report) and verify all the report's numeric claims one final time.
+Final verification pass: the test file, the suite counts, and the untouched production code.
+The counts moved by one since another verifier added a file. Let me confirm all failures are still verifier tests.
+A parallel verifier added a 38th file. Let me identify it and update the report's count.
+`test_fable_s5_f5.py` appeared during my run — a concurrent verifier. Let me update the report to state the count honestly with that attribution.
+S5-F4 is confirmed. Dropped the claim and still get confirmed on the drop-and-delete.
+
+**What I found:**
+
+`_stop_orphan` (`runtimes.py:1827-1864`) has six early `return`s, all before the single `_shutdown` at `:1864`. Since none of them raise, the caller's `if not failed` at `:1899` falls through to `path.unlink(missing_ok=True)` at `:1901`. I grepped `RUNNING_ENGINES_DIRNAME|_ledger_path|running-engines` across `ohyesmlx/` — the file is the only reader-facing record and `cli.py:1078` is the only sweep, so "never recoverable" is exact.
+
+It reproduces through the **real** `_engine_env` → `_run` → `_listener_pids` chain with one line of setup (an absent lab path, which is F10's refusal), against a genuinely live pid. No mocks of the probe. Drop is silent: `stderr bytes: 0`.
+
+Two things the finding didn't have:
+- The module *manufactures* the unprovable shape on purpose — `_record_running_engine:1765` writes `lstart: None, argv: None` when the launcher's `ps` fails, and `test_runtimes.py:3775-3805` pins that as intended. A live launcher + null identity is dropped and deleted with no probe failure and no environment mismatch.
+- `v5-hardening.md:33` **mandates** the drop as the contract, and two green tests pin it (`test_an_unreadable_port_is_dropped_and_never_signalled`, `test_a_listener_whose_recorded_identity_no_longer_matches_is_dropped`). This is a contract objection, not a code/contract mismatch — any fix must change the paragraph and those two tests together, which is why I reported rather than fixed.
+
+**One part refuted:** the DST mechanism is wrong. `ps` renders via `localtime()`, which resolves the offset *at the epoch*, not at today — I proved it by converting a January and a July epoch from the same November "now" and getting EST and EDT. A DST change does not move `lstart`. The locale/TZ half does stand, and I demonstrated it: one live pid rendered four different `lstart` strings (`Sun Nov 15 16:50:19 2026` → `Mon Nov 16 06:50:19 2026` → `Mo. 16 Nov. 06:50:19 2026`) with identical argv.
+
+**Verification:** `tests/test_fable_s5_f4.py` — 2 fail, 1 control passes (holding the drop that *is* correct, so the failures can't read as "never drop"). Production untouched: `md5 -q ohyesmlx/runtimes.py` = `d7a98d5bf4cf727180c28b49cd91aa15` before and after. Baseline `1368 passed, 2 skipped`; full suite `60 failed, 1388 passed` with all 60 failures in `test_fable_*`.
+
+Two corrections to my own work worth noting: I first asserted stderr silence, then removed it — the finding's fix *emits* a line there, so pinning silence would fail the fix. And my first counterfactual run reached the real `_shutdown` during the control case; I verified afterwards that pid 4242 doesn't exist and nothing listens on 8081, and reran with `_shutdown` faked.
+
+I did not stage the real trigger (a shell-environment record followed by a launchd-environment check on one machine), so the cross-process handoff is mechanism-shown, not observed.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     53    4816296    4715776    40532   97.9%   0.053545
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py

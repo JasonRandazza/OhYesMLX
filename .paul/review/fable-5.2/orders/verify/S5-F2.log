@@ -1,0 +1,112 @@
+I'll start by reading the cited code ranges and the dossier entry.
+The file read was truncated and the dossier path is outside the workspace for read_file. Let me get the exact line ranges and read the dossier via shell.
+The dossier grep hit unrelated F2 references. Let me find the actual finding entry and read the exact code ranges.
+The code matches the finding exactly. Now let me find the dossier entry and see how existing tests drive `Runtime.start`.
+
+
+
+The code matches the finding precisely. Let me check the per-runtime `version_command` definitions and the test conftest.
+
+The `Vmlx.version_command` comment at line 3306 is itself telling: it says the 9.2s import "start() times as part of cold load, and cold load is a published metric that must not carry harness overhead" — the codebase already acknowledged the coupling. Let me check conftest and the existing rig seams I'll need to replicate.
+The code matches the finding exactly. Now I'll write the reproduction test with a fake clock and fake seams.
+I left a mangled setattr in the fixture. Let me fix it.
+Now let me run the test against the current code.
+Reproduced: 7.5s for a 2.0s load (2.0 spawn + 5.0 version + 0.5 lsof). Let me isolate each component and check how `cold_load_s` reaches published output.
+The isolate script needs the repo on the path. Let me rerun it properly.
+Both probes independently land inside the window. Let me check the interface spec that pins what `cold_load_s` is supposed to mean, and confirm there's no memoization.
+The interface spec is decisive: `cold_load_s` is defined as "spawn -> ready". Let me read that section and the report's caveat handling, plus the vMLX comment that already recorded the import cost.
+The code's own vMLX comment is a smoking gun: it records "measured 9.2s, which `start()` times as part of cold load". Let me check whether any existing test pins the current ordering, and time a real version command.
+Measured: `python -m mlx_lm --version` = **1.18 s** wall. Let me check the existing test at 2434 and time the other runtimes' probes.
+
+Measured per-runtime probe costs on this host: mlx-lm 1.18-1.20s, OptiQ 2.96s, Osaurus 0.38s, oMLX 0.18s, MTPLX 0.16s, vMLX sed ~0.00s, plus lsof 0.10s. Now let me establish the suite baseline and confirm my test's attribution.
+Let me check whether the report's recommended cross-runtime comparison (the sum) is also affected, and see how the existing rig masks this.
+Both probes are inside the window and independently attributable. Now let me prove the counterfactual — that moving the timing line makes the assertion pass — without touching repo code, by patching `Runtime.start` in memory.
+
+The counterfactual pins the attribution exactly: 2.0s with the clock taken at readiness, 7.5s shipped. Now let me size the bias against this repo's real recorded cold loads.
+
+
+
+
+
+Now let me check whether the version probe has been inside the window in the era those published rows were recorded.
+
+The ordering has been in place since the measurement core's first commit, so every published row carries it. Now let me measure the actual probe cost precisely, through the module's own `_run`.
+Measured per-runtime probe costs through the module's own `_run`: mlx-lm 1.19s, OptiQ 1.18s, Osaurus 0.31s, oMLX 0.05s, MTPLX 0.08s, vMLX 0.005s. Now let me size this against the recorded numbers.
+The sizing is striking. Let me check whether it actually inverts a cross-runtime ordering on the same artifact, so I don't overclaim from mixed medians.
+
+
+The report already refuses a cross-runtime ordering on `cold_load_s`. That matters for severity, so let me check how that gate works.
+The constant is per-runtime, so it cancels within a runtime column but not across them. Let me verify the full suite count including my test.
+Baseline is 54 failures from the other verifiers' pending tests; mine is the 55th. Let me confirm the red-check by stashing my test and confirming the count drops.
+All 55 failures are `test_fable_*` reproduction tests for open findings. Let me confirm the module suite itself is green.
+Clean baseline: **1368 passed, 2 skipped** with zero verifier tests. Now let me do the red-check properly — verify the test fails for exactly the right reason and that no other assertion could be responsible.
+`ohyesmlx/runtimes.py` checksum is unchanged and no production file is touched. Let me now write the report.
+
+S5-F2 is **CONFIRMED**, and the bias is worse than the finding estimated.
+
+`Runtime.start` (runtimes.py:2317-2344) starts its clock before `_spawn` but stops it after both `self.version()` and `_serving_pid`, so a version subprocess and an `lsof` call are charged to the load metric. `measurement-core.md:132` defines that field as "spawn -> ready". The vMLX `version_command` comment at :3306 already records the coupling as measured ("9.2s, which `start()` times as part of cold load") — the comment says the metric must not carry harness overhead; the code puts it there.
+
+I proved it with a fake clock: 2.0s spawn + 5.0s version + 0.5s lsof reports `cold_load_s = 7.5`, and varying one probe at a time attributes each: 2.0 / 7.0 / 2.5 / 7.5. A counterfactual that rebinds `start` in memory with only the measurement moved to just after `await_ready` makes the assertion pass at exactly 2.0s, so the test discriminates on that one ordering.
+
+Sizing on this host through the module's own `_run`: mlx-lm 1.19s, OptiQ 1.18s, Osaurus 0.31s, oMLX 0.05s, MTPLX 0.08s, vMLX 0.005s — a **240×** spread. Against the 1289 recorded rows in the main checkout that is 51% of the mlx-lm column's p50, 39% of OptiQ's.
+
+One thing I won't overclaim: the report already refuses a cross-runtime ordering on this column, and my p50s come from 263 different runs, not a same-artifact grid — so I sized the bias and showed the arithmetic reorder, rather than proving a published ranking inverted.
+
+Added `tests/test_fable_s5_f2.py` (1 test). `runtimes.py` checksum unchanged; module suite baseline `1368 passed, 2 skipped`; with all verifier tests present, `55 failed / 1386 passed`, all failures being `test_fable_*` reproductions of open findings.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     47    3228503    3149568    33738   97.6%   0.041532
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py

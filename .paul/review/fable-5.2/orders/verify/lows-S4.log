@@ -1,0 +1,165 @@
+I'll verify each finding separately, starting by locating the cited code and the dossier entries.
+Let me pull the dossier entries for these findings and read the cited code ranges.
+
+
+
+I have the claims restated. Now let me look at existing test fakes to model my tests on, starting with F10.
+
+
+Now let me read the quickbench and fetch ranges for F11–F14.
+
+
+Now let me confirm the ledger is per-repo and merged, which is load-bearing for F11.
+
+Let me check the `run` signature and existing quickbench test fakes so my tests match the seam.
+Now let me check the existing quickbench test harness so my tests reuse its fakes.
+
+
+Now let me check the lock name, ledger path, and the `CancelAfter` counter semantics for the sweep test.
+Let me look at an existing verify report to match the established format, and check the tests dir setup.
+
+I have the shapes I need. Let me start the baseline suite count in the background while I write the first test.
+I have the shapes. Let me check stage A's cancel-check ordering (needed to place the F12 cancel) and grep for fsync for F14.
+No `fsync` anywhere in fetch.py — that half of F14 is already a static fact. Let me read the gate at quickbench:283 and `_verify`.
+
+Let me check `ledger_for`, the consent wording quickbench shows, and whether a one-file model suffices.
+The module docstring at quickbench.py:20 states "Only a sibling this run downloaded is ever evicted" — that's the contract F11 tests against. Let me check the module docstring and consent sentence.
+Let me check the baseline suite result.
+Baseline recorded: **46 failed, 1384 passed, 2 skipped** (those failures are the other verifiers' red tests). Now let me check whether an empty lock is already an accepted case in the existing suite, before judging F13.
+No fsync in fetch.py at all. Let me read `plan`'s layout so F11 and F14 can build a real cache layout.
+Now I'll write the first test file (F10).
+Now writing the F10 test: an `emit` that raises on the `error` event must still leave the venv rolled back.
+
+Test 1 confirms F10. My second test's counter fired on the wrong append — let me make it raise precisely on the `error` line, the finding's ENOSPC trigger.
+
+Both F10 variants fail on current code. Let me confirm the rollback does work when nothing raises (so the failure is the raise, not a broken fixture).
+F10 is confirmed by both variants, with a control showing rollback works when nothing raises. Let me check the dossier's accepted-items section before judging F13/F14.
+No fsync anywhere in `fetch.py`, and the dossier confirms only the *dead*-owner reclaim race is accepted — not F13's live-owner window. Let me write the F13 and F12 tests.
+
+`not_evicted=[]` for F12, both fail. Let me see F13's failure detail to confirm it reclaims the empty lock rather than erroring for another reason.
+F13 confirmed: the empty lock is removed and re-created. Now F11 and F14, which are the most involved. Let me check the existing "already downloaded sibling" test to model F11 and confirm the ledger merge behavior.
+Now let me check `catalog.siblings` and the `Model` fields so F11/F14 can build a two-file sibling with a real cache.
+Let me ground F11's consent claim in the app's actual copy.
+
+Now the F11 and F14 tests. Both need a real cache layout, so let me check `fetch.downloaded`'s link expectations and `_keep_during_run`.
+Now I'll write F11. The key: a sibling with a pre-existing ledger entry (the user's own 80% download), then quickbench downloads the rest and `evict` removes the whole entry including the user's bytes.
+That draft uses clumsy `__import__` calls. Let me clean it up with proper imports.
+
+The run refused before stage B. Let me see why — probably the chosen row isn't "downloaded" against a real scratch cache.
+The chosen row must be downloaded too. Let me use small hand-built rows and materialize the chosen row's cache.
+
+F11 is reproduced: both the user's partial and the run's bytes are gone. Let me tighten the assertion to prove the *user's* bytes specifically were destroyed.
+
+A file survived but with NUL bytes — I need to see what's actually on disk after the run.
+The dump proves it precisely: after the run, the sibling's repo holds only `refs/main` — the user's 320 bytes of `u` and the run's blob are both gone. Let me express the claim that way.
+
+F11 confirmed cleanly. Now F14 — the fsync half is a static fact (no `fsync` in fetch.py at all); the "nothing downstream re-checks bytes" half needs a test.
+My two F14 assertions currently assert the buggy behaviour (so they pass). Let me rewrite so the test fails on today's code, and cite the fsync half statically.
+
+All five reproduced. Now let me red-check: revert each finding's mechanism and confirm the test goes green (proving the test targets the cited cause, not something incidental). I'll do this with temporary patches I revert.
+All five tests fail on current code. Now the red-check: I'll apply each minimal fix, confirm its test goes green, then revert.
+
+F10 goes green with the rollback moved into a `finally`. Now revert and do the same for F13.
+F10 back to red, code restored. Now F13's fix (treat a lock too young to have a pid as held).
+
+F13's green with the fix and the existing fetch suite still passes. Now revert and red-check F12.
+
+
+F12 green with the one-line fix, whole quickbench suite passes. Now revert and red-check F11 and F14.
+F12 red again. Now F11's fix direction — evict only when the repo had nothing on disk at plan time.
+
+
+
+
+My F11 fix didn't take effect — let me find out why `had_bytes` was False.
+My fix left the repo in `outstanding`, so the run-level sweep still evicted it. Let me close that path too.
+The per-cell `evict` is skipped correctly now, but `outstanding` still holds the repo — no wait, `outstanding.discard` is in the `finally` of the `if fetched` block, which is now skipped. Let me move the discard out.
+
+The fix now works — the test fails only on its own precondition line ("the run evicted the sibling"), exactly as intended when behaviour is corrected. Let me reorder so the test asserts the survivor rather than requiring an evict.
+
+F11 red-checks correctly. Now F14's fix — have the plan verify the chosen row's blobs.
+
+My F14 test expects `plan` to return empty `stage_a`, but a verify-style refusal raises. Let me align the test to accept either refusal shape (a raise before any cell, or no cells).
+
+The F14 patch breaks the suite (existing tests pin fake hashes), so that fix isn't the point. Let me revert it and red-check F14 differently — by proving the test hinges exactly on the missing byte re-check.
+
+The F14 red-check holds: with a byte re-check in the gate, the plan refuses and the test passes. Let me confirm all three source files are restored.
+All six tests fail on the unmodified tree, sources clean. Now I'll write the five reports.
+
+
+
+
+Now let me run the full suite and confirm the new files' effect matches the baseline, and check I touched nothing else.
+Baseline was 46 failed / 1384 passed / 2 skipped; now 52 failed / 1384 passed — exactly my 6 new tests, no regressions, no tracked file modified. Let me verify a couple of report citations I relied on.
+One correction: I cited `tests/test_fetch.py:1075-1076` in the F11 report for the residue-on-ledger assertion; it's at line 1076. Let me fix that and check for stray temp files.
+The citation is accurate as written: the assert spans lines 1075–1076 (comment at 1075, assertion at 1076). Let me clean up the backups I made outside the workspace.
+All five findings verified. Batch of 5, all CONFIRMED, all Low agreed — each with its own failing test and its own report.
+
+**Baseline:** 46 failed, 1384 passed, 2 skipped. **After:** 52 failed, 1384 passed, 2 skipped — exactly my 6 new tests, zero regressions, no tracked file modified (`git diff HEAD -- ohyesmlx/ app/` is empty).
+
+| ID | Test | Mechanism |
+|---|---|---|
+| S4-F10 | 2 tests | `send("error")` precedes `_rollback`; an ENOSPC append or throwing `emit` skips it. Half venv survives. |
+| S4-F11 | 1 test | `downloaded` is whole-repo/size-only, so a user's 80% partial reads "missing", gets resumed, then `evict` deletes the merged ledger entry — including their bytes. |
+| S4-F12 | 1 test | Sweep's `except` logs but never appends `not_evicted`, unlike the inner path 6 lines up. |
+| S4-F13 | 1 test | Empty lock ⇒ `pid = None` ⇒ liveness check skipped ⇒ live owner's lock removed. Distinct from the accepted dead-owner race. |
+| S4-F14 | 1 test + grep | No `fsync` anywhere in fetch.py; no downstream byte re-check, so a right-size/wrong-bytes blob reaches `stage_a`. |
+
+Every finding was red-checked: applied a minimal fix, watched the test go green (existing nearby suites still passing), reverted, watched it fail again. One negative result worth flagging: for F14, adding a verify loop directly inside `quickbench.plan` breaks 48 existing tests, because the suite's hand-built rows carry fake hashes — so the fix needs an injected seam, not a hard call. That's recorded in the F14 report rather than implemented.
+
+**Not verified:** no network, model, engine, server, subprocess or app was run. F14's fsync half is source evidence only (a power loss can't be staged in pytest), and F13's race is staged by state rather than by two real processes.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     96    9594654    9444096   103746   98.4%   0.113164
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py

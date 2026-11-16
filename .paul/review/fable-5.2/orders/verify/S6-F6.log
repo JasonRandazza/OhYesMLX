@@ -1,0 +1,112 @@
+NOTE: Mon 03:43 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+
+I'll read the dossier entry and gatekeeper line 59.
+
+
+
+
+
+
+No cleanliness check exists anywhere in `scripts/` (the grep only hit `.paul/` docs). Now let me look at a sibling verify report for the expected format, and check the constraints dir shape for the fake-repo fixture.
+Now I'll write the verification test file: a fake release repo (script + package copy) so I can reproduce the dirty-tree, post-copy-edit, and unhashed-data-file gaps without touching the real tree.
+
+All three defect tests fail and the control passes. Now let me collect the direct code evidence, including what the on-disk bundle actually ships.
+
+
+The shipped SBOM names commit `bb762c6…` — let me check whether that commit's tree actually matches the recorded source digest. This is a real artifact, so it can settle the claim outright.
+A real mismatch on a shipped artifact. Let me pin down which tree the recorded digest belongs to.
+Decisive: the shipped SBOM was generated at 17:09:47, four minutes *before* commit `101df7c` (17:13:53) captured the code it shipped. Let me check whether any document states the "commit = context, digest = truth" reading.
+Let me run the rest of the suite to establish that the tree is otherwise green and my file is the only source of failures.
+
+
+
+One last check before writing the report: whether any release procedure (plan/doc) requires a clean worktree.
+
+Evidence is complete. Writing the report.
+
+
+
+
+
+S6-F6 verified — **CONFIRMED**.
+
+- Wrote `.paul/review/fable-5.2/verify/S6-F6.md` and `tests/test_fable_s6_f6.py` (4 tests: 1 green control, 3 red reproductions). No production code touched; `git status` shows no tracked change.
+- All three claims reproduce: a dirty fake checkout is stamped with bare `HEAD`; an edit committed after the `:68` copy is hashed although the copy didn't ship; changing `catalog.json` moves no recorded digest. Pre-existing suite: 1406 passed, 92 failed, all 92 in other verifiers' `tests/test_fable_*.py`.
+- Strongest evidence is the already-shipped artifact, no build needed: `dist/OhYesMLX-0.3.0-sbom.json` (generated 22:09:47Z) names `bb762c6`, whose `ohyesmlx/*.py` digest is `bde0d12…`; the recorded `0a17bd4…` is the bundle's and is commit `101df7c`'s tree — a commit created four minutes *after* the SBOM. Q3's experiment is answered.
+- Severity Medium agreed: provenance/audit defect, no runtime path.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     30    2311619    2208000    40255   95.5%   0.092640
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py
+?? tests/test_fable_s6_f4.py
+?? tests/test_fable_s6_f5.py
+?? tests/test_fable_s6_f6.py

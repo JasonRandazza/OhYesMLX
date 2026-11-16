@@ -1,0 +1,6 @@
+- **S5-F1** → High (Fable: High): kept High (verifier proposed Medium): on this Mac the mlx-lm control resolves OptiQ lab bin, mlx 0.32.4 vs the dedicated venv 0.32.2, transformers 5.12.1 vs 5.17.0
+- **S4-F1** → Medium (Fable: High): start() itself refuses a busy port and a resident Osaurus app (runtimes.py:2295-2305); what remains is a late, unclear failure
+- **S3-F3** → Low (Fable: Medium): backend sends restore_failed error before done (quickbench.py:733-739); residual: stale comment AppModel.swift:677 and misleading Results/Benchmark copy
+- **S4-F8** → Low (Fable: Medium): no shipped catalog row has divergent engine lists
+- **S5-F14** → Low (Fable: Low): engines.py:501 bounds the non-/Applications case; Fable itself rated it Low on this Mac
+- **S6-F7** → Low (Fable: Medium): refuted: ps eww shows env of ad-hoc-signed processes; check_bundle P5-9 holds; residual substring PATH match

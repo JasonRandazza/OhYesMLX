@@ -1,0 +1,110 @@
+I'll read the cited code and the dossier entry for S6-F8.
+The dossier grep found nothing. Let me locate the dossier files and check make_sbom.py.
+Let me find the F8 entry in the S6 findings and dossier.
+Now let me check whether any other step in the repo produces a digest, and look at how existing verifier reports/tests are shaped.
+I'll look at an existing S6 report and test for format, and check the plan's acceptance criteria for the sha256 promise.
+Let me check the phase 5 plan summary/audit and the scripts directory for any release step that produces the zip digest.
+Let me check the actual released artifacts for a `.sha256` file, read the SBOM script's main path, and see what docs/release holds.
+The 0.3.0 release directory has no `.sha256` file at all. Let me hash the zip, check whether that digest appears anywhere in the SBOM, and read the plan's AC text.
+The artifact evidence is strong: the 0.3.0 release folder has the zip and SBOM but no `.sha256`, and the zip's digest appears zero times in the SBOM. Now let me verify the ad-hoc signature limb with a throwaway bundle in the scratchpad.
+`/bin/true` isn't on this macOS; I'll use `/usr/bin/true`.
+The signature probe confirms the second limb. Now I'll write the test file.
+Running my test file alone.
+The probe hit `copy2`'s xattr/flag copying. I'll copy only file contents.
+
+The reproduction is red and the signature probe is green, as designed. Now the suite.
+Let me pin down the remaining evidence: failure-file inventory, whether any release checklist exists, and what the threat model says.
+Let me check the archived 0.3.0 handoff for any release digest step.
+All evidence is in hand. Writing the report.
+Checking the report's closing lines, the final test state, and that no tracked file changed.
+The report file didn't appear in `git status` — let me check whether it's gitignored or simply untracked under a directory already listed.
+
+**S6-F8 — CONFIRMED.**
+
+Changed:
+- Added `tests/test_fable_s6_f8.py` — one red reproduction (no digest-producing command or `.sha256` path in `scripts/build_app.sh`) and one green codesign probe showing an altered bundle re-signs ad-hoc and verifies again, with `Signature=adhoc`, `TeamIdentifier=not set`.
+- Added `.paul/review/fable-5.2/verify/S6-F8.md`.
+
+Verified:
+- Test file alone: `1 failed, 1 passed in 0.10s` — the failure is the finding's reproduction, by design; no production code touched.
+- Full suite: `99 failed, 1409 passed, 3 skipped`; every failure is in a `test_fable_*.py` file (other verifiers' red tests plus mine), none in tracked tests.
+- Artifact evidence: the 0.3.0 release directory has the zip and SBOM but no `.sha256`; the zip's digest `c6feff2a…` appears 0 times in the SBOM.
+- `git status` shows no tracked modifications.
+
+Verdict line: `VERDICT: CONFIRMED (test: tests/test_fable_s6_f8.py::test_the_build_produces_the_digest_the_release_doc_promises)` — severity agrees (Medium).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     22    1542836    1463552    28932   94.9%   0.033642
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py
+?? tests/test_fable_s6_f4.py
+?? tests/test_fable_s6_f5.py
+?? tests/test_fable_s6_f6.py
+?? tests/test_fable_s6_f7.py
+?? tests/test_fable_s6_f8.py

@@ -1,0 +1,46 @@
+I'll read the cited code ranges in `ohyesmlx/fetch.py` and the dossier entry, then reproduce with a minimal test.
+The dossier grep found nothing. Let me inspect the dossier's structure and the surrounding code (`download`, `open_url`, `_close`, constants).
+Now let me read `download` and the existing fetch tests to learn the harness (how `open_url`/`hardware` are faked), plus check the S1 findings doc for F3.
+Let me examine the existing fetch test harness — fake responses, fake catalog model, and helpers.
+
+
+
+
+
+Now I'll check `conftest.py` (the suite's lock-dir guard) so the new test file doesn't trip it.
+I have everything I need. Writing the reproduction test now — it asserts the fixed behavior (no escape, retry, fetch-level refusal, ledger residue), so it should fail on current code.
+Now I'll run just the new test; on the current code it should fail with the `TimeoutError` escaping.
+The failure reproduces exactly at `fetch.py:1070`. Now let me capture the two secondary facts — one `open_url` call (no retry) and the residue absent from the ledger — with a throwaway script in the scratchpad.
+All three elements reproduce. Now the project's test suite — I'll run it fully, then run the baseline excluding the verifier files to state a clean starting count.
+The suite now has 12 other verifiers' red tests plus mine. Let me confirm the clean baseline by excluding all verifier files.
+Baseline is clean: 1368 passed, 2 skipped with all verifier files excluded. Let me check the evict path precisely and whether other verify reports exist to match format.
+
+
+Let me confirm the evict consequence directly — reproduce the escape, then call `evict` on the same ledger.
+Everything reproduces. Writing the report.
+
+**S1-F3: CONFIRMED — severity Low, agree.**
+
+Wrote two files only:
+
+- `tests/test_fable_s1_f3.py::test_a_mid_body_timeout_is_retried_and_never_escapes_download` — red on unmodified `714e8f6`: `TimeoutError` escapes at `fetch.py:1070` through `fetch_file:1130` and `download:712`, with none of the retry/refusal assertions reached.
+- `.paul/review/fable-5.2/verify/S1-F3.md` — claim, code path with line numbers, evidence, and the required `VERDICT` / `SEVERITY-CHECK` lines.
+
+Secondary evidence captured (no code changed): one `open_url` call (no retry), zero `error` events emitted, a 4-byte `.incomplete` on disk with `created_blobs: []`, and a subsequent `evict` returns True having "removed 0 paths" while the partial survives — matching `fetch.py:1261-1265` and `:1280-1288`.
+
+Suite: baseline excluding all verifier files is **1368 passed, 2 skipped**; with the verifier tests present it is 13 failed / 1374 passed / 2 skipped, every failure being a verifier reproduction (mine included). I did not verify the bundled Python's exact `HTTPResponse.read` exception on a short close, and did not execute the server route — `server.py:754-758` was read, not run.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     22    1243107    1182080    20632   95.1%   0.025079
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py

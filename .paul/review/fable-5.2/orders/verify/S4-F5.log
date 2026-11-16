@@ -1,0 +1,72 @@
+I'll start by reading the cited code and the dossier entry for S4-F5.
+Let me find the dossier's F5 entry specifically.
+
+Now let me check how `best` is persisted and consumed, and whether any existing test covers `_best`.
+Let me check the summary structure and the recommend consumer, then look at an existing quickbench test for style.
+I have the full picture. Let me get the baseline suite count before adding my test.
+Baseline is 36 failed / 1379 passed / 2 skipped — the failures are other verifiers' red tests. Now I'll write mine.
+
+Claim reproduced, and the control passes (a wide gap does win), so the failure is specifically the missing band. Let me confirm the downstream `measured_here` wiring.
+Full chain confirmed. Let me quickly check whether the app's Results screen surfaces `best`, since the finding says that raises confidence.
+
+The best card renders it. Let me check an existing sibling report's format so mine matches.
+
+
+Now I'll write the report.
+Now the final suite run to report the exact count.
+CONFIRMED — S4-F5 reproduces.
+
+- `_best` (`quickbench.py:398-425`) takes `max(decode_tps)` at `:419` over `stage_b.cells`, which includes the reused stage-A baseline (`:836`); `TIE` is applied only in `_winner` (`:393`). `stage_b` has no `tie` key at `:603`.
+- Test: `tests/test_fable_s4_f5.py::test_best_keeps_the_baseline_when_the_sibling_is_inside_the_tie_band` — 71.0 vs 72.1 (1.5%, inside the 5% band) returns the sibling. Its control, 60.0 vs 70.0, passes, so the failure is the missing band, not the fixture.
+- Persistence chain verified by reading: `summary["best"]` at `:994`, written at `:997`, keyed by `best["repo"]` in `latest` (`:1051-1064`), wired at `server.py:1013` → `measured_here` (`:586-589`, `recommend.py:206`), and rendered as "Best on your Mac" in `ResultsView.swift:87-102`.
+- Report: `.paul/review/fable-5.2/verify/S4-F5.md`. Severity agreed (Medium).
+
+Suite: baseline 36 failed / 1379 passed / 2 skipped → 37 failed / 1380 passed / 2 skipped (my one red test + its passing control). Every failure is a `tests/test_fable_*` verifier file; no shipped-code test fails. No code changed.
+
+Not verified: a real stage-B run's thermal drift (needs a server/model, forbidden here); the two UI surfaces were read, not run.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     17     682871     607616     9801   89.0%   0.018992
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py

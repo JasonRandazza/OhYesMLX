@@ -1,0 +1,112 @@
+I'll verify S5-F8 by reading the cited code paths and dossier first.
+Now let me read the dossier entry and check whether anything captures the snapshot into run headers.
+The dossier grep came back empty — let me locate the dossier file and check the quickbench drift path too.
+Let me read the dossier's F8 entry and check whether any run header records the settings snapshot.
+
+Now let me confirm no snapshot reaches any results directory in the harness path, and check exact line numbers.
+Code reading confirms both halves. Let me look at the existing test file's scratch-config helpers, then write the test.
+Let me read the fixture and setup of the test file.
+Now I'll write the test, and check whether anything at all carries an Osaurus snapshot into a record.
+
+The test fails exactly as the finding predicts. Let me verify the test's logic is sound by simulating the fix, and check whether quickbench keeps any snapshot with results.
+Let me confirm the "no snapshot with the results" half by checking what quickbench and measure write for Osaurus.
+
+
+Let me check whether any runner preserves the pinned baseline with its results.
+Let me check the grid runner and relax the assertion to match the finding's stated test idea.
+The count is 23 tracked keys with 3 pinned — matching the finding. Let me tighten the test so it isn't coupled to today's behaviour, then run it.
+
+Test fails as predicted. Now the red-check: simulate the fix direction and confirm the assertion flips.
+Red-check passes. Let me get exact line numbers and check docs/interfaces for any snapshot shape.
+
+
+
+
+Let me confirm which `check_host_state` is which, then run the full suite for the baseline count.
+
+
+70 failures, nearly all in other verifiers' `test_fable_*` files (expected — those are confirmed findings too). Let me establish the real baseline excluding the verify tests.
+Let me pin down the exact line numbers for the report.
+Let me confirm the base-class gate and that `start()` invokes it per cell.
+Everything checks out. Writing the report.
+
+S5-F8 confirmed — both halves.
+
+**Wrote:** `.paul/review/fable-5.2/verify/S5-F8.md` and `tests/test_fable_s5_f8.py`. No production code touched.
+
+**What I proved:**
+
+1. **The gate is a tautology.** `pin` (`osaurus_settings.py:285`) ends with `write_baseline(baseline, root)`, which is `capture_osaurus_settings` written out verbatim. The pin edits 3 of the 23 `TRACKED_KEYS`; the other 20 (including `numberOfThreads`, `generation.streamInterval`, `performance.compiledDecode`, `mtp.mode`) go into the new baseline at whatever the host held that day. `check_host_state` (`runtimes.py:2694-2712`, called at `:2306`) then diffs the host against itself for every cell start. `restore` writes the old baseline back over it (`:310`), so even the file is gone.
+
+2. **No snapshot reaches the results.** `grep -c osaurus measure.py` → 0, `report.py` → 0. quickbench's `summary["osaurus"]` is statuses only; its byte copy (`during_run`) is written *only* when drift was already detected. `grep -rl numberOfThreads` across the main checkout's `results/` → nothing.
+
+**Test:** `test_pin_replaces_the_committed_baseline_with_the_live_host` fails on current code with `assert [] == ['server.json:numberOfThreads']` — exactly the reported empty drift. **Red-checked:** monkeypatching `write_baseline` to the fix direction flips it to `['server.json:numberOfThreads']`; reverting returns `[]`.
+
+**Baseline:** `1368 passed, 2 skipped` with verify tests excluded. Full suite `70 failed, 1391 passed` — the 70 are other findings' confirmed tests plus mine; no pre-existing test regressed.
+
+**Not verified:** that a real Tuesday/Thursday grid pair was ever joined under different settings; the app's pin path end-to-end; and whether the committed baseline is *meant* to bind across runs — that's Jason's call, and the report says so.
+
+One thing the finding understates, in the report: `measure.run` calls `check_host_state` once per cell start and never after, so the **grid** path has no post-cell drift check at all. quickbench's `_osaurus_drift` guards only quickbench.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     33    1895300    1833216    25348   96.7%   0.030021
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py

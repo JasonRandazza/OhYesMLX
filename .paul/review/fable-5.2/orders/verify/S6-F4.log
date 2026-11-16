@@ -1,0 +1,118 @@
+NOTE: Mon 03:20 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll verify this finding by reading the cited code first.
+I have the code. Now let me read the dossier entry and the existing test fixtures for `engines.py` detection, since I want to reuse their fake filesystem.
+The dossier grep came back empty for F4; let me look at the dossier's structure and the `FakeEnv` helper.
+The dossier's F4 entry is Q2 at line 425; let me pull the actual finding text from the review report directory and the rest of the fixture helper.
+Let me read the F4 order and finding text, plus the `_engine_env` start path that turns the dangling venv into a failure.
+Let me read the install-test helpers (`do_install`, `FakeRun`, `FakeHardware`) so my new test file can drive `install` the same way.
+
+
+
+Now let me confirm the `/engines` row comes from `detect_all` and that no uninstall/repair surface exists.
+No uninstall/repair surface exists anywhere. Now I'll write the reproduction test: a stranded app-managed venv whose `bin/python` symlink dangles.
+
+Now I'll write the reproduction test. It encodes the repair the finding asks for, so it must fail on the current code.
+
+All three defect assertions fail exactly as the finding predicts, and the two controls pass. Now let me gather the remaining mechanical evidence: the exact citation lines, the venv symlink shape, and the actual exec failure.
+
+The shebang path exceeded 127 bytes, so let me redo the exec check with a short path alias and show the full symlink chain.
+The exec failure is reproduced. Now let me check the "new Python minor in a later release" arm, using whatever interpreters are on this machine.
+
+Confirmed: an in-place minor change leaves the interpreter running but with no venv `site-packages` (`sys.path` has none), so the script dies on `ModuleNotFoundError`. Let me read the `/engines` composition and then run the suite for the baseline.
+The shared worktree accumulates other verifiers' intentionally failing tests. Let me establish the committed baseline by running only tracked test files.
+Baseline confirmed: 1368 passed, 2 skipped on tracked tests. Let me pin down the remaining details: the OptiQ start command and how a missing interpreter surfaces from `_spawn`.
+
+
+
+
+
+
+
+
+Let me confirm that every other suite failure lives in an untracked verifier file, so the baseline statement is exact.
+All evidence is in. Writing the report.
+Let me verify the exact line numbers I cite in the report.
+
+
+
+S6-F4 is **CONFIRMED**. Report at `.paul/review/fable-5.2/verify/S6-F4.md`, test at `tests/test_fable_s6_f4.py`. No production code touched.
+
+- **Reproduced:** a fixture app-managed venv with a dangling `bin/python` still reports `installed=True`, `version=0.31.3` / `0.5.13`, `tested=True` for both mlxlm and optiq; `install` then emits only `already_installed`. Two live-interpreter controls pass, so the dead link is the sole difference. `3 failed, 2 passed`.
+- **Exec evidence:** a real venv's `bin/python` chain ends in an absolute base-install path; pointing it at the moved bundle makes a shebang console script exit 126 ("bad interpreter: No such file") and `bin/python` exit 127. `_spawn` surfaces it as `RuntimeStartError: could not start …`.
+- **Minor-change arm:** confirmed, but the symptom is `ModuleNotFoundError` with no venv site-packages, not ENOENT — same silent state, same refused repair.
+- **Baseline:** tracked suite green at `1368 passed, 2 skipped`; the worktree's 92 failures are all untracked verifier tests (3 mine, by design).
+- **Not verified:** a live app run (`sys.executable` read from `BackendLauncher.swift:149-156`), macOS translocation behaviour, the Engines-screen click path, and the repair itself (forbidden by the order).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     37    3805437    3548288    46933   93.2%   0.154754
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py
+?? tests/test_fable_s6_f4.py

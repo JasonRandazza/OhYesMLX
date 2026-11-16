@@ -1,0 +1,60 @@
+I'll read the cited code and the dossier entry for S3-F2.
+The dossier grep returned nothing — let me locate the right dossier file and the download result emitter.
+The download/evict paths do emit `result`. Now let me find the dossier entry and pin exact line numbers.
+
+
+Dossier confirms the shape. Now I'll look at how existing Swift tests drive `AppModel` so my test matches the project's pattern.
+
+There's already a test about a download after a quickbench. Let me read the helper setup and StubBackend's event scripting.
+
+The format is clear. Let me read StubBackend's job API and the sibling verifier's test pattern (read-only) before writing mine.
+Now let me read AppModel's state, gating, and job-start functions to drive the test correctly.
+
+Let me check `JobEvent.payloadData` and the summary fixture shape before writing the test.
+
+Two more checks: the JSONValue cases and the plan fixture's repo.
+Everything checks out. Writing the reproduction test now — three emitters (download, evict, install), each after a finished quickbench.
+Now running just the new tests.
+All three fail with exactly the claimed symptom. Now the full Swift suite for counts.
+Full suite: 86 tests, 8 failures. Let me confirm which failures are mine vs the sibling's.
+Reproduction is solid. Let me read the sibling report's structure so mine matches the house style.
+Now I'll get a real baseline: temporarily move my new file aside, run the suite, restore it.
+Let me confirm the working tree only has the expected additions before writing the report.
+
+Done. Verdict: **S3-F2 CONFIRMED (Medium stands)**.
+
+**Wrote**
+- `.paul/review/fable-5.2/verify/S3-F2.md` — code reads, reproduction, view/export path, limits, suite counts, verdict lines.
+- `app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift` — 3 new tests (download, evict, install `result` after a finished quickbench). No code fixed; no tracked file touched.
+
+**Verified**
+- All 3 tests fail with the claimed symptom: `summary` becomes nil and `summaryData` becomes the job receipt (76 / 83 / 18 bytes vs the 4285-byte summary), so Results takes the live-cells branch and Export writes the receipt as `OhYesMLX-quickbench-<stamp>.json`.
+- Suite: baseline without my file 83 tests / 2 failures (both the parallel S3-F1 verifier's); with my file 86 tests / 8 assertion failures across 5 cases — my 3 and S3-F1's 2. Every pre-existing test passes.
+- Not verified: no app/UI run, no live jobs, fix not applied so the tests were not observed green.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     24    1377982    1299200    22241   94.3%   0.029060
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

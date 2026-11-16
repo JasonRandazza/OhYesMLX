@@ -1,0 +1,72 @@
+I'll orient first: check the interface docs' shape inventory, the graphify map, and the recent-test list.
+The docs are small enough to audit window-by-window. I'll read the interface docs in slices and gather the test inventory in parallel.
+Graphify works and v5-onboarding.md is fully mapped (13 shape groups). Now I'll read the remaining four interface docs in windows.
+Now measurement-core.md in windows.
+
+All five docs are inventoried — roughly 60 shape/rule groups to verify. Now I'll start Part A verification module by module, locating the producing code, and gather Part B's test ordering in parallel.
+34 test files changed since 2026-10-29. I'll build the ordered test inventory for Part B, and read the hardware/engines shape code for Part A.
+Part B's sample boundary is clear: the 7 most recently changed test files give 249 tests (≥200). I'll dispatch two background scouts to flag suspect tests while I verify Part A shapes myself.
+Now I'll verify the lab-path, detect_all, and bundle-executable shapes against their code.
+Shape inventory done. I'll fan out the remaining Part A audits to background scouts with tight scopes, then verify hardware/catalog/recommend/canary myself.
+
+I'll now verify hardware, catalog, recommend, and canary shapes myself.
+Hardware and Pick shapes match so far. Now the catalog model shape, recommend rules, and canary specifics.
+Found a candidate drift in `recommend._rank` ordering. Let me pin the constants and the rest of catalog, plus canary's verdict/cells.
+Recommend's rank order deviates from the doc text. Now I'll verify the canary CLI surface, `fetch.downloaded`, and the `/recommendations` composition.
+`/recommendations` and `fetch.downloaded` match. I'll check the manifest's canary block, `_engine_env`'s PATH rule, and the plan's ranking wording.
+My own clusters (hardware, catalog, recommend, canary, lab paths, bundles) are verified. Now I'll collect the scout results.
+All scouts still running. I'll verify one remaining call-site claim, then write the file skeleton with my verified sections.
+Now I'll write the sweep skeleton with the sections I verified myself.
+Skeleton written. Now I'll collect scout results as they land, starting with the server audit.
+Server scout reports all-match. I'll spot-check its key claims before recording them.
+Spot-checks confirm the scout. Appending the server-side verdicts to the sweep.
+v5-onboarding section complete. Collecting the quickbench audit next.
+Quickbench scout reports near-full match. Spot-checking its deltas and key claims.
+Confirmed. Appending the v5-quickbench section.
+Now the hardening audit.
+Hardening scout found one real delta in the pip argv block. Verifying it and spot-checking the ledger fields.
+Confirmed. Appending the v5-hardening section.
+Now the measurement-core audit.
+Three real drifts claimed in measurement-core. I'll verify each before listing, plus the sweep-sentence nuance.
+Two drifts confirmed. I need the full header dict and the sweep sentence condition to be precise.
+
+All three measurement-core drifts verified. Appending that section.
+Now the Swift app audit.
+Swift audit found string and shape drift. Verifying those three claims directly.
+
+All three verified. Appending the v5-app section.
+Part A is complete. Now checking the Part B test scouts.
+One Swift flag pending my verification. Now the Python test scan.
+Both scouts flagged one test each. I'll verify each against the actual test code before listing it.
+Both flags verified against the test code — the Python one is a genuine can't-fail (the fake's `best: None` decides the outcome and `pick` defaults to `None` anyway); the Swift one is a pure echo of the stub's constants. Writing Part B.
+The sweep is complete. I'll add a findings index at the top so the coordinator can see every mismatch at a glance.
+Final check that I touched nothing but the sweep file.
+Done. Wrote `.paul/review/fable-5.2/W1-sweep.md` (701 lines) — the only file I touched (the other untracked dossiers/orders logs are other dispatches').
+
+**Part A** — every shape/rule in the five interface docs checked against its producing/consuming code. 12 mismatches, all indexed at the top with `doc:line vs code:line`:
+- Real behavior drift: `recommend._rank` orders starter-tier before params and only within `comfortable` rows, against the Pick rule's text (:80-82) — which of the two is intent needs Jason's word.
+- Stale doc: the hardening pip argv block omits `--no-deps` (code and the doc's own prose have it); measurement-core's concurrency count says "the two without one" (three with MTPLX), its sample result dict misses `pid`/`interval_s`, and its header pin list omits `quick`.
+- Shape/label drift in v5-app: `.exited(status, stderrTail)` vs the `onExit` closure, "Stop After This Cell"/"Stop Now" title case, "Check Again".
+- Minor: `lab_paths(read=)` seam, unenforced "only query parameter", `run(abort=)` missing from the quickbench signature block, `cards`/`cells` naming.
+
+**Part B** — 263 tests examined (the 7 most-recently-changed files = 249, past the ≥200 boundary, plus 3 same-date Swift files); 2 flagged, each re-read against its production code before listing: `test_server.py::test_recommendations_leaves_measured_here_null_without_a_finished_quick_run` (assertion decided by the fake's own `best: None`; passes with the fill deleted) and `AppModelTests.swift::testExcludedModelCarriesItsReason` (assertions echo the stub's own constants through a verbatim assignment).
+
+**Not verified:** suites were not run (order forbids); Part A "matches" verdicts rest on my direct reads for hardware/catalog/recommend/canary/server/lab-path clusters and on scout reports spot-checked at their cited lines for the rest — the sweep records exactly which ranges were re-read. Raw assertion-by-assertion re-audit of all 263 tests beyond the flagged candidates was delegated and sampled, not line-by-line by me.
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     39    4940175    4783232    90776   96.8%   0.164465
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S4.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log

@@ -1,0 +1,141 @@
+I'll start by understanding the layout and finding the cited code. Let me get oriented with the repo and the existing verify directory.
+Let me check whether any of my test files already exist, and read the cited code ranges in parallel.
+The four test files already exist from an earlier run. Let me check what's in them and whether reports exist yet.
+Let me run the existing F11 test to see where it stands, and read the other three test files.
+F11 reproduces. Let me run the remaining three tests.
+All four reproduce. Now let me read the cited code paths to confirm each mechanism precisely.
+Now the orphan/own stop paths and the `osaurus-pin.sh` script.
+Let me confirm `Handle.stop`, `await_ready`, and the `osaurus_settings` write path for F12's read-back claim.
+All four reproduce. Let me confirm the exact failure messages for F13 and check the `/engines` detection claim in F14.
+
+
+All four reproduce. I'll capture the baseline suite count in the background while I finish reading the remaining call sites.
+Let me confirm the key-list claim in F12 by reading the settings constants and `pin`.
+Now let me check the dossier entries and confirm the F12 test can't pollute the repo.
+Let me get exact failure detail for F12 and check `app_support_dir` so I can be sure the test writes nothing into the repo.
+Let me confirm `_run` executes argv and read `_resolve_program`, then check the baseline suite.
+
+Baseline captured: 86 failed, 1398 passed, 2 skipped. Let me confirm all 86 failures are pre-existing verifier files.
+Baseline: **86 failed, 1398 passed, 2 skipped**, and every failure is in a pre-existing `test_fable_*` verifier file — the shipped suite is clean. Now I'll red-check each test by applying the finding's own fix direction, confirming the test goes green, then restoring.
+
+
+That edit was wrong. Let me restore it and do the red-check more cleanly, via `_process_alive`.
+
+I mangled the file. Let me restore it from git and apply a clean minimal patch instead.
+Clean. Now I'll do the F11 red-check as a single self-contained patch: make `_process_alive` remember reaped pids and refuse to answer for them.
+
+
+F11 red-check green. Let me revert and confirm it fails again.
+F11 verified: fails before, passes with fix, fails after revert. Now the F12 red-check.
+
+All three F12 tests go green with the fix. Let me revert and confirm they fail again.
+F12 verified. Now F13's red-check — the fix direction is to derive the stop command rather than read it from the ledger.
+
+The file was rewritten by the git checkout. Now applying the F13 red-check: ignore the ledger's `stop_command` field entirely.
+
+Both F13 tests go green. Reverting and confirming they fail again.
+F13 verified. Now F14's red-check: add the `~/Applications` spellings to the one tuple.
+
+
+
+Both F14 tests go green. Reverting and confirming.
+All four red-checks are done. Let me check one more F14 consumer in `quickbench` and verify no files were polluted outside the tests.
+Let me directly confirm the F11 mechanism — that `_process_alive` reads a reaped pid as alive on a second call.
+The mechanism is confirmed: the second `_process_alive` does reach the `os.kill` fall-through (`waitpid` raises `ECHILD`), and only a non-reused number makes it answer False. Let me verify the F14 `/engines` detection question the finding flagged as unchecked.
+All four are confirmed and red-checked. Let me pin exact current line numbers for the citations.
+I have everything. Let me write the four reports.
+
+
+Now F14 — I found the answer to the finding's own open question, so let me verify it precisely.
+The asymmetry is confirmed — oMLX and vMLX detection both consult `env.home` (`:512`, `:568`), Osaurus does not (`:501`). Writing the F14 report.
+Now the final full-suite run to confirm my four test files are the only state change.
+Same as baseline. Let me confirm my 8 tests are among the 86 failures and that no shipped test changed state.
+
+All four findings verified. Reports written, no shipped code touched.
+
+**Results — all four CONFIRMED:**
+
+| Finding | Reproduced | Red-check |
+|---|---|---|
+| S5-F11 — `Handle.stop` signals a stranger's process group | `_process_alive` reaped the child, then `os.kill(pid,0)` reads the freed number as alive; `_shutdown` sends SIGTERM **and** SIGKILL to `os.getpgid(pid)` | 1 passed with a `_REAPED_PIDS` guard, 1 failed reverted |
+| S5-F12 — `osaurus_set_seqs` non-atomic + accepts `0` | 3 failures: `0` accepted and re-baselined, hard link proved in-place truncate, write precedes validation | 3 passed with `\|0` + `_write_atomic`, 3 failed reverted |
+| S5-F13 — ledger `stop_command` is exec'd | 2 failures: marker files created via `stop_own_engines` (no identity check) and `_stop_orphan` (checks compare the entry to itself) | 2 passed with the field ignored, 2 failed reverted |
+| S5-F14 — Osaurus recognised only under `/Applications` | 2 failures: `~/Applications/...` argv0 not matched; CLI fallback table holds no user-scoped path | 2 passed by appending to `OSAURUS_APP_BUNDLES` (both tables derive from it), 2 failed reverted |
+
+Two things I'd flag beyond the four verdicts:
+
+- **S5-F14 severity: I lowered the "Medium for other Macs" half to Low.** The finding's own open question resolves the other way — `engines.py:501` imports the *same* tuple, so a `~/Applications` install reads as "not installed" and the v5 app never schedules an Osaurus cell. There is no resident model to miss. What survives is a CLI user with a Homebrew `--appdir` install, which is real but needs a non-default install plus a CLI run.
+- **S5-F13's blast radius is more specific than stated:** `stop_own_engines` is the app's "Stop now" daemon thread (`server.py:803-808`), so the unchecked path runs in the shipped app's own process. Still Low (same user), but that's the half to fix first — and the fix is a deletion, since `RUNTIMES` is already keyed by port.
+
+**Suite:** baseline **86 failed, 1398 passed, 2 skipped** → final **86 failed, 1398 passed, 2 skipped**. Operationally identical: every failure is the same pre-existing `test_fable_*` verifier file, and my 8 new tests are in that set by design. The shipped suite alone is clean. `git status --short ohyesmlx/ scripts/` is empty.
+
+**Not verified:** no engine started, no model loaded, no real Osaurus host or `~/.osaurus/config` touched, and no real pid's process group signalled — the pids are reaped children or integers, and `os.kill`/`getpgid`/`killpg`/`ps`/`lsof` outcomes are supplied by the module's own seams.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     54    3790625    3707136    40958   97.8%   0.048220
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py

@@ -1,0 +1,86 @@
+I'll start by reading the cited code ranges and the dossier entry for S4.
+The dossier hotspots don't restate F7 directly. Let me find the dossier's findings section and check `disk_needed` / `_partial_size` definitions.
+
+F7 lives in `S4-findings.md`, not the dossier. Let me read that entry.
+Claim is clear. Now let me read `fetch.plan`/`downloaded`/`_partial_size` and the `recommend` model/hardware shapes, plus check S3 for the app-side claim.
+I have the core mechanism. Let me check `Hardware`/`Model` shapes, existing test conventions, and whether the download guard's `hardware()` is injectable — plus the app's handling of excluded rows.
+
+The app confirms the second half: excluded rows render as plain text under "Not recommended for this Mac" with no Download or Remove control. Now let me read the `Model`/`Planned` definitions and the download entry point to build the test precisely.
+Let me look at the existing disk-guard test to mirror its technique, then check the test baseline.
+The mechanism is fully established. Let me get the suite baseline before adding my test.
+Baseline is 37 failed / 1380 passed / 2 skipped. Let me confirm all failures are the other verifiers' untracked reproduction tests, not tracked-suite failures.
+All 37 failures are other verifiers' untracked tests; the tracked suite is green. Now let me check how `server._get_recommendations` is tested, since the most fix-agnostic reproduction is at the server response level.
+Let me check how sibling verifier tests pin behavior, especially the server-adjacent ones, to choose a fix-agnostic target.
+Let me inspect `server.py`'s structure to see whether the recommendations composition can be exercised without a socket.
+
+I'll drive the real `_get_recommendations` composition with an injected server object and a captured `_write_json` — no socket, and fix-agnostic. Let me check `EngineStatus` and `make_server`'s injection shape.
+Let me check the existing verifier reports for format, then write the test.
+
+Now I'll write the reproduction test that drives the real `_get_recommendations` with injected seams.
+
+Writing the reproduction test now.
+Now run only this file to reproduce.
+Reproduced exactly, and the control passes. Let me capture the actual exclusion sentence the handler emitted, for the report.
+Now the full suite for the final count.
+All tracked-suite tests remain green; the only failures are verifier `test_fable_*` files (mine adds 1F/1P). Writing the report.
+
+
+Done. Two files created; no tracked code modified.
+
+**Changed**
+- `tests/test_fable_s4_f7.py` — drives the real `_Handler._get_recommendations` with injected scan/detect/catalog and captured `_write_json` (no socket, no download). 80% partial (3.83 GB of 4.78 GB) + free disk = 1.5× the remainder: today the handler returns `picks: []` and excludes the row with "Needs about 5.7 GB of free disk to download; this Mac has 1.7 GB free", while `fetch`'s guard needs only 1.15 GB. Control test (empty cache, half the full-size margin) correctly excludes and passes.
+- `.paul/review/fable-5.2/verify/S4-F7.md` — code path with line numbers, reproduction output, the app-side confirmation (`ModelsView.swift:28-48` offers no control on excluded rows), one correction to the fix direction (`fetch.plan` does not expose remainder; it lives in `_download`), and scope notes.
+
+**Verification**
+- Single test: `1 failed, 1 passed` — the failure is the finding; the pass is the control.
+- Baseline at start: 37 failed / 1380 passed / 2 skipped. Final: 43 failed / 1384 passed / 2 skipped (parallel verifiers added files mid-run). Zero failures outside `tests/test_fable_*`; the tracked suite is green. My file contributes exactly 1F/1P — it cannot pass without fixing the code, which this order forbids.
+
+VERDICT: CONFIRMED; SEVERITY-CHECK: agree.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     28    2042557    1954304    28751   95.7%   0.036351
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py

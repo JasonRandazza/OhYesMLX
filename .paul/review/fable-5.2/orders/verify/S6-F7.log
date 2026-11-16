@@ -1,0 +1,116 @@
+NOTE: Mon 03:52 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll start by reading the finding's cited code and dossier entry.
+The dossier grep found nothing. Let me locate it.
+
+
+
+The threat-model row does say P5-9 was observed via check_bundle. Now the decisive question: does `ps eww` expose another process's environment on Darwin 27.2?
+Confirmed: on this OS `ps eww` returns no environment block even for our own process. Let me check the existing verifier conventions before writing the test.
+`ps -E` and `ps e -p` also show no environment. Let me check the existing verify-report convention and when this OS build was installed.
+Let me nail down the OS-behaviour claim with a python-shaped child and a launchd-spawned process, and confirm the AGENTS.md gate wording.
+`ps eww` DID show env for the python child, but not for `/bin/sleep` or `/bin/sh` — those are Apple platform binaries. Let me test whether the signature is the discriminator.
+
+`/bin/sleep` is an Apple platform binary; an ad-hoc-signed copy shows its env. Let me confirm the pattern with more binaries, a launchd-spawned process, and the signature the build gives the bundled Python.
+The pattern holds: Apple platform binaries hide env; ad-hoc-signed binaries (which `build_app.sh` produces, `--sign -`) expose it — even when spawned by launchd. Let me confirm the shipped bundle's signature and the launcher's env.
+
+
+Everything I need is established. Now I'll write the test file.
+
+The substring half reproduces exactly. Now the suite baseline and full count.
+Baseline is polluted by parallel verifiers' untracked tests. Let me get the tracked-suite baseline.
+
+I'll widen the extractor so a fix that pads the dump in the `case` subject is still exercised, then validate the green side against a patched copy in the scratchpad (never the repo file).
+
+
+Let me bridge the two halves with the real `ps` invocation against an ad-hoc-signed process whose env is the launcher's six keys, then feed it to the script's own block.
+
+
+All the evidence is in. Writing the report.
+
+Done. Two files added, nothing else touched.
+
+**Outcome:** the finding's headline is refuted; its second clause is real.
+
+- `ps eww -p <pid> -o command=` on this Darwin 27.2.1 **does** print another process's environment — for ad-hoc-signed processes, which is what `build_app.sh:95` makes the bundled `python3` (`flags=0x2(adhoc)`, no platform identifier). It withholds it only for Apple platform binaries (`/bin/sh`, `/bin/sleep`, Finder) — which is why the reviewer's suggested `ps eww -p $$` lands on the wrong side.
+- Fed that live dump, `check_bundle.sh:214-231` prints `PASS P5-9` twice, `COUNT=0`: the `*)` branch is not taken, "all checks PASS" is reachable, and `docs/threat-model.md:606` is consistent with the check. The false statement is the script's comment at `:209-212`.
+- The substring half reproduces: `PATH=…:/opt/homebrew/bin`, `MANPATH=…`, and `PYTHONEXECUTABLE=…` all print PASS today.
+
+**Verification:** `tests/test_fable_s6_f7.py` reads the `case` block and the `pass`/`fail` helpers out of `check_bundle.sh` itself — 3 failed, 1 passed on the shipped script; all 4 green against a token-matched copy in the scratchpad (repo file untouched). Tracked suite baseline 1368 passed/2 skipped → 3 failed/1369 passed/2 skipped with my file.
+
+Report: `.paul/review/fable-5.2/verify/S6-F7.md` — `VERDICT: REFUTED`, `SEVERITY-CHECK: lower to Low`.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     29    1922809    1839616    41025   95.7%   0.042613
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py
+?? tests/test_fable_s6_f4.py
+?? tests/test_fable_s6_f5.py
+?? tests/test_fable_s6_f6.py
+?? tests/test_fable_s6_f7.py

@@ -1,0 +1,76 @@
+I'll build the S4 dossier for the onboarding backend. Let me start by mapping the code with graphify and checking file sizes.
+Graph is live. Let me get precise function inventories via grep and start scanning the contracts.
+Function inventory is solid. Now I'll gather the contracts and "already known" sources in parallel.
+Threat-model rows found — and some cited line numbers look stale versus current code (a useful finding). Now I'll read the contract docs and STATE.
+Contracts are detailed. Now the hardening contract, PLAN decisions, and STATE.
+Contracts and STATE captured. Now the threat-model's §9/§10 and the review logs with known findings.
+
+Threat model captured. Now the SUMMARY deviations/carried-forward sections and prior review findings on S4 code.
+Prior review findings are rich here. Let me read the full wave-1/wave-2 review logs to catalog each finding and its fix.
+
+
+Now I'll read w2's standards log and check which fix commits touched the S4 files, so I can attribute fixes correctly.
+Commit attribution is clear. Now I'll study the source — engines.py in three windows first.
+
+
+engines.py is fully mapped. Now fetch.py in three windows.
+
+
+fetch.py mapped. Now quickbench.py in two windows.
+
+quickbench.py mapped. Now the three small modules plus the data files.
+Now hardware.py and the data files.
+Now the catalog.json schema and the test inventory files.
+Source study done. Now the mechanical scan — I'll run all the pattern greps over the S4 scope.
+Now the remaining scan patterns — `Range`, `lock`, `size`, `resume` hit lists, plus `open(` write modes and subprocess timeouts.
+Scan data complete. Now the test names so I can map hotspots to guards.
+
+I have the test map. Now the SUMMARY gaps/deviations to finish the "already known" section.
+One more pass over the remaining SUMMARY deviations for S4-relevant items.
+Two quick verifications before writing — whether w1's test findings were fixed, and the w2 "two definitions of newest wins" status.
+
+
+
+One last fact-check for the map — `runtimes.OSAURUS_APP_BUNDLES` and `RUNTIMES` order that `detect_all` iterates.
+All facts verified. Now I'll write the dossier in stages. First, a compact mechanical-scan listing of the `size` hits to embed.
+Writing the dossier now — stage 1 (header, §1 Map, §2 Contracts).
+Stage 2 — §3 Already known and §4 Hotspots.
+Stage 3 — §5 Mechanical scan.
+Final stage — §6 Test inventory and §7 Open questions.
+The dossier is complete. Let me verify its size and sanity-check a few cited lines for the final report.
+One consistency fix to the range-convention note, then I'm done.
+
+Done. Wrote exactly one file: `.paul/review/fable-5.2/dossier-S4.md` — **81,789 characters** (~20K tokens, cap 30K), all seven sections in the ordered headings.
+
+**How I built it:** read all six Python modules whole (windowed), the three interface docs, PLAN.md D1–D10, threat-model §5/§7–§10, STATE.md, every v5 SUMMARY's Deviations/Carried/Gaps sections, and both phase-5 review logs; every map range and quoted line came from those reads, and every test name in §6/§4 was grepped present in `tests/`. Findings are listed, not fixed; no suite run (forbidden by the order — the coordinator runs them), nothing touched outside the dossier. Not verified: any runtime behaviour, and whether the w2 Swift-side findings' fixes landed individually (attributed to the wave-2 fixes/`101df7c` tree, with the one I checked — the `server.py` newest-wins duplicate — confirmed gone).
+
+**Three map lines I'm least sure of:**
+1. `engines.py:204-220 _Filesystem` — the class body's last code line is 219; the range end follows the stated trailing-blank convention, not a targeted re-check.
+2. `quickbench.py:646-751 run.measure_cell` — the end was counted through its `finally` from a window read, not re-grepped.
+3. `fetch.py:906-1122 _download._fetch_file` — same: the trailing `finally: _close(response)` block counted from the read.
+
+Notable content for the orchestrator's spot-check: §3 lists P5-11 as the named open item plus the still-duplicated ABORTED block (quickbench.py:808-810 / 934-936, w1 standards finding, **not** fixed by `ac0de1b`); §7 has 8 questions, including the order's named concerns (quickbench measuring unverified cached bytes, half-venv after a mid-pip crash, evict deleting a blob a user link outside `snapshots/` names, retry exhaustion deleting resumable partials, disk guard measuring the root volume for a non-root cache).
+
+model                 turns      input    cacheRd   output  cache%        USD
+xiaomi/mimo-v2.6-pro     33    4023112    3874944    64100   96.3%   0.134170
+
+== cc-agent: git status ==
+ M .paul/review/fable-5.2/PLAN.md
+?? .paul/review/fable-5.2/W1-sweep.md
+?? .paul/review/fable-5.2/dossier-S1.md
+?? .paul/review/fable-5.2/dossier-S3.md
+?? .paul/review/fable-5.2/dossier-S4.md
+?? .paul/review/fable-5.2/dossier-S5.md
+?? .paul/review/fable-5.2/dossier-S6.md
+?? .paul/review/fable-5.2/orders/W1-sweep.log
+?? .paul/review/fable-5.2/orders/_fable-brief.txt
+?? .paul/review/fable-5.2/orders/dossier-S1.log
+?? .paul/review/fable-5.2/orders/dossier-S2.log
+?? .paul/review/fable-5.2/orders/dossier-S3.log
+?? .paul/review/fable-5.2/orders/dossier-S4.log
+?? .paul/review/fable-5.2/orders/dossier-S5.log
+?? .paul/review/fable-5.2/orders/dossier-S6.log
+?? .paul/review/fable-5.2/orders/fable-S1.err
+?? .paul/review/fable-5.2/orders/fable-S1.json
+ .paul/review/fable-5.2/PLAN.md | 9 +++++++++
+ 1 file changed, 9 insertions(+)

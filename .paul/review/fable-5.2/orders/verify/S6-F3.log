@@ -1,0 +1,121 @@
+NOTE: Mon 03:09 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+
+I'll read the dossier entry and the threat-model row the finding cites.
+The dossier grep found nothing — let me check the dossier file directly.
+
+
+
+
+
+I've confirmed the request path. Now I'll gather exact line numbers and demonstrate the two mechanisms the finding rests on.
+The system Python didn't write bytecode at all — let me check and redo with the project venv interpreter.
+
+
+Now the decisive demonstration: a signed bundle with no precompile, imported by a child interpreter on a writable copy (seal breaks) versus on the UDRO image (seal cannot break).
+Let me check whether launch-time engine detection spawns any Python child (which would matter to the "never causes a child interpreter to run" claim).
+
+
+The main checkout has the real signed bundle. I'll use it read-only to reproduce the gate's blind spot with the actual artifact.
+
+
+The copy failed verification right after touching `.py` mtimes — I need to isolate whether `touch` itself invalidates the seal or whether the earlier interpreter run wrote something.
+The real bundle's interpreter writes into its own tree on a bare startup. Let me identify exactly what it writes.
+
+
+`cp -R` resets mtimes — exactly the transfer F1 describes. Now the two-sided test against the real bundle: writable copy vs the gate's UDRO image.
+
+The reproduction is complete on both sides. Let me confirm the remaining citations before writing the report.
+Let me capture clean, quotable numbers for the report.
+
+
+
+
+
+
+The evidence is complete. Let me get the exact snippets I'll cite and run the suite for the baseline count.
+The suite baseline is 89 failed / 1399 passed / 3 skipped — all failures are the other verifiers' red fix-shape tests; I add none. Writing the report now.
+
+Wrote `.paul/review/fable-5.2/verify/S6-F3.md` (only file changed; no code, no test added).
+
+**Verdict: CONFIRMED (no test: packaging gate — exercising P5-6 launches the app, which this role forbids).** Severity check: agree (Medium).
+
+The finding's mechanism is reproduced against the shipped `dist/OhYesMLX.app`:
+- **Writable copy** (mtimes reset by `cp -R`, exactly F1's lossy transfer): child interpreter `-I` **without `-B`** rewrites 42 stdlib pycs → `codesign --verify --deep --strict` exits 1 ("a sealed resource is missing or invalid").
+- **Same bundle through the gate's own procedure** (UDRO image, read-only mount, same child imports): 0 files rewritten, writes refused with `Read-only file system`, `codesign --verify` **PASS**. So P5-6 passes the same defect it was written to catch.
+- A synthetic signed bundle with **no precompile at all** shows the same asymmetry.
+- The check also never triggers the path: its only request is unauthenticated `GET /hardware`, refused 401 by `server.py:435-458` before routing, and both 200/401 pass; the backend is `-I -B`, and the pyc-writing child (`engines.py:797`) needs an engine install the check never performs.
+
+Suite: **89 failed, 1399 passed, 3 skipped** — identical baseline before and after; every failure is in another verifier's `test_fable_*` file, none of mine (I added none).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     37    2660852    2551040    45552   95.9%   0.102912
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py

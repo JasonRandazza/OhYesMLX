@@ -1,0 +1,62 @@
+I'll start by reading the cited code and the dossier entry.
+Claim in one line: `runtime_version` is only stamped on the first visit that started, and no later visit compares `handle.version`, so a cell whose samples span two builds reports the first build's version and guard 4 cannot see the change.
+
+Now let me check the consumers and how the existing tests fake a runtime.
+I have the code path. Now let me see how the existing measure tests fake a runtime across two visits.
+I'll read the test harness so my new test uses its existing fakes rather than a fresh one.
+Now let me check `_visits`, the existing version test, and whether anything else reads `handle.version`.
+Confirmed the mechanism at the source: `handle.version` is read exactly once, at line 865, inside the `if result.cold_load_s is None` block, and grep shows no other reader. Let me look at the sibling verifier files for the established harness pattern.
+Let me check the harness fixture and the conftest so my test can reuse the existing fakes.
+I have the full picture. Writing the reproduction test now.
+Now let me run it and confirm it fails the way the finding predicts.
+The `harness` fixture lives in `test_measure.py`, not conftest — I need to define it in my file.
+
+The primary test fails exactly as predicted (`PASS` stamped `0.25.6` after a `0.25.18` start). The second test currently asserts the *current* behaviour, which would break under a fix — I'll make it fail on the defect too, and use it to show the downstream guards are blind.
+Let me fix the second test so it fails on the defect too, and check how the real handle's version is obtained (so the report states the mechanism accurately).
+Let me confirm that the real `start()` re-reads the version on each launch — that's what makes the defect reachable in practice, not just in a fake.
+`Runtime.start()` calls `self.version()` on every launch (`runtimes.py:2327`), so the real handle does carry a fresh build each visit — only `measure.py:863-865` drops it. Now let me make the second test assert the requirement rather than the current behaviour, and add the guard-blindness evidence.
+I need to read the full file before rewriting it.
+Now I'll replace the second test with one that fails on the defect and records the guards' blindness.
+
+
+
+Both fail with the predicted symptom. Now a control: the same test setup with one build should pass, proving the version change is the discriminating variable rather than a broken harness.
+
+
+The control proves the build change is the discriminating variable. Now let me check whether the fix direction would actually make my test pass — a test that can't go green is worthless.
+
+The wrapper's FAIL got overwritten — I need to check where `_set_status` runs relative to `_visit`.
+`_set_status` runs after `_visit` returns, so a FAIL set inside the visit is overwritten — that's a real detail about the fix direction. Let me read that region.
+This is important: `_set_status` at line 663 rewrites the row after every `measured` visit, so a FAIL set inside `_visit` is erased unless the visit returns `skip`. Let me verify the fix shape that actually holds.
+
+Both directions confirmed: the defect reproduces, and the finding's fix closes it — though only if the visit returns `skip`, since `_set_status` (line 663) overwrites a FAIL set inside `_visit`. Now the full suite.
+The five failures are other verifiers' reproduction tests. Let me establish the baseline without any fable tests.
+Baseline: 1368 passed, 2 skipped (excluding all fable reproduction files). Let me verify the guard-4 call site precisely before writing the report.
+I have everything. Writing the report.
+Now let me confirm the final state: the new test fails, the rest of the suite is unchanged, and no source file was touched.
+S2-F3 is **CONFIRMED**.
+
+**The claim holds.** `measure.py:863-865` puts `result.runtime_version = handle.version` inside `if result.cold_load_s is None`, two levels deep, while `request_seed` immediately above it is stamped on every visit. `grep -n "handle.version" ohyesmlx/*.py` returns exactly one hit — that line. And the real handle *does* carry a fresh build each launch: `Runtime.start` calls `self.version()` at `runtimes.py:2327` and passes it to the `Handle` at `:2355`, so the loop is the only place the later build is dropped.
+
+**Reproduction** (`tests/test_fable_s2_f3.py`, both failing): a runtime reporting `0.25.6` then `0.25.18` across the two visits a 9-batch budget forces, yields
+
+- `PASS` stamped `'0.25.6'` on a row holding all nine samples from two builds
+- a `results.jsonl` line with `status: PASS, runtime_version: "0.25.6"` — and I ran both version-reading guards over that record: `_check_known_runtime_versions` only refuses `unknown` prefixes and guard 4 sees one string, so both accept it
+
+A one-build control (`0.25.6` twice) stays `PASS`, so the build change is the discriminating variable. Applying the finding's fix out-of-process turns the test green, so it is falsifiable.
+
+**One correction to the remedy.** The fix direction as stated isn't sufficient by itself: `run_cells` calls `_set_status` after every `measured` visit (`measure.py:663`), which rewrites status and reason from the samples. My first simulated fix set FAIL and returned `"measured"` — the row came back `PASS`. It has to return `"skip"` (the shape `stream_experts_missing` already uses) or record the mismatch where `_set_status` can't overwrite it.
+
+**Not verified:** no real Osaurus update mid-run (no server/engine/app started); whether an update can land inside the ~30 s cooldown is a timing question I didn't test; only the fake runtime was exercised.
+
+Baseline 1368 passed / 2 skipped, unchanged. I touched one new test file and one report file, no source.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     35    2812093    2630528    24494   93.5%   0.049823
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py

@@ -1,0 +1,109 @@
+I'll start by reading the cited code and the dossier entry.
+Now the `_shutdown` implementation, the dossier entry, and the quick-bench loop after cell failure.
+
+
+Now let me look at `Omlx`'s host-state/build path, `RUNTIMES`, and existing test patterns for `start`.
+
+
+
+
+Now the measure.py comparison path the finding cites as the contrast.
+
+
+
+
+
+
+I have the full picture. Now I'll write the verification test file.
+Now I'll run only those two tests against the current code.
+Both failed at `_spawn`, as the claim predicts. Let me confirm the failure mode of test 1, check that no scratch directory leaked, and then demonstrate the tests pass under the finding's proposed fix (simulated from a plugin, without touching repo code).
+
+
+Now I'll verify the quick-bench claim exhaustively — that nothing between cells aborts or sweeps a survivor.
+
+Let me check whether any interface doc or recorded decision deliberately scopes the pre-start check to one port.
+
+The interface doc pins the invariant absolutely while the code checks one port. Now the full suite, to report a count and confirm I touched nothing else.
+
+Let me confirm directly that the `_RUN_STARTED_PIDS` exclusion is what hides the survivor from `_resident_osaurus_pids`.
+
+
+
+
+
+
+
+Let me verify the exact line numbers I cited in the report.
+
+
+
+**S5-F3: CONFIRMED** — report at `.paul/review/fable-5.2/verify/S5-F3.md`.
+
+What the code does: `Runtime.start` (`runtimes.py:2295`) checks only its own port, and `_resident_osaurus_pids` (`:646`) skips anything in `_RUN_STARTED_PIDS`. `Handle.stop` (`:1983`) calls `_shutdown` first and discards the pids after, so a stop that raises before signalling (the `lsof`-unavailable path at `:1665-1669`) leaves the engine loaded, its port held, and its pid still excluded. Nothing between cells sweeps it — `stop_orphaned_engines` has exactly one caller, `cli.py:1078` at app launch.
+
+Verified by two new tests in `tests/test_fable_s5_f3.py`, both failing today at `_spawn` (the start went ahead):
+- 8081 held, `Omlx.start` on 8100 — spawns.
+- Failed stop of an Osaurus handle (pid remains in `_RUN_STARTED_PIDS`), survivor alive per `ps` with 1337 busy — `Omlx.start` spawns anyway, exercising the exclusion and the one-port scope in one run.
+
+Counterfactual: a throwaway plugin re-binds `Runtime.start` with the finding's own "refuse while any `RUNTIMES` port listens" refusal and nothing else → both tests pass, so they pin exactly the fix direction.
+
+One correction: `measure.py:843` is the *start*-failure re-raise; the CLI abort on a failed stop runs through `_visit`'s `finally` (`:917-920`) and `run_cells`' re-raise (`:651-653`). The quick-bench FAIL-then-continue half is proof-by-code-path only (`quickbench.py:703-706`, loops at `:792-811` and `:894-914`) — driving `quickbench.run` needs the full plan harness. No production file touched (`runtimes.py` md5 unchanged). Suite: 57 failed / 1387 passed / 2 skipped without my file; 59/1387/2 with it, the two deltas being mine.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     40    2747156    2654464    28899   96.6%   0.039207
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py

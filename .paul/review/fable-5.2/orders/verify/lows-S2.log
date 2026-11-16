@@ -1,0 +1,114 @@
+I'll verify each finding against the cited code, starting with the dossier and the cited ranges.
+Now let me read the dossier entries and the contract range.
+
+
+Dossier read. Now the remaining code paths and contract sentences.
+Now let me check the test helpers I'll need, and one existing verifier test for convention.
+
+Now the measure test harness, so F7/F8 tests stay compact.
+
+Now let me confirm the remaining details for F6, F8, F10, F11.
+
+
+
+Now the remaining specifics: osaurus pin/restore, the lost-visit tests, and the report floor rendering.
+
+
+
+
+
+
+
+Baseline first — let me run the existing suite before adding anything.
+
+Let me check an existing verify report's format and the `_missing_metric` order.
+
+
+
+
+
+I have the full picture. Let me check the card row format, then write the six test files.
+Now I'll write the six test files. Starting with F6 and F9 (both report-side, smallest).
+
+
+F6 and F9 reproduced. Now F10 and F11 — check the quickbench helpers I need precisely.
+
+F6 and F9 reproduce. Now F7 and F8 (measure-side).
+
+F8 confirmed exactly as claimed (45 requests). F7's behavior is as described but an existing test pins it — let me check its provenance before judging.
+F8 confirmed (45 requests). For F7 the test passes on current code, which means the factual claim reproduces; I'll note it. Now F10 and F11, and I'll rework F9 to test through `render_grid` so either fix shape (refusal or caveat) satisfies it.
+
+Both reproduce; F10 just needs the right cell selection (three engines in stage A).
+
+F10 confirmed. Now F11 — the `latest()` claim has two halves; let me verify both with the actual summary shape.
+
+
+All six reproduce. Let me record exact failure output per test and the full-suite counts.
+
+
+Let me count requests precisely in quickbench's real configuration, and get the default-measured figure.
+
+F7 needs its test to reproduce the *asymmetry* rather than pin current behavior. Let me rewrite it that way.
+
+Now the final check: full suite counts and that no existing test changed state.
+Let me gather the last pieces of evidence for the reports.
+
+
+
+Let me verify F10's precondition — that `pin` can raise after it has already changed a settings file.
+The F10 precondition is proven. Let me relax one over-constrained assertion in that test.
+
+
+
+Let me verify the third case F6 names — a "runtime did not start" row — and the rows' floors.
+That's the third label case F6 names, confirmed. Now let me write the six reports.
+
+Now F10 and F11.
+Let me verify the suite numbers I quoted and confirm no existing tests changed state.
+
+Let me confirm each report ends correctly with one verdict and a severity line.
+All six findings are confirmed. `git diff --stat` is empty — no source file was touched.
+
+Six verdicts, all CONFIRMED, all Low agreed:
+
+| finding | claim reproduced | test |
+|---|---|---|
+| S2-F6 | `coherence: pass` on a row the gate never judged (1 timeout + 8 salad; 9 timeouts; a did-not-start row) | 2 tests |
+| S2-F7 | lost second visit = `FAIL`, no `lost_visit_reason`; lost first = ranked `PASS` with annotation | 1 test (control passes) |
+| S2-F8 | 45 requests / 49 at default / 11 in quickbench — worse than the finding's estimate | 1 test |
+| S2-F9 | stamped + legacy header joins with nothing said | 1 test (through `render_grid`) |
+| S2-F10 | `restored: None`, run `finished`, no event; proved `pin` can raise *after* rewriting both configs | 1 test |
+| S2-F11 | both halves: superseded 60 tok/s served over the newer 48; mtime outranks `measured_at` | 2 tests |
+
+Three things worth flagging beyond the findings:
+
+- **F8 is worse than filed.** The default 9-sample run makes 49 requests, not ~25 — the 20-step warmup cap is paid *per visit*, so 8.17 h per workload, not 4 h. Quickbench is 1.83 h, not 80 min.
+- **F10's precondition is real, not hypothetical.** I patched only `write_baseline` to raise and watched `pin` leave both settings files rewritten (`seconds: 900`, both caches false) with the originals in `backup_dir`.
+- **F7 is a contract decision, not a bug.** `docs/interfaces/sweep-pins.md:185` says lost visits are "annotations and none of them floors"; the lost-second-visit path is a floor. `test_measure.py::test_a_visit_that_fails_last_changes_nothing_new` pins the current direction deliberately, from the same commit that added the field. I left that to you and said so in the report.
+
+Suite: **18 failed, 1376 passed, 2 skipped** before my files; **26 failed, 1379 passed, 2 skipped** after. The 18 are the earlier verifiers' confirmed findings; the 8 new ones are mine. No previously passing test changed state.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     82    9743358    9611776   166012   98.6%   0.148180
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

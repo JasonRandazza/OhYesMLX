@@ -1,0 +1,74 @@
+I'll start by reading the dossier entry and the cited code ranges in parallel.
+The dossier grep came up empty — I'll locate the dossier files and read the launcher's start path, the recovery routine, and the shutdown constants.
+No Python-side lock exists — confirmed by grep. Now let me read `_recover_startup` and find the dossier's entry for this finding (the "F8" grep missed; likely different formatting).
+I have the finding and the code map. The decisive question is whether the backend child inherits the lock fd — if it does, the lock survives the app's death and F8's premise fails; if not, a relaunch races the old backend. Let me look at the existing launcher tests and the remaining evidence.
+Let me read the existing launcher test helpers and a prior verifier test for conventions.
+Let me check how a second launch reacts to `.alreadyRunning`, and what startup recovery does to a live engine.
+Recovery only stops engines whose owner pid is dead, so a live old backend's engine would not be touched — the overlap would be real if the lock frees. Now the decisive experiment: does the real child inherit the lock fd? Let me check if any existing test launches a real process through the launcher.
+
+The evidence chain is clear; the one unknown is fd inheritance across `Process.run()`. I'll write the launcher test that models app death by atomically replacing the lock descriptor, then checks whether a second launch can start while the first backend is alive.
+Now I'll run just the new test.
+The test reproduces it: after the app's lock descriptor closes, `flock` on a fresh descriptor succeeds and a second launch starts while the first backend is alive. The child's `/dev/fd` report was weak evidence though (macOS fds aren't symlinks), so let me confirm the descriptor evidence with `lsof` before finalizing.
+`lsof` works — the earlier report was a partial read (the test read the file mid-write, and macOS fds aren't symlinks). I'll make the report atomic, use `lsof -Ffn`, and add a control assertion: the same second launcher must be refused *before* the app-death model, which proves the test distinguishes held from free.
+
+
+
+
+The evidence is decisive: the child's descriptor table holds no `app.lock`; the control launch was refused while the app held the lock, and after the app's descriptor disappears the lock is free and a second backend starts beside the live first one. Let me confirm the recovery side of the claim before writing the report.
+
+The recovery race is concrete too: a launched-beside backend's `_recover_startup()` restores the Osaurus backup while the old job still holds its pin, and `stop_orphaned_engines` skips live owners. Now let me run the full app suite (without `OYMLX_DEV_PYTHON`, so no real backend starts) to establish the baseline around the one intentional failure.
+95 tests, 24 failures — I need to check whether those are other verifiers' intentional failures or something else. Let me list them.
+All 23 other failures are the other verifiers' pre-existing confirmed-finding tests (F1, F2, F4–F7); every non-verifier test passes. Now the Python baseline.
+
+All Python failures are the same pre-existing verifier tests. Let me check a sibling report for format, then write mine.
+
+Let me pin down the UI path that turns the second backend into a second job, so the report states the consequence precisely.
+I have everything needed. Writing the verification report.
+Final check that the worktree contains only my two new files.
+Verdict: **CONFIRMED** — the lock dies with the app while its backend lives.
+
+**Files added (no production code touched)**
+- `app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift`
+- `.paul/review/fable-5.2/verify/S3-F8.md`
+
+**What I proved.** Real `BackendLauncher` + `acquireLock` + `FoundationLauncherProcess`, fake `/bin/sh` backend that reports its own descriptor table and ignores stdin EOF. The child holds no `app.lock` fd, so the lock really is app-scoped. Control: the second launcher returns `.alreadyRunning` while the app's descriptor is held; after `dup2`-ing `/dev/null` over it (exactly what process death does), a fresh `flock` succeeds and the second launcher returns `.running` — two backends, one lock, 0.28 s after the app "dies". The report adds that `stop_orphaned_engines` skips the live old owner, and the new backend's `_recover_startup()` restores the Osaurus backup the old job's pin still relies on.
+
+**Verification**
+- `swift test --filter FableS3F8Tests`: 1 test, 1 failure, the intended assertion (finding reproduced); control passed in the same run.
+- `cd app && swift test` (no `OYMLX_DEV_PYTHON`): 95 tests, 24 failures — 23 pre-existing from FableS3F1–S3F7 verifier tests, 1 from this file. All non-verifier tests pass.
+- `pytest -q`: 1379 passed, 26 failed, 2 skipped — all 26 in the other verifiers' `test_fable_s1_*`/`s2_*` files.
+
+Severity: agree (Medium). Not verified: the real 135 s shutdown wait (read from `cli.py:1168`, `server.py:76,81`) and the GUI Retry path.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     28    2307364    2206208    44146   95.6%   0.048280
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

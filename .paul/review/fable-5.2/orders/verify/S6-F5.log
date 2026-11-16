@@ -1,0 +1,110 @@
+NOTE: Mon 03:32 UTC is a DeepSeek peak window — this run bills
+at double rate. Pass --route mimo to avoid it. Proceeding.
+I'll verify this claim about the smoke script's spawn target. Let me read the cited code and dossier entry.
+The dossier already lists this as open question Q6 — so I need to prove it mechanically, not just restate it. Let me pull the AC-6 wording, the launcher's argv/env, and the existing loader convention.
+Now let me check the exact spawn plumbing (`_shut_down`, `read_launch_line`) so a test can drive `main()` with a stubbed `Popen` and record the real argv.
+Let me read `parse_launch` and `check_ac2` so my stubbed `main()` run takes the no-network path.
+I have the full picture. The claim is testable: drive `main()` with a stubbed `Popen` and record the exact argv/env it spawns. Writing the verification test now.
+Running just this file.
+
+5 passed — the claim reproduces. Now the red-check: mutate the spawn line, watch the test fail, restore. (Production files stay untouched at the end; I verify with git.)
+
+Red-check confirmed: 3 failures, each pointing at `scripts/smoke_clean_account.py:843` — the cited line. Restoring from backup.
+`git diff --stat scripts/` is empty — file restored byte-exact. Re-running the test, then the full suite for the baseline count.
+
+The 92 failures are all other verifiers' `test_fable_*` reproduction files (expected red). Let me get the clean baseline by excluding those.
+Baseline: 1368 passed, 2 skipped. Let me collect two more concrete facts for the report — how `sys.executable` makes engine venvs descend from the bundle, and whether the results payload records which artifact ran.
+
+Two last facts: whether the server passes an explicit `python=` (so I can state the engine-venv descent accurately), and the `-I` on the client invocation.
+One more: how `server.py` supplies the interpreter for installs (so the engine-venv descent claim is exact).
+Let me confirm the "nothing written inside the bundle" half of AC-6 has no check, and that no bundle path appears in the client.
+One more check: whether the Python backend creates App Support itself (which would mean the smoke's P5-5 evidence comes from a creator the production launcher also duplicates).
+
+
+
+Let me confirm the install call site passes no explicit interpreter, which is what makes engine venvs descend from whatever runs the backend.
+All the evidence is in. Writing the report.
+Final check: only my two files exist as changes, and nothing outside them was touched.
+S6-F5 is **CONFIRMED**, and the report is at `.paul/review/fable-5.2/verify/S6-F5.md`.
+
+The script spawns `[<sys.prefix>/bin/ohyesmlx, "app"]` with no `env=`, no `-I`, no `-B` — a console script over a wheel built from `git archive HEAD`, under `/opt/homebrew/bin/python3.14`. The launcher, the spec (05-06-PLAN AC-6: "via the bundled interpreter, exactly the launcher's argv and env"), and the bundle all say otherwise.
+
+New test file `tests/test_fable_s6_f5.py` (5 tests, pass on current code) drives `main()` with `Popen` stubbed and asserts the real argv, the absent `env=`, the absence of any bundle-pointing flag, and the launcher's contrasting argv read from the Swift source. Red-checked: mutating the spawn to `-I -B -m ohyesmlx.cli app` failed three tests at `smoke_clean_account.py:843`, then restored byte-exact (`git diff --stat scripts/` empty).
+
+Two things I found beyond the finding's own list, both evidenced in the report: the bundled Python verifies TLS against `/etc/ssl/cert.pem` while the smoke's Homebrew Python uses `/opt/homebrew/etc/openssl@4/cert.pem` (two different CA bundles), and `_finish` records no artifact identity, so a results file cannot say whether it tested the wheel or the bundle. I also recorded where the finding overstates: P5-9's PATH value does coincide under the driver's `env -i`, so that property is exercised even though the launcher's builder is not.
+
+Severity: I agree with Medium — `check_bundle.sh` still covers P5-3/P5-4/P5-6/P5-9 on the real bundle; only the clean-account half is untested. Product suite unchanged at 1368 passed, 2 skipped (the 92 failures in the full run are other verifiers' red reproduction files).
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     26    1978736    1888000    31556   95.4%   0.076416
+  (DeepSeek priced at its peak rate: $0.30/$1.20, cache read assumed doubled)
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f10.py
+?? tests/test_fable_s5_f11.py
+?? tests/test_fable_s5_f12.py
+?? tests/test_fable_s5_f13.py
+?? tests/test_fable_s5_f14.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py
+?? tests/test_fable_s5_f7.py
+?? tests/test_fable_s5_f8.py
+?? tests/test_fable_s5_f9.py
+?? tests/test_fable_s6_f1.py
+?? tests/test_fable_s6_f2.py
+?? tests/test_fable_s6_f4.py
+?? tests/test_fable_s6_f5.py

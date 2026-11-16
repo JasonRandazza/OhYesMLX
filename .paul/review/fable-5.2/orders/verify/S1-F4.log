@@ -1,0 +1,43 @@
+I'll start by reading the dossier entry and the cited code.
+The dossier grep came up empty; let me check the dossier format and the surrounding code.
+
+
+Now let me understand the injection points and the existing test harness for `download`.
+
+Now let me check `_remove`, `cancelled`, and whether anything else cleans up the partial after a failed `_download`.
+
+
+
+The code confirms `attempts` is initialized once at :916 and never reset, and exhaustion at :1112-1118 calls `size_mismatch(..., remove=incomplete)`. Let me write the reproduction test.
+
+Now I'll run just this test to reproduce.
+Reproduced. Let me capture the exact refusal message and confirm the cancel-keeps-partial counterpart exists in the suite.
+Confirmed end to end. Running the full suite for the final count.
+
+
+S1-F4 is **CONFIRMED**.
+
+**What the code does** — `ohyesmlx/fetch.py:916` sets `attempts = 0` once, before `while True` (`:922`), and nothing inside the loop resets it; only `attempts += 1` on failure (`:953`, `:1015`, `:1120`). After a short pass, `:1112-1118` tests `attempts + 1 >= MAX_ATTEMPTS` and calls `size_mismatch(..., remove=incomplete)`, which unlinks the partial via `size_mismatch` at `:775-778`. A cancel never removes it (`:766-772`), as `tests/test_fetch.py:1049/1079` already prove.
+
+**Reproduction** — new `tests/test_fable_s1_f4.py`. Fake transport honours `Range` and serves one further byte per pass on a 10-byte file, so every pass progresses. Run: `1 failed, 1 passed`.
+- Failing test observes `[0, 1, 2, 3]` bytes on disk at each of 4 requests, 3 sleeps, code `size_mismatch`, message `the transfer ended at 4 of 10 bytes`, and `.incomplete` gone (`blob dir: []`). It stops on `assert os.path.exists(run.incomplete)`.
+- Passing control: a single short close is retried and the download completes, isolating the cumulative budget as the cause rather than short closes.
+
+**Suite** — baseline (before my file): `13 failed, 1374 passed, 2 skipped`; every failure in other verifiers' untracked `test_fable_*` files. After: `14 failed, 1375 passed, 2 skipped` — my one reproduction failure (by design) and my control pass.
+
+Report written to `.paul/review/fable-5.2/verify/S1-F4.md` with `VERDICT: CONFIRMED (test: tests/test_fable_s1_f4.py::test_a_valid_four_byte_prefix_is_deleted_when_the_cumulative_budget_runs_out)` and `SEVERITY-CHECK: agree` (no corruption, but the refusal is mislabelled `size_mismatch` and four drops anywhere in a large file make it unfinishable). No production code touched; no existing test edited.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     18     884427     825600    14699   93.3%   0.020120
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py

@@ -1,0 +1,48 @@
+I'll read the cited code and the dossier entry for S3-F1.
+I'll read the S3 dossier entry and the existing test files that touch the events path.
+
+Now let me look at the app package setup and existing tests to model the new test.
+I'll check the dossier's coverage of this issue and the app's test layout.
+
+I'll add the missing live-transport test as a new file, exercising Foundation's `bytes.lines` and `HTTPBackend.events` through a real `URLSession` with a `URLProtocol`-served SSE body.
+Now I'll run only the new test file's tests through the real transport.
+Both tests fail exactly as the finding predicts. Let me verify the claimed downstream consequences in the code (job gating, inflight banner, quit bound) and the server-side framing.
+
+
+
+The mechanism and symptom are reproduced. Let me confirm `dispatch()` is unused outside tests and the inflight banner path, then run the full app suite for the count.
+Baseline check without my new file, and confirm the shipping app wires `AppModel` to `HTTPBackend`.
+
+Evidence is complete. I'll write the verification report.
+
+S3-F1 is **CONFIRMED**. I added only the reproduction test and the report — no production code touched.
+
+- `app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift` — URLProtocol-backed `URLSession` through the real `URLSessionTransport`: `bytes.lines` yielded `["id: 1", "data: …", "id: 2", "data: …"]` with no blank line, and `HTTPBackend.events` produced zero events in 3 s (deadline expired), exactly the predicted reconnect loop.
+- `.paul/review/fable-5.2/verify/S3-F1.md` — evidence with line numbers for the downstream symptoms (stuck `.running`, `canStartJob`, no Results, false interrupted banner, 150 s quit bound), plus `VERDICT: CONFIRMED` and `SEVERITY-CHECK: agree` (High).
+- Suite: baseline **81 tests, 0 failures**; with the new file **83 tests, 2 failures** — both are the two new reproduction tests; all pre-existing tests still pass. I did not run a live job or the app (per the order), so the UI consequences are code-path deduction, stated as such in the report.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     18    1003739     944128    21013   94.1%   0.024382
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py

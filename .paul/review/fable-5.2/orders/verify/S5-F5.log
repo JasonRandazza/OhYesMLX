@@ -1,0 +1,122 @@
+I'll read the cited code ranges and the dossier entry for F5.
+Now let me look at the ledger helpers and an existing start-rig test I can mirror.
+I have the key code. Let me read the `rig` fixture and a start test to mirror their style.
+
+Now let me check `stop_orphaned_engines`, the `MlxLm` runtime's base, and AC-6's wording.
+I have the core code. Let me check the test harness setup (conftest, `pyproject` pytest config) and `Runtime.start`'s neighbours.
+The claim hinges on whether anything else covers an engine that is still loading. Let me check quickbench's own registry and the "Stop now" path.
+Now let me read the orphan tests to mirror how they fake a ledger entry and listeners.
+Now I'll check the `MlxLm` runtime so my test can reach `Runtime.start` with minimal fakes.
+Let me read `_stop_orphan`, `_remove_scratch`, and `Runtime.start`'s signature.
+Let me check the dossier's F5 entry, quickbench's own process registry, and start a baseline suite run.
+
+
+Now let me check the baseline suite result.
+The baseline already has 59 failures, all in other verifiers' in-flight `test_fable_*` files. Let me get the clean pre-existing baseline and confirm which failures are mine to ignore.
+Let me verify `version()`, and check whether anything besides the ledger sweeps ports at launch.
+Let me confirm the launch path has no other recovery, and that `_record_running_engine` has exactly one call site.
+
+Let me confirm quickbench reaches engines only through `runtimes.start`, and that nothing else spawns or tracks them.
+Let me check how `measure.run_cells` starts a runtime and whether abort is honored during start.
+
+Now I have everything I need. Let me write the test file.
+Let me fix the second test's leftover expression and the in-process cleanup accounting.
+
+I patched at class level, so the fake needs `self`.
+
+Test 1 reproduces the gap. Test 2 passes today but is close to vacuous — let me give it a control showing the ledger entry is exactly what would have saved the engine.
+
+Test 1 fails with the exact reported symptom; test 2 passes and its control proves the sweep works when an entry exists. Let me read AC-6's exact wording to check the finding's fix direction against it.
+Test 1 reproduces. Let me confirm the "Quit anyway" SIGKILL path and check whether any port sweep exists at launch.
+The trigger may be wider than "Quit anyway". Let me check whether the harness installs a SIGTERM handler.
+Test 1 reproduces; test 2's control passes. Let me add a sensitivity control proving test 1 discriminates on the ledger write, and check whether the crash-orphan window is pinned in docs.
+Let me check for any SIGTERM handler in the package and confirm the interrupt path.
+Let me check whether the backend's SIGTERM path actually unwinds through `Runtime.start`'s cleanup.
+Let me confirm job threads and whether SIGTERM reaches a running start.
+Let me read `cancel_and_wait` — if the job thread is a daemon, an ordinary quit mid-load is a trigger too.
+Let me check the shutdown wait bound, which widens the trigger beyond "Quit anyway".
+Let me verify the trigger is broader than claimed — whether an ordinary quit mid-load also orphans the engine.
+Test 1 is red for exactly the reported symptom, and test 2's control proves the fixture can see a ledger when one exists. Let me add the sharpest sensitivity check: apply the proposed fix direction to the fixture and confirm test 1's observation point goes green.
+
+Let me verify the ordinary-quit trigger, which the finding may understate.
+Let me check `_port_is_free` to confirm the "next run is refused" half of the claim.
+Let me verify whether a load cell polls cancel/abort — this decides whether an ordinary quit is also a trigger.
+Test 1 is red for the exact reported symptom and green under the proposed fix direction. Let me run the full suite.
+Let me confirm all remaining failures are in other verifiers' files, not the pre-existing suite.
+Let me verify the `_RUN_STARTED_PIDS` declaration and check docs for any pin on the crash-orphan case.
+The audit pins the "Stop now" gap and there's a plan AC on the write ordering. Let me check both, plus whether a test locks the ordering.
+Let me read the existing test that pins the write's ordering — it determines whether "write earlier, subtract" is even viable.
+I have the full picture. Let me run the exact command form the order specifies and capture the failure output.
+Now let me write the report file.
+Let me verify the report's line citations and the "cancel-unaware start" claim before finishing.
+Citations check out — `run_cells` has no cancel/abort parameter, confirming a start is not cancellable. Final verification run.
+S5-F5 is confirmed. I added `tests/test_fable_s5_f5.py` and wrote `.paul/review/fable-5.2/verify/S5-F5.md`; no source file was touched.
+
+**What the code does:** `Runtime.start` calls `_spawn` at `runtimes.py:2320` and then `await_ready` at `:2321` (up to `READY_TIMEOUT_S` = 900 s), and `_record_running_engine` is the only writer, called at `:2347` after `cold_load_s` is taken. `_spawn` uses `start_new_session=True` (`:605`). Both recovery paths read only the ledger: `stop_orphaned_engines` globs `running-engines/*.json` (one caller, `cli.py:1078`) and `stop_own_engines` reads `_ledger_path()` only. So the ledger-less window is a hole in both, and the next run's `_port_is_free` check (`:2295`) refuses the leftover's port.
+
+**Verification:** the primary test fails on unmodified code with `no running-engines ledger entry existed while the engine was loading: nothing on disk named pid 4243 on port 8081`, after already having observed the spawned pid — i.e. inside the load window. Two companion tests pass: one follows the gap to the next launch (sweep finds nothing, engine survives) and includes a control where the entry a start-early write would leave makes the same sweep stop the same engine; the other is a sensitivity check that wraps `_spawn` to write the entry immediately and shows the failing assertion go green.
+
+**Two things I found that widen the claim:** the trigger is not only "Quit anyway" — an ordinary quit reaches it too, since `cancel_and_wait` waits `JOB_SHUTDOWN_WAIT_S` (120 s) + `JOB_KILL_GRACE_S` (15 s) and a start is not cancel-aware (`run_cells` takes no cancel/abort). And the "Stop now" degradation is pinned in `v5-app.md:33-35` / `05-01-AUDIT.md:25`, but nothing in `docs/` pins the crash orphan.
+
+**Not verified:** that a real process survives — the engine in the test is a number; survival rests on `start_new_session=True`, which the dossier cites. Baseline: 1368 passed, 2 skipped with `--ignore-glob='tests/test_fable_*'`. The full suite's 52 remaining failures are all other verifiers' in-flight `test_fable_*` files plus my one intentionally-red test.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     53    4138156    4038144    71480   97.6%   0.070004
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F11Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F12Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F13Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F14Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F15Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F17Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
+?? tests/test_fable_s4_f1.py
+?? tests/test_fable_s4_f10.py
+?? tests/test_fable_s4_f11.py
+?? tests/test_fable_s4_f12.py
+?? tests/test_fable_s4_f13.py
+?? tests/test_fable_s4_f14.py
+?? tests/test_fable_s4_f2.py
+?? tests/test_fable_s4_f3.py
+?? tests/test_fable_s4_f4.py
+?? tests/test_fable_s4_f5.py
+?? tests/test_fable_s4_f6.py
+?? tests/test_fable_s4_f7.py
+?? tests/test_fable_s4_f8.py
+?? tests/test_fable_s4_f9.py
+?? tests/test_fable_s5_f1.py
+?? tests/test_fable_s5_f2.py
+?? tests/test_fable_s5_f3.py
+?? tests/test_fable_s5_f4.py
+?? tests/test_fable_s5_f5.py
+?? tests/test_fable_s5_f6.py

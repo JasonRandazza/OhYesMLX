@@ -1,0 +1,89 @@
+I'll start by reading the finding's dossier entry and the cited code.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now I'll write the test file.
+
+
+Both fail with the reported symptom. Now the positive control — temporarily adding the refresh, then reverting.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+**S3-F10: CONFIRMED.** Two new tests reproduce it; both fail on current code with the launch-time figure.
+
+**What I added**
+- `app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift` — stub's `hardware()` returns 40 GB at launch, 20 GB after the job; drives `download` and `evict` to `done` and asserts `model.hardware.diskFreeBytes` moved. Both fail: `Optional(40000000000) != Optional(20000000000)`.
+- `.paul/review/fable-5.2/verify/S3-F10.md` — report, ending in the verdict and severity lines.
+
+**Evidence**
+- `backend.hardware()` has exactly one call site (`AppModel.swift:414` in `reload`) plus `refreshHardware` called only from the `low_disk` branch (`:697`). The post-job block (`:663-665`) refreshes recommendations, and `Recommendations` (`Models.swift:384-400`) carries no disk field — so re-entering Models can't fix it either.
+- `QuickPlan` (`Models.swift:435-452`) has no free-space field; `ohyesmlx/quickbench.py` sends none. "Free disk after" is `free - downloadBytes` in `BenchmarkView.swift:255-258`, under a header (`:5`) claiming nothing there computes a number.
+- Scan Again is the only refresh control and `RootView.swift:60-65` shows it only on `.welcome`/`.yourMac`.
+
+**Two corrections, verdict unchanged:** the nil-hardware branch prints "0 MB" and is unreachable (a screen is published only once hardware is non-nil); the fix's second half needs a new `free_after` in the backend's plan shape, not a client tweak.
+
+**Verification:** temporary `await refreshHardware()` in the post-job block turned both tests green; reverted, `git diff app/Sources` empty, tests red again. Baseline `swift test --skip "Fable"`: 81 tests, 0 failures. Full run: 101 tests, 28 failures — 26 belong to the other S3 verifier files, 2 are mine. Nothing started a backend; `LiveBackendTests` skipped.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     41    2302292    2226816    19393   96.7%   0.029638
+
+== cc-agent: git status ==
+?? .paul/review/fable-5.2/verify/
+?? app/Tests/OhYesMLXKitTests/FableS3F10Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F1Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F2Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F3Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F4Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F5Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F6Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F7Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F8Tests.swift
+?? app/Tests/OhYesMLXKitTests/FableS3F9Tests.swift
+?? tests/test_fable_s1_f1.py
+?? tests/test_fable_s1_f2.py
+?? tests/test_fable_s1_f3.py
+?? tests/test_fable_s1_f4.py
+?? tests/test_fable_s1_f5.py
+?? tests/test_fable_s1_f6.py
+?? tests/test_fable_s1_f7.py
+?? tests/test_fable_s1_f8.py
+?? tests/test_fable_s2_f1.py
+?? tests/test_fable_s2_f10.py
+?? tests/test_fable_s2_f11.py
+?? tests/test_fable_s2_f2.py
+?? tests/test_fable_s2_f3.py
+?? tests/test_fable_s2_f4.py
+?? tests/test_fable_s2_f5.py
+?? tests/test_fable_s2_f6.py
+?? tests/test_fable_s2_f7.py
+?? tests/test_fable_s2_f8.py
+?? tests/test_fable_s2_f9.py
