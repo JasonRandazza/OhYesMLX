@@ -564,6 +564,9 @@ def run(
     downloaded and never evicted. Every ending -- finished, cancelled, restore failed, or an
     unexpected raise -- leaves a summary on disk saying which one it was.
 
+    A :class:`~ohyesmlx.runtimes.RuntimeStopError` from a cell is such a raise: the engine may
+    still be resident, so no later cell is started, and Osaurus's settings are still restored.
+
     ``abort`` is "Stop now"; a cell it landed on is :func:`_aborted`'s record, which states
     why, and the rest of the plan is skipped on the existing cancelled tail.
     """
@@ -725,6 +728,12 @@ def run(
                         status="FAIL",
                         reason="Osaurus changed its settings during the run: " + drift,
                     )
+        except runtimes.RuntimeStopError:
+            # An engine that would not stop may still hold its weights and port: a FAIL cell
+            # would let the next cell load a second model beside it. The run ends instead, as
+            # an unexpected raise does (summary `ended: error`, nothing further started); the
+            # `finally` below still restores Osaurus's settings first (Fable S5-F3).
+            raise
         except Exception as error:
             return _cell_record(
                 engine, fmt, artifact_dir, repo, status="FAIL", reason=str(error)

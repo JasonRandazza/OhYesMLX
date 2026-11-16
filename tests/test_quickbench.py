@@ -1145,6 +1145,57 @@ def test_a_cell_that_raises_still_restores_osaurus(tmp_path):
     assert osaurus["reason"] == "the runtime refused to start"
 
 
+def test_a_runtime_stop_error_ends_the_run_and_still_restores_osaurus(tmp_path):
+    """An engine that would not stop may still hold its weights: no later cell starts (05-09 AC-8)."""
+    seen = []
+
+    def stop_failing(cells, workloads, **kwargs):
+        seen.append(cells[0].id)
+        raise runtimes.RuntimeStopError("port 1337 is still held 10s after stopping")
+
+    events = []
+    log = []
+    fake_osaurus = FakeOsaurus(log=log)
+    cache = FakeCache(downloaded=(CHOSEN.repo,))
+    with pytest.raises(runtimes.RuntimeStopError):
+        quickbench.run(
+            CHOSEN.repo,
+            confirmed=True,
+            osaurus=True,
+            models=MODELS,
+            statuses=[an_engine("osaurus"), an_engine("mlxlm")],
+            hw=SimpleNamespace(),
+            run_cells=stop_failing,
+            download=cache.download,
+            evict=cache.evict,
+            downloaded=cache.downloaded,
+            pin=fake_osaurus.pin,
+            restore=fake_osaurus.restore,
+            recover=fake_osaurus.recover,
+            port_in_use=PortProbe(),
+            osaurus_app_running=lambda: False,
+            load=FakeLoad(),
+            clock=FakeClock(),
+            emit=events.append,
+            cache_dir=str(tmp_path / "cache"),
+            results_dir=str(tmp_path / "quickbench"),
+            backup_dir=str(tmp_path / "backup"),
+            baseline_path=str(tmp_path / "baseline.json"),
+        )
+
+    assert len(seen) == 1, "no cell was started after the one whose engine would not stop"
+    assert [entry[0] for entry in fake_osaurus.calls] == ["recover", "pin", "restore"]
+    written = json.loads(
+        next((tmp_path / "quickbench").glob("*/summary.json")).read_text(encoding="utf-8")
+    )
+    assert written["ended"] == "error"
+    assert written["osaurus"]["restored"] is True
+    assert all(
+        cell["status"] != "FAIL" for cell in written["stage_a"]["cells"]
+    ), "a stop error is the run's ending, not a FAIL cell"
+    assert [event["type"] for event in events if event["type"] == "result"] == ["result"]
+
+
 def test_osaurus_wins_stage_a_and_is_pinned_again_for_stage_b(tmp_path):
     """AC-3's per-cell rule: every Osaurus cell is pinned before it and restored after it."""
     ok, fakes, summary = a_run(

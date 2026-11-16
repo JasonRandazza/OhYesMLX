@@ -230,6 +230,13 @@ and `/Applications/osaurus.app`. On a case-insensitive HFS+/APFS volume these re
 same bundle, but on a case-sensitive volume only one will exist. The doctor's
 `duplicateBundles` verdict exists for the case where both are genuinely installed.
 
+**Where this harness looks for the app (plan 05-09, S5-F14).** Both spellings, under both
+`/Applications` and `~/Applications` (a Homebrew `--appdir`, or a user without admin rights), expanded
+once in `runtimes.OSAURUS_APP_BUNDLES`. `OSAURUS_APP_EXECUTABLES` (the resident-app sweep that refuses a
+start over a running app, this run's own included) and `ENGINE_BUNDLE_EXECUTABLES["osaurus"]` (the
+`Contents/Helpers` CLI fallback under launchd's PATH) both derive from that one tuple, as does
+`engines._detect_osaurus`.
+
 ### 1.4 Other executables shipped in the bundle
 
 | Path | Note |

@@ -2488,7 +2488,8 @@ def test_start_refuses_a_port_this_run_does_not_own(rig):
     with pytest.raises(RuntimeStartError) as raised:
         RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
 
-    assert "8081 is already held" in str(raised.value)
+    assert "port 8081 (mlxlm)" in str(raised.value)
+    assert f"{runtimes.LSOF} -nP -iTCP:8081 -sTCP:LISTEN" in str(raised.value)
     assert rig.commands == []
 
 
@@ -3763,34 +3764,91 @@ def ledger_entry(**overrides):
     return entry
 
 
-def test_the_running_engine_is_recorded_after_the_cold_load_time_is_taken(rig, monkeypatch):
-    """The ledger write must not sit between spawn and readiness: no measured load time
-    contains its `ps` call (045-02a AC-6)."""
+def test_the_engine_is_recorded_right_after_the_spawn_and_again_after_readiness(
+    rig, monkeypatch
+):
+    """AC-5: the ledger names the engine before readiness is awaited (S5-F5), and the entry
+    gains its serving pid once the start is ready."""
     order = []
-
-    def now():
-        rig.clock.advance(1.0)
-        value = rig.clock()
-        order.append(("now", value))
-        return value
-
-    monkeypatch.setattr(runtimes, "_now", now)
     monkeypatch.setattr(
         runtimes,
         "_record_running_engine",
-        lambda pid, serving_pid, port, stop_command=(): order.append(("ledger", pid)),
+        lambda pid, serving_pid, port: order.append(("ledger", pid, serving_pid, port)),
     )
-    rig.spawn_seconds = 2.5
-    rig.inventory = (HF_ID,)
+    rig.inventory = lambda: order.append(("ready",)) or (HF_ID,)
 
     handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
 
-    writes = [index for index, event in enumerate(order) if event[0] == "ledger"]
-    assert writes, "the start wrote no running-engines entry"
-    before = order[writes[0] - 1]
-    assert before[0] == "now", "a value other than the load-time timestamp preceded the write"
-    started = 1001.0
-    assert handle.cold_load_s == before[1] - started
+    assert [event[0] for event in order][0] == "ledger"
+    assert [event[0] for event in order][-1] == "ledger"
+    assert ("ready",) in order[1:-1], "readiness was awaited between the two writes"
+    early, late = order[0], order[-1]
+    assert early == ("ledger", handle.pid, handle.pid, 8081)
+    assert late[1:] == (handle.pid, handle.memory_pid, 8081)
+
+
+def test_a_slow_ledger_write_does_not_move_cold_load_s(rig, monkeypatch):
+    """The early write is timed and taken out of ``cold_load_s`` (05-07 AC-4)."""
+    rig.spawn_seconds = 2.5
+    rig.inventory = (HF_ID,)
+    baseline = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID).cold_load_s
+
+    def slow_first_write(pid, serving_pid, port):
+        if serving_pid == pid:
+            rig.clock.advance(30.0)
+
+    monkeypatch.setattr(runtimes, "_record_running_engine", slow_first_write)
+    slow = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID).cold_load_s
+
+    assert slow == baseline
+
+
+def test_a_failed_ledger_write_after_the_spawn_is_one_stderr_line_and_the_start_goes_on(
+    rig, monkeypatch, capsys
+):
+    rig.inventory = (HF_ID,)
+
+    def broken(pid, serving_pid, port):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runtimes, "_record_running_engine", broken)
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert handle.pid == rig.next_pid
+    assert capsys.readouterr().err.count(runtimes.LEDGER_ERROR_CODE) == 2
+
+
+def test_a_start_that_fails_and_cleans_up_forgets_its_early_ledger_entry(rig, monkeypatch):
+    forgotten = []
+    monkeypatch.setattr(runtimes, "_forget_running_engine", forgotten.append)
+    monkeypatch.setattr(runtimes, "_shutdown", lambda pid, port, stop_command=(): None)
+    monkeypatch.setattr(runtimes.Runtime, "await_ready", _raise_start_error)
+
+    with pytest.raises(RuntimeStartError):
+        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert forgotten == [rig.next_pid]
+
+
+def test_a_start_whose_cleanup_fails_keeps_its_early_ledger_entry(rig, monkeypatch):
+    forgotten = []
+    monkeypatch.setattr(runtimes, "_forget_running_engine", forgotten.append)
+
+    def failing_shutdown(pid, port, stop_command=()):
+        raise RuntimeStopError("port still held")
+
+    monkeypatch.setattr(runtimes, "_shutdown", failing_shutdown)
+    monkeypatch.setattr(runtimes.Runtime, "await_ready", _raise_start_error)
+
+    with pytest.raises(RuntimeStopError, match="cleanup failed"):
+        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert forgotten == []
+
+
+def _raise_start_error(self, **kwargs):
+    raise RuntimeStartError("the model failed to load")
 
 
 def test_a_started_engine_is_recorded_with_its_pid_port_and_identity(
@@ -4460,3 +4518,72 @@ def test_mlx_version_says_why_when_there_is_no_python_mlx(monkeypatch):
     assert runtimes._mlx_version(1).startswith("unknown: ")
     monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: None)
     assert runtimes._mlx_version(1).startswith("unknown: ")
+
+
+# --------------------------------------------------------------------------------------
+# 05-09 AC-7 / AC-8: a reaped pid stays gone; a start sees every engine
+# --------------------------------------------------------------------------------------
+
+
+def _must_not_be_called(*args, **kwargs):
+    raise AssertionError("a reaped pid must not be probed or signalled again")
+
+
+def test_a_pid_the_reap_collected_stays_gone_and_is_never_probed_again(monkeypatch):
+    monkeypatch.setattr(runtimes, "_REAPED_PIDS", set())
+    monkeypatch.setattr(runtimes.os, "waitpid", lambda pid, flags: (pid, 0))
+    assert runtimes._process_alive(777) is False
+    assert 777 in runtimes._REAPED_PIDS
+
+    # Whoever holds the number now answers kill(pid, 0): it must not be asked.
+    monkeypatch.setattr(runtimes.os, "waitpid", _must_not_be_called)
+    monkeypatch.setattr(runtimes.os, "kill", _must_not_be_called)
+    assert runtimes._process_alive(777) is False
+
+
+def test_a_fresh_spawn_clears_its_pid_from_the_reaped_set(monkeypatch, tmp_path):
+    class FakeProcess:
+        pid = 777
+
+    monkeypatch.setattr(runtimes, "_REAPED_PIDS", {777})
+    monkeypatch.setattr(runtimes, "_engine_command", lambda name, command: (command, {}))
+    monkeypatch.setattr(runtimes, "_resolve_program", lambda command, env: command)
+    monkeypatch.setattr(runtimes.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    assert runtimes._spawn(("true",), tmp_path / "runtime.log") == 777
+
+    assert 777 not in runtimes._REAPED_PIDS
+
+
+def test_start_refuses_another_runtimes_port_before_building_any_command(rig):
+    rig.listeners.add(1337)
+
+    with pytest.raises(RuntimeStartError) as raised:
+        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    assert "port 1337 (osaurus)" in str(raised.value)
+    assert f"{runtimes.LSOF} -nP -iTCP:1337 -sTCP:LISTEN" in str(raised.value)
+    assert rig.commands == []
+
+
+def test_an_osaurus_app_this_run_started_still_counts_as_resident(monkeypatch):
+    executable = runtimes.OSAURUS_APP_EXECUTABLES[0]
+    monkeypatch.setattr(
+        runtimes, "_run", lambda command, timeout_s: _completed(stdout=f"9191 {executable}\n")
+    )
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
+    monkeypatch.setattr(runtimes, "_RUN_STARTED_PIDS", {9191})
+
+    assert runtimes._resident_osaurus_pids() == (9191,)
+
+
+def test_osaurus_is_recognised_under_both_application_directories():
+    home = os.path.expanduser("~/Applications")
+    for name in ("osaurus.app", "Osaurus.app"):
+        assert f"/Applications/{name}" in runtimes.OSAURUS_APP_BUNDLES
+        assert f"{home}/{name}" in runtimes.OSAURUS_APP_BUNDLES
+    assert f"{home}/osaurus.app/Contents/MacOS/osaurus" in runtimes.OSAURUS_APP_EXECUTABLES
+    assert (
+        f"{home}/Osaurus.app/Contents/Helpers/osaurus"
+        in runtimes.ENGINE_BUNDLE_EXECUTABLES["osaurus"]
+    )
