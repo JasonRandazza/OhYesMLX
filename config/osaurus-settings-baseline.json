@@ -10,6 +10,7 @@
     "server-runtime.json:cache.storedKVCodec": "auto",
     "server-runtime.json:concurrency.continuousBatching": true,
     "server-runtime.json:concurrency.maxConcurrentSequences": 1,
+    "server-runtime.json:concurrency.smeltMode": "disabled",
     "server-runtime.json:generation.streamInterval": 1,
     "server-runtime.json:memorySafety.mode": "safe_auto",
     "server-runtime.json:memorySafety.slider": 2,

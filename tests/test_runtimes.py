@@ -171,6 +171,7 @@ class Rig:
         monkeypatch.setattr(runtimes, "_signal_tree", self.signal_tree)
         monkeypatch.setattr(runtimes, "_signal_process", self.signal_process)
         monkeypatch.setattr(runtimes, "_run", self.run)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda command, path=None: None)
         monkeypatch.setattr(runtimes, "_log_path", lambda name: self.log_file)
         # The ledger's directory is a seam too: a start writes there, and no test may write
         # into this repo's results/ (045-02a review, Std-7).
@@ -2958,7 +2959,11 @@ CONFIG_RUNTIME = {
         "prefix": {"enabled": True},
         "storedKVCodec": "auto",
     },
-    "concurrency": {"continuousBatching": True, "maxConcurrentSequences": 1},
+    "concurrency": {
+        "continuousBatching": True,
+        "maxConcurrentSequences": 1,
+        "smeltMode": "disabled",
+    },
     "generation": {"streamInterval": 1},
     "memorySafety": {"mode": "safe_auto", "slider": 2},
     "mtp": {"mode": "auto"},
@@ -3353,7 +3358,9 @@ def test_a_lab_path_is_prefixed_to_path_and_the_rest_of_the_environment_passes_t
     lab.mkdir(parents=True)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     env = runtimes._engine_env(
-        write_lab_manifest(tmp_path, str(lab)), tmp_path / "no-lab-paths.json"
+        write_lab_manifest(tmp_path, str(lab)),
+        tmp_path / "no-lab-paths.json",
+        engine="mlxlm",
     )
     assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
     for key, value in os.environ.items():
@@ -3384,7 +3391,11 @@ def test_a_manifest_entry_without_a_lab_path_key_means_no_lab_path(tmp_path, mon
 def test_a_lab_path_that_does_not_exist_is_refused_naming_the_engine(tmp_path):
     missing = str(tmp_path / "gone" / "bin")
     with pytest.raises(RuntimeStartError, match="mlxlm"):
-        runtimes._engine_env(write_lab_manifest(tmp_path, missing), tmp_path / "no-lab-paths.json")
+        runtimes._engine_env(
+            write_lab_manifest(tmp_path, missing),
+            tmp_path / "no-lab-paths.json",
+            engine="mlxlm",
+        )
 
 
 def test_spawn_hands_the_engine_env_to_the_process(monkeypatch, tmp_path):
@@ -3567,6 +3578,7 @@ def test_the_machine_local_file_overrides_the_manifests_lab_path_for_one_engine(
     env = runtimes._engine_env(
         write_lab_manifest(tmp_path, str(manifest_lab)),
         write_lab_paths_file(tmp_path, {"mlxlm": str(local_lab)}),
+        engine="mlxlm",
     )
     assert env["PATH"] == f"{local_lab}{os.pathsep}/usr/bin:/bin"
 
@@ -3578,6 +3590,7 @@ def test_a_lab_path_only_in_the_machine_local_file_is_prefixed(tmp_path, monkeyp
     env = runtimes._engine_env(
         write_lab_manifest(tmp_path, None),
         write_lab_paths_file(tmp_path, {"optiq": str(lab)}),
+        engine="optiq",
     )
     assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
 
@@ -3593,9 +3606,9 @@ def test_the_manifest_lab_path_still_applies_to_an_engine_the_local_file_omits(
     env = runtimes._engine_env(
         write_lab_manifest(tmp_path, str(manifest_lab)),
         write_lab_paths_file(tmp_path, {"optiq": str(local_lab)}),
+        engine="mlxlm",
     )
-    # Manifest order, one directory per engine: mlxlm's from the manifest, optiq's from the file.
-    assert env["PATH"] == f"{manifest_lab}{os.pathsep}{local_lab}{os.pathsep}/usr/bin:/bin"
+    assert env["PATH"] == f"{manifest_lab}{os.pathsep}/usr/bin:/bin"
 
 
 def test_a_missing_machine_local_file_leaves_the_manifest_alone(tmp_path, monkeypatch):
@@ -3603,7 +3616,9 @@ def test_a_missing_machine_local_file_leaves_the_manifest_alone(tmp_path, monkey
     lab = tmp_path / "mlx-lm-0.31.3" / "bin"
     lab.mkdir(parents=True)
     env = runtimes._engine_env(
-        write_lab_manifest(tmp_path, str(lab)), tmp_path / "absent.json"
+        write_lab_manifest(tmp_path, str(lab)),
+        tmp_path / "absent.json",
+        engine="mlxlm",
     )
     assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
 
@@ -3613,6 +3628,7 @@ def test_a_machine_local_lab_path_that_does_not_exist_is_refused_naming_the_engi
         runtimes._engine_env(
             write_lab_manifest(tmp_path, None),
             write_lab_paths_file(tmp_path, {"optiq": str(tmp_path / "gone" / "bin")}),
+            engine="optiq",
         )
 
 
@@ -3638,7 +3654,11 @@ def test_a_lab_path_that_must_not_join_path_is_refused_at_start(tmp_path, monkey
         lab = str(target)
 
     with pytest.raises(RuntimeStartError, match="lab path") as raised:
-        runtimes._engine_env(write_lab_manifest(tmp_path, lab), tmp_path / "no-lab-paths.json")
+        runtimes._engine_env(
+            write_lab_manifest(tmp_path, lab),
+            tmp_path / "no-lab-paths.json",
+            engine="mlxlm",
+        )
 
     assert lab in str(raised.value)
 
@@ -3650,7 +3670,9 @@ def test_a_lab_path_nobody_else_can_write_is_still_prefixed(tmp_path, monkeypatc
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
 
     env = runtimes._engine_env(
-        write_lab_manifest(tmp_path, str(lab)), tmp_path / "no-lab-paths.json"
+        write_lab_manifest(tmp_path, str(lab)),
+        tmp_path / "no-lab-paths.json",
+        engine="mlxlm",
     )
 
     assert env["PATH"] == f"{lab}{os.pathsep}/usr/bin:/bin"
@@ -3672,7 +3694,11 @@ def test_a_lab_path_owned_by_another_user_is_refused_at_start(tmp_path, monkeypa
     monkeypatch.setattr(engines.os, "stat", another_owner)
 
     with pytest.raises(RuntimeStartError, match="owned"):
-        runtimes._engine_env(write_lab_manifest(tmp_path, str(lab)), tmp_path / "no-lab-paths.json")
+        runtimes._engine_env(
+            write_lab_manifest(tmp_path, str(lab)),
+            tmp_path / "no-lab-paths.json",
+            engine="mlxlm",
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -4170,3 +4196,44 @@ def test_stop_own_engines_without_a_readable_ledger_is_zero(tmp_path, monkeypatc
     unreadable.write_text("not json", encoding="utf-8")
 
     assert runtimes.stop_own_engines(tmp_path) == 0
+
+
+def test_optiq_start_and_version_probe_keep_its_own_lab_bin_and_mlxlm_gets_none(tmp_path, monkeypatch):
+    """05-07 audit must-have: scoping PATH per engine must not cost OptiQ its own lab copy.
+
+    The global optiq and the lab copy are different builds (0.7.8 vs 0.5.13 on the reference
+    Mac), so a version probe that lost the lab prefix would record the wrong build on every
+    OptiQ row -- S5-F1 in reverse.
+    """
+    from ohyesmlx import engines
+
+    lab = tmp_path / "optiq-lab" / "bin"
+    lab.mkdir(parents=True)
+    program = lab / "optiq"
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o755)
+    monkeypatch.setattr(engines, "lab_paths", lambda *a, **k: {"optiq": str(lab)})
+    monkeypatch.setattr(
+        engines,
+        "load_manifest",
+        lambda *a, **k: {"optiq": {"lab_path": None}, "mlxlm": {"lab_path": None}},
+    )
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    command, env = runtimes._engine_command("optiq", ("optiq", "serve"))
+    assert command[0] == str(program)
+    assert env["PATH"].split(os.pathsep)[0] == str(lab)
+
+    probed = []
+    monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: probed.append(command))
+    runtimes.RUNTIMES["optiq"].version()
+    assert probed and probed[0][0] == str(program)
+
+    # The spawned child of that absolute command still finds the rest of its venv first.
+    _command, child_env = runtimes._engine_command(None, (str(program), "serve"))
+    assert child_env["PATH"].split(os.pathsep)[0] == str(lab)
+
+    control = ("python", "-m", "mlx_lm.server")
+    command, env = runtimes._engine_command("mlxlm", control)
+    assert command == control
+    assert str(lab) not in env["PATH"].split(os.pathsep)
