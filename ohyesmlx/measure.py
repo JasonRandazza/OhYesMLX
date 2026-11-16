@@ -887,6 +887,13 @@ def _visit(
                     f"and {handle.version!r}"
                 )
                 version_mismatch = True
+            elif getattr(handle, "mlx_version", None) != result.mlx_version:
+                result.status = "FAIL"
+                result.reason = (
+                    f"mlx core changed between visits: {result.mlx_version!r} "
+                    f"and {getattr(handle, 'mlx_version', None)!r}"
+                )
+                version_mismatch = True
         if version_mismatch:
             return "skip"
 

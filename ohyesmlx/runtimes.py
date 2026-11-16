@@ -486,12 +486,9 @@ def _engine_env(manifest_path=None, lab_paths_path=None, *, engine=None) -> dict
     if engine is None:
         return env
 
-    from .engines import check_lab_dir, lab_paths, load_manifest
+    from .engines import check_lab_dir
 
-    manifest = load_manifest() if manifest_path is None else load_manifest(manifest_path)
-    local = lab_paths() if lab_paths_path is None else lab_paths(lab_paths_path)
-    entry = manifest.get(engine, {})
-    lab_path = local.get(engine, entry.get("lab_path"))
+    lab_path = _lab_paths(manifest_path, lab_paths_path).get(engine)
     if lab_path is None:
         return env
     resolved = os.path.expanduser(lab_path)
@@ -508,6 +505,21 @@ def _engine_env(manifest_path=None, lab_paths_path=None, *, engine=None) -> dict
     ambient = env.get("PATH")
     env["PATH"] = os.pathsep.join([resolved] + ([ambient] if ambient else []))
     return env
+
+
+def _lab_paths(manifest_path=None, lab_paths_path=None) -> dict[str, str]:
+    """Each engine's lab directory as configured: the machine-local file's entry, else the
+    manifest's ``lab_path``. The one place the two sources are combined; unexpanded."""
+    from .engines import lab_paths, load_manifest
+
+    manifest = load_manifest() if manifest_path is None else load_manifest(manifest_path)
+    local = lab_paths() if lab_paths_path is None else lab_paths(lab_paths_path)
+    found = {}
+    for name, entry in manifest.items():
+        lab_path = local.get(name, entry.get("lab_path"))
+        if lab_path is not None:
+            found[name] = lab_path
+    return found
 
 
 def _engine_command(
@@ -539,13 +551,9 @@ def _engine_command(
                     *command[index + 1 :],
                 )
     if command and os.path.isabs(command[0]):
-        from .engines import lab_paths, load_manifest
-
         directory = os.path.dirname(command[0])
-        local = lab_paths()
-        for name, entry in load_manifest().items():
-            lab_path = local.get(name, entry.get("lab_path"))
-            if lab_path is not None and os.path.expanduser(lab_path) == directory:
+        for lab_path in _lab_paths().values():
+            if os.path.expanduser(lab_path) == directory:
                 entries = env.get("PATH", "").split(os.pathsep)
                 if not entries or entries[0] != directory:
                     ambient = env.get("PATH")
