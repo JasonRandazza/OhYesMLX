@@ -176,6 +176,8 @@ class Rig:
         # The ledger's directory is a seam too: a start writes there, and no test may write
         # into this repo's results/ (045-02a review, Std-7).
         monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+        # The ledger's owner block (05-09): this process's cached identity, never a real `ps`.
+        monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
 
     def spawn(self, command, log_path):
         self.commands.append(command)
@@ -3705,19 +3707,45 @@ def test_a_lab_path_owned_by_another_user_is_refused_at_start(tmp_path, monkeypa
 # 045-02a AC-6: the running-engines ledger, and the startup stop of a dead owner's engines
 # --------------------------------------------------------------------------------------
 
+OWN_IDENTITY = ("Wed Nov 5 09:59:00 2025", "python -m ohyesmlx app")
+OWN_OWNER = {"pid": os.getpid(), "lstart": OWN_IDENTITY[0], "argv": OWN_IDENTITY[1]}
 LEDGER_LSTART = "Wed Nov 5 10:00:00 2025"
 LEDGER_ARGV = "python -m mlx_lm.server --model /models/x --port 8081"
 OSAURUS_LSTART = "Wed Nov 5 10:00:01 2025"
 OSAURUS_ARGV = "/Applications/osaurus.app/Contents/MacOS/osaurus serve --port 1337"
 
 
-def write_ledger(root, owner, entries):
-    """One owner's ledger file, in the shape `_write_ledger` produces."""
+def write_ledger(root, owner, entries, owner_block=None):
+    """One owner's ledger file: the shape `_write_ledger` produces with *owner_block*, the
+    pre-05-09 shape (no owner) without it."""
     directory = root / "results" / runtimes.RUNNING_ENGINES_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{owner}.json"
-    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    payload = {"entries": entries}
+    if owner_block is not None:
+        payload["owner"] = owner_block
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def kept_reasons(capsys):
+    """``(pid, port, reason)`` of each kept-entry stderr line (05-09 AC-3)."""
+    found = []
+    for line in capsys.readouterr().err.splitlines():
+        error = json.loads(line)["error"]
+        assert error["code"] == runtimes.LEDGER_ERROR_CODE
+        head, _, reason = error["message"].rpartition(": ")
+        words = head.split()
+        found.append(
+            (int(words[words.index("pid") + 1]), int(words[words.index("port") + 1]), reason)
+        )
+    return found
+
+
+def write_own_ledger(root, entries, monkeypatch):
+    """This process's own ledger file, owner block and all, with its identity cached."""
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
+    return write_ledger(root, os.getpid(), entries, OWN_OWNER)
 
 
 def ledger_entry(**overrides):
@@ -3730,7 +3758,6 @@ def ledger_entry(**overrides):
         "serving_lstart": LEDGER_LSTART,
         "serving_argv": LEDGER_ARGV,
         "port": 8081,
-        "stop_command": [],
     }
     entry.update(overrides)
     return entry
@@ -3772,15 +3799,16 @@ def test_a_started_engine_is_recorded_with_its_pid_port_and_identity(
     monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
     pid = rig.next_pid + 1
     rig.inventory = (HF_ID,)
-    rig.results[(runtimes.PS, "-ww", "-o", "lstart=,args=", "-p", str(pid))] = _completed(
+    rig.results[runtimes._identity_command(pid)] = _completed(
         stdout=f"{LEDGER_LSTART} {LEDGER_ARGV}\n"
     )
 
     handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
 
     path = tmp_path / "results" / runtimes.RUNNING_ENGINES_DIRNAME / f"{os.getpid()}.json"
-    entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
-    assert entries == [
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["owner"] == OWN_OWNER
+    assert payload["entries"] == [
         {
             "pid": handle.pid,
             "lstart": LEDGER_LSTART,
@@ -3789,7 +3817,6 @@ def test_a_started_engine_is_recorded_with_its_pid_port_and_identity(
             "serving_lstart": LEDGER_LSTART,
             "serving_argv": LEDGER_ARGV,
             "port": 8081,
-            "stop_command": [],
         }
     ]
 
@@ -3808,7 +3835,7 @@ def test_an_osaurus_start_records_the_serving_process_when_the_launcher_is_unrea
     rig.inventory = ("ornith-1.0-35b-jang_4m",)
     rig.results[listener_probe(1337)] = _completed(stdout=f"{OSAURUS_APP_PID}\n")
     # No `ps` answer for the spawned launcher: its identity is already unreadable.
-    rig.results[(runtimes.PS, "-ww", "-o", "lstart=,args=", "-p", str(OSAURUS_APP_PID))] = (
+    rig.results[runtimes._identity_command(OSAURUS_APP_PID)] = (
         _completed(stdout=f"{OSAURUS_LSTART} {OSAURUS_ARGV}\n")
     )
 
@@ -3825,7 +3852,6 @@ def test_an_osaurus_start_records_the_serving_process_when_the_launcher_is_unrea
             "serving_lstart": OSAURUS_LSTART,
             "serving_argv": OSAURUS_ARGV,
             "port": 1337,
-            "stop_command": ["osaurus", "stop"],
         }
     ]
     assert capsys.readouterr().err == "", "an unreadable launcher identity was reported"
@@ -3833,7 +3859,7 @@ def test_an_osaurus_start_records_the_serving_process_when_the_launcher_is_unrea
 
 def test_a_ledger_write_failure_does_not_fail_the_start(rig, monkeypatch, capsys):
     rig.inventory = (HF_ID,)
-    rig.results[(runtimes.PS, "-ww", "-o", "lstart=,args=", "-p", str(rig.next_pid + 1))] = (
+    rig.results[runtimes._identity_command(rig.next_pid + 1)] = (
         _completed(stdout=f"{LEDGER_LSTART} {LEDGER_ARGV}\n")
     )
 
@@ -3853,6 +3879,8 @@ def test_a_ledger_write_failure_does_not_fail_the_start(rig, monkeypatch, capsys
 def test_a_dead_owners_matching_engine_is_stopped_through_shutdown(tmp_path, monkeypatch):
     path = write_ledger(tmp_path, 999_999, [ledger_entry()])
     calls = []
+    # `same_process` asks the kernel whether the pid is this user's (05-09): the pids are fakes.
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(
@@ -3885,11 +3913,12 @@ def test_an_osaurus_shaped_entry_with_a_dead_launcher_is_stopped(tmp_path, monke
                 serving_lstart=OSAURUS_LSTART,
                 serving_argv=OSAURUS_ARGV,
                 port=1337,
-                stop_command=["osaurus", "stop"],
             )
         ],
     )
     calls = []
+    # `same_process` asks the kernel whether the pid is this user's (05-09): the pids are fakes.
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (4243,))
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid not in (4242, 999_999))
     monkeypatch.setattr(
@@ -3909,10 +3938,10 @@ def test_an_osaurus_shaped_entry_with_a_dead_launcher_is_stopped(tmp_path, monke
     assert not path.exists()
 
 
-def test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop(tmp_path, monkeypatch):
+def test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop(tmp_path, monkeypatch, capsys):
     """Review fix: `_shutdown` signals the spawned pid's group when that pid is alive, so a
-    launcher pid the OS has given to another process drops the entry, matching listener or
-    not."""
+    launcher pid the OS has given to another process blocks the stop, matching listener or
+    not. 05-09 (S5-F4): the entry is kept and reported, not dropped."""
     path = write_ledger(
         tmp_path,
         999_999,
@@ -3924,7 +3953,6 @@ def test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop(tmp_path, monkeypa
                 serving_lstart=OSAURUS_LSTART,
                 serving_argv=OSAURUS_ARGV,
                 port=1337,
-                stop_command=["osaurus", "stop"],
             )
         ],
     )
@@ -3936,6 +3964,8 @@ def test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop(tmp_path, monkeypa
         "_process_identity",
         lambda pid: (OSAURUS_LSTART, OSAURUS_ARGV) if pid == 4243 else ("x", "/bin/stranger"),
     )
+    # `same_process` asks the kernel whether the pid is this user's (05-09): the pids are fakes.
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(
         runtimes,
         "_shutdown",
@@ -3945,7 +3975,8 @@ def test_a_reused_launcher_pid_blocks_the_osaurus_shaped_stop(tmp_path, monkeypa
     runtimes.stop_orphaned_engines(tmp_path)
 
     assert calls == []
-    assert not path.exists()
+    assert path.exists(), "an entry whose launcher identity is unproven was dropped"
+    assert kept_reasons(capsys) == [(4242, 1337, "identity unproven")]
 
 
 def test_a_stranger_listening_on_the_recorded_port_is_dropped(tmp_path, monkeypatch):
@@ -3965,7 +3996,8 @@ def test_a_stranger_listening_on_the_recorded_port_is_dropped(tmp_path, monkeypa
     assert not path.exists()
 
 
-def test_an_unreadable_port_is_dropped_and_never_signalled(tmp_path, monkeypatch):
+def test_an_unreadable_port_is_kept_reported_and_never_signalled(tmp_path, monkeypatch, capsys):
+    """05-09 (S5-F4): an unreadable port proves nothing either way, so the entry is kept."""
     path = write_ledger(tmp_path, 999_999, [ledger_entry()])
     calls = []
     monkeypatch.setattr(runtimes, "_listener_pids", lambda port: None)
@@ -3976,12 +4008,14 @@ def test_an_unreadable_port_is_dropped_and_never_signalled(tmp_path, monkeypatch
     runtimes.stop_orphaned_engines(tmp_path)
 
     assert calls == [], "an entry whose port could not be read was signalled"
-    assert not path.exists()
+    assert path.exists(), "an entry whose port could not be read was dropped"
+    assert kept_reasons(capsys) == [(4242, 8081, "port unreadable")]
 
 
-def test_a_listener_whose_recorded_identity_no_longer_matches_is_dropped(
-    tmp_path, monkeypatch
+def test_a_listener_whose_recorded_identity_no_longer_matches_is_kept_and_not_signalled(
+    tmp_path, monkeypatch, capsys
 ):
+    """05-09 (S5-F4): a recorded pid alive with an unproven identity is kept, not dropped."""
     path = write_ledger(
         tmp_path,
         999_999,
@@ -4001,11 +4035,14 @@ def test_a_listener_whose_recorded_identity_no_longer_matches_is_dropped(
     runtimes.stop_orphaned_engines(tmp_path)
 
     assert calls == [], "a listener whose identity no longer matched was signalled"
-    assert not path.exists()
+    assert path.exists()
+    assert kept_reasons(capsys) == [(4242, 1337, "identity unproven")]
 
 
 def test_a_stop_that_does_not_take_effect_keeps_the_ledger_file(tmp_path, monkeypatch):
     path = write_ledger(tmp_path, 999_999, [ledger_entry()])
+    # `same_process` asks the kernel whether the pid is this user's (05-09): the pids are fakes.
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(
@@ -4025,7 +4062,8 @@ def test_a_stop_that_does_not_take_effect_keeps_the_ledger_file(tmp_path, monkey
     assert path.exists(), "a ledger whose stop did not take effect was removed"
 
 
-def test_a_reused_pid_is_dropped_and_never_signalled(tmp_path, monkeypatch):
+def test_a_reused_pid_is_kept_and_never_signalled(tmp_path, monkeypatch, capsys):
+    """05-09 (S5-F4): alive with another start time is unproven -- kept, never signalled."""
     path = write_ledger(tmp_path, 999_999, [ledger_entry()])
     calls = []
     monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
@@ -4043,7 +4081,8 @@ def test_a_reused_pid_is_dropped_and_never_signalled(tmp_path, monkeypatch):
     runtimes.stop_orphaned_engines(tmp_path)
 
     assert calls == [], "a reused pid was signalled"
-    assert not path.exists()
+    assert path.exists()
+    assert kept_reasons(capsys) == [(4242, 8081, "identity unproven")]
 
 
 def test_a_matching_pid_with_a_different_argv_is_dropped_and_never_signalled(
@@ -4066,7 +4105,7 @@ def test_a_matching_pid_with_a_different_argv_is_dropped_and_never_signalled(
 
 
 def test_a_live_owners_ledger_is_never_read_or_touched(tmp_path, monkeypatch):
-    path = write_ledger(tmp_path, os.getpid(), [ledger_entry()])
+    path = write_own_ledger(tmp_path, [ledger_entry()], monkeypatch)
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
 
     def refuse(*args, **kwargs):
@@ -4093,6 +4132,8 @@ def test_a_json_file_that_is_not_a_ledger_is_left_alone(tmp_path):
 
 
 def test_the_ledger_file_is_replaced_atomically(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
+    expected = {"owner": OWN_OWNER, "entries": [{"pid": 1}]}
     target = runtimes._ledger_path(4242, root=tmp_path)
     seen = []
     real_replace = os.replace
@@ -4100,7 +4141,7 @@ def test_the_ledger_file_is_replaced_atomically(tmp_path, monkeypatch):
     def replace(source, destination):
         seen.append((Path(source), Path(destination)))
         assert not Path(destination).exists(), "the target was written before the replace"
-        assert json.loads(Path(source).read_text()) == {"entries": [{"pid": 1}]}
+        assert json.loads(Path(source).read_text()) == expected
         real_replace(source, destination)
 
     monkeypatch.setattr(runtimes.os, "replace", replace)
@@ -4108,11 +4149,12 @@ def test_the_ledger_file_is_replaced_atomically(tmp_path, monkeypatch):
     runtimes._write_ledger(target, [{"pid": 1}])
 
     assert [destination for _source, destination in seen] == [target]
-    assert json.loads(target.read_text()) == {"entries": [{"pid": 1}]}
+    assert json.loads(target.read_text()) == expected
 
 
 def test_the_ledger_file_is_removed_once_its_last_entry_is_gone(tmp_path, monkeypatch):
     monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
     path = runtimes._ledger_path()
     runtimes._write_ledger(path, [{"pid": 4242}])
 
@@ -4127,19 +4169,15 @@ def test_the_ledger_file_is_removed_once_its_last_entry_is_gone(tmp_path, monkey
 
 
 def test_stop_own_engines_stops_only_this_processes_entries_and_never_writes(tmp_path, monkeypatch):
-    own = write_ledger(
+    own = write_own_ledger(
         tmp_path,
-        os.getpid(),
         [
-            ledger_entry(pid=4242, serving_pid=4242, port=8081, stop_command=[]),
-            ledger_entry(
-                pid=4243,
-                serving_pid=4243,
-                port=1337,
-                stop_command=["osaurus", "stop"],
-            ),
+            ledger_entry(pid=4242, serving_pid=4242, port=8081),
+            ledger_entry(pid=4243, serving_pid=4243, port=1337),
         ],
+        monkeypatch,
     )
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: False)
     other = write_ledger(tmp_path, 999_999, [ledger_entry(pid=4343, port=8000)])
     before = (own.read_bytes(), other.read_bytes())
     calls = []
@@ -4159,11 +4197,12 @@ def test_stop_own_engines_stops_only_this_processes_entries_and_never_writes(tmp
 def test_stop_own_engines_reports_a_failing_stop_and_still_stops_the_next(
     tmp_path, monkeypatch, capsys
 ):
-    write_ledger(
+    write_own_ledger(
         tmp_path,
-        os.getpid(),
         [ledger_entry(pid=4242, port=8081), ledger_entry(pid=4243, port=8100)],
+        monkeypatch,
     )
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: False)
     calls = []
 
     def shutdown(pid, port, stop_command=()):
@@ -4196,6 +4235,154 @@ def test_stop_own_engines_without_a_readable_ledger_is_zero(tmp_path, monkeypatc
     unreadable.write_text("not json", encoding="utf-8")
 
     assert runtimes.stop_own_engines(tmp_path) == 0
+
+
+# --------------------------------------------------------------------------------------
+# 05-09 AC-1..AC-4: one identity check; a ledger file belongs to the process that wrote it
+# --------------------------------------------------------------------------------------
+
+
+def test_identity_is_read_in_the_c_locale_and_utc():
+    """AC-1: the same process renders one `lstart` from a shell, under launchd and over DST."""
+    command = runtimes._identity_command(4242)
+    assert command[: command.index(runtimes.PS)] == ("/usr/bin/env", "LC_ALL=C", "TZ=UTC")
+    assert command[-2:] == ("-p", "4242")
+
+
+def test_same_process_needs_alive_this_users_and_the_recorded_identity(monkeypatch):
+    identities = {4242: (LEDGER_LSTART, LEDGER_ARGV)}
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid in (4242, 1))
+    monkeypatch.setattr(runtimes, "_process_identity", identities.get)
+
+    def kill(pid, sig):
+        if pid == 1:
+            raise PermissionError("another user's")
+
+    monkeypatch.setattr(runtimes.os, "kill", kill)
+
+    assert runtimes.same_process(4242, (LEDGER_LSTART, LEDGER_ARGV))
+    assert runtimes.same_process(4242)
+    assert not runtimes.same_process(4242, ("Thu Nov 6 11:00:00 2025", LEDGER_ARGV))
+    assert not runtimes.same_process(1), "EPERM was read as ours"
+    assert not runtimes.same_process(4343), "a dead pid was the same process"
+
+
+def test_same_process_answers_for_this_process_from_its_cached_identity(monkeypatch):
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {})
+    reads = []
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: reads.append(pid) or OWN_IDENTITY
+    )
+
+    assert runtimes.same_process(os.getpid(), OWN_IDENTITY)
+    assert runtimes.same_process(os.getpid(), OWN_IDENTITY)
+    assert not runtimes.same_process(os.getpid(), ("Mon Jan 1 00:00:00 2024", "earlier"))
+    assert reads == [os.getpid()], "this process's identity was read more than once"
+
+
+def test_a_pre_0509_ledger_file_loads_through_the_sweep_and_stop_now(tmp_path, monkeypatch):
+    """AC-2 audit: a file with `stop_command` and no `owner` still loads. Under a dead owner's
+    pid the sweep stops it with the command derived from the port; under this process's pid
+    it is an earlier process's file, so Stop now leaves it to the sweep."""
+    legacy = ledger_entry(port=1337, stop_command=["/usr/bin/touch", "/tmp/never"])
+    dead = write_ledger(tmp_path, 999_999, [legacy])
+    calls = []
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
+    )
+    monkeypatch.setattr(
+        runtimes,
+        "_shutdown",
+        lambda pid, port, stop_command=(): calls.append((pid, port, stop_command)),
+    )
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == [(4242, 1337, ("osaurus", "stop"))]
+    assert not dead.exists()
+
+    calls.clear()
+    own = write_ledger(tmp_path, os.getpid(), [legacy])
+
+    assert runtimes.stop_own_engines(tmp_path) == 0
+    assert calls == [], "Stop now signalled a file this process did not write"
+
+    runtimes.stop_orphaned_engines(tmp_path)
+
+    assert calls == [(4242, 1337, ("osaurus", "stop"))]
+    assert not own.exists()
+
+
+def test_an_entry_on_a_port_no_runtime_owns_is_stopped_by_signal_only():
+    """AC-4."""
+    assert runtimes._stop_command_for_port(59999) == ()
+    assert runtimes._stop_command_for_port(1337) == ("osaurus", "stop")
+
+
+def test_stop_now_does_not_signal_an_own_entry_whose_pid_is_now_another_process(
+    tmp_path, monkeypatch, capsys
+):
+    """AC-2 belt and braces: the file is this process's, but the recorded pid is alive under
+    another start time."""
+    write_own_ledger(tmp_path, [ledger_entry()], monkeypatch)
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: ("Thu Nov 6 11:00:00 2025", LEDGER_ARGV)
+    )
+    calls = []
+    monkeypatch.setattr(runtimes, "_shutdown", lambda *args, **kwargs: calls.append(args))
+
+    assert runtimes.stop_own_engines(tmp_path) == 0
+    assert calls == []
+    error = json.loads(capsys.readouterr().err)["error"]
+    assert error["code"] == "abort_stop_failed" and "4242" in error["message"]
+
+
+def test_a_start_stops_a_proven_orphan_in_its_own_pid_file_before_writing(
+    tmp_path, monkeypatch
+):
+    """AC-2 audit: an earlier process's file under this pid is settled, not merged: a proven
+    entry is stopped, and the file is then this process's alone."""
+    write_ledger(tmp_path, os.getpid(), [ledger_entry()])
+    monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: ())
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (LEDGER_LSTART, LEDGER_ARGV)
+    )
+    calls = []
+    monkeypatch.setattr(
+        runtimes,
+        "_shutdown",
+        lambda pid, port, stop_command=(): calls.append((pid, port, stop_command)),
+    )
+
+    runtimes._record_running_engine(5555, 5555, 8100)
+
+    payload = json.loads(runtimes._ledger_path().read_text(encoding="utf-8"))
+    assert calls == [(4242, 8081, ())]
+    assert payload["owner"] == OWN_OWNER
+    assert [entry["pid"] for entry in payload["entries"]] == [5555]
+    assert "stop_command" not in payload["entries"][0]
+
+
+def test_forgetting_an_engine_leaves_an_earlier_processs_file_alone(tmp_path, monkeypatch):
+    """Rewriting it would stamp this process's owner block on entries it never recorded."""
+    path = write_ledger(tmp_path, os.getpid(), [ledger_entry(), ledger_entry(pid=4343)])
+    before = path.read_bytes()
+    monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {os.getpid(): OWN_IDENTITY})
+
+    runtimes._forget_running_engine(4242)
+
+    assert path.read_bytes() == before
 
 
 def test_optiq_start_and_version_probe_keep_its_own_lab_bin_and_mlxlm_gets_none(tmp_path, monkeypatch):
