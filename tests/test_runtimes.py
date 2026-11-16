@@ -4196,3 +4196,44 @@ def test_stop_own_engines_without_a_readable_ledger_is_zero(tmp_path, monkeypatc
     unreadable.write_text("not json", encoding="utf-8")
 
     assert runtimes.stop_own_engines(tmp_path) == 0
+
+
+def test_optiq_start_and_version_probe_keep_its_own_lab_bin_and_mlxlm_gets_none(tmp_path, monkeypatch):
+    """05-07 audit must-have: scoping PATH per engine must not cost OptiQ its own lab copy.
+
+    The global optiq and the lab copy are different builds (0.7.8 vs 0.5.13 on the reference
+    Mac), so a version probe that lost the lab prefix would record the wrong build on every
+    OptiQ row -- S5-F1 in reverse.
+    """
+    from ohyesmlx import engines
+
+    lab = tmp_path / "optiq-lab" / "bin"
+    lab.mkdir(parents=True)
+    program = lab / "optiq"
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o755)
+    monkeypatch.setattr(engines, "lab_paths", lambda *a, **k: {"optiq": str(lab)})
+    monkeypatch.setattr(
+        engines,
+        "load_manifest",
+        lambda *a, **k: {"optiq": {"lab_path": None}, "mlxlm": {"lab_path": None}},
+    )
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    command, env = runtimes._engine_command("optiq", ("optiq", "serve"))
+    assert command[0] == str(program)
+    assert env["PATH"].split(os.pathsep)[0] == str(lab)
+
+    probed = []
+    monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: probed.append(command))
+    runtimes.RUNTIMES["optiq"].version()
+    assert probed and probed[0][0] == str(program)
+
+    # The spawned child of that absolute command still finds the rest of its venv first.
+    _command, child_env = runtimes._engine_command(None, (str(program), "serve"))
+    assert child_env["PATH"].split(os.pathsep)[0] == str(lab)
+
+    control = ("python", "-m", "mlx_lm.server")
+    command, env = runtimes._engine_command("mlxlm", control)
+    assert command == control
+    assert str(lab) not in env["PATH"].split(os.pathsep)

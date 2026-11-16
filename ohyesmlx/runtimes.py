@@ -517,7 +517,9 @@ def _engine_command(
     directory, so the child can find the rest of its venv without exposing it to other engines.
     """
     env = _engine_env() if engine is None else _engine_env(engine=engine)
-    if engine is not None:
+    # Only an engine with a lab copy has its program pinned to an absolute path; every other
+    # command is handed on exactly as the runtime wrote it.
+    if engine is not None and env.get("PATH") != os.environ.get("PATH"):
         index = 0
         while index < len(command):
             token = command[index]
@@ -2319,10 +2321,10 @@ class Runtime:
             concurrency=concurrency,
         )
         log_path = _log_path(self.name)
-        started = _now()
         pid = None
         try:
             command, _env = _engine_command(self.name, command)
+            started = _now()
             pid = _spawn(command, log_path)
             resolved = self.await_ready(
                 pid=pid,
