@@ -35,8 +35,23 @@ public struct URLSessionTransport: HTTPTransport {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    for try await line in bytes.lines {
-                        continuation.yield(line)
+                    // Not `bytes.lines`: it drops empty lines, and an empty line is the SSE event
+                    // boundary, so no event ever dispatched (Fable S3-F1). Split on LF ourselves,
+                    // keep empty lines, strip a trailing CR, and decode each whole line as UTF-8
+                    // so a multi-byte character split across network chunks stays intact.
+                    var line: [UInt8] = []
+                    for try await byte in bytes {
+                        if byte == 0x0A {
+                            if line.last == 0x0D { line.removeLast() }
+                            continuation.yield(String(decoding: line, as: UTF8.self))
+                            line.removeAll(keepingCapacity: true)
+                        } else {
+                            line.append(byte)
+                        }
+                    }
+                    if !line.isEmpty {
+                        if line.last == 0x0D { line.removeLast() }
+                        continuation.yield(String(decoding: line, as: UTF8.self))
                     }
                     continuation.finish()
                 } catch {
@@ -49,6 +64,10 @@ public struct URLSessionTransport: HTTPTransport {
 }
 
 public struct HTTPBackend: Backend {
+    /// Consecutive failed attempts after which `events` stops reconnecting (Fable S3-F11). A
+    /// dropped connection that delivered events resets the count; a backend that is gone does not.
+    static let maxConsecutiveEventFailures = 5
+
     public let port: Int
 
     private let token: BackendToken
@@ -111,54 +130,77 @@ public struct HTTPBackend: Backend {
         AsyncThrowingStream { continuation in
             let task = Task {
                 var last = after ?? 0
-                var finished = false
-                while !finished {
+                var failures = 0
+                while true {
+                    var parser = SSEParser()
+                    var received = false
+                    var finished = false
+                    // One frame: decode, advance `last`, yield. A frame this client cannot read
+                    // is skipped, never re-fetched: `last` moves to the frame's own SSE id, so the
+                    // reconnect asks for what follows it rather than the same event forever.
+                    func handle(_ payload: String) {
+                        guard let event = try? JSONDecoder().decode(
+                            JobEvent.self, from: Data(payload.utf8)
+                        ) else {
+                            if let frameID = parser.lastEventID, let id = Int(frameID) {
+                                last = max(last, id)
+                            }
+                            return
+                        }
+                        received = true
+                        last = max(last, event.seq)
+                        continuation.yield(event)
+                        if event.type == .done { finished = true }
+                    }
                     do {
                         let request = try makeRequest(
                             path: "/jobs/\(jobID)/events",
                             lastEventID: last > 0 ? last : nil
                         )
-                        var parser = SSEParser()
                         let lines = try await transport.lines(for: request)
                         for try await line in lines {
-                            guard let payload = parser.consume(line: line) else { continue }
-                            guard let event = try? JSONDecoder().decode(
-                                JobEvent.self, from: Data(payload.utf8)
-                            ) else {
-                                // A frame this client cannot read is skipped, never re-fetched:
-                                // `last` moves to the frame's own SSE id, so the reconnect asks
-                                // for what follows it rather than the same event forever.
-                                if let frameID = parser.lastEventID, let id = Int(frameID) {
-                                    last = max(last, id)
-                                }
-                                continue
-                            }
-                            last = max(last, event.seq)
-                            continuation.yield(event)
-                            if event.type == .done {
-                                finished = true
-                                break
-                            }
+                            if let payload = parser.consume(line: line) { handle(payload) }
+                            if finished { break }
                         }
-                        if !finished {
-                            try await Task.sleep(for: retryDelay)
-                        }
+                        // A stream that ended mid-event still delivers the event it holds.
+                        if !finished, let payload = parser.dispatch() { handle(payload) }
+                        if finished { break }
+                        failures = received ? 0 : failures + 1
                     } catch let error as BackendError where error.code == "unknown_job" {
-                        finished = true
+                        break
                     } catch is CancellationError {
-                        finished = true
+                        break
                     } catch {
-                        if Task.isCancelled {
-                            finished = true
-                        } else {
-                            try? await Task.sleep(for: retryDelay)
+                        if Task.isCancelled { break }
+                        failures += 1
+                        if Self.isTerminal(error) || failures >= Self.maxConsecutiveEventFailures {
+                            continuation.finish(throwing: error)
+                            return
                         }
                     }
+                    if Task.isCancelled { break }
+                    if failures >= Self.maxConsecutiveEventFailures {
+                        continuation.finish(throwing: URLError(.networkConnectionLost))
+                        return
+                    }
+                    try? await Task.sleep(for: retryDelay)
                 }
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// An error no reconnect can fix: nothing is listening (the backend exited), or the backend
+    /// refused the request itself (a 4xx other than 429). Everything else is retried, bounded.
+    static func isTerminal(_ error: Error) -> Bool {
+        if let error = error as? URLError {
+            return [.cannotConnectToHost, .cannotFindHost].contains(error.code)
+        }
+        if let error = error as? BackendError, let status = error.status {
+            return (400..<500).contains(status) && status != 429
+        }
+        return false
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
