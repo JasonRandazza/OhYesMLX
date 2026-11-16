@@ -38,6 +38,7 @@ def _no_real_lock_dir(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _fresh_own_identity(monkeypatch):
-    """``runtimes._OWN_IDENTITY`` caches this process's identity; a test that fakes
-    ``_process_identity`` must not leave its fake cached for the next test (05-09)."""
+    """``runtimes._OWN_IDENTITY`` and ``runtimes._REAPED_PIDS`` are per-process module state;
+    one test's fake identity or reaped pid must not leak into the next (05-09)."""
     monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {})
+    monkeypatch.setattr(runtimes, "_REAPED_PIDS", set())

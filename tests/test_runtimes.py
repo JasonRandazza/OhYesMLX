@@ -4572,7 +4572,6 @@ def test_an_osaurus_app_this_run_started_still_counts_as_resident(monkeypatch):
         runtimes, "_run", lambda command, timeout_s: _completed(stdout=f"9191 {executable}\n")
     )
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
-    monkeypatch.setattr(runtimes, "_RUN_STARTED_PIDS", {9191})
 
     assert runtimes._resident_osaurus_pids() == (9191,)
 

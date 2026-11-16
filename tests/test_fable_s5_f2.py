@@ -98,10 +98,7 @@ def seams(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runtimes, "_spawn", spawn)
     monkeypatch.setattr(runtimes, "_run", run)
-    try:
-        yield clock
-    finally:
-        runtimes._RUN_STARTED_PIDS.clear()
+    yield clock
 
 
 def test_cold_load_s_does_not_include_the_version_probe_or_lsof(seams):

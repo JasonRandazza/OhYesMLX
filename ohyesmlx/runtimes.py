@@ -177,7 +177,6 @@ ENGINE_BUNDLE_EXECUTABLES: dict[str, tuple[str, ...]] = {
         for bundle in OSAURUS_APP_BUNDLES
     ),
 }
-_RUN_STARTED_PIDS: set[int] = set()
 
 # Pids :func:`_process_alive` has reaped. A reaped pid is free for reuse, and ``kill(pid, 0)``
 # then answers for whoever holds the number, so a pid in this set is "gone" for the rest of the
@@ -2213,9 +2212,6 @@ class Handle:
     def stop(self) -> None:
         """Stop the runtime. Does not return until the port is free."""
         _shutdown(self.pid, self.port, self.stop_command)
-        _RUN_STARTED_PIDS.discard(self.pid)
-        if self.serving_pid is not None:
-            _RUN_STARTED_PIDS.discard(self.serving_pid)
         _forget_running_engine(self.pid)
         _remove_scratch(self.scratch)
 
@@ -2599,9 +2595,7 @@ class Runtime:
                 _forget_running_engine(pid)
             _remove_scratch(scratch)
             raise
-        _RUN_STARTED_PIDS.add(pid)
         serving_pid = _serving_pid(pid, self.port)
-        _RUN_STARTED_PIDS.add(serving_pid)
         mlx_version = _mlx_version(serving_pid)
         # AC-4: cold_load_s ends at readiness; the version probe, listener lookup, mlx probe and
         # ledger write follow it. A failed ledger write never fails the start.

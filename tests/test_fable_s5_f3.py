@@ -35,17 +35,6 @@ def _completed(stdout: str = ""):
     )
 
 
-@pytest.fixture(autouse=True)
-def run_started_pids_restored():
-    """The run's own pid set is module state; leave it as it was found."""
-    saved = set(runtimes._RUN_STARTED_PIDS)
-    try:
-        yield
-    finally:
-        runtimes._RUN_STARTED_PIDS.clear()
-        runtimes._RUN_STARTED_PIDS.update(saved)
-
-
 @pytest.fixture
 def artifact(tmp_path):
     """A real artifact directory: oMLX's catalog symlinks to it for real."""
@@ -92,8 +81,7 @@ def test_start_refuses_when_a_failed_stop_left_another_engine_resident(
     osaurus = runtimes.RUNTIMES["osaurus"]
     survivor = 9191
 
-    # The engine a previous cell started, recorded exactly as `Runtime.start` records it.
-    runtimes._RUN_STARTED_PIDS.add(survivor)
+    # The engine a previous cell started.
     handle = runtimes.Handle(
         pid=survivor,
         port=osaurus.port,
@@ -109,9 +97,6 @@ def test_start_refuses_when_a_failed_stop_left_another_engine_resident(
     monkeypatch.setattr(runtimes, "_listener_pids", lambda port: None)
     with pytest.raises(runtimes.RuntimeStopError):
         handle.stop()
-    assert survivor in runtimes._RUN_STARTED_PIDS, (
-        "the stop had to skip its discards for this scenario to be the finding's"
-    )
 
     # The survivor is real: `ps` lists it, it is alive, and its port answers.
     monkeypatch.setattr(
