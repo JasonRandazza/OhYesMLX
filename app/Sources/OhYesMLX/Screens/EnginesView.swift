@@ -60,8 +60,10 @@ struct EnginesView: View {
                 if let name = initialConsentEngine, consent == nil {
                     consent = model.engines.first { $0.name == name && $0.install != nil }
                 }
+                openRequestedConsent()
             }
         }
+        .onChange(of: model.consentRequest) { openRequestedConsent() }
         .sheet(item: $consent) { engine in
             if let plan = engine.install {
                 ConsentSheet(title: engine.title, plan: plan) {
@@ -69,6 +71,13 @@ struct EnginesView: View {
                 }
             }
         }
+    }
+
+    /// Retry of an interrupted install lands here: the same consent sheet the button opens.
+    private func openRequestedConsent() {
+        guard let name = model.consentRequest else { return }
+        model.consentRequest = nil
+        consent = model.engines.first { $0.name == name && $0.install != nil }
     }
 
     private func startInstall(_ engine: EngineStatus) {

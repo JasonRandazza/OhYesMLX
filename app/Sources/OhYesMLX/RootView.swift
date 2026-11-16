@@ -127,10 +127,11 @@ struct RootView: View {
             HStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.small)
-                if let job = model.job {
-                    Text("Finishing \(job.kind.wireName) \(job.name)…")
+                if let job = model.job, job.state.isActive {
+                    let name = job.kind == .install ? job.name : model.displayName(for: job.name)
+                    Text("Stopping \(job.kind.wireName) \(name)…")
                 } else {
-                    Text("Finishing…")
+                    Text("Quitting…")
                 }
                 Spacer()
             }

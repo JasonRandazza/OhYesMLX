@@ -10,7 +10,9 @@ struct BenchmarkView: View {
 
     @State private var selectedRepo: String?
 
-    private var selection: String? { selectedRepo ?? model.defaultBenchmarkPick?.modelID }
+    private var selection: String? {
+        selectedRepo ?? model.requestedBenchmarkRepo ?? model.defaultBenchmarkPick?.modelID
+    }
 
     private var running: Bool { model.job?.state.isActive == true && model.job?.kind == .quickbench }
 
@@ -86,7 +88,7 @@ struct BenchmarkView: View {
                             .labelStyle(.titleAndIcon)
                     }
                     .help("Stop Now")
-                    .disabled(stopping)
+                    .disabled(model.job?.state == .stoppingNow)
                 }
             }
         }
@@ -208,7 +210,7 @@ struct BenchmarkView: View {
 
         Section("Osaurus") {
             Toggle(
-                "Pin Osaurus settings for the run, restored after",
+                "Pin Osaurus settings for the run",
                 isOn: Binding(
                     get: { model.osaurusConsent },
                     set: { model.osaurusConsent = $0 }
@@ -216,8 +218,9 @@ struct BenchmarkView: View {
             )
             .disabled(!plan.osaurus)
             Text(
-                "Holds Osaurus's settings still so its numbers compare fairly. Your settings "
-                    + "are put back when the run ends or is stopped."
+                "Holds Osaurus's settings still so its numbers compare fairly. The app asks "
+                    + "the backend to put your settings back when the run ends or is stopped; "
+                    + "Results says whether that worked."
             )
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -273,8 +276,8 @@ struct BenchmarkView: View {
             ProgressView(value: model.job?.fraction ?? 0)
             Text(
                 "Stop After This Cell lets the cell in flight finish and keeps its result. "
-                    + "Stop Now ends at once and this cell is not counted. Either way, Osaurus "
-                    + "settings are restored."
+                    + "Stop Now ends at once and this cell is not counted. Results says whether "
+                    + "your Osaurus settings were put back."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
