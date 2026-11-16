@@ -333,21 +333,27 @@ def _cell_record(
     """One cell's line in the summary: its status, its numbers, and the quick label.
 
     A measured cell takes ``row`` from ``report.summarize`` -- the one definition of a
-    published figure -- and a skipped or failed one carries its own status and reason with
-    no number at all. A skipped cell reporting zero would be a measurement it did not make.
+    published figure -- and its status and reason from that same row. ``decode_tps`` and
+    ``ttft_s`` are taken from the row only when the row's status is ``PASS``; any other
+    status carries them as None. An app prints a figure whenever it is not null, so a cell
+    whose requests came back at full speed as token salad would otherwise show a tok/s
+    beside the word "Failed" -- and the samples that earned the verdict are not a
+    measurement of a cell that passed. ``status`` and ``reason`` are kept either way.
     *repo* is the catalog row the artifact came from: the chosen repo in stage A, the
     sibling's in stage B, so a stage-B win names the format and repo that produced it.
     """
+    row = row or {}
+    published = row.get("status", status) == "PASS"
     return {
         "engine": engine,
         "format": fmt,
         "repo": repo,
         "artifact_dir": artifact_dir,
-        "status": (row or {}).get("status", status),
-        "reason": (row or {}).get("reason", reason),
-        "decode_tps": (row or {}).get("decode_tps"),
-        "ttft_s": (row or {}).get("ttft_p50_s"),
-        "runtime_version": (row or {}).get("runtime_version"),
+        "status": row.get("status", status),
+        "reason": row.get("reason", reason),
+        "decode_tps": row.get("decode_tps") if published else None,
+        "ttft_s": row.get("ttft_p50_s") if published else None,
+        "runtime_version": row.get("runtime_version"),
         "label": LABEL,
         "reused": reused,
     }
@@ -371,6 +377,16 @@ def _aborted(engine, fmt, artifact_dir, repo) -> dict:
     return _cell_record(engine, fmt, artifact_dir, repo, status=ABORTED, reason=ABORTED_REASON)
 
 
+def _tied_with(cell, top) -> bool:
+    """The one TIE band: *cell* is within ``TIE`` of *top*'s decode rate.
+
+    Two cells that close are one reading on this host (Decision 131), so neither outranks
+    the other. Callers keep their own stage order inside the band rather than ranking noise
+    -- stage A reports the engines as a tie, and stage B keeps its baseline.
+    """
+    return top["decode_tps"] - cell["decode_tps"] <= top["decode_tps"] * TIE
+
+
 def _winner(cells) -> tuple[dict | None, list[str]]:
     """Stage A's winner and the engines inside the tie band.
 
@@ -387,11 +403,7 @@ def _winner(cells) -> tuple[dict | None, list[str]]:
     if not passed:
         return None, []
     top = max(passed, key=lambda cell: cell["decode_tps"])
-    tied = [
-        cell["engine"]
-        for cell in passed
-        if top["decode_tps"] - cell["decode_tps"] <= top["decode_tps"] * TIE
-    ]
+    tied = [cell["engine"] for cell in passed if _tied_with(cell, top)]
     return top, tied
 
 
@@ -403,20 +415,33 @@ def _best(summary, measured_at) -> dict | None:
     eligible, which is what keeps a failed cell out of `Pick.measured_here`. ``format`` and
     ``repo`` are the winning cell's own, never the chosen row's: when a stage-B sibling
     wins, the number belongs to the sibling and `measured_here` is keyed on it.
+
+    Ranking is ``_winner``'s: a cell inside ``TIE`` of the top is one reading on this host,
+    so it does not take the win. Stage B's baseline is the reused stage-A cell, measured
+    earlier in the run and in a different thermal state from every sibling it is compared
+    with, so when a sibling lands inside the band the baseline is kept: the gap is the noise
+    floor, not a format win.
     """
     cells = (
         summary["stage_b"]["cells"]
         if summary["stage_b"]["engine"]
         else summary["stage_a"]["cells"]
     )
-    passed = [
-        cell
-        for cell in cells
-        if cell["status"] == "PASS" and cell["decode_tps"] is not None
-    ]
-    if not passed:
+    top, _tied = _winner(cells)
+    if top is None:
         return None
-    top = max(passed, key=lambda cell: cell["decode_tps"])
+    baseline = next(
+        (
+            cell
+            for cell in cells
+            if cell.get("reused") is True
+            and cell["status"] == "PASS"
+            and cell["decode_tps"] is not None
+        ),
+        None,
+    )
+    if baseline is not None and _tied_with(baseline, top):
+        top = baseline
     return {
         "engine": top["engine"],
         "format": top["format"],
@@ -1020,23 +1045,67 @@ def run(
     return True
 
 
+def _summary_when(best: dict, modified: float) -> float:
+    """When the summary's own record says the run it holds was measured, in epoch seconds.
+
+    ``best.measured_at`` is the run's start, stamped by :func:`_best` from the clock the
+    summary was opened with, so two runs are ordered by when they measured rather than by
+    what happened to their files: a results directory restored from a backup, copied or
+    merely re-saved carries an mtime that is not a measurement. The mtime is the last resort
+    for a summary too old or too damaged to carry its own stamp -- an order has to exist,
+    and nothing better is on the record.
+    """
+    stamp = best.get("measured_at")
+    if isinstance(stamp, str):
+        try:
+            return datetime.fromisoformat(stamp).timestamp()
+        except ValueError:
+            pass
+    return modified
+
+
+def _measured_repos(summary) -> set[str]:
+    """The repos a finished run actually measured: every cell of it that was not skipped.
+
+    A skipped cell never ran, so it says nothing about its repo. A cell that ran and did not
+    win -- PASS beside a faster sibling, or FAIL -- is this Mac's newest measurement of that
+    repo, and ``latest`` drops an older run's win rather than serving a number the newest
+    run already superseded.
+    """
+    repos: set[str] = set()
+    for stage in ("stage_a", "stage_b"):
+        block = summary.get(stage)
+        if not isinstance(block, dict) or not isinstance(block.get("cells"), list):
+            continue
+        for cell in block["cells"]:
+            if not isinstance(cell, dict) or cell.get("status") == "SKIPPED":
+                continue
+            repo = cell.get("repo")
+            if isinstance(repo, str) and repo:
+                repos.add(repo)
+    return repos
+
+
 def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]:
     """The newest finished summary per repo a run measured, keyed by that repo.
 
     This is what ``GET /recommendations`` fills ``Pick.measured_here`` from, and the key is
     the winning cell's own repo (``best.repo``): the chosen row when stage B did not beat
     it, the sibling when the sibling won. A chosen repo that lost stage B is therefore
-    absent rather than carrying a number another artifact produced, and two finished runs
-    naming the same repo resolve to the newer one. Only a summary whose own record says it
-    finished is read: a cancelled run is a record of what happened, never a recommendation
-    (AC-5). A missing directory is no summaries, and a file that cannot be read is skipped
-    rather than failing the recommendations screen -- it is not a number, so nothing here
-    is being silently approximated.
+    absent rather than carrying a number another artifact produced, and that holds across
+    runs too: a finished run that measured a repo without any of its cells winning drops an
+    older run's win for the same repo, so the map never serves a number a newer run already
+    superseded. Runs are ordered by the summary's own timestamp (``best.measured_at``), never
+    by the file's mtime, so a directory restored from a backup cannot outrank a newer run.
+    Only a summary whose own record says it finished is read: a cancelled run is a record of
+    what happened, never a recommendation (AC-5). A missing directory is no summaries, and a
+    file that cannot be read is skipped rather than failing the recommendations screen -- it
+    is not a number, so nothing here is being silently approximated.
     """
-    found: dict[str, tuple[float, dict]] = {}
     root_path = pathlib.Path(root)
     if not root_path.is_dir():
         return {}
+    summaries = []
     for path in root_path.glob(f"*/{SUMMARY_NAME}"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1054,6 +1123,12 @@ def latest(root=DEFAULT_RESULTS_DIR) -> dict[str, dict]:
             modified = path.stat().st_mtime
         except OSError:
             continue
-        if repo not in found or modified > found[repo][0]:
-            found[repo] = (modified, payload)
-    return {repo: payload for repo, (_modified, payload) in found.items()}
+        summaries.append((_summary_when(best, modified), payload, repo))
+    summaries.sort(key=lambda summary: summary[0])
+    found: dict[str, tuple[float, dict]] = {}
+    for when, payload, repo in summaries:
+        for measured in _measured_repos(payload) - {repo}:
+            found.pop(measured, None)
+        if repo not in found or when > found[repo][0]:
+            found[repo] = (when, payload)
+    return {repo: payload for repo, (_when, payload) in found.items()}
