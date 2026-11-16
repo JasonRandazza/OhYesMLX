@@ -1,10 +1,15 @@
+import AppKit
 import Darwin
 import Foundation
 
 public enum LaunchOutcome: Sendable {
     case running(RunningBackend)
     case couldntStart(String)
+    /// `app.lock` is held and another instance of this app is running: activate it and exit.
     case alreadyRunning
+    /// `app.lock` is held and no other instance of this app is running: a previous session's
+    /// backend is still unwinding (S3-F8). The app says so and offers **Check again**.
+    case stillFinishing
 }
 
 public enum QuitOutcome: Sendable, Equatable {
@@ -122,6 +127,7 @@ public final class BackendLauncher: @unchecked Sendable {
     private let processFactory: ProcessFactory
     private let timing: QuitTiming
     private let launchTimeout: TimeInterval
+    private let otherInstanceRunning: @Sendable () -> Bool
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -129,7 +135,8 @@ public final class BackendLauncher: @unchecked Sendable {
         productionInterpreter: URL = BackendLauncher.bundledInterpreter(),
         processFactory: @escaping ProcessFactory = { FoundationLauncherProcess() },
         timing: QuitTiming = .standard,
-        launchTimeout: TimeInterval = 30
+        launchTimeout: TimeInterval = 30,
+        otherInstanceRunning: @escaping @Sendable () -> Bool = BackendLauncher.anotherInstanceIsRunning
     ) {
         self.environment = environment
         self.appSupportDirectory = appSupportDirectory
@@ -137,6 +144,15 @@ public final class BackendLauncher: @unchecked Sendable {
         self.processFactory = processFactory
         self.timing = timing
         self.launchTimeout = launchTimeout
+        self.otherInstanceRunning = otherInstanceRunning
+    }
+
+    /// Whether another process with this app's bundle id is running. False without a bundle id.
+    public static func anotherInstanceIsRunning() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let me = ProcessInfo.processInfo.processIdentifier
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .contains { $0.processIdentifier != me }
     }
 
     public static func defaultAppSupportDirectory() -> URL {
@@ -167,22 +183,30 @@ public final class BackendLauncher: @unchecked Sendable {
             return .couldntStart(missingInterpreterMessage())
         }
 
-        guard let lockFD = acquireLock() else {
-            return .alreadyRunning
+        // The backend owns app.lock (P5-7); this probe only saves a spawn when it is held.
+        switch probeLock() {
+        case .free:
+            break
+        case .held:
+            return heldOutcome()
+        case .failed(let message):
+            return .couldntStart(message)
         }
 
         let process: any LauncherProcess
         do {
             process = try processFactory()
         } catch {
-            releaseLock(lockFD)
             return .couldntStart("could not create the backend process: \(error.localizedDescription)")
         }
 
-        let session = LaunchSession(process: process, lockFD: lockFD, timing: timing)
+        let session = LaunchSession(process: process, timing: timing)
         // -B: never write bytecode into the bundle; it is signed and may be on a read-only
         // volume (P5-6). The bundle's own modules are precompiled at build time.
-        let argv = [interpreter.path, "-I", "-B", "-m", "ohyesmlx.cli", "app"]
+        let argv = [
+            interpreter.path, "-I", "-B", "-m", "ohyesmlx.cli", "app",
+            "--lock-dir", appSupportDirectory.path,
+        ]
         do {
             try process.run(argv: argv, environment: childEnvironment(), directory: directory)
         } catch {
@@ -192,6 +216,13 @@ public final class BackendLauncher: @unchecked Sendable {
         session.startReading()
 
         let line = await session.awaitLaunchLine(timeout: launchTimeout)
+        if let data = line?.data(using: .utf8),
+           let refusal = try? JSONDecoder().decode(LockRefusal.self, from: data),
+           refusal.error.code == "already_running" {
+            // The lock was taken between the probe and the backend's own flock.
+            session.abandon()
+            return heldOutcome()
+        }
         guard let line,
               let data = line.data(using: .utf8),
               let parsed = try? JSONDecoder().decode(LaunchLine.self, from: data)
@@ -253,30 +284,37 @@ public final class BackendLauncher: @unchecked Sendable {
         return appSupportDirectory
     }
 
-    private func lockPath() -> String {
-        appSupportDirectory.appendingPathComponent("app.lock").path
+    private enum LockProbe {
+        case free
+        case held
+        case failed(String)
     }
 
-    private func acquireLock() -> Int32? {
-        let path = lockPath()
-        let descriptor = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { return nil }
-        if flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
-            close(descriptor)
-            return nil
+    /// Takes and at once releases `app.lock`. Only EWOULDBLOCK means another holder (S3-F14);
+    /// any other failure is the errno text, so it reaches the couldn't-start screen.
+    private func probeLock() -> LockProbe {
+        let path = appSupportDirectory.appendingPathComponent("app.lock").path
+        let descriptor = open(path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            return .failed("could not open \(path): \(String(cString: strerror(errno)))")
         }
-        return descriptor
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let code = errno
+            if code == EWOULDBLOCK { return .held }
+            return .failed("could not lock \(path): \(String(cString: strerror(code)))")
+        }
+        flock(descriptor, LOCK_UN)
+        return .free
     }
 
-    private func releaseLock(_ descriptor: Int32) {
-        flock(descriptor, LOCK_UN)
-        close(descriptor)
+    private func heldOutcome() -> LaunchOutcome {
+        otherInstanceRunning() ? .alreadyRunning : .stillFinishing
     }
 }
 
 final class LaunchSession: @unchecked Sendable {
     private let process: any LauncherProcess
-    private let lockFD: Int32
     private let timing: QuitTiming
     private let lock = NSLock()
 
@@ -290,11 +328,9 @@ final class LaunchSession: @unchecked Sendable {
     private var status: Int32 = 0
     private var storedExitHandler: (@Sendable (Int32, [String]) -> Void)?
     private var stdinClosed = false
-    private var lockReleased = false
 
-    init(process: any LauncherProcess, lockFD: Int32, timing: QuitTiming) {
+    init(process: any LauncherProcess, timing: QuitTiming) {
         self.process = process
-        self.lockFD = lockFD
         self.timing = timing
         process.onTermination = { [weak self] status in
             self?.handleTermination(status: status)
@@ -411,7 +447,6 @@ final class LaunchSession: @unchecked Sendable {
             process.kill()
             _ = process.waitForExit(timeout: 1)
         }
-        releaseLockIfNeeded()
     }
 
     private func readLines(from handle: FileHandle, isStdout: Bool) {
@@ -511,19 +546,7 @@ final class LaunchSession: @unchecked Sendable {
         handler = storedExitHandler
         tail = stderrRing
         lock.unlock()
-        releaseLockIfNeeded()
         handler?(status, tail)
-    }
-
-    private func releaseLockIfNeeded() {
-        let shouldRelease: Bool = lock.withLock {
-            if lockReleased { return false }
-            lockReleased = true
-            return true
-        }
-        guard shouldRelease else { return }
-        flock(lockFD, LOCK_UN)
-        close(lockFD)
     }
 }
 
@@ -563,4 +586,10 @@ public final class RunningBackend: BackendRunner, @unchecked Sendable {
 private struct LaunchLine: Decodable {
     let port: Int
     let token: String
+}
+
+/// The backend's refusal when another backend holds `app.lock` (P5-7); `holder_pid` is not read.
+private struct LockRefusal: Decodable {
+    struct Body: Decodable { let code: String }
+    let error: Body
 }

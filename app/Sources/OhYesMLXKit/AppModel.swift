@@ -178,6 +178,9 @@ public final class AppModel {
     public private(set) var quitInProgress = false
     public private(set) var quitAnywayOffered = false
     public private(set) var alreadyRunning = false
+    /// `app.lock` is held by a backend with no app in front of it: the previous session is still
+    /// unwinding (S3-F8). Shown on the couldn't-start screen with **Check again**.
+    public private(set) var previousSessionFinishing = false
     public private(set) var shouldExit = false
 
     /// Retry's hand-off to the screens that own a gate: the Engines screen opens its consent
@@ -390,6 +393,10 @@ public final class AppModel {
             case .alreadyRunning:
                 alreadyRunning = true
                 return
+            case .stillFinishing:
+                previousSessionFinishing = true
+                screen = .couldntStart
+                return
             case .running(let running):
                 adopt(running)
             }
@@ -404,6 +411,13 @@ public final class AppModel {
             return
         }
         guard let launcher else { return }
+        previousSessionFinishing = false
+        // S3-F7: a live backend is never spawned over; the retry is a reload against it.
+        if let runner, runner.isRunning {
+            screen = .launching
+            await reload()
+            return
+        }
         backendStopped = nil
         backendStderrTail = []
         quitAnywayOffered = false
@@ -415,6 +429,9 @@ public final class AppModel {
             screen = .couldntStart
         case .alreadyRunning:
             alreadyRunning = true
+        case .stillFinishing:
+            previousSessionFinishing = true
+            screen = .couldntStart
         case .running(let running):
             adopt(running)
             interruptedJob = loadInflight()
