@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import fcntl
 import json
 import os
 import signal
@@ -27,6 +28,7 @@ from pathlib import Path
 
 from ohyesmlx import (
     __version__,
+    app_support_dir,
     canary,
     engines,
     ensure_app_support,
@@ -836,6 +838,13 @@ def _parser() -> argparse.ArgumentParser:
         help="port to bind on 127.0.0.1 (default: 0, an ephemeral port; the printed line "
         "names the one the OS chose)",
     )
+    app.add_argument(
+        "--lock-dir",
+        default=None,
+        metavar="DIR",
+        help="directory holding app.lock, the single-instance lock (default: "
+        "~/Library/Application Support/OhYesMLX). The app passes its own; nothing else moves",
+    )
     return parser
 
 
@@ -1129,12 +1138,38 @@ def _app(args) -> int:
 
     A port that cannot be bound prints nothing on stdout: the client waits on that line, so an
     error there is one stderr line and exit 2, which it can tell from a hang.
+
+    P5-7: before anything else this takes ``app.lock`` (:func:`_lock_app`). When another backend
+    holds it, the only stdout line is ``{"error": {"code": "already_running", "holder_pid":
+    int|null}}`` and the exit is 2; any other failure to lock is one stderr line, exit 2.
     """
     from ohyesmlx import server
 
     # A job this server accepts writes under Application Support, so the directory exists
     # 0700 before the first request can be served.
     ensure_app_support()
+
+    # P5-7: one backend at a time, decided here rather than in the app, so a crashed app's
+    # backend keeps the lock until it has finished unwinding. Taken before the port is bound and
+    # before startup recovery, which must never run against state another backend still owns.
+    lock_dir = Path(args.lock_dir) if args.lock_dir else app_support_dir()
+    try:
+        _lock_app(lock_dir)
+    except BlockingIOError:
+        print(
+            json.dumps(
+                {"error": {"code": "already_running", "holder_pid": _lock_holder(lock_dir)}}
+            ),
+            flush=True,
+        )
+        return 2
+    except OSError as error:
+        print(
+            json.dumps({"error": {"code": "lock_failed", "message": str(error)}}),
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
 
     try:
         listener = server.make_server(args.port)
@@ -1168,6 +1203,35 @@ def _app(args) -> int:
         listener.jobs.cancel_and_wait(server.JOB_SHUTDOWN_WAIT_S)
         listener.server_close()
     return 0
+
+
+def _lock_app(directory: Path) -> int:
+    """Take ``<directory>/app.lock`` exclusively and write this pid into it.
+
+    The descriptor is never closed: the lock is held until the process exits, however it
+    exits. ``os.open`` makes it non-inheritable (PEP 446), so an engine server this backend
+    spawns -- which may outlive it as an orphan -- never holds the lock. Raises
+    ``BlockingIOError`` (EWOULDBLOCK) when another process holds it, and ``OSError`` for any
+    other failure to open or lock.
+    """
+    descriptor = os.open(directory / "app.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(descriptor)
+        raise
+    os.ftruncate(descriptor, 0)
+    os.write(descriptor, f"{os.getpid()}\n".encode())
+    return descriptor
+
+
+def _lock_holder(directory: Path) -> int | None:
+    """The pid the holder of ``app.lock`` wrote, or None (unreadable, or not written yet)."""
+    try:
+        text = (directory / "app.lock").read_text().strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
 
 
 def _stop(signum, frame) -> None:

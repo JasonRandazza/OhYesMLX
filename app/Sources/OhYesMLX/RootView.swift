@@ -15,7 +15,12 @@ struct RootView: View {
                 switch model.screen {
                 case .launching:
                     LaunchingStateView()
+                case .couldntStart where model.previousSessionFinishing:
+                    StillFinishingStateView {
+                        Task { await model.relaunch() }
+                    }
                 case .couldntStart:
+                    // relaunch() reloads instead of spawning when the backend is alive (S3-F7).
                     CouldntStartStateView(
                         message: model.launchError ?? "The backend did not start."
                     ) {
@@ -259,5 +264,34 @@ private enum SidebarItem: Int, CaseIterable, Identifiable {
                 || !model.benchmarkCells.isEmpty
                 || model.summary != nil
         }
+    }
+}
+
+/// S3-F8: `app.lock` is held but no other OhYesMLX is open, so the previous session's backend is
+/// still unwinding (a running job is given up to 135 s to stop). **Check again** relaunches.
+private struct StillFinishingStateView: View {
+    let checkAgain: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "hourglass")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("The previous session is still finishing")
+                .font(.title2)
+                .multilineTextAlignment(.center)
+            Text("OhYesMLX's engine checker from the last session is still shutting down. "
+                + "If a job was running, this can take a couple of minutes.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+            Button("Check Again", action: checkAgain)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
