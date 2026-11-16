@@ -274,6 +274,14 @@ class CellResult:
     # visit was missing. The reason is kept here, where :func:`_set_status` cannot overwrite
     # it; ``None`` means no visit was lost.
     lost_visit_reason: str | None = None
+    # The mlx core the serving process had loaded (runtimes._mlx_version), and Osaurus's app
+    # options for the served model (runtimes.Osaurus.host_model_options). Recorded from the
+    # first started visit, beside runtime_version, because a row is one stack: two venvs report
+    # the same mlx-lm over different mlx cores (Fable S5-F1), and the thinking switch decides
+    # whether the model reasons at all (S5-F9). ``None`` means not recorded (an older record,
+    # or a runtime with no such surface).
+    mlx_version: str | None = None
+    host_model_options: object = None
     # Whether the start that recorded ``cold_load_s`` came after a lost visit rather than
     # first. The figure is still the start's own, but it is a later, warm-page-cache start and
     # not the cell's cold one, which the cold load column alone cannot say.
@@ -870,6 +878,8 @@ def _visit(
             if result.cold_load_s is None:
                 result.cold_load_s = handle.cold_load_s
                 result.runtime_version = handle.version
+                result.mlx_version = getattr(handle, "mlx_version", None)
+                result.host_model_options = getattr(handle, "host_model_options", None)
             elif handle.version != result.runtime_version:
                 result.status = "FAIL"
                 result.reason = (
@@ -1540,6 +1550,11 @@ def _record(result: CellResult) -> dict:
     # existed.
     if result.lost_visit_reason is not None:
         record["lost_visit_reason"] = result.lost_visit_reason
+    # Written only when recorded, so every record from before 05-07 stays byte-identical.
+    if result.mlx_version is not None:
+        record["mlx_version"] = result.mlx_version
+    if result.host_model_options is not None:
+        record["host_model_options"] = result.host_model_options
     if result.cold_load_after_lost_visit:
         record["cold_load_after_lost_visit"] = result.cold_load_after_lost_visit
     return record
@@ -1632,6 +1647,9 @@ def _cell_result(record: dict, path: Path, number: int) -> CellResult:
             # before a lost visit could be recorded, and no visit of theirs was lost, so the
             # absence IS the fact here rather than a default standing in for something unknown.
             lost_visit_reason=record.get("lost_visit_reason"),
+            # Lenient: absent on every record written before 05-07, and absent means not recorded.
+            mlx_version=record.get("mlx_version"),
+            host_model_options=record.get("host_model_options"),
             cold_load_after_lost_visit=record.get("cold_load_after_lost_visit", False),
             # Read leniently, and the default is the historical fact rather than a stand-in:
             # every record on disk that lacks this key was written before the seed was omitted

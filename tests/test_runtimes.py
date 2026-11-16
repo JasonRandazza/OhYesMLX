@@ -4237,3 +4237,39 @@ def test_optiq_start_and_version_probe_keep_its_own_lab_bin_and_mlxlm_gets_none(
     command, env = runtimes._engine_command("mlxlm", control)
     assert command == control
     assert str(lab) not in env["PATH"].split(os.pathsep)
+
+
+def test_mlx_version_is_read_from_the_site_packages_the_server_loaded(tmp_path, monkeypatch):
+    """05-07 (Jason: record the mlx version on every row): what the process mapped, not PATH."""
+    import subprocess
+
+    site = tmp_path / "optiq-0.5.13" / "lib" / "python3.14" / "site-packages"
+    (site / "mlx" / "lib").mkdir(parents=True)
+    (site / "mlx-0.32.4.dist-info").mkdir()
+    (site / "mlx_lm-0.31.3.dist-info").mkdir()
+    (site / "mlx_metal-0.32.4.dist-info").mkdir()
+    listing = f"p123\nn/usr/lib/dyld\nn{site}/mlx/lib/libmlx.dylib\n"
+    calls = []
+
+    def run(command, timeout_s):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=listing, stderr="")
+
+    monkeypatch.setattr(runtimes, "_run", run)
+    assert runtimes._mlx_version(123) == "0.32.4"
+    assert calls[0][0] == runtimes.LSOF and "123" in calls[0]
+
+
+def test_mlx_version_says_why_when_there_is_no_python_mlx(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        runtimes,
+        "_run",
+        lambda command, timeout_s: subprocess.CompletedProcess(
+            command, 0, stdout="p1\nn/Applications/osaurus.app/Contents/MacOS/osaurus\n", stderr=""
+        ),
+    )
+    assert runtimes._mlx_version(1).startswith("unknown: ")
+    monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: None)
+    assert runtimes._mlx_version(1).startswith("unknown: ")

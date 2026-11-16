@@ -869,6 +869,7 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "memory_note": (result.memory or {}).get("error"),
         "disk_bytes": result.disk_bytes,
         "runtime_version": result.runtime_version,
+        "mlx_version": getattr(result, "mlx_version", None),
         "percentile_note": None
         if n >= MIN_PERCENTILE_N
         else f"n={n}: p90/p99 omitted (fewer than {MIN_PERCENTILE_N} samples)",

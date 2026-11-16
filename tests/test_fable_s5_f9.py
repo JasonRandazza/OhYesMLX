@@ -173,88 +173,103 @@ def test_smelt_mode_is_tracked_with_the_other_concurrency_settings():
 # ======================================================================================
 
 
-@pytest.mark.xfail(
-    strict=True, reason="S5-F9 plist disableThinking: deferred to Jason at 05-07 UNIFY"
-)
-def test_RED_the_gate_refuses_a_host_whose_per_model_thinking_switch_differs(tmp_path, monkeypatch):
-    """RED. Two hosts identical in every attested file, differing only in the plist.
+# 05-07 (Jason 2026-11-16: "Yes we should track Osaurus's disableThinking app setting"): the
+# tests below were the gap's characterisation and now assert the attestation.
 
-    ``disableThinking`` decides whether the measured model emits reasoning tokens at all. Two
-    rows that differ only in this switch differ by the entire reasoning run: TTFT (reasoning is
-    not content), ``completion_tokens``, and the channel Decision 119 times. AGENTS.md:92 says
-    to snapshot and diff the app plist before every run; the gate must therefore refuse, and
-    today it does not.
 
-    The product path is driven with paths patched rather than functions replaced, so the
-    refusal is ``check_host_state``'s own.
-    """
-    root = write_config(tmp_path / "config")
-    monkeypatch.setattr(osaurus_settings, "DEFAULT_CONFIG_DIR", root)
-
-    baseline_path = tmp_path / "baseline.json"
-    baseline_path.write_text(
+def baseline_with_options(tmp_path, root, options):
+    path = tmp_path / "baseline.json"
+    path.write_text(
         json.dumps(
             {
                 "settings": osaurus_settings.capture_osaurus_settings(root),
-                # What a fix would add: the per-model options for the cell's model.
-                "model_options": {MODEL_ID: {"disableThinking": False}},
+                "model_options": options,
             },
             indent=2,
             sort_keys=True,
         )
         + "\n"
     )
-    monkeypatch.setattr(osaurus_settings, "BASELINE_PATH", baseline_path)
-
-    write_plist(tmp_path / "host.plist", disable_thinking=True)
-
-    with pytest.raises(runtimes.RuntimeStartError):
-        runtimes.RUNTIMES["osaurus"].check_host_state()
+    return path
 
 
-def test_the_two_json_captures_are_identical_across_a_flipped_thinking_switch(tmp_path):
-    """Characterisation of the gap: the switch moves nothing the capture holds.
+def test_the_gate_refuses_a_host_whose_per_model_thinking_switch_differs(tmp_path, monkeypatch):
+    """Two hosts identical in every attested file, differing only in the plist: refused.
 
-    A real plist, decoded with the stdlib, holding this host's own shape for a model it has
-    ``disableThinking`` on. The capture of a host configured identically except for that switch
-    is byte-identical, so no gate, no baseline and no row can distinguish the two.
+    ``disableThinking`` decides whether the measured model emits reasoning tokens at all. The
+    refusal is ``Osaurus.host_model_options``' own, driven with paths patched.
     """
+    root = write_config(tmp_path / "config")
+    monkeypatch.setattr(osaurus_settings, "DEFAULT_CONFIG_DIR", root)
+    monkeypatch.setattr(
+        osaurus_settings,
+        "BASELINE_PATH",
+        baseline_with_options(
+            tmp_path, root, {MODEL_ID: {"disableThinking": {"bool": {"_0": False}}}}
+        ),
+    )
+    monkeypatch.setattr(
+        osaurus_settings,
+        "PREFERENCES_PLIST",
+        write_plist(tmp_path / "host.plist", disable_thinking=True),
+    )
+
+    with pytest.raises(runtimes.RuntimeStartError, match="disableThinking"):
+        runtimes.RUNTIMES["osaurus"].host_model_options(MODEL_ID)
+
+
+def test_the_gate_passes_the_same_switch_and_ignores_another_models(tmp_path, monkeypatch):
+    """Control: the served model's switch matches; another model's moved and is not drift."""
+    root = write_config(tmp_path / "config")
+    monkeypatch.setattr(osaurus_settings, "DEFAULT_CONFIG_DIR", root)
+    on = {"disableThinking": {"bool": {"_0": True}}}
+    monkeypatch.setattr(
+        osaurus_settings,
+        "BASELINE_PATH",
+        baseline_with_options(tmp_path, root, {MODEL_ID: on, "Other/Model": on}),
+    )
+    monkeypatch.setattr(
+        osaurus_settings,
+        "PREFERENCES_PLIST",
+        write_plist(tmp_path / "host.plist", disable_thinking=True),
+    )
+
+    assert runtimes.RUNTIMES["osaurus"].host_model_options(MODEL_ID) == on
+
+
+def test_the_plist_capture_tells_the_two_switches_apart(tmp_path):
+    """The JSON captures are identical across a flipped switch; the plist capture is not."""
     root = write_config(tmp_path / "config")
     thinking_on = write_plist(tmp_path / "on.plist", disable_thinking=False)
     thinking_off = write_plist(tmp_path / "off.plist", disable_thinking=True)
 
-    for path, expected in ((thinking_on, False), (thinking_off, True)):
-        blob = json.loads(plistlib.loads(path.read_bytes())[f"model_options_{MODEL_ID}"])
-        assert blob["options"]["disableThinking"]["bool"]["_0"] is expected
-
-    captured = osaurus_settings.capture_osaurus_settings(root)
-
-    assert not any("disableThinking" in key for key in captured)
-    assert not any(MODEL_ID in key for key in captured), (
-        "no captured key names the model, so a per-model switch has nothing to attach to"
+    assert osaurus_settings.capture_osaurus_settings(root) == (
+        osaurus_settings.capture_osaurus_settings(root)
     )
+    on = osaurus_settings.capture_model_options(thinking_on)[MODEL_ID]
+    off = osaurus_settings.capture_model_options(thinking_off)[MODEL_ID]
+    assert on["disableThinking"]["bool"]["_0"] is False
+    assert off["disableThinking"]["bool"]["_0"] is True
 
 
-def test_no_osaurus_module_reads_the_app_plist():
-    """AGENTS.md:92's "and an app plist" has no code behind it anywhere in the package."""
-    import inspect
+def test_a_recorded_baseline_holds_the_model_options(tmp_path, monkeypatch):
+    """``write_baseline`` (what ``pin`` calls) records the plist beside the JSON settings."""
+    root = write_config(tmp_path / "config")
+    monkeypatch.setattr(
+        osaurus_settings,
+        "PREFERENCES_PLIST",
+        write_plist(tmp_path / "host.plist", disable_thinking=True),
+    )
+    path = tmp_path / "baseline.json"
+    osaurus_settings.write_baseline(path, root)
 
-    from ohyesmlx import osaurus_settings as module
-
-    source = inspect.getsource(module)
-    assert "com.dinoki.osaurus" not in source
-    assert "Library/Preferences" not in source
-
-    tracked_files = {name for name, _dotted in module.TRACKED_KEYS}
-    assert tracked_files == {"server-runtime.json", "server.json"}
-    assert not any("plist" in name for name in tracked_files)
+    recorded = osaurus_settings.load_baseline_model_options(path)
+    assert recorded[MODEL_ID]["disableThinking"]["bool"]["_0"] is True
+    assert osaurus_settings.load_baseline(path) == osaurus_settings.capture_osaurus_settings(root)
 
 
-def test_a_row_carries_no_host_setting_and_no_thinking_state(tmp_path):
-    """The other half of "nothing in the artifact names why": the row.
-
-    Written through the real writer, so the field list is the record's own.
-    """
+def test_a_row_carries_the_served_models_options_and_its_mlx_core(tmp_path):
+    """The row says which switch the cell ran under; older rows stay byte-identical."""
     from ohyesmlx import measure
 
     cell = measure.Cell(
@@ -263,31 +278,40 @@ def test_a_row_carries_no_host_setting_and_no_thinking_state(tmp_path):
         artifact_dir=str(tmp_path / "artifact"),
         label="stub",
     )
-    result = CellResult(
-        cell=cell,
-        workload_id="w1",
-        status="PASS",
-        reason=None,
-        observations=[],
-        batch_spans=[],
-        warmup_observations=[],
-        warmup_plateau=True,
-        cold_load_s=1.0,
-        first_request_s=None,
-        first_request_workload_id=None,
-        memory={},
-        runtime_version="0.25.18",
-        disk_bytes=1,
-        request_seed=None,
-    )
-    path = tmp_path / "results.jsonl"
-    write_jsonl([result], path, run={"temperature": 0.0})
-    header, row = [json.loads(line) for line in path.read_text().splitlines()]
 
-    for document in (row, header):
-        text = json.dumps(document)
-        for needle in ("smeltMode", "disableThinking", "plist", "model_options_"):
-            assert needle not in text, f"the record carries {needle!r}"
+    def result(**extra):
+        return CellResult(
+            cell=cell,
+            workload_id="w1",
+            status="PASS",
+            reason=None,
+            observations=[],
+            batch_spans=[],
+            warmup_observations=[],
+            warmup_plateau=True,
+            cold_load_s=1.0,
+            first_request_s=None,
+            first_request_workload_id=None,
+            memory={},
+            runtime_version="0.25.18",
+            disk_bytes=1,
+            request_seed=None,
+            **extra,
+        )
+
+    options = {"disableThinking": {"bool": {"_0": True}}}
+    path = tmp_path / "results.jsonl"
+    write_jsonl([result(host_model_options=options, mlx_version="0.32.2")], path,
+                run={"temperature": 0.0})
+    _header, row = [json.loads(line) for line in path.read_text().splitlines()]
+    assert row["host_model_options"] == options
+    assert row["mlx_version"] == "0.32.2"
+    loaded = measure.load_run(tmp_path)[1][0]
+    assert loaded.host_model_options == options and loaded.mlx_version == "0.32.2"
+
+    write_jsonl([result()], path, run={"temperature": 0.0})
+    _header, row = [json.loads(line) for line in path.read_text().splitlines()]
+    assert "host_model_options" not in row and "mlx_version" not in row
 
 
 if __name__ == "__main__":  # pragma: no cover - a runnable check without pytest

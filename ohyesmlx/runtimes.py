@@ -81,7 +81,10 @@ from pathlib import Path
 
 from . import stderr_json, writable_root
 from .osaurus_settings import (
+    capture_model_options,
     capture_osaurus_settings,
+    load_baseline_model_options,
+    model_options_for,
     describe_drift,
     diff_against_baseline,
     load_baseline,
@@ -749,6 +752,40 @@ def _serving_pid(spawned: int, port: int) -> int:
     if listeners is not None and len(listeners) == 1 and spawned not in listeners:
         return listeners[0]
     return spawned
+
+
+# The package directory a Python runtime's mlx core is loaded from, and the dist-info beside it
+# that names its version. Matched against the files the serving process has open.
+_MLX_PACKAGE = "/site-packages/mlx/"
+_MLX_DIST_INFO = re.compile(r"^mlx-(\d[^-]*)\.dist-info$")
+
+
+def _mlx_version(pid: int) -> str:
+    """The mlx core version the process at *pid* has loaded, or ``unknown: <why>``.
+
+    Read from what the running server actually mapped -- ``lsof`` lists ``mlx/core`` and
+    ``libmlx`` under the site-packages the interpreter imported them from -- not from the
+    command line or PATH. Two venvs can both report mlx-lm 0.31.3 over different mlx cores
+    (Fable S5-F1: 0.32.4 in OptiQ's lab venv, 0.32.2 in the control's), and only the loaded
+    files say which one served the cell. A runtime that carries no Python mlx package
+    (Osaurus is Swift) answers ``unknown`` with that reason. Never raises.
+    """
+    result = _run((LSOF, "-n", "-P", "-p", str(pid), "-Fn"), VERSION_TIMEOUT_S)
+    if result is None or result.returncode != 0:
+        return "unknown: lsof could not list the serving process's files"
+    for line in result.stdout.splitlines():
+        if line.startswith("n") and _MLX_PACKAGE in line:
+            site = line[1:].split(_MLX_PACKAGE)[0] + "/site-packages"
+            try:
+                entries = sorted(os.listdir(site))
+            except OSError:
+                return f"unknown: cannot list {site}"
+            for entry in entries:
+                match = _MLX_DIST_INFO.match(entry)
+                if match:
+                    return match.group(1)
+            return f"unknown: no mlx dist-info in {site}"
+    return "unknown: the serving process has no Python mlx package loaded"
 
 
 def _read_log(path: Path) -> str:
@@ -1978,6 +2015,11 @@ class Handle:
     # expert-streaming flag on a model they cannot stream and fall back without failing
     # anything. ``None`` on a handle built without a spawn.
     log_path: str | None = None
+    # The mlx core the serving process loaded (:func:`_mlx_version`), and for Osaurus the app's
+    # per-model options for the served model (:meth:`Runtime.host_model_options`). Both are
+    # read after readiness, outside the load window. ``None`` on a handle built without a start.
+    mlx_version: str | None = None
+    host_model_options: object = None
 
     @property
     def memory_pid(self) -> int:
@@ -2176,6 +2218,14 @@ class Runtime:
     def check_host_state(self) -> None:
         """Refuse to start when host state this runtime cannot pin has moved."""
 
+    def host_model_options(self, model_id: str) -> object:
+        """Host-side options for the served model that no start command shows, or ``None``.
+
+        Asked after readiness, because the served model's id is only known then. Only Osaurus
+        has such a surface (its app plist); every other runtime answers ``None``.
+        """
+        return None
+
     def build_command(
         self,
         artifact_dir: str,
@@ -2334,6 +2384,7 @@ class Runtime:
             )
             cold_load_s = _now() - started
             version = self.version()
+            host_model_options = self.host_model_options(resolved)
         except BaseException as start_error:
             if pid is not None:
                 try:
@@ -2348,8 +2399,9 @@ class Runtime:
         _RUN_STARTED_PIDS.add(pid)
         serving_pid = _serving_pid(pid, self.port)
         _RUN_STARTED_PIDS.add(serving_pid)
-        # AC-4: cold_load_s ends at readiness; the version probe, listener lookup and ledger
-        # write follow it. A failed ledger write never fails the start.
+        mlx_version = _mlx_version(serving_pid)
+        # AC-4: cold_load_s ends at readiness; the version probe, listener lookup, mlx probe and
+        # ledger write follow it. A failed ledger write never fails the start.
         stop_command = self.stop_command()
         try:
             _record_running_engine(pid, serving_pid, self.port, stop_command)
@@ -2367,6 +2419,8 @@ class Runtime:
             scratch=scratch,
             api_key=self.api_key(),
             log_path=str(log_path),
+            mlx_version=mlx_version,
+            host_model_options=host_model_options,
         )
 
 
@@ -2697,6 +2751,30 @@ class Osaurus(Runtime):
         return _ordered(
             (hub_repo_name(artifact_dir),), (model_id,), name_forms(artifact_dir)
         )
+
+    def host_model_options(self, model_id: str) -> object:
+        """The app plist's options for the served model, refused when they left the baseline.
+
+        ``disableThinking`` decides whether the model emits a reasoning run at all, and it lives
+        in the app's preferences, not in the attested config files (Fable S5-F9). Only the
+        served model's entry is compared -- toggling another model is not this cell's drift.
+        No recorded baseline means no gate, as in :meth:`check_host_state`. A baseline recorded
+        before options were attested holds ``<missing>`` for every model, so it refuses a model
+        the app now has options for until the baseline is recorded again. The entry is returned
+        for the row either way, sentinels included.
+        """
+        live = model_options_for(model_id, capture_model_options())
+        recorded = load_baseline_model_options()
+        if recorded is None:
+            return live
+        expected = model_options_for(model_id, recorded)
+        if expected != live:
+            raise RuntimeStartError(
+                f"Osaurus's per-model options for {model_id!r} drifted from the recorded "
+                f"baseline (app plist model_options_{model_id}): baseline {expected!r}, "
+                f"host {live!r}. disableThinking decides whether the model reasons at all."
+            )
+        return live
 
     def check_host_state(self) -> None:
         """Refuse to start when the host drifted from the recorded baseline.

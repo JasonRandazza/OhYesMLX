@@ -1,4 +1,125 @@
 {
+  "model_options": {
+    "OsaurusAI/Bonsai-2-27B-Ternary-JANG": {
+      "reasoningEffort": {
+        "string": {
+          "_0": "medium"
+        }
+      }
+    },
+    "OsaurusAI/Bonsai-27b-Ternary-JANG": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/Holo3-35B-A3B-JANGTQ4": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/Laguna-XS.2-JANGTQ2": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/Ling-2.6-flash-JANGTQ": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/Nanbeige4.2-3B-JANG_6M": {
+      "disableThinking": {
+        "bool": {
+          "_0": true
+        }
+      }
+    },
+    "OsaurusAI/Ornith-1.0-35B-JANG_4M": {
+      "disableThinking": {
+        "bool": {
+          "_0": true
+        }
+      }
+    },
+    "OsaurusAI/Ornith-1.5-9B-JANG_6D": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/Qwen3.6-35B-A3B-MXFP4-MTP": {
+      "disableThinking": {
+        "bool": {
+          "_0": true
+        }
+      }
+    },
+    "OsaurusAI/Qwen3.8-27B-JANGH2": {
+      "reasoningEffort": {
+        "string": {
+          "_0": "medium"
+        }
+      }
+    },
+    "OsaurusAI/Raptor-v0.5-8B-A1B-JANG_6M": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/gemma-4-12B-it-JANG_4M": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "OsaurusAI/gemma-4-12B-it-qat-JANG_4M": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "omlx/gemma-4-12B-coder-fable5-composer2.5-v1": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "openai-chatgpt/gpt-5.6-luna": {
+      "reasoningEffort": {
+        "string": {
+          "_0": "high"
+        }
+      }
+    },
+    "opencode/laguna-s-2.1-free": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    },
+    "opencode/nemotron-3-ultra-free": {
+      "disableThinking": {
+        "bool": {
+          "_0": false
+        }
+      }
+    }
+  },
   "settings": {
     "server-runtime.json:cache.blockDisk.enabled": true,
     "server-runtime.json:cache.blockDisk.maxSizePercent": 10,
