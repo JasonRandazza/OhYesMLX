@@ -793,7 +793,7 @@ def test_a_successful_pip_install_records_its_venv_bin_and_engine_env_prefixes_i
     }
     assert not (tmp_path / "lab-paths.json.tmp").exists(), "the write is atomic"
 
-    env = runtimes._engine_env(lab_paths_path=str(lab_paths))
+    env = runtimes._engine_env(lab_paths_path=str(lab_paths), engine="optiq")
     assert env["PATH"].split(os.pathsep)[0] == f"{tmp_path}/engines/optiq-0.5.13/bin"
 
 

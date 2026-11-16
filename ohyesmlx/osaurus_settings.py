@@ -72,6 +72,7 @@ TRACKED_KEYS: tuple[tuple[str, str], ...] = (
     ("server-runtime.json", "cache.longPromptMultiplier"),
     ("server-runtime.json", "concurrency.maxConcurrentSequences"),
     ("server-runtime.json", "concurrency.continuousBatching"),
+    ("server-runtime.json", "concurrency.smeltMode"),
     ("server-runtime.json", "memorySafety.mode"),
     ("server-runtime.json", "memorySafety.slider"),
     ("server-runtime.json", "mtp.mode"),
