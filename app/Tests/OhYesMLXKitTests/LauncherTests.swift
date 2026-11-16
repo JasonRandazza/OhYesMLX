@@ -147,7 +147,8 @@ final class LauncherTests: XCTestCase {
         factory: LauncherFactory,
         appSupport: URL,
         timing: QuitTiming = .standard,
-        launchTimeout: TimeInterval = 2
+        launchTimeout: TimeInterval = 2,
+        otherInstance: Bool = false
     ) -> BackendLauncher {
         BackendLauncher(
             environment: environment(),
@@ -155,8 +156,19 @@ final class LauncherTests: XCTestCase {
             productionInterpreter: URL(fileURLWithPath: "/nonexistent/bundled/python3"),
             processFactory: { factory.make() },
             timing: timing,
-            launchTimeout: launchTimeout
+            launchTimeout: launchTimeout,
+            otherInstanceRunning: { otherInstance }
         )
+    }
+
+    /// Holds `app.lock` in *appSupport* the way a live backend does; the descriptor is returned
+    /// so the test can release it.
+    private func holdLock(in appSupport: URL) throws -> Int32 {
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        let descriptor = open(appSupport.appendingPathComponent("app.lock").path, O_CREAT | O_RDWR, 0o600)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        XCTAssertEqual(flock(descriptor, LOCK_EX | LOCK_NB), 0)
+        return descriptor
     }
 
     private func startRunning(
@@ -192,7 +204,9 @@ final class LauncherTests: XCTestCase {
         let backend = try await startRunning(launcher, fake)
         defer { backend.forceKill() }
 
-        XCTAssertEqual(fake.argv, ["/usr/bin/true", "-I", "-B", "-m", "ohyesmlx.cli", "app"])
+        XCTAssertEqual(fake.argv, [
+            "/usr/bin/true", "-I", "-B", "-m", "ohyesmlx.cli", "app", "--lock-dir", appSupport.path,
+        ])
         XCTAssertEqual(fake.environment, [
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": "/Users/tester",
@@ -212,7 +226,7 @@ final class LauncherTests: XCTestCase {
 
     func testTheFirstStdoutLineIsTheLaunchLineWhenTwoArriveBeforeTheAwait() async throws {
         let fake = FakeLauncherProcess()
-        let session = LaunchSession(process: fake, lockFD: -1, timing: .standard)
+        let session = LaunchSession(process: fake, timing: .standard)
 
         session.deliverLine("{\"port\": 43210, \"token\": \"launch-token\"}")
         session.deliverLine("a later stdout line")
@@ -415,30 +429,118 @@ final class LauncherTests: XCTestCase {
         XCTAssertFalse(backend.isRunning)
     }
 
-    func testSecondLauncherIsAlreadyRunningAndSpawnsNothing() async throws {
-        let firstProcess = FakeLauncherProcess()
-        let secondProcess = FakeLauncherProcess()
-        let factory = LauncherFactory([firstProcess, secondProcess])
+    /// P5-7: the backend holds app.lock; the launcher's probe holds nothing past its check.
+    func testTheLauncherHoldsNoLockWhileItsBackendRuns() async throws {
+        let fake = FakeLauncherProcess()
+        let factory = LauncherFactory([fake])
         let appSupport = temporaryAppSupport()
-        let first = makeLauncher(factory: factory, appSupport: appSupport)
-        let second = makeLauncher(factory: factory, appSupport: appSupport)
+        let backend = try await startRunning(makeLauncher(factory: factory, appSupport: appSupport), fake)
+        defer { backend.forceKill() }
 
-        let firstBackend = try await startRunning(first, firstProcess)
-        XCTAssertEqual(factory.count, 1)
+        let descriptor = try holdLock(in: appSupport)
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+    }
 
-        let secondOutcome = await second.start()
-        guard case .alreadyRunning = secondOutcome else {
-            XCTFail("expected alreadyRunning, got \(secondOutcome)")
+    func testAHeldLockWithAnotherAppIsAlreadyRunningAndSpawnsNothing() async throws {
+        let factory = LauncherFactory()
+        let appSupport = temporaryAppSupport()
+        let descriptor = try holdLock(in: appSupport)
+        defer { close(descriptor) }
+
+        let outcome = await makeLauncher(factory: factory, appSupport: appSupport, otherInstance: true).start()
+        guard case .alreadyRunning = outcome else {
+            XCTFail("expected alreadyRunning, got \(outcome)")
             return
         }
+        XCTAssertEqual(factory.count, 0)
+    }
+
+    /// S3-F8: a crashed app's backend still holds the lock and no app is in front of it.
+    func testAHeldLockWithNoOtherAppIsStillFinishingUntilItIsReleased() async throws {
+        let secondProcess = FakeLauncherProcess()
+        let factory = LauncherFactory([secondProcess])
+        let appSupport = temporaryAppSupport()
+        let launcher = makeLauncher(factory: factory, appSupport: appSupport)
+        let descriptor = try holdLock(in: appSupport)
+
+        let outcome = await launcher.start()
+        guard case .stillFinishing = outcome else {
+            XCTFail("expected stillFinishing, got \(outcome)")
+            close(descriptor)
+            return
+        }
+        XCTAssertEqual(factory.count, 0)
+
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+        let backend = try await startRunning(launcher, secondProcess)
+        defer { backend.forceKill() }
         XCTAssertEqual(factory.count, 1)
+    }
 
-        firstProcess.exit(status: 0)
-        await waitUntil { !firstBackend.isRunning }
+    /// The lock taken between the probe and the backend's own flock: the backend's pinned
+    /// refusal line maps the same way the probe does.
+    func testTheBackendsRefusalLineMapsToStillFinishingOrAlreadyRunning() async throws {
+        for otherInstance in [false, true] {
+            let fake = FakeLauncherProcess()
+            let factory = LauncherFactory([fake])
+            let launcher = makeLauncher(
+                factory: factory,
+                appSupport: temporaryAppSupport(),
+                otherInstance: otherInstance
+            )
+            fake.writeStdout("{\"error\": {\"code\": \"already_running\", \"holder_pid\": 4242}}\n")
+            let outcome = await launcher.start()
+            switch (outcome, otherInstance) {
+            case (.stillFinishing, false), (.alreadyRunning, true):
+                break
+            default:
+                XCTFail("otherInstance \(otherInstance): got \(outcome)")
+            }
+            XCTAssertFalse(fake.isRunning, "the refusing child was not reaped")
+        }
+    }
 
-        let secondBackend = try await startRunning(second, secondProcess, port: 43_212)
-        defer { secondBackend.forceKill() }
-        XCTAssertEqual(factory.count, 2)
+    /// The model shows "still finishing" in place of quitting, and **Check again** re-probes.
+    @MainActor
+    func testTheModelShowsStillFinishingAndCheckAgainReprobes() async throws {
+        let factory = LauncherFactory()
+        let appSupport = temporaryAppSupport()
+        let descriptor = try holdLock(in: appSupport)
+        defer { close(descriptor) }
+        let model = AppModel(
+            launcher: makeLauncher(factory: factory, appSupport: appSupport),
+            bundlePath: "/Applications/OhYesMLX.app"
+        )
+
+        await model.launch()
+        XCTAssertEqual(model.screen, .couldntStart)
+        XCTAssertTrue(model.previousSessionFinishing)
+        XCTAssertFalse(model.alreadyRunning)
+
+        await model.relaunch()
+        XCTAssertTrue(model.previousSessionFinishing)
+        XCTAssertFalse(model.alreadyRunning)
+        XCTAssertEqual(factory.count, 0)
+    }
+
+    /// S3-F14: only EWOULDBLOCK is a holder; an unopenable lock is couldn't-start with errno text.
+    func testAnUnopenableLockIsCouldntStartWithTheErrnoText() async throws {
+        let factory = LauncherFactory()
+        let appSupport = temporaryAppSupport()
+        try FileManager.default.createDirectory(
+            at: appSupport.appendingPathComponent("app.lock"),
+            withIntermediateDirectories: true
+        )
+
+        let outcome = await makeLauncher(factory: factory, appSupport: appSupport, otherInstance: true).start()
+        guard case .couldntStart(let message) = outcome else {
+            XCTFail("expected couldntStart, got \(outcome)")
+            return
+        }
+        XCTAssertTrue(message.contains("Is a directory"), message)
+        XCTAssertEqual(factory.count, 0)
     }
 }
 

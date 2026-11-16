@@ -178,7 +178,15 @@ public final class AppModel {
     public private(set) var quitInProgress = false
     public private(set) var quitAnywayOffered = false
     public private(set) var alreadyRunning = false
+    /// `app.lock` is held by a backend with no app in front of it: the previous session is still
+    /// unwinding (S3-F8). Shown on the couldn't-start screen with **Check again**.
+    public private(set) var previousSessionFinishing = false
     public private(set) var shouldExit = false
+
+    /// Retry's hand-off to the screens that own a gate: the Engines screen opens its consent
+    /// sheet for this engine, and the Benchmark screen shows this repo's plan. Never a start.
+    public var consentRequest: String?
+    public var requestedBenchmarkRepo: String?
 
     public var installConsent = false
     public var osaurusConsent = false
@@ -213,6 +221,12 @@ public final class AppModel {
     private let inflightKey = "inflightJob"
     /// The repo the newest plan request is for; a slower earlier response is dropped.
     private var planningRepo: String?
+    /// The job a start is waiting on `POST /jobs` for: the slot is claimed synchronously, before
+    /// the first await, so a second start cannot enter while the first is in the air (S3-F6).
+    private var starting: JobArgs?
+    /// The ending an `error` event recorded; `done` is what makes it the job's state (S3-F5).
+    private var endedState: JobState?
+    private var eventTask: Task<Void, Never>?
 
     public init(
         backend: any Backend,
@@ -261,6 +275,10 @@ public final class AppModel {
     }
 
     public var oneSlotReason: String? {
+        if let starting {
+            let name = starting.kind == .install ? starting.name : displayName(for: starting.name)
+            return "Busy: starting \(starting.kind.wireName) \(name)"
+        }
         guard let job, job.state.isActive else { return nil }
         let name = job.kind == .install ? job.name : displayName(for: job.name)
         return "Busy: \(job.kind.wireName) \(name) is running"
@@ -375,6 +393,10 @@ public final class AppModel {
             case .alreadyRunning:
                 alreadyRunning = true
                 return
+            case .stillFinishing:
+                previousSessionFinishing = true
+                screen = .couldntStart
+                return
             case .running(let running):
                 adopt(running)
             }
@@ -389,6 +411,13 @@ public final class AppModel {
             return
         }
         guard let launcher else { return }
+        previousSessionFinishing = false
+        // S3-F7: a live backend is never spawned over; the retry is a reload against it.
+        if let runner, runner.isRunning {
+            screen = .launching
+            await reload()
+            return
+        }
         backendStopped = nil
         backendStderrTail = []
         quitAnywayOffered = false
@@ -400,6 +429,9 @@ public final class AppModel {
             screen = .couldntStart
         case .alreadyRunning:
             alreadyRunning = true
+        case .stillFinishing:
+            previousSessionFinishing = true
+            screen = .couldntStart
         case .running(let running):
             adopt(running)
             interruptedJob = loadInflight()
@@ -504,6 +536,13 @@ public final class AppModel {
             benchmarkRefusal = error
             return false
         } catch {
+            guard planningRepo == repo else { return false }
+            quickPlan = nil
+            benchmarkRefusal = BackendError(
+                code: "plan_failed",
+                status: nil,
+                message: "Could not work out the plan: \(error.localizedDescription)"
+            )
             return false
         }
     }
@@ -515,12 +554,20 @@ public final class AppModel {
     }
 
     public func cancelJob(now: Bool) async {
-        guard let current = job, current.state.isActive else { return }
+        guard let current = job, current.state.isActive, current.state != .stoppingNow else {
+            return
+        }
         do {
             try await backend.cancel(jobID: current.id, now: now)
-            var status = current
-            status.state = now ? .stoppingNow : .stoppingAfterCell
-            job = status
+            // The await let events in: re-read, and mark stopping only a job that is still the
+            // same one and still active (S3-F4). Stop Now escalates; Stop After never demotes.
+            guard var latest = job, latest.id == current.id, latest.state.isActive else { return }
+            if now {
+                latest.state = .stoppingNow
+            } else if latest.state == .running {
+                latest.state = .stoppingAfterCell
+            }
+            job = latest
         } catch let error as BackendError {
             refusal = error
         } catch {
@@ -532,9 +579,15 @@ public final class AppModel {
         guard !quitInProgress else { return }
         backendStopped = status
         backendStderrTail = stderrTail
+        eventTask?.cancel()
         if var current = job, current.state.isActive {
             current.state = .interrupted
             job = current
+        }
+        // The app was asked to quit and offered "Quit anyway"; the backend is gone, so the
+        // quit is complete rather than stranded behind the backend-stopped screen (S3-F12).
+        if quitAnywayOffered {
+            finishQuit()
         }
     }
 
@@ -547,15 +600,26 @@ public final class AppModel {
         guard !unsupported else { return }
         guard let interrupted = interruptedJob else { return }
         interruptedJob = nil
+        // Retry goes through the gate the button has, never straight to a start (S3-F15):
+        // install asks for consent, evict is confirmed on Models, a benchmark shows its plan.
         switch interrupted.kind {
         case .install:
-            await start(.install(engine: interrupted.name))
+            if installConsent {
+                await start(.install(engine: interrupted.name))
+            } else {
+                consentRequest = interrupted.name
+                go(to: .engines)
+            }
         case .download:
             await start(.download(repo: interrupted.name))
         case .evict:
-            await start(.evict(repo: interrupted.name))
+            go(to: .models)
         case .quickbench:
-            await quickbench(repo: interrupted.name)
+            if downloadedPicks.contains(where: { $0.modelID == interrupted.name }) {
+                requestedBenchmarkRepo = interrupted.name
+            }
+            go(to: .benchmark)
+            await planBenchmark(repo: interrupted.name)
         }
     }
 
@@ -607,7 +671,32 @@ public final class AppModel {
     private func start(_ args: JobArgs) async {
         // AC-7: no job can start from a translocated bundle, whatever the screen says.
         guard !unsupported, !translocated else { return }
+        // The slot is claimed here, before the first await (S3-F6).
+        if let reason = oneSlotReason {
+            routeStartRefusal(BackendError(code: "busy", status: nil, message: reason), args: args)
+            return
+        }
         refusal = nil
+        starting = args
+
+        let jobID: String
+        do {
+            jobID = try await backend.startJob(kind: args.kind, args: args)
+        } catch let error as BackendError {
+            starting = nil
+            routeStartRefusal(error, args: args)
+            return
+        } catch {
+            starting = nil
+            routeStartRefusal(
+                BackendError(code: "start_failed", status: nil, message: error.localizedDescription),
+                args: args
+            )
+            return
+        }
+
+        // The POST succeeded, so the slot is the backend's now: only here does the per-kind
+        // reset and the crash record happen.
         if args.kind == .quickbench {
             benchmarkRefusal = nil
             liveCells = []
@@ -618,22 +707,14 @@ public final class AppModel {
         } else {
             modelRefusals[args.name] = nil
         }
-
-        let started = ISO8601DateFormatter().string(from: Date())
-        writeInflight(InterruptedJob(kind: args.kind, name: args.name, started: started))
-
-        let jobID: String
-        do {
-            jobID = try await backend.startJob(kind: args.kind, args: args)
-        } catch let error as BackendError {
-            refusal = error
-            defaults.removeObject(forKey: inflightKey)
-            return
-        } catch {
-            defaults.removeObject(forKey: inflightKey)
-            return
-        }
-
+        writeInflight(
+            InterruptedJob(
+                kind: args.kind,
+                name: args.name,
+                started: ISO8601DateFormatter().string(from: Date())
+            )
+        )
+        endedState = nil
         job = JobStatus(
             id: jobID,
             kind: args.kind,
@@ -643,25 +724,43 @@ public final class AppModel {
             message: "",
             events: []
         )
+        starting = nil
         if args.kind == .quickbench {
             screen = .benchmark
         }
 
-        do {
-            for try await event in backend.events(jobID: jobID, after: nil) {
-                await apply(event, jobID: jobID, args: args)
-                if event.type == .done { break }
+        let stream = backend.events(jobID: jobID, after: nil)
+        let task = Task { [weak self] in
+            do {
+                for try await event in stream {
+                    guard let self else { return }
+                    await self.apply(event, jobID: jobID, args: args)
+                    if event.type == .done { break }
+                }
+            } catch let error as BackendError {
+                self?.refusal = error
+            } catch {
+                // The stream ended without its `done`; the job's own state already says what it
+                // did, and the recommendations below are still asked for.
             }
-        } catch let error as BackendError {
-            refusal = error
-        } catch {
-            // The stream ended without its `done`; the job's own state already says what it
-            // did, and the recommendations below are still asked for.
         }
+        eventTask = task
+        await task.value
         // AC-6: a download or an evict changes what is on disk, so the step ticks and the
         // Benchmark picker are re-read from the backend rather than left on stale rows.
         if args.kind == .download || args.kind == .evict {
             await refreshRecommendations()
+        }
+    }
+
+    /// A refused start is shown on the screen that asked for it, and also in `refusal`, which
+    /// Engines renders (S3-F6).
+    private func routeStartRefusal(_ error: BackendError, args: JobArgs) {
+        refusal = error
+        switch args.kind {
+        case .quickbench: benchmarkRefusal = error
+        case .download, .evict: modelRefusals[args.name] = error
+        case .install: break
         }
     }
 
@@ -674,11 +773,13 @@ public final class AppModel {
         switch event.type {
         case .done:
             if status.state.isActive {
-                // A half-restored quickbench sends `done` and no error; only its summary says
-                // so. Any other kind's completion is its own, never a summary it did not write.
+                // The backend holds its one slot until `done`, so this is where the job ends
+                // (S3-F5). `error` recorded how; a pinned Osaurus whose restore failed also
+                // sends `error` (code restore_failed), and its summary says so too. Any other
+                // kind's completion is its own, never a summary it did not write.
                 let restoreFailed =
                     status.kind == .quickbench && summary?.ended == .restoreFailed
-                status.state = restoreFailed ? .failed : .finished
+                status.state = endedState ?? (restoreFailed ? .failed : .finished)
             }
             job = status
             defaults.removeObject(forKey: inflightKey)
@@ -688,7 +789,7 @@ public final class AppModel {
             return
         case .error:
             let code = event.payload?["code"]?.stringValue
-            status.state = code == "cancelled" ? .cancelled : .failed
+            endedState = code == "cancelled" ? .cancelled : .failed
             let error = BackendError(code: code ?? "error", status: nil, message: event.message)
             refusal = error
             route(error: error, event: event, args: args)
@@ -698,8 +799,14 @@ public final class AppModel {
             }
             return
         case .result:
-            summaryData = event.payloadData
-            summary = summaryData.flatMap { try? JSONDecoder().decode(QuickSummary.self, from: $0) }
+            // Only a quickbench's result is the run's summary; a download's or an evict's is
+            // its own receipt and must not replace it (S3-F2).
+            if args.kind == .quickbench {
+                summaryData = event.payloadData
+                summary = summaryData.flatMap {
+                    try? JSONDecoder().decode(QuickSummary.self, from: $0)
+                }
+            }
         case .progress:
             if args.kind == .quickbench {
                 updateBenchmarkCell(event)

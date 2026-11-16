@@ -272,3 +272,45 @@ final class HTTPBackendTests: XCTestCase {
         XCTAssertTrue(dumped.contains("<redacted>"), dumped)
     }
 }
+
+/// 05-08 (audit): bytes split mid-character and a final event with no blank line, served in
+/// separate chunks through the real URL loading system.
+final class ChunkedSSEProtocol: URLProtocol {
+    static let chunks: [Data] = {
+        let event = #"{"seq":1,"type":"done","message":"done … ok","at":"2026-11-16T00:00:00Z"}"#
+        let body = Array("id: 1\r\ndata: \(event)".utf8)
+        let ellipsis = Array("…".utf8)
+        let cut = body.firstRange(of: ellipsis)!.lowerBound + 1
+        return [Data(body[..<cut]), Data(body[cut...])]
+    }()
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        for chunk in Self.chunks { client?.urlProtocol(self, didLoad: chunk) }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+final class ChunkedSSETests: XCTestCase {
+    func testASplitMultibyteCharacterAndAnUnterminatedFinalEventArriveIntact() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ChunkedSSEProtocol.self]
+        let backend = HTTPBackend(
+            port: 51_235,
+            token: BackendToken("token"),
+            transport: URLSessionTransport(session: URLSession(configuration: configuration)),
+            retryDelay: .milliseconds(2)
+        )
+        var events: [JobEvent] = []
+        for try await event in backend.events(jobID: "job", after: nil) { events.append(event) }
+        XCTAssertEqual(events.map(\.type), [.done])
+        XCTAssertEqual(events.first?.message, "done … ok")
+    }
+}

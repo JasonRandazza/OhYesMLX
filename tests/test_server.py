@@ -2311,3 +2311,14 @@ def test_a_second_stop_now_answers_202_without_a_second_stop(launch):
     assert wait_until(lambda: listener.jobs.get(job_id).done)
 
 
+
+
+def test_a_second_job_posted_the_moment_a_reader_sees_done_is_accepted(launch):
+    """`done` means the slot is free: it reaches the stream only after the worker's cleanup."""
+    listener = launch(download=scripted(an_event("progress", "one"), an_event("done", "finished")))
+    job_id = posted_job_id(listener, DOWNLOAD)
+
+    _, body = stream_to_close(listener, job_id)
+    assert sse_events(body)[-1][1]["type"] == "done"
+
+    assert post_job(listener, DOWNLOAD)[0] == 202

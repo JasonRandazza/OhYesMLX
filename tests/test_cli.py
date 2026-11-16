@@ -1163,7 +1163,7 @@ def stop(process) -> None:
     process.stderr.close()
 
 
-def test_the_app_creates_app_support_before_it_serves(monkeypatch, capsys):
+def test_the_app_creates_app_support_before_it_serves(monkeypatch, capsys, tmp_path):
     """AC-1: a job this server accepts writes under Application Support, so the 0700
     directory exists before the listener is built."""
     from ohyesmlx import server
@@ -1200,7 +1200,7 @@ def test_the_app_creates_app_support_before_it_serves(monkeypatch, capsys):
         SimpleNamespace(SIGTERM=signal.SIGTERM, signal=lambda number, handler: None),
     )
 
-    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert cli._app(SimpleNamespace(port=0, lock_dir=str(tmp_path))) == 0
     assert order[:2] == ["support", "make_server"]
     assert json.loads(capsys.readouterr().out) == {
         "port": 9,
@@ -1277,7 +1277,7 @@ def test_the_app_recovers_an_osaurus_backup_before_the_launch_line(
         lambda **kwargs: (order.append(("recover", kwargs)), True)[1],
     )
 
-    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert cli._app(SimpleNamespace(port=0, lock_dir=str(tmp_path))) == 0
 
     captured = capsys.readouterr()
     assert order[:3] == ["support", "make_server", "orphans"]
@@ -1315,7 +1315,7 @@ def test_a_running_osaurus_app_leaves_the_backup_for_the_next_launch(
 
     monkeypatch.setattr(osaurus_settings, "recover", refuse)
 
-    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert cli._app(SimpleNamespace(port=0, lock_dir=str(tmp_path))) == 0
 
     captured = capsys.readouterr()
     assert stderr_lines(captured) == [
@@ -1340,7 +1340,7 @@ def test_a_recovery_that_raises_is_one_line_and_the_app_still_serves(
 
     monkeypatch.setattr(osaurus_settings, "recover", broken)
 
-    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert cli._app(SimpleNamespace(port=0, lock_dir=str(tmp_path))) == 0
 
     captured = capsys.readouterr()
     assert stderr_lines(captured) == [
@@ -1370,7 +1370,7 @@ def test_a_recovery_that_does_not_verify_is_one_line_and_keeps_the_backup(
     monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(backup))
     monkeypatch.setattr(osaurus_settings, "recover", lambda **kwargs: False)
 
-    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert cli._app(SimpleNamespace(port=0, lock_dir=str(tmp_path))) == 0
 
     captured = capsys.readouterr()
     assert stderr_lines(captured) == [
@@ -1395,7 +1395,7 @@ def test_an_orphan_stop_that_raises_is_one_line_and_the_app_still_serves(
     monkeypatch.setattr(quickbench, "DEFAULT_BACKUP_DIR", str(tmp_path / "backup"))
     monkeypatch.setattr(osaurus_settings, "recover", lambda **kwargs: False)
 
-    assert cli._app(SimpleNamespace(port=0)) == 0
+    assert cli._app(SimpleNamespace(port=0, lock_dir=str(tmp_path))) == 0
 
     captured = capsys.readouterr()
     assert stderr_lines(captured) == [
@@ -1466,6 +1466,52 @@ def test_the_app_exits_zero_on_a_signal(tmp_path, number):
         stop(process)
 
 
+def test_a_second_app_against_a_held_lock_refuses_with_the_pinned_line(tmp_path):
+    """P5-7 (S3-F8): the backend owns app.lock. A second `app` against a held lock prints the
+    pinned refusal as its only stdout line, names the holder's pid and exits non-zero, before
+    it binds a port; the lock lives in the directory `--lock-dir` names, never the real one."""
+    lock_dir = tmp_path / "support"
+    lock_dir.mkdir()
+    held = cli._lock_app(lock_dir)
+    try:
+        assert os.get_inheritable(held) is False, "an engine server would inherit app.lock"
+        finished = subprocess.run(
+            [sys.executable, "-c", APP_BOOTSTRAP, "app", "--lock-dir", str(lock_dir)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT),
+            env={**os.environ, "HOME": str(tmp_path)},
+            timeout=60,
+        )
+    finally:
+        os.close(held)
+
+    assert finished.returncode != 0
+    assert json.loads(finished.stdout) == {
+        "error": {"code": "already_running", "holder_pid": os.getpid()}
+    }
+    assert len(finished.stdout.splitlines()) == 1
+
+
+def test_an_unusable_lock_path_is_lock_failed_on_stderr_not_already_running(tmp_path):
+    """S3-F14: only EWOULDBLOCK is "already running"; app.lock as a directory is lock_failed."""
+    (tmp_path / "app.lock").mkdir()
+    finished = subprocess.run(
+        [sys.executable, "-c", APP_BOOTSTRAP, "app", "--lock-dir", str(tmp_path)],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        env={**os.environ, "HOME": str(tmp_path)},
+        timeout=60,
+    )
+
+    assert finished.returncode == 2
+    assert finished.stdout == ""
+    assert json.loads(finished.stderr)["error"]["code"] == "lock_failed"
+
+
 def test_the_app_started_with_dev_null_exits_at_once_by_design(tmp_path):
     """Audit item 9: stdin EOF is the parent-death signal, so `app </dev/null` is not a crash."""
     finished = subprocess.run(
@@ -1515,7 +1561,7 @@ def test_the_app_reports_a_bind_failure_on_stderr_and_exits_two(tmp_path):
 
 
 
-def test_shutdown_cancels_a_running_download_and_exits_zero(monkeypatch):
+def test_shutdown_cancels_a_running_download_and_exits_zero(monkeypatch, tmp_path):
     """AC-6: stdin EOF arrives mid-job, the job is cancelled at its next check, exit is 0.
 
     In-process, against the real ``server.make_server`` with the download seam faked: what is
@@ -1590,7 +1636,7 @@ def test_shutdown_cancels_a_running_download_and_exits_zero(monkeypatch):
     monkeypatch.setattr(server, "make_server", make_server)
     monkeypatch.setattr(cli, "ensure_app_support", lambda: None)
 
-    code = cli.main(["app"])
+    code = cli.main(["app", "--lock-dir", str(tmp_path)])
 
     assert code == 0
     assert failures == []

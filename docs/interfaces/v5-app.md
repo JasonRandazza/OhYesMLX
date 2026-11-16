@@ -40,7 +40,7 @@ of "Stop now" is "Stop after this cell" with the number discarded.
   that interpreter's own site-packages (plan 05-06). Development: the path in `OYMLX_DEV_PYTHON`, a venv made
   by `scripts/dev_backend_venv.sh` whose site-packages holds a `.pth` naming the repo root. Neither found:
   the `couldnt_start` screen, naming which path was looked for.
-- **Argv:** `[python, "-I", "-B", "-m", "ohyesmlx.cli", "app"]` (the package has no `__main__.py`; `cli.py` has the `__main__` guard). Nothing else, and never the token (P5-2, P5-3). `-B` because the app bundle is signed and may sit on a read-only volume, so the backend never writes bytecode into it (P5-6, plan 05-06); the bundled `ohyesmlx` is precompiled at build time.
+- **Argv:** `[python, "-I", "-B", "-m", "ohyesmlx.cli", "app", "--lock-dir", <appSupportDirectory>]` (the package has no `__main__.py`; `cli.py` has the `__main__` guard). Nothing else, and never the token (P5-2, P5-3). `-B` because the app bundle is signed and may sit on a read-only volume, so the backend never writes bytecode into it (P5-6, plan 05-06); the bundled `ohyesmlx` is precompiled at build time.
 - **Environment:** built, not inherited: `PATH=/usr/bin:/bin:/usr/sbin:/sbin` (launchd's default, P5-9),
   `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` from the parent, nothing else. No `PYTHON*` variable.
 - **Working directory:** `~/Library/Application Support/OhYesMLX`, created `0700` by the client before the
@@ -59,9 +59,28 @@ of "Stop now" is "Stop after this cell" with the number discarded.
   from the app's side (the backend bounds itself: 120 s + `JOB_KILL_GRACE_S`); the app shows "Finishing
   <job>…" and never sends SIGKILL on its own; 150 s after stdin closed it offers **Quit anyway**, and only that
   click sends SIGKILL. With no job running, wait 10 s, then SIGTERM, then 5 s, then SIGKILL.
-- **Single instance (P5-7):** an exclusive `flock` on `<App Support>/OhYesMLX/app.lock` taken before the
-  spawn; a second launch that cannot take it activates the running app (by bundle id, when it has one) and
-  exits without spawning.
+- **Single instance (P5-7, owner moved to the backend in 05-08, S3-F8):** the **backend** holds an exclusive
+  `flock(LOCK_EX | LOCK_NB)` on `<lock dir>/app.lock` for its whole life, so a crashed or force-quit app's
+  backend keeps it until it has finished unwinding. `<lock dir>` is the `--lock-dir` argument the launcher
+  passes (its own `appSupportDirectory`, so a test or scratch launch locks its own directory); without it,
+  `ohyesmlx.app_support_dir()`. Only the lock moves; every other path still comes from `HOME`. The backend
+  takes the lock before it binds the port, runs startup recovery or prints anything, writes its pid into the
+  file, and opens it non-inheritable, so no engine server it spawns ever holds it. When the lock is held, the
+  backend's only stdout line is the refusal below and it exits 2, having bound nothing:
+
+  ```json
+  {"error": {"code": "already_running", "holder_pid": 4242}}
+  ```
+
+  `holder_pid` is the integer the holder wrote, or `null` when the file is unreadable or not yet written. Any
+  other failure to open or lock is one stderr line `{"error": {"code": "lock_failed", "message": str}}`, exit 2,
+  nothing on stdout. The app holds no lock across the child's life. Before spawning it probes the lock (take and
+  release at once) only as a fast path; the probe and the refusal line map the same way: **another instance of
+  the app is running** (by bundle id, other than itself) → `.alreadyRunning`, which activates it and exits;
+  **none is** → `.stillFinishing`, the couldn't-start screen as "The previous session is still finishing" with
+  **Check again** (a relaunch). Only `EWOULDBLOCK` means a holder (S3-F14): any other probe failure is
+  `.couldntStart` with the errno text. With a live backend, the couldn't-start retry is a reload against it,
+  never a second spawn (S3-F7).
 
 ## The client (`Backend` protocol, plan 05-02)
 
