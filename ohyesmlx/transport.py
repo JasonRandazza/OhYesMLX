@@ -152,6 +152,72 @@ def _usage_count(value: object, message: str) -> int:
     return value
 
 
+def _buffered_bytes(response: http.client.HTTPResponse, stream_socket) -> bytes:
+    """What the response's own reader already holds, without ever waiting for more.
+
+    One ``read1`` of a chunked body fills the reader's 8 KiB buffer with whatever the
+    kernel held and hands back one HTTP chunk of it. Those bytes are invisible to
+    ``select`` on the socket, so the stream loop asks this before it waits.
+
+    ``BufferedReader.peek`` reads the socket raw when the buffer is empty, and the stream
+    socket is blocking with no timeout (a short timeout is not usable: after one
+    ``socket.timeout`` the makefile raises ``OSError("cannot read from timed out
+    object")`` on every later read). So the socket is non-blocking for the length of the
+    peek only, where an empty kernel answers nothing and ``peek`` returns ``b""``. It is
+    restored before anything parses: http.client takes a short ``readline`` from a
+    non-blocking raw read as a whole chunk-size line, which desynchronises the framing.
+    """
+    reader = getattr(response, "fp", None)
+    peek = getattr(reader, "peek", None)
+    if peek is None:
+        return b""
+    stream_socket.setblocking(False)
+    try:
+        return peek(1) or b""
+    except (ValueError, OSError):
+        return b""
+    finally:
+        stream_socket.settimeout(None)
+
+
+def _read1_stays_in_buffer(
+    response: http.client.HTTPResponse, buffered: bytes
+) -> bool:
+    """Whether ``response.read1`` can run without it reading the socket.
+
+    ``read1`` is syscall-free only where the buffer reaches. Mid-chunk that is any
+    buffered byte: the bytes are body, and ``read1`` returns the ones it has rather than
+    filling to the chunk's length. At a chunk boundary it must first consume the 2-byte
+    terminator, then a whole chunk-size line, then at least one body byte of the chunk
+    that line announces (for the terminal chunk, its trailer instead). Anything less and
+    the loop must ``select`` first, where the request deadline still applies -- a read
+    that has to wait for the socket would block past the deadline.
+    """
+    if not getattr(response, "chunked", False):
+        return True
+    chunk_left = getattr(response, "chunk_left", None)
+    if chunk_left is None:
+        rest = buffered
+    elif chunk_left > 0:
+        return True
+    else:
+        rest = buffered[2:]
+    line_end = rest.find(b"\n")
+    if line_end < 0:
+        return False
+    # http.client drops a chunk extension at the first ";" before it parses the size
+    # (_read_next_chunk_size), so the same split has to happen here or a buffered
+    # "3;x=y" line would look unreadable and never be consumed.
+    try:
+        size = int(rest[:line_end].split(b";")[0], 16)
+    except ValueError:
+        return False
+    body = rest[line_end + 1 :]
+    if size == 0:
+        return body.startswith(b"\r\n") or b"\r\n\r\n" in body
+    return bool(body)
+
+
 def chat(
     base_url: str,
     model: str,
@@ -262,21 +328,30 @@ def chat(
         # Wait with select() instead so OptiQ prompt-processing keepalives
         # that arrive >1s after headers do not abort the cohort.
         stream_socket.settimeout(None)
+        # select() sees the socket, not the reader: one read1 can pull several events'
+        # worth of bytes and return only the first chunk of them. Waiting again before
+        # consuming the rest stamps each event on the arrival of the next one, and holds
+        # [DONE] until the server closes a keep-alive connection. So the reader is drained
+        # first, each event stamped as it is parsed, and the socket is waited on only when
+        # nothing is buffered -- or when read1 would have to read the socket to finish the
+        # chunk it is in the middle of (S2-F2).
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TransportError("request timed out", reason="timeout")
-            try:
-                readable, _, _ = select.select(
-                    [stream_socket],
-                    [],
-                    [],
-                    min(1.0, remaining),
-                )
-            except (ValueError, OSError):
-                break
-            if not readable:
-                continue
+            buffered = _buffered_bytes(response, stream_socket)
+            if not buffered or not _read1_stays_in_buffer(response, buffered):
+                try:
+                    readable, _, _ = select.select(
+                        [stream_socket],
+                        [],
+                        [],
+                        min(1.0, remaining),
+                    )
+                except (ValueError, OSError):
+                    break
+                if not readable:
+                    continue
             try:
                 chunk = stream_reader.read1(4096)
             except (BlockingIOError, InterruptedError, TimeoutError):
@@ -449,6 +524,13 @@ def chat(
             # whole response, and the visible remainder of zero is not a count this response
             # has.
             and not reasoning_only
+            # And not when the stream it just read refutes the split: zero reasoning tokens
+            # over a reasoning channel that was not empty (a server emitting the field as a
+            # constant, or counting reasoning under content) makes every completion token
+            # look like visible content, divided by a window that covers the content deltas
+            # alone -- 400 reasoning + 100 content tokens publishes 5x the visible count.
+            # resolve_token_accounting reconciles that split or refuses it (S2-F5).
+            and not (accounting_reasoning_text and usage_reasoning_tokens == 0)
         ):
             if usage_reasoning_tokens > completion_tokens:
                 raise TransportError(

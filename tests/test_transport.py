@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1016,3 +1017,77 @@ def test_headers_then_stall_respects_request_deadline(server):
     assert observation.ok is False
     assert observation.error == "request timed out"
     assert time.monotonic() - started < 3.0
+
+
+class _StalledStream:
+    """A chunked SSE response that ends mid-event and then holds the connection open.
+
+    ``SseHandler`` always finishes its stream and closes, so it cannot present the shape
+    the drain has to survive: a stalled stream whose reader still holds framing bytes.
+    """
+
+    def __init__(self, payload: bytes) -> None:
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(1)
+        self.port = self._listener.getsockname()[1]
+        self.base_url = f"http://127.0.0.1:{self.port}/v1"
+        self._payload = payload
+        self._release = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        try:
+            connection, _ = self._listener.accept()
+        except OSError:
+            return
+        with connection:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                piece = connection.recv(4096)
+                if not piece:
+                    return
+                request += piece
+            connection.sendall(self._payload)
+            self._release.wait(timeout=10.0)
+
+    def stop(self) -> None:
+        self._release.set()
+        self._listener.close()
+        self._thread.join(timeout=5.0)
+
+
+def test_a_partial_event_that_stalls_ends_at_the_deadline_and_not_in_a_read():
+    """A drain must not turn a stalled stream into a blocking read.
+
+    The chunk written here holds half an SSE event. Once the reader has returned it, what
+    is left buffered is the chunk's own terminator, and the next chunk-size line never
+    comes. A drain that reads again whenever the reader holds *any* bytes calls ``read1``
+    there, which has to read the socket for that line — and the stream socket has no
+    timeout, so the request would sit until the server closed (10 s) instead of reaching
+    its 1 s deadline.
+    """
+    partial = b'data: {"choices": [{"delta": {"cont'
+    server = _StalledStream(
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: text/event-stream\r\n"
+        b"Transfer-Encoding: chunked\r\n"
+        b"\r\n"
+        + f"{len(partial):x}\r\n".encode()
+        + partial
+        + b"\r\n"
+    )
+    try:
+        started = time.monotonic()
+        observation = chat(
+            server.base_url, "model", MESSAGES, max_tokens=16, timeout_s=1.0
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        server.stop()
+
+    assert observation.ok is False
+    assert observation.error == "request timed out"
+    assert elapsed < 3.0
