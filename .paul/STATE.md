@@ -94,7 +94,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 Last session: 2026-11-16 (Claude Opus 5.5 coordinator)
 Stopped at: 05-08 closed and merged to main (local, not pushed). Command Code untouched (weekly 88%); 05-08 ran on coordinator + Claude subagents.
 Next action: `/paul:plan` 05-09 (plan C: process identity, locks, ledger — S1-F1, S1-F2, S3-F16, S4-F13, S5-F3/F4/F5/F10/F11/F13/F14). Live Phase 5 checks (Stop now, real download) are now possible whenever Jason says when.
-Resume file: `.paul/phases/v5-onboarding/05-08-SUMMARY.md`
+Resume file: `.paul/HANDOFF.md` (plan C start, worker routing while Command Code is limited)
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).

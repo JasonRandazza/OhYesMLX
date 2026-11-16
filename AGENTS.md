@@ -111,6 +111,10 @@ profile names (`orca-fleet routes`; the `fleet-provider-routing` skill has the m
 2026-09-24 `implement`/`refactor` run DeepSeek v4.1 flash, `test`/`explain` MiMo flash, `review`
 MiMo pro; Luna is explicit-only). Claude Opus orchestrates and is the final reviewer.
 
+**Exception while Command Code is limited (Jason, 2026-11-16):** do not dispatch `cc-agent` unless he says so;
+workers are Claude Code subagents with a model and effort fitted to each task, or the coordinator itself.
+`.paul/HANDOFF.md` has the routing and its traps. Every other rule in this contract still applies.
+
 A worker dispatch always carries: the plan's acceptance criteria, the exact files it may
 touch, and "touch nothing else."
 
