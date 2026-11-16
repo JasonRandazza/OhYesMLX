@@ -1099,7 +1099,11 @@ def test_every_failed_request_is_still_retained_as_an_observation(harness):
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
 
-    assert len(results[0].observations) == MEASURED
+    # 05-07 (S2-F8): a hung engine's visit ends after HUNG_AFTER_TIMEOUTS consecutive timeouts,
+    # so fewer requests are made -- and every one that was made is still on the row.
+    made = results[0].warmup_observations + results[0].observations
+    assert made and all(not observation.ok for observation in made)
+    assert len(results[0].observations) < MEASURED
     assert results[0].status == "FAIL"
     assert results[0].runtime_version == "0.31.3"
 
@@ -1437,16 +1441,19 @@ def test_a_runtime_that_will_not_start_is_na_and_does_not_end_the_run(harness):
     assert broken.attempts == 2
 
 
-def test_a_second_visit_that_will_not_start_fails_rather_than_passes(harness):
-    """The samples that were taken stand, and the visit that did not happen is not hidden."""
+def test_a_second_visit_that_will_not_start_is_recorded_and_judged_on_its_samples(harness):
+    """The samples that were taken stand, and the visit that did not happen is not hidden.
+
+    05-07 (S2-F7): a lost later visit is judged like a lost first one -- on the samples held,
+    with the loss kept as ``lost_visit_reason`` -- rather than failing the row by itself."""
     harness.add_runtime("mlxlm", start_error=RuntimeError("port still held by a stale server"),
                         fail_from_attempt=2)
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
 
-    assert results[0].status == "FAIL"
-    assert "did not start" in results[0].reason
-    assert "port still held" in results[0].reason
+    assert results[0].status == "PASS"
+    assert "did not start" in results[0].lost_visit_reason
+    assert "port still held" in results[0].lost_visit_reason
     assert len(results[0].observations) == 3
     assert results[0].cold_load_s == pytest.approx(7.5)
 
@@ -1504,20 +1511,19 @@ def test_a_cell_whose_every_visit_measured_keeps_the_record_it_always_had(harnes
     assert "cold_load_after_lost_visit" not in record
 
 
-def test_a_visit_that_fails_last_changes_nothing_new(harness):
-    """The other direction, and why the field is written only where a reason was overwritten:
-    the visit that measured was the first one, so nothing is erased and the record gains
-    nothing -- the row keeps the failure as its own reason, as it always did."""
+def test_a_visit_that_fails_last_is_recorded_like_one_that_fails_first(harness):
+    """The other direction (05-07, S2-F7): the visit that measured was the first one, and the
+    lost later visit is kept as ``lost_visit_reason`` exactly as a lost first visit is. The
+    start that recorded cold_load_s was the first, so that flag stays absent."""
     harness.add_runtime("mlxlm", start_error=RuntimeError("port still held by a stale server"),
                         fail_from_attempt=2)
 
     results = harness.run([harness.cell("oq__mlxlm", "mlxlm")])
     record, = harness.lines()
 
-    assert results[0].status == "FAIL"
-    assert "port still held" in results[0].reason
-    assert results[0].lost_visit_reason is None
-    assert "lost_visit_reason" not in record
+    assert results[0].status == "PASS"
+    assert "port still held" in results[0].lost_visit_reason
+    assert "lost_visit_reason" in record
     assert "cold_load_after_lost_visit" not in record
 
 
@@ -1592,7 +1598,7 @@ def test_the_leaderboard_of_a_run_with_a_lost_visit_says_both_things(harness, tm
     leaderboard = (run_dir / "leaderboard.md").read_text(encoding="utf-8")
 
     assert code == 0
-    assert "a visit to this cell was lost before the one that measured" in leaderboard
+    assert "a visit to this cell was lost: " in leaderboard
     assert "port still held by a stale server" in leaderboard
     assert "cold load s and first request s are from a later start" in leaderboard
     assert "short measured window: 4 of 9 pinned batches landed" in leaderboard

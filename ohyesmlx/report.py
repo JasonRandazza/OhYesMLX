@@ -366,6 +366,7 @@ _METRIC_ABSENCE = {
     "ttft_p50_s": "percentile_note",
     "ttft_p90_s": "percentile_note",
     "ttft_p99_s": "percentile_note",
+    "peak_mb": "memory_note",
 }
 
 
@@ -862,7 +863,10 @@ def _row(result: CellResult, *, measured: int | None = None) -> dict:
         "prefill_tps": median(prefill),
         "cold_load_s": result.cold_load_s,
         "first_request_s": result.first_request_s,
-        "peak_mb": (result.memory or {}).get("peak_mb"),
+        "peak_mb": None
+        if (result.memory or {}).get("error")
+        else (result.memory or {}).get("peak_mb"),
+        "memory_note": (result.memory or {}).get("error"),
         "disk_bytes": result.disk_bytes,
         "runtime_version": result.runtime_version,
         "percentile_note": None
@@ -956,8 +960,8 @@ def _lost_visit_note(result: CellResult) -> str | None:
     if result.lost_visit_reason is None:
         return None
     return (
-        "a visit to this cell was lost before the one that measured: "
-        f"{result.lost_visit_reason}; the samples on this row are the surviving visit's"
+        "a visit to this cell was lost: "
+        f"{result.lost_visit_reason}; the samples on this row are the surviving visits'"
     )
 
 
@@ -1098,6 +1102,13 @@ def _floor_verdicts(status, reason) -> dict:
         floors = [
             _verdict("coherence", "fail", reason),
             _verdict("metrics", "not reached"),
+        ]
+    elif status != "PASS" and reason and any(
+        phrase in reason for phrase in measure.NOT_JUDGED
+    ):
+        floors = [
+            _verdict("coherence", "not reached"),
+            _verdict("metrics", "fail", reason),
         ]
     elif status != "PASS":
         floors = [
@@ -1303,6 +1314,7 @@ def _cells(row: dict) -> list[str]:
                 row.get("reasoning_timed_note"),
                 row.get("delta_note"),
                 row.get("drift_note"),
+                row.get("memory_note"),
                 row.get("cold_load_note"),
                 row.get("first_request_note"),
             )
@@ -1496,9 +1508,11 @@ def _check_known_runtime_versions(runs: list[tuple]) -> None:
 
 def _check_harness(runs: list[tuple]) -> None:
     seen = None
+    unstamped = []
     for label, header, _rows in runs:
         harness = header.get("harness")
         if harness is None:
+            unstamped.append(label)
             continue
         source_sha256 = harness.get("source_sha256")
         if seen is not None and seen[1] != source_sha256:
@@ -1508,6 +1522,11 @@ def _check_harness(runs: list[tuple]) -> None:
             )
         if seen is None:
             seen = (label, source_sha256)
+    if seen is not None and unstamped:
+        raise ValueError(
+            f"harness stamp missing from {', '.join(unstamped)}; mixed stamped and legacy "
+            "runs cannot be compared as one join"
+        )
 
 
 def _check_pins(runs: list[tuple], *, varying: str | None = None) -> None:

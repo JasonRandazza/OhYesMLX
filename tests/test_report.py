@@ -1248,7 +1248,7 @@ def test_a_lost_visit_and_the_later_start_it_left_behind_are_both_visible():
     )[0]
 
     assert row["status"] == "PASS"
-    assert "a visit to this cell was lost before the one that measured" in row["lost_visit_note"]
+    assert "a visit to this cell was lost: " in row["lost_visit_note"]
     assert LOST_REASON in row["lost_visit_note"]
     assert "later start" in row["cold_load_note"]
     assert "not the cell's cold start" in row["cold_load_note"]
@@ -1260,7 +1260,7 @@ def test_a_lost_visit_and_the_later_start_it_left_behind_are_both_visible():
     assert "short measured window: 4 of 9" in printed["notes"]
 
     card = card_blocks(report.render_cards([row]))[("chat", "oq4__mlxlm")]
-    assert "| status | PASS | a visit to this cell was lost before the one that measured" in card
+    assert "| status | PASS | a visit to this cell was lost: " in card
     assert "| n measured | 4 | short measured window: 4 of 9 pinned batches landed" in card
     assert "| cold_load_s | 12.50 | cold load s and first request s are from a later start" in card
 
