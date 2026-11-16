@@ -39,7 +39,7 @@ def test_a_lock_whose_owner_pid_belongs_to_another_process_is_reclaimed(tmp_path
         "never reclaimed, so every later download and eviction answers busy with "
         "'another download is already running'"
     )
-    assert lock.read_text(encoding="utf-8").strip() == str(os.getpid())
+    assert fetch._read_lock(str(lock))[0] == os.getpid()
     fetch._release_lock(str(lock))
 
 

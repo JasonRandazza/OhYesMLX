@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import pathlib
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1781,3 +1782,40 @@ def test_a_file_no_larger_than_one_chunk_emits_only_the_per_file_event(tmp_path)
     assert in_flight(harness) == []
     assert harness.events[1]["fraction"] == 1.0
     assert harness.events[1]["payload"] == {"path": "weights.safetensors", "bytes": 500}
+
+
+# --- lock ownership by process identity (05-09 AC-6) ---
+
+
+def test_lock_records_identity_and_release_removes_it(tmp_path):
+    lock = tmp_path / fetch.LOCK_NAME
+    assert fetch._acquire_lock(str(lock)) is True
+    pid, _identity = fetch._read_lock(str(lock))
+    assert pid == os.getpid()
+    fetch._release_lock(str(lock))
+    assert not lock.exists()
+
+
+def test_json_lock_with_matching_live_identity_is_busy(tmp_path):
+    from ohyesmlx import runtimes
+
+    ident = runtimes._own_identity()
+    lock = tmp_path / fetch.LOCK_NAME
+    lock.write_text(json.dumps({"pid": os.getpid(), "lstart": ident[0], "argv": ident[1]}))
+    assert fetch._acquire_lock(str(lock)) is False
+
+
+def test_json_lock_with_mismatched_identity_is_reclaimed(tmp_path):
+    lock = tmp_path / fetch.LOCK_NAME
+    lock.write_text(json.dumps({"pid": os.getpid(), "lstart": "x", "argv": "not this"}))
+    assert fetch._acquire_lock(str(lock)) is True
+    fetch._release_lock(str(lock))
+
+
+def test_old_empty_lock_is_reclaimed(tmp_path):
+    lock = tmp_path / fetch.LOCK_NAME
+    lock.write_text("")
+    old = time.time() - fetch.LOCK_WRITE_WINDOW_S - 5
+    os.utime(lock, (old, old))
+    assert fetch._acquire_lock(str(lock)) is True
+    fetch._release_lock(str(lock))

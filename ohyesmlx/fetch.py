@@ -351,20 +351,44 @@ def _ledger_save(path, payload: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _pid_alive(pid: int) -> bool:
+# An empty or unreadable lock younger than this is a live owner between its `O_EXCL` create and
+# its identity write (microseconds in practice), so it is held, not reclaimed; older is debris
+# from an owner that died in that window. Ten seconds covers a stalled disk without keeping
+# debris for long.
+LOCK_WRITE_WINDOW_S = 10.0
+
+
+def _read_lock(path: str):
+    """``(pid, identity)`` the lock names, or ``None`` when empty or unparseable.
+
+    A bare integer is the legacy format: a pid with no identity.
+    """
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read().strip()
     except OSError:
-        return True
-    return True
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value, None
+    if isinstance(value, dict) and isinstance(value.get("pid"), int):
+        lstart, argv = value.get("lstart"), value.get("argv")
+        if isinstance(lstart, str) and isinstance(argv, str):
+            return value["pid"], (lstart, argv)
+        return value["pid"], None
+    return None
 
 
 def _acquire_lock(path: str) -> bool:
-    """Create the lock file, reclaiming one whose pid is gone; False means busy."""
+    """Create the lock file, reclaiming one whose owner is gone; False means busy.
+
+    The owner is checked by :func:`runtimes.same_process`, the one liveness definition.
+    """
+    from ohyesmlx import runtimes
+
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -372,32 +396,36 @@ def _acquire_lock(path: str) -> bool:
         try:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
-            try:
-                with open(path, encoding="utf-8") as handle:
-                    pid = int(handle.read().strip())
-            except (OSError, ValueError):
-                pid = None
-            if pid is not None and _pid_alive(pid):
-                return False
+            owner = _read_lock(path)
+            if owner is not None:
+                if runtimes.same_process(*owner):
+                    return False
+            else:
+                try:
+                    age = time.time() - os.stat(path).st_mtime
+                except OSError:
+                    continue  # removed since: try the create again
+                if age < LOCK_WRITE_WINDOW_S:
+                    return False
             try:
                 os.remove(path)
             except OSError:
                 return False
             continue
+        identity = runtimes._own_identity()
+        record = {"pid": os.getpid()}
+        if identity is not None:
+            record["lstart"], record["argv"] = identity
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(str(os.getpid()))
+            handle.write(json.dumps(record))
         return True
     return False
 
 
 def _release_lock(path: str) -> None:
     """Remove the lock only while it still names this process."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            owner = int(handle.read().strip())
-    except (OSError, ValueError):
-        return
-    if owner != os.getpid():
+    owner = _read_lock(path)
+    if owner is None or owner[0] != os.getpid():
         return
     try:
         os.remove(path)
