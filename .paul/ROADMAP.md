@@ -28,7 +28,21 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 3 | Models (catalog, recommender, fetch) | Complete 2026-11-02 (reviewed) |
 | 4 | Server and quickbench | Complete 2026-11-03 (reviewed, UAT 8/8) |
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Complete 2026-11-13 (045-01, 02a, 02b, 03; reviewed; clean-account smoke 21/21; `PHASE-4.5-SUMMARY.md`) |
-| 5 | SwiftUI app and packaging | Built + reviewed 2026-11-14 (05-01..05-06); Fable fix plans 05-07..05-13 — 05-07, 05-08 and 05-09 closed 2026-11-16; open: clean-account smoke, live checks, UAT |
+| 5 | SwiftUI app and packaging | Built + reviewed 2026-11-14 (05-01..05-06); Fable fix plans 05-07..05-13 — 05-07, 05-08 and 05-09 closed 2026-11-16; **05-10b inserted after plan D** (port independence, Jason 2026-11-16); open: clean-account smoke, live checks, UAT |
+
+### Plan 05-10b — Port independence [INSERTED 2026-11-16, runs after 05-10 / plan D]
+
+Jason's call after 05-09: the harness passes `--port` to all six runtimes, but the ports are fixed in `RUNTIMES` and a
+resident engine is detected only by those six ports. A user's engine on a non-default port is invisible to the
+one-model-resident check, and an unrelated server on a default port blocks every start.
+
+- **In scope:** (1) detect resident engines by process (`ps` argv against each engine's executables/modules, as
+  Osaurus is already matched) and read the port they listen on from `lsof`; the start refusal names the engine, pid
+  and port. (2) Default ports stay; when a default is held by a non-engine, pick a free port, pass it with `--port`,
+  and record the port on every row. No engine settings file is touched.
+- **Not in scope unless (2) proves insufficient:** (3) a user-set per-engine port override (CLI flag or app setting) —
+  a new surface, needs Jason's yes.
+- Red tests first; plan → audit → apply → two-axis review → unify, as A–C.
 
 ## Current Milestone
 
