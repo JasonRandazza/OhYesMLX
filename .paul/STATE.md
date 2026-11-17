@@ -98,7 +98,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 Last session: 2026-11-16 (Claude Opus 5.5 coordinator)
 Stopped at: 05-10 closed and merged to main `9dcc568` (local, not pushed); 05-09 closed and merged to main (local, not pushed). Known flaky Swift test (pre-existing, ~1 in 6): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail` (stderr reader vs stdout EOF race).
-Next action: `/paul:plan` 05-10b (port independence; scope in ROADMAP), 05-10b (port independence; scope in ROADMAP). Live Phase 5 checks (Stop now, real download) are now possible whenever Jason says when.
+Next action: `/paul:plan` 05-10b (port independence; scope in ROADMAP). Live Phase 5 checks (Stop now, real download) are now possible whenever Jason says when.
 Resume file: `.paul/phases/v5-onboarding/05-10-SUMMARY.md` (routing and traps: `.paul/HANDOFF.md`)
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
