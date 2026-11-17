@@ -40,14 +40,15 @@ True the cell's record is replaced by status `"ABORTED"` with reason `"stopped b
 is reported"` and no figures, and the run ends `"cancelled"` exactly as a between-cell cancel does (the
 in-flight cell's stop path, sibling eviction and the Osaurus restore still run; the cell's raw rows stay on disk
 because raw observations are never discarded). `"ABORTED"` joins the cell statuses in `v5-quickbench.md`; an
-ABORTED cell never wins and is never compared. If the engine had not yet written its ledger entry when the
-abort arrived, nothing is stopped, the cell runs to its own end and is still recorded `ABORTED`: the worst case
-of "Stop now" is "Stop after this cell" with the number discarded.
+ABORTED cell never wins and is never compared. Since 05-09 the engine is in the ledger from its spawn, so an
+abort during the load stops it too (below).
 
 **Stop now during a load (plan 05-09, S5-F5).** The engine is in the ledger from its spawn: `Runtime.start`
 writes the entry (pid, identity, port) right after `_spawn` and before it awaits readiness, and writes it again
-after readiness with `serving_pid` (replace by pid, no duplicate). The first write is timed and taken out of
-`cold_load_s`. So a Stop now (or a launch after a killed backend) during the load already finds and stops the
+after readiness with `serving_pid` (replace by pid, no duplicate). The first write is one `ps` and a file and is
+not subtracted from `cold_load_s` (the engine loads while it runs); an earlier process's file at the same path is
+settled before the load clock starts. Identity is compared by start time, since oMLX, vMLX and MTPLX `exec` from a
+shell script and change argv. So a Stop now (or a launch after a killed backend) during the load already finds and stops the
 engine. A start that fails and whose own cleanup succeeds forgets the entry; one whose cleanup fails keeps it.
 A `RuntimeStopError` from a cell ends the quickbench run (summary `ended: "error"`, no later cell started, the
 Osaurus restore still run) rather than being recorded as one `FAIL` cell.

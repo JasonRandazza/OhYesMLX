@@ -3787,20 +3787,59 @@ def test_the_engine_is_recorded_right_after_the_spawn_and_again_after_readiness(
     assert late[1:] == (handle.pid, handle.memory_pid, 8081)
 
 
-def test_a_slow_ledger_write_does_not_move_cold_load_s(rig, monkeypatch):
-    """The early write is timed and taken out of ``cold_load_s`` (05-07 AC-4)."""
+def test_settling_an_earlier_processs_ledger_is_outside_cold_load_s(rig, monkeypatch):
+    """Settling a predecessor's file may stop an engine; it runs before the load clock starts.
+
+    The early write itself is not subtracted (05-09 review): the engine goes on loading while
+    it runs, so subtracting it would under-report the load.
+    """
     rig.spawn_seconds = 2.5
     rig.inventory = (HF_ID,)
     baseline = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID).cold_load_s
 
-    def slow_first_write(pid, serving_pid, port):
-        if serving_pid == pid:
-            rig.clock.advance(30.0)
+    real_adopt = runtimes._adopt_ledger
+    calls = []
 
-    monkeypatch.setattr(runtimes, "_record_running_engine", slow_first_write)
+    def slow_settle(path=None):
+        # The first call (before the clock) settles a predecessor; the ones inside the record
+        # find this process's own file and cost nothing, as the real one does.
+        calls.append(path)
+        if len(calls) == 1:
+            rig.clock.advance(30.0)
+        return real_adopt(path)
+
+    monkeypatch.setattr(runtimes, "_adopt_ledger", slow_settle)
     slow = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID).cold_load_s
 
     assert slow == baseline
+
+
+def test_same_process_holds_across_an_exec_that_changes_argv(monkeypatch):
+    """oMLX, vMLX and MTPLX start as `/bin/sh <script>` and `exec` Python: same pid, same start
+    time, new argv. Recorded at the spawn, the entry must still prove the server later."""
+    lstart = "Mon Nov 16 22:00:00 2026"
+    monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
+    monkeypatch.setattr(runtimes.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(
+        runtimes, "_process_identity", lambda pid: (lstart, "python -m omlx.cli serve")
+    )
+
+    assert runtimes.same_process(4242, (lstart, "/bin/sh /Users/x/.omlx/bin/omlx serve"))
+    assert not runtimes.same_process(4242, ("Mon Nov 16 21:59:59 2026", "python -m omlx.cli serve"))
+
+
+def test_an_orphan_dropped_for_a_stranger_on_its_port_says_so(tmp_path, monkeypatch, capsys):
+    """Never signalled, never silent: the drop is one ledger line naming the stranger."""
+    entry = {"pid": 5150, "serving_pid": 5150, "port": 1337, "lstart": "x", "argv": "y"}
+    shutdowns = []
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (6060,))
+    monkeypatch.setattr(runtimes, "_shutdown", lambda *args: shutdowns.append(args))
+
+    assert runtimes._stop_orphan(entry) is None
+
+    assert shutdowns == []
+    err = capsys.readouterr().err
+    assert runtimes.LEDGER_ERROR_CODE in err and "6060" in err
 
 
 def test_a_failed_ledger_write_after_the_spawn_is_one_stderr_line_and_the_start_goes_on(

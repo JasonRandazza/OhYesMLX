@@ -698,9 +698,9 @@ def _resident_osaurus_pids() -> tuple[int, ...]:
         pid_text, _, argv = line.strip().partition(" ")
         argv0 = argv.split(maxsplit=1)[:1]
         if pid_text.isdigit() and argv0 and argv0[0] in OSAURUS_APP_EXECUTABLES:
-            pid = int(pid_text)
-            if _process_alive(pid):
-                pids.append(pid)
+            # `ps` just listed it, so it is alive; `_process_alive` is not asked, because its
+            # reaped-pid answer is about this process's own children, not a listed app.
+            pids.append(int(pid_text))
     return tuple(pids)
 
 
@@ -1853,8 +1853,8 @@ def _process_identity(pid: int) -> tuple[str, str] | None:
 
     Both halves come from one call so a recovered ledger entry is compared with the process it
     was recorded from: the start time tells a reused pid from the engine this harness spawned,
-    and the argv tells the user's own identical command from it. Compared only by
-    :func:`same_process`.
+    and the argv is kept beside it for whoever reads the ledger. Compared only by
+    :func:`same_process`, which compares the start time alone (it says why).
     """
     result = _run(_identity_command(pid), STOP_TIMEOUT_S)
     if result is None:
@@ -1899,14 +1899,22 @@ def same_process(pid: int, identity: tuple[str, str] | None = None) -> bool:
     its cached identity without a ``ps``.
     """
     if pid == os.getpid():
-        return identity is None or identity == _own_identity()
+        own = _own_identity()
+        return identity is None or (own is not None and own[0] == identity[0])
     if not _process_alive(pid):
         return False
     try:
         os.kill(pid, 0)
     except OSError:  # PermissionError: another user's. ProcessLookupError: gone since.
         return False
-    return identity is None or _process_identity(pid) == identity
+    if identity is None:
+        return True
+    current = _process_identity(pid)
+    # The start time, not the argv, is the proof: oMLX, vMLX and MTPLX start through a shell
+    # script that `exec`s Python, so the argv read right after the spawn is `/bin/sh ...` and
+    # the one read later is the server's -- the same process, same pid and start time. A
+    # reused pid has a later start time. The argv is recorded for the reader, not compared.
+    return current is not None and current[0] == identity[0]
 
 
 def _record_running_engine(
@@ -1934,19 +1942,19 @@ def _record_running_engine(
     they go through :func:`_settle_orphans` first, and the ones it keeps are carried forward
     marked ``inherited`` -- which "Stop now" skips and the next launch's sweep handles.
     """
-    identity = _process_identity(pid)
-    serving_identity = identity if serving_pid == pid else _process_identity(serving_pid)
+    # A pid this process has reaped may already be someone else's: record no identity for it,
+    # so nothing later can "prove" a stranger is the engine (`_REAPED_PIDS`).
+    identity = None if pid in _REAPED_PIDS else _process_identity(pid)
+    if serving_pid == pid:
+        serving_identity = identity
+    else:
+        serving_identity = None if serving_pid in _REAPED_PIDS else _process_identity(serving_pid)
     lstart, argv = identity if identity is not None else (None, None)
     serving_lstart, serving_argv = (
         serving_identity if serving_identity is not None else (None, None)
     )
     path = _ledger_path()
-    owner, entries = _read_ledger(path)
-    if entries and not _owned_by_this_process(owner):
-        kept, failures = _settle_orphans(entries)
-        for failure in failures:
-            stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": failure}})
-        entries = [{**entry, "inherited": True} for entry in kept]
+    entries = _adopt_ledger(path)
     entries = [entry for entry in entries if entry.get("pid") != pid]
     entries.append(
         {
@@ -1960,6 +1968,26 @@ def _record_running_engine(
         }
     )
     _write_ledger(path, entries)
+
+
+def _adopt_ledger(path: Path | None = None) -> list[dict]:
+    """This process's ledger entries, settling first a file an earlier process left at its path.
+
+    A file at this process's path that this process did not write is an earlier process's
+    orphan: its entries go through :func:`_settle_orphans` (which may stop an engine, so this
+    can take a stop's time) and the ones kept are returned marked ``inherited``. A file this
+    process wrote is returned as it is. :meth:`Runtime.start` calls this before its load clock
+    starts, so the ledger write inside the load window is one ``ps`` and a file.
+    """
+    path = _ledger_path() if path is None else path
+    owner, entries = _read_ledger(path)
+    if entries and not _owned_by_this_process(owner):
+        kept, failures = _settle_orphans(entries)
+        for failure in failures:
+            stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": failure}})
+        entries = [{**entry, "inherited": True} for entry in kept]
+        _write_ledger(path, entries)
+    return entries
 
 
 def _forget_running_engine(pid: int) -> None:
@@ -2029,7 +2057,22 @@ def _stop_orphan(entry: dict) -> str | None:
     if listeners is None:
         return "port unreadable"
     recorded = (pid, entry.get("serving_pid"))
-    if any(listener not in recorded for listener in listeners):
+    strangers = [listener for listener in listeners if listener not in recorded]
+    if strangers:
+        # Never signalled. For Osaurus this is also how a load killed before readiness looks
+        # (the app took the port; the entry names only the launcher): the resident-app check
+        # then refuses every start and names the app, so the line says what was let go.
+        stderr_json(
+            {
+                "error": {
+                    "code": LEDGER_ERROR_CODE,
+                    "message": (
+                        f"dropped orphan entry for pid {pid} on port {port}: the port is held "
+                        f"by unrecorded pid(s) {', '.join(map(str, strangers))}; not signalled"
+                    ),
+                }
+            }
+        )
         return None
     targets = list(listeners)
     if _process_alive(pid) and pid not in targets:
@@ -2561,24 +2604,29 @@ class Runtime:
         pid = None
         try:
             command, _env = _engine_command(self.name, command)
+            # An earlier process's file at this path is settled before the load clock starts:
+            # settling may stop an engine, and that is no part of this one's load.
+            try:
+                _adopt_ledger()
+            except Exception as error:
+                stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
             started = _now()
             pid = _spawn(command, log_path)
             # AC-5: the engine is in the ledger before it is awaited, so a harness killed or a
-            # "Stop now" pressed mid-load still names it. The write (a `ps` and a file) is timed
-            # and taken out of cold_load_s below. A failed write never fails the start.
-            ledger_started = _now()
+            # "Stop now" pressed mid-load still names it. The write is one `ps` and a file, and
+            # it is not subtracted: the engine goes on loading while it runs, so it delays only
+            # the first readiness poll. A failed write never fails the start.
             try:
                 _record_running_engine(pid, pid, self.port)
             except Exception as error:
                 stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
-            ledger_s = _now() - ledger_started
             resolved = self.await_ready(
                 pid=pid,
                 log_path=log_path,
                 artifact_dir=artifact_dir,
                 model_id=model_id,
             )
-            cold_load_s = _now() - started - ledger_s
+            cold_load_s = _now() - started
             version = self.version()
             host_model_options = self.host_model_options(resolved)
         except BaseException as start_error:
