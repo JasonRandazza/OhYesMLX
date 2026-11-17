@@ -9,6 +9,8 @@ under test.
 
 from __future__ import annotations
 
+import os
+
 import subprocess
 from collections import namedtuple
 
@@ -54,7 +56,12 @@ def no_volumes():
 
 def scan_hw(answers):
     """``scan`` driven by the chip answers alone, with no volume inspected."""
-    return scan(run=fake_run(answers), volume_paths=no_volumes)
+    return scan(
+        run=fake_run(answers),
+        disk_usage=fake_disk_usage({"/": 0}),
+        volume_paths=no_volumes,
+        cache_dir="/",
+    )
 
 
 IOREG_AGX = (IOREG, "-rc", "AGXAccelerator", "-d1")
@@ -244,11 +251,12 @@ def test_an_unknown_future_apple_chip_stays_supported_at_base_tier():
     assert hw.unsupported_reason is None
 
 
-def test_disk_free_bytes_is_the_root_volumes_free_space():
+def test_disk_free_bytes_is_the_cache_volumes_free_space():
     hw = scan(
         run=fake_run(M2_MAX_64),
         disk_usage=fake_disk_usage({"/": 123456789012}),
         volume_paths=lambda: ["/"],
+        cache_dir="/",
     )
     assert hw.disk_free_bytes == 123456789012
 
@@ -258,6 +266,7 @@ def test_volumes_are_reported_in_volume_path_order():
         run=fake_run(M2_MAX_64),
         disk_usage=fake_disk_usage({"/": 123456789012, "/Volumes/Ext": 987654321}),
         volume_paths=lambda: ["/", "/Volumes/Ext"],
+        cache_dir="/",
     )
     assert hw.volumes == [
         {"path": "/", "free_bytes": 123456789012},
@@ -277,6 +286,7 @@ def test_an_unreadable_volume_is_skipped_and_the_rest_remain():
             }
         ),
         volume_paths=lambda: ["/", "/Volumes/Gone", "/Volumes/Ext"],
+        cache_dir="/",
     )
     assert hw.volumes == [
         {"path": "/", "free_bytes": 123456789012},
@@ -292,9 +302,21 @@ def test_an_unreadable_root_reports_zero_free_and_leaves_the_other_volumes():
             {"/": OSError("no such volume"), "/Volumes/Ext": 987654321}
         ),
         volume_paths=lambda: ["/", "/Volumes/Ext"],
+        cache_dir="/",
     )
     assert hw.disk_free_bytes == 0
     assert hw.volumes == [{"path": "/Volumes/Ext", "free_bytes": 987654321}]
+
+
+def test_disk_free_bytes_follows_the_cache_not_the_root_volume(tmp_path):
+    cache_volume = os.path.realpath(tmp_path)
+    hw = scan(
+        run=fake_run(M2_MAX_64),
+        disk_usage=fake_disk_usage({"/": 123456789012, cache_volume: 987654321}),
+        volume_paths=lambda: ["/"],
+        cache_dir=str(tmp_path / "hub"),  # not created yet: the nearest existing parent is asked
+    )
+    assert hw.disk_free_bytes == 987654321
 
 
 def test_model_budget_takes_two_thirds_of_ram_under_36_gib_less_two_gib():

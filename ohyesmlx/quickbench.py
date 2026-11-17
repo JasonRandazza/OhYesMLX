@@ -53,6 +53,7 @@ from ohyesmlx import (
     report,
     runtimes,
 )
+from ohyesmlx.hardware import free_bytes_at
 from ohyesmlx.hardware import scan as _scan_hardware
 
 # D9's light cell, defined once and used by both stages. A quick cell is the same request
@@ -137,6 +138,7 @@ class QuickPlan:
     download_bytes: int
     osaurus: bool
     estimate_s: int
+    free_after_bytes: int = 0  # plan() always sets it; the default keeps older constructors valid
 
 
 def _print_event(event: dict) -> None:
@@ -300,17 +302,22 @@ def plan(
         )
         for sibling in catalog.siblings(model, models)
     ]
-    missing_bytes = sum(
-        sibling.size_bytes for sibling in stage_b if not sibling.downloaded
+    models_by_repo = {candidate.repo: candidate for candidate in models}
+    to_fetch = sum(
+        fetch.missing_bytes(models_by_repo[sibling.repo], cache_dir)
+        for sibling in stage_b
+        if not sibling.downloaded
     )
+    cache = cache_dir or fetch.default_cache_dir()
     return QuickPlan(
         repo=model.repo,
         format=model.format,
         stage_a=stage_a,
         stage_b=stage_b,
-        download_bytes=missing_bytes,
+        download_bytes=to_fetch,
+        free_after_bytes=max(0, free_bytes_at(cache) - to_fetch),
         osaurus=any(engine.engine == "osaurus" for engine in stage_a),
-        estimate_s=estimate_seconds(len(stage_a) + len(stage_b), missing_bytes),
+        estimate_s=estimate_seconds(len(stage_a) + len(stage_b), to_fetch),
     )
 
 

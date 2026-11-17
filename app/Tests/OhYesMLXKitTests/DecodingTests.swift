@@ -106,6 +106,7 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(plan.stageB.first?.sizeBytes, 1_794_528_789)
         XCTAssertEqual(plan.stageB.first?.downloaded, false)
         XCTAssertEqual(plan.downloadBytes, 1_794_528_789)
+        XCTAssertEqual(plan.freeAfterBytes, 41_583_077_867)
         XCTAssertTrue(plan.osaurus)
         XCTAssertEqual(plan.estimateS, 630)
     }

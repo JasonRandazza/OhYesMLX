@@ -727,6 +727,7 @@ public enum StubScenario: String, CaseIterable, Sendable {
                 )
             ],
             downloadBytes: 1_794_528_789,
+            freeAfterBytes: 41_583_077_867,
             osaurus: true,
             estimateS: 630
         )

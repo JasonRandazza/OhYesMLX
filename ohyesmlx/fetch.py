@@ -52,6 +52,7 @@ from dataclasses import dataclass
 
 from ohyesmlx import app_support_dir, atomic_write_text, catalog, engines
 from ohyesmlx.catalog import Model, disk_needed
+from ohyesmlx.hardware import free_bytes_at
 from ohyesmlx.hardware import scan as _scan_hardware
 
 # The one host a request may start at. Every hop after it must still be allowed.
@@ -919,7 +920,7 @@ def _download(
 
     # --- AC-6 / AC-16: missing bytes x the catalog's disk margin, before any request. ---
     needed = disk_needed(missing_bytes(planned.model, planned.cache_dir, present))
-    free = hardware().disk_free_bytes
+    free = free_bytes_at(planned.cache_dir)
     if free < needed:
         return _refuse(
             send,
@@ -1252,7 +1253,7 @@ def _download(
             send("log", f"reusing {planned_file.blob} ({planned_file.size} bytes already present)")
             continue
         required = disk_needed(_file_missing(planned_file, False))
-        free = hardware().disk_free_bytes
+        free = free_bytes_at(planned.cache_dir)
         if free < required:
             return _refuse(
                 send,

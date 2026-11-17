@@ -17,6 +17,8 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import shutil
+from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -390,6 +392,21 @@ def test_the_plan_names_the_siblings_and_only_the_missing_download_bytes(tmp_pat
     assert [sibling.repo for sibling in shown.stage_b] == [SIBLING.repo, SIBLING_2.repo]
     assert [sibling.downloaded for sibling in shown.stage_b] == [False, True]
     assert shown.download_bytes == SIBLING.size_bytes
+
+
+def test_the_plan_reports_free_after_from_the_cache_volume_and_floors_it_at_zero(
+    tmp_path, monkeypatch
+):
+    """S3-F10: the backend computes "free after" so the app does no arithmetic of its own."""
+    both = SIBLING.size_bytes + SIBLING_2.size_bytes
+    free = {"bytes": both + 5}
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: usage(0, 0, free["bytes"]))
+
+    assert a_plan(tmp_path).free_after_bytes == 5
+
+    free["bytes"] = 1
+    assert a_plan(tmp_path).free_after_bytes == 0
 
 
 def test_the_plan_estimate_is_per_cell_plus_the_download_at_the_constant_rate(tmp_path):

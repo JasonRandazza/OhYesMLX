@@ -62,6 +62,7 @@ final class SlowPlanBackend: Backend, @unchecked Sendable {
             stageA: plan.stageA,
             stageB: plan.stageB,
             downloadBytes: plan.downloadBytes,
+            freeAfterBytes: plan.freeAfterBytes,
             osaurus: plan.osaurus,
             estimateS: plan.estimateS
         )

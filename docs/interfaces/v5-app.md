@@ -112,6 +112,14 @@ connection, ends after `done`). Codable types mirror the pinned JSON exactly (sn
 `CodingKeys`, byte counts `Int64`); an error body decodes to `BackendError {code, status, message}` and the UI
 shows its `message` as the backend wrote it.
 
+**Free disk (plan 05-10, S4-F3, S3-F10).** `Hardware.disk_free_bytes` is the free space of the volume the
+Hugging Face cache lives on (`hardware.free_bytes_at(fetch.default_cache_dir())`), not of `/`: the number the
+Models toolbar and Your Mac show is the one both download guards use, and `volumes` still lists every volume.
+`GET /quickbench/plan` carries `free_after_bytes` (that volume's free bytes minus `download_bytes`, floored at 0),
+which Benchmark shows as "Free disk after"; the client does no disk arithmetic. `download_bytes` there counts only
+what is still to fetch (a partial sibling counts its remainder). `AppModel` re-reads `hardware()` beside
+`recommendations()` when a download or evict job ends.
+
 ## The app model (`AppModel`, plan 05-02; screens in 05-04/05-05)
 
 Screens: `launching`, `couldntStart`, `unsupported`, `moveToApplications`, `welcome`, `yourMac`, `engines`,

@@ -13,8 +13,9 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import time
-from types import SimpleNamespace
+from collections import namedtuple
 
 import pytest
 
@@ -178,8 +179,27 @@ class Clock:
         self.value += seconds
 
 
+_Usage = namedtuple("usage", "total used free")
+_CURRENT = []  # the Harness of the running test; its ``free`` is the cache volume's room
+
+
+@pytest.fixture(autouse=True)
+def _fake_disk_usage(monkeypatch):
+    """The guards ask ``hardware.free_bytes_at(cache_dir)``, which asks ``shutil.disk_usage``."""
+
+    def disk_usage(path):
+        free = _CURRENT[-1].free
+        free = free() if callable(free) else free
+        return _Usage(free, 0, free)
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
+
+
 class Harness:
-    """Every injected seam for one test, all rooted in ``tmp_path``."""
+    """Every injected seam for one test, all rooted in ``tmp_path``.
+
+    *free* is what the cache's volume reports (a number, or a callable asked at each guard).
+    """
 
     def __init__(self, tmp_path, models, transport, *, free=10**12, clock=1234.5):
         self.models = models
@@ -190,6 +210,7 @@ class Harness:
         self.log = self.support / "fetch-log.jsonl"
         self.locks = self.support / "locks"
         self.free = free
+        _CURRENT.append(self)
         self.clock = clock
         self.cancel = Flag()
         self.events = []
@@ -733,14 +754,15 @@ def test_disk_guard_refuses_before_any_request(tmp_path):
 def test_the_disk_guard_is_rechecked_before_each_file(tmp_path):
     model = make_model(TWO_FILES)
     transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
-    harness = Harness(tmp_path, [model], transport)
     calls = []
 
-    def hardware():
+    def free():
         calls.append(1)
-        return SimpleNamespace(disk_free_bytes=10**12 if len(calls) == 1 else 0)
+        return 10**12 if len(calls) == 1 else 0
 
-    assert harness.download(hardware=hardware) is False
+    harness = Harness(tmp_path, [model], transport, free=free)
+
+    assert harness.download() is False
 
     assert len(calls) == 2
     assert harness.codes() == ["low_disk"]

@@ -129,8 +129,35 @@ def _volume_paths(root: str = "/Volumes") -> list[str]:
     return paths
 
 
-def scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths) -> Hardware:
-    """Describe this Mac through *run* and its volumes through *disk_usage*."""
+def free_bytes_at(path: str, disk_usage=None) -> int:
+    """Free bytes on the volume that holds *path*, which need not exist yet.
+
+    The one disk-free definition (S4-F3): the nearest existing ancestor of *path*, resolved
+    through symlinks, asked of ``shutil.disk_usage`` -- looked up at call time, so a test
+    that replaces the module attribute is honoured (*disk_usage* is only for ``scan``'s own injection). ``scan``'s ``disk_free_bytes`` and both
+    download guards ask this, so the number the screens show is the number the guards use.
+    """
+    probe = os.path.realpath(path)
+    while not os.path.exists(probe) and os.path.dirname(probe) != probe:
+        probe = os.path.dirname(probe)
+    return (disk_usage or shutil.disk_usage)(probe).free
+
+
+def scan(
+    run=_run,
+    disk_usage=None,
+    volume_paths=_volume_paths,
+    cache_dir: str | None = None,
+) -> Hardware:
+    """Describe this Mac through *run* and its volumes through *disk_usage*.
+
+    ``disk_free_bytes`` is the free space of the volume the Hugging Face cache lives on
+    (*cache_dir*, else ``fetch.default_cache_dir()``), not of ``/``.
+    """
+    from ohyesmlx import fetch  # fetch imports this module; the cycle is broken here
+
+    disk_usage = disk_usage or shutil.disk_usage
+
     chip = run([SYSCTL, "-n", "machdep.cpu.brand_string"])
     ram_bytes = int(run([SYSCTL, "-n", "hw.memsize"]))
     cpu_cores = int(run([SYSCTL, "-n", "hw.ncpu"]))
@@ -141,15 +168,16 @@ def scan(run=_run, disk_usage=shutil.disk_usage, volume_paths=_volume_paths) -> 
         ioreg = ""
     family, tier = _chip_identity(chip)
     supported, reason = _support(chip, ram_bytes)
-    disk_free_bytes = 0
+    try:
+        disk_free_bytes = free_bytes_at(cache_dir or fetch.default_cache_dir(), disk_usage)
+    except OSError:
+        disk_free_bytes = 0
     volumes: list[dict] = []
     for path in volume_paths():
         try:
             free_bytes = disk_usage(path).free
         except OSError:
             continue
-        if path == "/":
-            disk_free_bytes = free_bytes
         volumes.append({"path": path, "free_bytes": free_bytes})
     return Hardware(
         supported=supported,

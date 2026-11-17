@@ -748,8 +748,10 @@ public final class AppModel {
         await task.value
         // AC-6: a download or an evict changes what is on disk, so the step ticks and the
         // Benchmark picker are re-read from the backend rather than left on stale rows.
+        // The free-disk figure moves with them (S3-F10), so the hardware is re-read too.
         if args.kind == .download || args.kind == .evict {
             await refreshRecommendations()
+            await refreshHardware()
         }
     }
 
@@ -794,9 +796,6 @@ public final class AppModel {
             refusal = error
             route(error: error, event: event, args: args)
             job = status
-            if args.kind == .download, code == "low_disk" {
-                await refreshHardware()
-            }
             return
         case .result:
             // Only a quickbench's result is the run's summary; a download's or an evict's is

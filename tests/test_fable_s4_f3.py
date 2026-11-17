@@ -198,7 +198,7 @@ def test_a_full_cache_volume_is_refused_even_when_the_root_volume_has_room(tmp_p
     )
     assert "low_disk" in codes, codes
     assert transport.calls == [], "the refusal must come before any request"
-    refusal = next(event for event in events if event["payload"].get("code") == "low_disk")
+    refusal = next(event for event in events if (event["payload"] or {}).get("code") == "low_disk")
     assert refusal["payload"]["free_bytes"] == TIGHT, (
         "the refusal must report the free space of the volume the cache is on, "
         f"not the root volume's {ROOMY}: {refusal['payload']!r}"
@@ -274,7 +274,7 @@ def test_the_per_file_guard_also_asks_the_cache_volume(tmp_path, monkeypatch):
     assert [url.rsplit("/", 1)[-1] for url, _headers in transport.calls] == [
         "weights.safetensors"
     ], "the second file must be refused before it is requested"
-    refusal = next(event for event in events if event["payload"].get("code") == "low_disk")
+    refusal = next(event for event in events if (event["payload"] or {}).get("code") == "low_disk")
     assert refusal["payload"]["free_bytes"] == 0, (
         f"the re-check must report the cache volume's free space: {refusal['payload']!r}"
     )

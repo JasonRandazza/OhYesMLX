@@ -202,7 +202,7 @@ struct BenchmarkView: View {
             }
             LabeledContent("Free disk after") {
                 HStack(spacing: 6) {
-                    Figure(diskAfter(plan))
+                    Figure(Format.size(plan.freeAfterBytes))
                     Badge("estimated")
                 }
             }
@@ -253,11 +253,6 @@ struct BenchmarkView: View {
                 .accessibilityHint(Text(model.oneSlotReason ?? ""))
             }
         }
-    }
-
-    private func diskAfter(_ plan: QuickPlan) -> String {
-        let free = model.hardware?.diskFreeBytes ?? 0
-        return Format.size(max(0, free - plan.downloadBytes))
     }
 
     // MARK: - the run

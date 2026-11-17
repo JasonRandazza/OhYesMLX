@@ -416,6 +416,7 @@ def a_quick_plan(repo="org/small"):
         stage_a=[quickbench.PlannedEngine("mlxlm", "0.31.3", True)],
         stage_b=[quickbench.PlannedSibling("org/sibling", "stock4bit", 2_000, False)],
         download_bytes=2_000,
+        free_after_bytes=9_000,
         osaurus=False,
         estimate_s=120,
     )
@@ -447,6 +448,7 @@ def test_the_quickbench_plan_endpoint_returns_the_plan(launch, monkeypatch):
         "stage_a",
         "stage_b",
         "download_bytes",
+        "free_after_bytes",
         "osaurus",
         "estimate_s",
     }

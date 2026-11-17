@@ -120,8 +120,13 @@ def exclusion_reason(
     hw: Hardware,
     free_disk: int,
     downloaded: frozenset[str] = frozenset(),
+    missing: int | None = None,
 ) -> str | None:
     """Why :func:`pick` leaves *model* out, or None when the row clears both budgets.
+
+    *missing* is the bytes a download would still fetch (``fetch.missing_bytes``); the disk
+    margin is applied to it, so a partial is judged like ``fetch.download``'s own guard
+    does. Left out, the whole artifact is meant (nothing on disk).
 
     Memory is checked first, because it is the budget a download cannot fix. A repo in
     *downloaded* has already been paid for on disk, so the disk budget is not applied to
@@ -138,7 +143,7 @@ def exclusion_reason(
         )
     if model.repo in downloaded:
         return None
-    needed = disk_needed(model.size_bytes)
+    needed = disk_needed(model.size_bytes if missing is None else missing)
     if free_disk < needed:
         return (
             f"Needs about {_gb(needed)} GB of free disk to download; "
@@ -161,6 +166,7 @@ def pick(
     free_disk: int,
     downloaded: frozenset[str] = frozenset(),
     measured_here: dict[str, dict] | None = None,
+    missing: dict[str, int] | None = None,
 ) -> list[Pick]:
     """The catalog rows this Mac can hold and download, ranked; pure, and no I/O.
 
@@ -174,6 +180,8 @@ def pick(
     *measured_here* maps a repo id to this Mac's own quickbench ``best`` block (D5); it is
     the caller's, built from ``quickbench.latest``, so nothing here reads a file and a row
     with no run on this Mac carries null rather than an estimate standing in for one.
+    *missing* maps a repo id to the bytes still to fetch (S4-F7); a repo absent from it is
+    judged on its full size.
     """
     if not hw.supported:
         return []
@@ -181,7 +189,12 @@ def pick(
     installed = {status.name for status in engines if status.installed}
     offerable = []
     for model in models:
-        if exclusion_reason(model, hw, free_disk, downloaded) is not None:
+        if (
+            exclusion_reason(
+                model, hw, free_disk, downloaded, (missing or {}).get(model.repo)
+            )
+            is not None
+        ):
             continue
         offerable.append((model, _fit(model.size_bytes, hw.model_budget_bytes)))
     offerable.sort(key=lambda pair: _rank(pair[0], pair[1], free_disk))
