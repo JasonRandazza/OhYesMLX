@@ -135,7 +135,7 @@ def a_run(tmp_path):
         pin=fake_osaurus.pin,
         restore=fake_osaurus.restore,
         recover=fake_osaurus.recover,
-        port_in_use=PortProbe(),
+        port_refusal=PortProbe(),
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),

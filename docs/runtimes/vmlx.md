@@ -2176,6 +2176,17 @@ positive one.
 
 ---
 
+## Process signature (05-10b)
+
+How `runtimes.resident_engines` recognises this engine's server, read from the bundle on
+2026-11-17 (no engine was started). The patterns themselves live once, in `runtimes._engine_of`.
+
+- The harness's server is `Contents/Resources/bundled-python/python/bin/vmlx serve ...`, a script,
+  so the process is its interpreter with `<path>/vmlx serve`: matched.
+- The app (`Contents/MacOS/vMLX`) also ships `mtplx` and `thermalforge` beside it. How the app
+  launches its own server is **not established from the bundle**. Any process whose executable
+  lives in `/Applications/vMLX.app` and holds a default port is refused (engine-root test).
+
 ## Appendix A — the 438 `VMLX_*` / `VMLINUX_*` environment variables
 
 Every name below is read somewhere in `$SRC`. Names differ only by the `VMLX_` / `VMLINUX_`

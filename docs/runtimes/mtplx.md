@@ -45,6 +45,19 @@ joins nothing earlier.
 | `JANGQ-AI/Qwen3.5-4B-JANG_4S` | does not load (`embed_tokens` shape 320 vs 640) |
 | LFM2.5-8B-A1B (all five) | no MTP head exists; AR-only, never an MTP cell |
 
+## Process signature (05-10b)
+
+How `runtimes.resident_engines` recognises this engine's server, read from the bundle on
+2026-11-17 (no engine was started). The patterns themselves live once, in `runtimes._engine_of`.
+
+- `~/.mtplx/bin/mtplx` is a `sh` shim:
+  `exec '~/Library/Application Support/MTPLX/runtime-venv/bin/mtplx' "$@"`, a Python console
+  script, so the server is that venv's interpreter with `<path>/mtplx serve`: matched, path
+  spaces included (argv is never split on whitespace).
+- `MTPLX.app` (`Contents/MacOS/MTPLXApp`) names `/usr/local/bin/mtplx` and
+  `/opt/homebrew/bin/mtplx`; how it starts a server is **not established from the bundle**.
+  `/Applications/MTPLX.app`, `~/.mtplx` and `~/Library/Application Support/MTPLX` are engine roots.
+
 ## Open
 
 RAM session-bank off switch; whether oMLX loads the OptiQ 4B bundle (gates a plain-decode

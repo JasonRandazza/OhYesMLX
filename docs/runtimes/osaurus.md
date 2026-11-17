@@ -200,7 +200,7 @@ session, with launchd as the parent and nothing in the process tree naming the h
 2026-09-23 `~/.commandcode/mcp.json` carried that entry, so every `cc-agent` worker dispatch
 spawned the app (a stray started 22:40:15, fifteen seconds after a worker session wrote
 `~/.commandcode`). The harness refuses every runtime start while such an app is alive
-(`runtimes._resident_osaurus_pids`), so a relaunch mid-column costs every remaining cell in
+(`runtimes.resident_engines`), so a relaunch mid-column costs every remaining cell in
 that column. Jason removed the entry and the app's Login Item the same night. Before a grid:
 no MCP host with an `osaurus` entry may start a session, and `sfltool dumpbtm` should not
 list Osaurus as enabled.
@@ -1232,6 +1232,19 @@ key list as reliable and the key *grouping* as provisional.
 non-mutating, and diff the keys against this table.
 
 ---
+
+## Process signature (05-10b)
+
+How `runtimes.resident_engines` recognises this engine's server, read from the bundle on
+2026-11-17 (no engine was started). The patterns themselves live once, in `runtimes._engine_of`.
+
+- The app process is matched by full executable path only (`OSAURUS_APP_EXECUTABLES`, both
+  spellings, `/Applications` and `~/Applications`); the CLI launcher
+  (`Contents/Helpers/osaurus`) counts only with `serve`. `osaurus mcp` never matches.
+- Osaurus **never moves** off 1337: its port is also `"port": 1337` in
+  `~/.osaurus/config/server.json` (read 2026-11-17), which the harness does not edit, and whether
+  `osaurus serve --port N` rewrites that file is not established. A non-engine on 1337 refuses
+  the start, naming the holder.
 
 ## 10. Summary for the harness
 

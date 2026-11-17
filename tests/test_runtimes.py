@@ -2494,7 +2494,7 @@ def test_start_refuses_a_port_this_run_does_not_own(rig):
 
 
 def test_start_refuses_when_process_inspection_is_unavailable(rig):
-    rig.results[(runtimes.PS, "-axo", "pid=,args=")] = None
+    rig.results[(runtimes.PS, "-ww", "-axo", "pid=,comm=")] = None
 
     with pytest.raises(RuntimeStartError, match="could not inspect running processes"):
         RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
@@ -2504,8 +2504,11 @@ def test_start_refuses_when_process_inspection_is_unavailable(rig):
 
 @pytest.mark.parametrize("app", runtimes.OSAURUS_APP_EXECUTABLES)
 def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatch, app):
-    rig.results[(runtimes.PS, "-axo", "pid=,args=")] = _completed(
+    rig.results[(runtimes.PS, "-ww", "-axo", "pid=,args=")] = _completed(
         stdout=f"111 {app} --serve\n222 osaurus mcp\n333 /tmp/osaurus\n"
+    )
+    rig.results[(runtimes.PS, "-ww", "-axo", "pid=,comm=")] = _completed(
+        stdout=f"111 {app}\n222 /opt/homebrew/bin/osaurus\n333 /tmp/osaurus\n"
     )
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: pid == 111)
 
@@ -2515,7 +2518,7 @@ def test_start_refuses_stale_osaurus_app_by_full_executable_path(rig, monkeypatc
     assert "111" in str(raised.value)
     assert "222" not in str(raised.value)
     assert rig.commands == []
-    assert (runtimes.PS, "-axo", "pid=,args=") in rig.ran
+    assert (runtimes.PS, "-ww", "-axo", "pid=,comm=") in rig.ran
 
 
 def test_start_does_not_match_osaurus_mcp_or_other_binary(rig, monkeypatch):
@@ -2542,7 +2545,7 @@ def test_resident_osaurus_pids_never_runs_a_ps_found_on_path(tmp_path, monkeypat
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setattr(runtimes, "_engine_env", lambda: dict(os.environ))
 
-    found = runtimes._resident_osaurus_pids()
+    found = runtimes.resident_engines()
 
     assert isinstance(found, tuple)
     assert not marker.exists(), "the fake ps on PATH was executed"
@@ -3773,7 +3776,7 @@ def test_the_engine_is_recorded_right_after_the_spawn_and_again_after_readiness(
     monkeypatch.setattr(
         runtimes,
         "_record_running_engine",
-        lambda pid, serving_pid, port: order.append(("ledger", pid, serving_pid, port)),
+        lambda pid, serving_pid, port, runtime=None: order.append(("ledger", pid, serving_pid, port)),
     )
     rig.inventory = lambda: order.append(("ready",)) or (HF_ID,)
 
@@ -3914,6 +3917,7 @@ def test_a_started_engine_is_recorded_with_its_pid_port_and_identity(
             "serving_lstart": LEDGER_LSTART,
             "serving_argv": LEDGER_ARGV,
             "port": 8081,
+            "runtime": "mlxlm",
         }
     ]
 
@@ -3949,6 +3953,7 @@ def test_an_osaurus_start_records_the_serving_process_when_the_launcher_is_unrea
             "serving_lstart": OSAURUS_LSTART,
             "serving_argv": OSAURUS_ARGV,
             "port": 1337,
+            "runtime": "osaurus",
         }
     ]
     assert capsys.readouterr().err == "", "an unreadable launcher identity was reported"
@@ -4416,8 +4421,8 @@ def test_a_pre_0509_ledger_file_loads_through_the_sweep_and_stop_now(tmp_path, m
 
 def test_an_entry_on_a_port_no_runtime_owns_is_stopped_by_signal_only():
     """AC-4."""
-    assert runtimes._stop_command_for_port(59999) == ()
-    assert runtimes._stop_command_for_port(1337) == ("osaurus", "stop")
+    assert runtimes._stop_command_for({"port": 59999}) == ()
+    assert runtimes._stop_command_for({"port": 1337}) == ("osaurus", "stop")
 
 
 def test_stop_now_does_not_signal_an_own_entry_whose_pid_is_now_another_process(
@@ -4594,15 +4599,17 @@ def test_a_fresh_spawn_clears_its_pid_from_the_reaped_set(monkeypatch, tmp_path)
     assert 777 not in runtimes._REAPED_PIDS
 
 
-def test_start_refuses_another_runtimes_port_before_building_any_command(rig):
+def test_a_non_engine_on_another_runtimes_port_no_longer_blocks_a_start(rig):
+    """05-10b reversed 05-09's port-only rule: a listener on 1337 that is not an engine process
+    holds no model, so an mlx-lm start goes ahead on its own free default."""
     rig.listeners.add(1337)
+    rig.inventory = (HF_ID,)
 
-    with pytest.raises(RuntimeStartError) as raised:
-        RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
 
-    assert "port 1337 (osaurus)" in str(raised.value)
-    assert f"{runtimes.LSOF} -nP -iTCP:1337 -sTCP:LISTEN" in str(raised.value)
-    assert rig.commands == []
+    assert handle.port == 8081
+
+    assert rig.commands, "the start was refused by a port another runtime owns"
 
 
 def test_an_osaurus_app_this_run_started_still_counts_as_resident(monkeypatch):
@@ -4612,7 +4619,7 @@ def test_an_osaurus_app_this_run_started_still_counts_as_resident(monkeypatch):
     )
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
 
-    assert runtimes._resident_osaurus_pids() == (9191,)
+    assert [(n, p) for n, p, _ports in runtimes.resident_engines()] == [("osaurus", 9191)]
 
 
 def test_osaurus_is_recognised_under_both_application_directories():
@@ -4625,3 +4632,47 @@ def test_osaurus_is_recognised_under_both_application_directories():
         f"{home}/Osaurus.app/Contents/Helpers/osaurus"
         in runtimes.ENGINE_BUNDLE_EXECUTABLES["osaurus"]
     )
+
+
+def test_a_start_whose_default_port_a_non_engine_holds_moves_to_a_free_port(
+    rig, monkeypatch, capsys
+):
+    """05-10b AC-3: one port value reaches the argv, the handle, its base_url and the ledger,
+    and one `port_moved` line names the default, its holder and the port chosen."""
+    rig.listeners.add(8081)
+    rig.inventory = (HF_ID,)
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (555,) if port == 8081 else ())
+    monkeypatch.setattr(runtimes, "_models_probe", lambda port: None)
+    monkeypatch.setattr(runtimes, "_free_port", lambda: 54321)
+    recorded = []
+    monkeypatch.setattr(
+        runtimes,
+        "_record_running_engine",
+        lambda pid, serving_pid, port, runtime=None: recorded.append((port, runtime)),
+    )
+
+    handle = RUNTIMES["mlxlm"].start(ARTIFACT, HF_ID)
+
+    command = rig.commands[-1]
+    assert command[command.index("--port") + 1] == "54321"
+    assert handle.port == 54321 and handle.base_url == "http://127.0.0.1:54321/v1"
+    assert recorded and set(recorded) == {(54321, "mlxlm")}
+    notes = [
+        json.loads(line)["note"]
+        for line in capsys.readouterr().err.splitlines()
+        if '"port_moved"' in line
+    ]
+    assert len(notes) == 1 and all(part in notes[0]["message"] for part in ("8081", "555", "54321"))
+    assert RUNTIMES["mlxlm"].port == 8081, "the shared table is never changed"
+
+
+def test_an_osaurus_start_whose_port_a_non_engine_holds_is_refused(rig, monkeypatch):
+    """05-10b AC-4: Osaurus never moves; nothing is spawned."""
+    rig.listeners.add(1337)
+    monkeypatch.setattr(runtimes, "_listener_pids", lambda port: (555,) if port == 1337 else ())
+    monkeypatch.setattr(runtimes, "_models_probe", lambda port: None)
+
+    with pytest.raises(RuntimeStartError, match="555"):
+        RUNTIMES["osaurus"].start(ARTIFACT, "osaurus-model")
+
+    assert rig.commands == []

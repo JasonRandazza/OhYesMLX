@@ -35,7 +35,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import subprocess
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -167,44 +166,31 @@ def estimate_seconds(cells: int, download_bytes: int) -> int:
     return round(cells * ESTIMATE_PER_CELL_S + download_bytes / DOWNLOAD_BYTES_PER_S)
 
 
-def _port_busy(port: int) -> bool:
-    """Whether something is listening on *port*, asked of `runtimes` rather than re-probed.
+def _port_refusal(name: str) -> str | None:
+    """Why engine *name* cannot start here, asked of :func:`runtimes.port_plan` -- the one port
+    decision a start makes, so quickbench never says "go" for a start that will refuse (05-10b).
 
-    A probe, never a stop: an engine whose port answers may be the user's own server, and
-    quickbench skips it rather than ending a process it did not start. A port that cannot be
-    verified is reported busy, so "unknown" skips the engine instead of starting over it.
+    A probe, never a stop: an engine resident on any port may be the user's own server, and
+    quickbench skips rather than ending a process it did not start. A default port held by
+    something that is not an engine is not a reason: the start moves to a free port.
     """
-    return not runtimes._port_is_free(port)
+    return runtimes.port_plan(runtimes.RUNTIMES[name]).refusal
 
 
-def _osaurus_app_running(run=subprocess.run) -> bool:
+def _osaurus_app_running() -> bool:
     """Whether the Osaurus app has a process at its own executable path.
 
-    Matched by full executable path and never by the name ``osaurus``: ``osaurus mcp`` is a
-    user's long-running client that shares the name, and the app outlives its server, so a
-    name match is both too broad and the wrong question. A probe that cannot run is read as
-    the app being present, because the alternative -- starting Osaurus's cell anyway -- is
-    what ends the user's own app (AGENTS.md).
+    Asked of the runtimes' one process read (``_ps_column``, absolute ``ps``) and matched by
+    full executable path, never by the name ``osaurus``: ``osaurus mcp`` is a user's
+    long-running client that shares the name. A read that fails is the app being present,
+    because the alternative -- starting Osaurus's cell anyway -- is what ends the user's own
+    app (AGENTS.md).
     """
     try:
-        completed = run(
-            [runtimes.PS, "-axo", "comm="],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        comms = runtimes._ps_column("comm")
+    except runtimes.RuntimeStartError:
         return True
-    for line in (completed.stdout or "").splitlines():
-        command = line.strip()
-        if any(
-            command == binary or command.startswith(binary + " ")
-            for binary in runtimes.OSAURUS_APP_EXECUTABLES
-        ):
-            return True
-    return False
+    return any(comm in runtimes.OSAURUS_APP_EXECUTABLES for comm in comms.values())
 
 
 def _osaurus_drift(*, baseline_path, config_dir=None) -> str | None:
@@ -460,7 +446,7 @@ def _best(summary, measured_at) -> dict | None:
     }
 
 
-def _skip_reason(name, osaurus, osaurus_app_running, port_in_use) -> str | None:
+def _skip_reason(name, osaurus, osaurus_app_running, port_refusal) -> str | None:
     """Why an engine cannot be driven into its cell here, or None when it can.
 
     Nothing on a skipped engine's port is stopped: the process there may be the user's own
@@ -473,10 +459,7 @@ def _skip_reason(name, osaurus, osaurus_app_running, port_in_use) -> str | None:
             return "Osaurus was not allowed for this run (osaurus: false)"
         if osaurus_app_running():
             return "quit the Osaurus app first"
-    port = runtimes.RUNTIMES[name].port
-    if port_in_use(port):
-        return f"quit {name} first"
-    return None
+    return port_refusal(name)
 
 
 def _stamp(when: float) -> str:
@@ -567,7 +550,7 @@ def run(
     recover=osaurus_settings.recover,
     osaurus_drift=_osaurus_drift,
     keep_during_run=_keep_during_run,
-    port_in_use=_port_busy,
+    port_refusal=_port_refusal,
     osaurus_app_running=_osaurus_app_running,
     load=canary.load,
     clock=time.time,
@@ -883,7 +866,7 @@ def run(
                 summary["ended"] = "cancelled"
                 break
             name = engine_plan.engine
-            reason = _skip_reason(name, osaurus, osaurus_app_running, port_in_use)
+            reason = _skip_reason(name, osaurus, osaurus_app_running, port_refusal)
             if reason is not None:
                 summary["stage_a"]["cells"].append(
                     _skipped(name, model.format, snapshot, model.repo, reason)

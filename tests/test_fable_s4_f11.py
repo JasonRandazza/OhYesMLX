@@ -153,7 +153,7 @@ def a_run(tmp_path, cache, events):
         pin=FakeOsaurus().pin,
         restore=FakeOsaurus().restore,
         recover=FakeOsaurus().recover,
-        port_in_use=PortProbe(),
+        port_refusal=PortProbe(),
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),

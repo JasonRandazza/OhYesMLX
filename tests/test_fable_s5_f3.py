@@ -23,6 +23,7 @@ import pytest
 from ohyesmlx import runtimes
 
 MODEL_ID = "mlx-community/fake-model-4bit"
+REAL_SCAN = runtimes.resident_engines
 
 
 class SpawnReached(Exception):
@@ -48,7 +49,7 @@ def artifact(tmp_path):
 def no_spawn(monkeypatch, tmp_path):
     """The pre-flight seams, with ``_spawn`` raising instead of starting anything."""
     monkeypatch.setattr(runtimes, "_log_path", lambda name: tmp_path / f"{name}.log")
-    monkeypatch.setattr(runtimes, "_resident_osaurus_pids", lambda: ())
+    monkeypatch.setattr(runtimes, "resident_engines", lambda: ())
 
     spawns = []
 
@@ -63,10 +64,17 @@ def no_spawn(monkeypatch, tmp_path):
 def test_start_refuses_when_another_runtimes_port_holds_a_listener(
     monkeypatch, no_spawn, artifact
 ):
-    """The finding's own test: 8081 busy, an oMLX start on 8100, and no refusal."""
+    """The finding's own test: an engine on 8081, an oMLX start on 8100, and no refusal.
+
+    Since 05-10b the engine is recognised by its process, not by the port: a non-engine on
+    8081 no longer blocks (tests/test_port_independence.py), an mlx-lm server there does."""
     mlxlm_port = runtimes.RUNTIMES["mlxlm"].port
     omlx_port = runtimes.RUNTIMES["omlx"].port
-    monkeypatch.setattr(runtimes, "_port_is_free", lambda port: port != mlxlm_port)
+    monkeypatch.setattr(
+        runtimes,
+        "resident_engines",
+        lambda: (("mlxlm", 4321, (mlxlm_port,)),),
+    )
 
     runtime = runtimes.Omlx(name="omlx", port=omlx_port)
 
@@ -99,6 +107,7 @@ def test_start_refuses_when_a_failed_stop_left_another_engine_resident(
         handle.stop()
 
     # The survivor is real: `ps` lists it, it is alive, and its port answers.
+    monkeypatch.setattr(runtimes, "resident_engines", REAL_SCAN)  # this test asks the real scan
     monkeypatch.setattr(
         runtimes,
         "_run",
