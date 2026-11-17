@@ -68,6 +68,12 @@ final class FakeLauncherProcess: LauncherProcess, @unchecked Sendable {
         return !isRunning
     }
 
+    /// `isRunning` false with no termination callback delivered yet: the window in which
+    /// `Process` has reaped the child but `handleTermination` has not run (S3-F16).
+    func markExitedWithoutTermination() {
+        lock.withLock { running = false }
+    }
+
     func exit(status: Int32) {
         let handler: (@Sendable (Int32) -> Void)? = lock.withLock {
             guard running else { return nil }

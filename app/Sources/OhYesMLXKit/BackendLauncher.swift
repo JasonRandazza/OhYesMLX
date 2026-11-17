@@ -102,6 +102,10 @@ public final class FoundationLauncherProcess: LauncherProcess, @unchecked Sendab
     }
 
     public func kill() {
+        // S3-F16: once `Process` has reaped the child its pid is free for reuse, and a SIGKILL
+        // to it would land on whatever took the number. A pidfd would close the remaining
+        // check-to-signal window; Foundation's `Process` exposes none.
+        guard process.isRunning else { return }
         Darwin.kill(process.processIdentifier, SIGKILL)
     }
 
@@ -434,7 +438,12 @@ final class LaunchSession: @unchecked Sendable {
     }
 
     func forceKill() {
-        lock.withLock { stdinClosed = true }
+        let alreadyExited = lock.withLock { () -> Bool in
+            stdinClosed = true
+            return exited
+        }
+        // A backend that has exited is never signalled: its pid may already be someone else's.
+        guard !alreadyExited, process.isRunning else { return }
         process.kill()
     }
 

@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from ohyesmlx import fetch
+from ohyesmlx import fetch, runtimes
 
 
 @pytest.fixture(autouse=True)
@@ -34,3 +34,11 @@ def _no_real_lock_dir(monkeypatch):
         return acquire(path)
 
     monkeypatch.setattr(fetch, "_acquire_lock", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_own_identity(monkeypatch):
+    """``runtimes._OWN_IDENTITY`` and ``runtimes._REAPED_PIDS`` are per-process module state;
+    one test's fake identity or reaped pid must not leak into the next (05-09)."""
+    monkeypatch.setattr(runtimes, "_OWN_IDENTITY", {})
+    monkeypatch.setattr(runtimes, "_REAPED_PIDS", set())

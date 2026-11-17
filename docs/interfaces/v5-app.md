@@ -20,19 +20,38 @@ On `{"now": true}` the server sets the job's cancel flag **and** its abort flag,
 `{"now": true}` on the same job answers `202` and starts no second stop (audit 05-01).
 
 `runtimes.stop_own_engines(root=None) -> int` stops every engine in **this process's** running-engines ledger
-file (`_ledger_path()`), each through `_shutdown(pid, port, tuple(stop_command))` (the spawned pid; `_shutdown` already takes every other listener on the port), and returns
-how many it stopped. It reads the ledger and never writes it: `Handle.stop` still drops its own entry when the
-cell's own stop path runs. A `RuntimeStopError` from one entry is written as one stderr line
+file (`_ledger_path()`), each through `_shutdown(pid, port, _stop_command_for_port(port))` (the spawned pid;
+`_shutdown` already takes every other listener on the port), and returns how many it stopped. It reads the
+ledger and never writes it: `Handle.stop` still drops its own entry when the cell's own stop path runs. A
+`RuntimeStopError` from one entry is written as one stderr line
 `{"error": {"code": "abort_stop_failed", "message": str}}` and the next entry is still tried.
+
+The ledger file (plan 05-09) is `{"owner": {"pid", "lstart", "argv"}, "entries": [{"pid", "lstart", "argv",
+"serving_pid", "serving_lstart", "serving_argv", "port"}, ...]}`, identities as `ps` prints them under
+`LC_ALL=C TZ=UTC`. It holds no command: the stop command is derived from `RUNTIMES` by the entry's port, and a
+`stop_command` field in a file written before 05-09 is ignored. "This process's" file means its owner block is
+this process (`runtimes.same_process`); a file an earlier process left under the same pid, or one without an
+owner block, is never Stop now's, and an entry marked `"inherited": true` (an earlier process's entry this one
+could not settle) is skipped. An entry whose recorded pid is alive but no longer the recorded process is one
+`abort_stop_failed` line and is not signalled.
 
 `quickbench.run(..., abort=<callable>)` (default never) — after each `measure_cell` returns, if `abort()` is
 True the cell's record is replaced by status `"ABORTED"` with reason `"stopped by the user mid-cell; no number
 is reported"` and no figures, and the run ends `"cancelled"` exactly as a between-cell cancel does (the
 in-flight cell's stop path, sibling eviction and the Osaurus restore still run; the cell's raw rows stay on disk
 because raw observations are never discarded). `"ABORTED"` joins the cell statuses in `v5-quickbench.md`; an
-ABORTED cell never wins and is never compared. If the engine had not yet written its ledger entry when the
-abort arrived, nothing is stopped, the cell runs to its own end and is still recorded `ABORTED`: the worst case
-of "Stop now" is "Stop after this cell" with the number discarded.
+ABORTED cell never wins and is never compared. Since 05-09 the engine is in the ledger from its spawn, so an
+abort during the load stops it too (below).
+
+**Stop now during a load (plan 05-09, S5-F5).** The engine is in the ledger from its spawn: `Runtime.start`
+writes the entry (pid, identity, port) right after `_spawn` and before it awaits readiness, and writes it again
+after readiness with `serving_pid` (replace by pid, no duplicate). The first write is one `ps` and a file and is
+not subtracted from `cold_load_s` (the engine loads while it runs); an earlier process's file at the same path is
+settled before the load clock starts. Identity is compared by start time, since oMLX, vMLX and MTPLX `exec` from a
+shell script and change argv. So a Stop now (or a launch after a killed backend) during the load already finds and stops the
+engine. A start that fails and whose own cleanup succeeds forgets the entry; one whose cleanup fails keeps it.
+A `RuntimeStopError` from a cell ends the quickbench run (summary `ended: "error"`, no later cell started, the
+Osaurus restore still run) rather than being recorded as one `FAIL` cell.
 
 ## The launcher (`BackendLauncher`, plan 05-02)
 
