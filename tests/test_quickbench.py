@@ -17,6 +17,9 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import shutil
+from collections import namedtuple
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -81,6 +84,11 @@ def an_engine(name, *, installed=True, version="0.31.3", tested=True):
         verified="2026-10-29",
         install=None,
     )
+
+
+def NO_VERIFY(_planned_file, _path):
+    """`run`'s `verify` seam: these fakes write no blobs, so there are no bytes to hash."""
+    return True
 
 
 ENGINES = [an_engine("mlxlm"), an_engine("optiq")]
@@ -290,6 +298,7 @@ def a_run(
     restore_error=None,
     loads=(1.0,),
     run_cells=None,
+    verify=None,
 ):
     """Run quickbench against scratch directories with every side effect faked."""
     log = []
@@ -312,6 +321,7 @@ def a_run(
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY if verify is None else verify,
         confirmed=confirmed,
         osaurus=osaurus,
         models=models,
@@ -390,6 +400,21 @@ def test_the_plan_names_the_siblings_and_only_the_missing_download_bytes(tmp_pat
     assert [sibling.repo for sibling in shown.stage_b] == [SIBLING.repo, SIBLING_2.repo]
     assert [sibling.downloaded for sibling in shown.stage_b] == [False, True]
     assert shown.download_bytes == SIBLING.size_bytes
+
+
+def test_the_plan_reports_free_after_from_the_cache_volume_and_floors_it_at_zero(
+    tmp_path, monkeypatch
+):
+    """S3-F10: the backend computes "free after" so the app does no arithmetic of its own."""
+    both = SIBLING.size_bytes + SIBLING_2.size_bytes
+    free = {"bytes": both + 5}
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: usage(0, 0, free["bytes"]))
+
+    assert a_plan(tmp_path).free_after_bytes == 5
+
+    free["bytes"] = 1
+    assert a_plan(tmp_path).free_after_bytes == 0
 
 
 def test_the_plan_estimate_is_per_cell_plus_the_download_at_the_constant_rate(tmp_path):
@@ -859,6 +884,7 @@ def test_the_host_pinned_between_pin_and_restore_shows_no_drift(tmp_path):
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=MODELS,
@@ -948,6 +974,7 @@ def test_drift_between_pin_and_restore_fails_the_cell_and_keeps_both_copies(tmp_
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=[CHOSEN],
@@ -1018,6 +1045,7 @@ def test_no_drift_between_pin_and_restore_passes_and_keeps_nothing(tmp_path):
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=[CHOSEN],
@@ -1083,6 +1111,7 @@ def test_a_drift_check_that_raises_fails_the_cell_and_still_restores(tmp_path):
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=[CHOSEN],
@@ -1160,6 +1189,7 @@ def test_a_runtime_stop_error_ends_the_run_and_still_restores_osaurus(tmp_path):
     with pytest.raises(runtimes.RuntimeStopError):
         quickbench.run(
             CHOSEN.repo,
+            verify=NO_VERIFY,
             confirmed=True,
             osaurus=True,
             models=MODELS,
@@ -1323,6 +1353,7 @@ def test_an_unexpected_raise_still_carries_the_summary_as_a_result_event(tmp_pat
     with pytest.raises(KeyboardInterrupt):
         quickbench.run(
             CHOSEN.repo,
+            verify=NO_VERIFY,
             confirmed=True,
             models=MODELS,
             statuses=ENGINES,
@@ -1726,3 +1757,94 @@ def test_the_default_abort_probe_never_fires(tmp_path):
     ok, fakes, summary = a_run(tmp_path)
 
     assert ok is True and summary["ended"] == "finished"
+
+
+# --- 05-10 AC-9: a sibling already on disk is verified before its cell ------------------------
+
+
+def test_a_sibling_on_disk_whose_bytes_do_not_verify_is_skipped_and_the_run_continues(tmp_path):
+    log = []
+    cache = FakeCache(downloaded=(CHOSEN.repo, SIBLING_2.repo), log=log)
+    events = []
+    ok = quickbench.run(
+        CHOSEN.repo,
+        confirmed=True,
+        verify=lambda _file, path: "two-b-jang" not in path,
+        models=MODELS,
+        statuses=ENGINES,
+        hw=SimpleNamespace(),
+        run_cells=FakeRunCells(on_call=lambda cell, _kwargs: log.append(("cell", cell.id))),
+        download=cache.download,
+        evict=cache.evict,
+        downloaded=cache.downloaded,
+        port_in_use=PortProbe(),
+        osaurus_app_running=lambda: False,
+        load=FakeLoad(),
+        clock=FakeClock(),
+        emit=events.append,
+        cache_dir=str(tmp_path / "cache"),
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(tmp_path / "baseline.json"),
+    )
+    found = sorted((tmp_path / "quickbench").glob("*/summary.json"))
+    cells = json.loads(found[0].read_text(encoding="utf-8"))["stage_b"]["cells"]
+    skipped = [cell for cell in cells if cell["repo"] == SIBLING_2.repo]
+
+    assert ok is True
+    assert [cell["status"] for cell in skipped] == ["SKIPPED"]
+    assert "do not verify" in skipped[0]["reason"] and "Models screen" in skipped[0]["reason"]
+    assert [cell for cell in cells if cell["repo"] == SIBLING.repo][0]["status"] == "PASS"
+    assert SIBLING_2.repo not in cache.evicts, "a sibling the run did not download is never evicted"
+
+
+# --- 05-10 review: ownership, kept, and the chosen-row check --------------------------------
+
+
+def test_a_download_refused_before_any_byte_is_not_reported_as_left_on_disk(tmp_path):
+    """A refusal that ledgered nothing (low_disk, busy) has nothing to evict or report."""
+    ok, fakes, summary = a_run(tmp_path, download_result=False)
+    assert SIBLING.repo in fakes.cache.downloads
+    assert SIBLING.repo not in fakes.cache.evicts
+    assert summary["not_evicted"] == []
+
+
+def test_a_sibling_the_user_had_begun_is_measured_kept_and_never_evicted(tmp_path):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    ledger = {"repos": {SIBLING.repo: {
+        "created_blobs": [], "created_links": [], "created_dirs": [],
+        "revision": SIBLING.revision, "time": 0.0, "bytes": SIBLING.size_bytes,
+    }}}
+    path = fetch.ledger_for(str(cache_dir))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(ledger, handle)
+    ok, fakes, summary = a_run(tmp_path)
+    assert ok is True
+    assert SIBLING.repo in fakes.cache.downloads
+    assert SIBLING.repo not in fakes.cache.evicts
+    assert summary["kept"] == [SIBLING.repo]
+
+
+def test_the_chosen_rows_check_is_announced_and_cancel_is_honoured_between_files(tmp_path):
+    two_files = replace(
+        CHOSEN,
+        files=[
+            catalog.ModelFile(path="a.safetensors", size=1_000_000_000, sha256="b" * 64, git_oid=None),
+            catalog.ModelFile(path="b.safetensors", size=1_000_000_000, sha256="b" * 64, git_oid=None),
+        ],
+    )
+    checked = []
+    ok, fakes, summary = a_run(
+        tmp_path,
+        models=[two_files, SIBLING, SIBLING_2, UNRELATED],
+        cancel_after=0,
+        verify=lambda planned_file, _path: checked.append(planned_file.path) or True,
+    )
+    assert ok is False
+    assert checked == ["a.safetensors"], "cancel is checked between files, not before the first"
+    assert any(
+        event["type"] == "log" and "checking" in event["message"] for event in fakes.events
+    )
+    assert fakes.osaurus.calls == [] and fakes.run_cells.calls == []

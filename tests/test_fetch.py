@@ -13,8 +13,9 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import time
-from types import SimpleNamespace
+from collections import namedtuple
 
 import pytest
 
@@ -178,8 +179,27 @@ class Clock:
         self.value += seconds
 
 
+_Usage = namedtuple("usage", "total used free")
+_CURRENT = []  # the Harness of the running test; its ``free`` is the cache volume's room
+
+
+@pytest.fixture(autouse=True)
+def _fake_disk_usage(monkeypatch):
+    """The guards ask ``hardware.free_bytes_at(cache_dir)``, which asks ``shutil.disk_usage``."""
+
+    def disk_usage(path):
+        free = _CURRENT[-1].free
+        free = free() if callable(free) else free
+        return _Usage(free, 0, free)
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
+
+
 class Harness:
-    """Every injected seam for one test, all rooted in ``tmp_path``."""
+    """Every injected seam for one test, all rooted in ``tmp_path``.
+
+    *free* is what the cache's volume reports (a number, or a callable asked at each guard).
+    """
 
     def __init__(self, tmp_path, models, transport, *, free=10**12, clock=1234.5):
         self.models = models
@@ -190,6 +210,7 @@ class Harness:
         self.log = self.support / "fetch-log.jsonl"
         self.locks = self.support / "locks"
         self.free = free
+        _CURRENT.append(self)
         self.clock = clock
         self.cancel = Flag()
         self.events = []
@@ -203,7 +224,6 @@ class Harness:
             log_path=str(self.log),
             lock_dir=str(self.locks),
             open_url=self.transport,
-            hardware=lambda: type("H", (), {"disk_free_bytes": self.free})(),
             sleep=self.sleeps.append,
             clock=lambda: self.clock,
             emit=self.events.append,
@@ -733,14 +753,15 @@ def test_disk_guard_refuses_before_any_request(tmp_path):
 def test_the_disk_guard_is_rechecked_before_each_file(tmp_path):
     model = make_model(TWO_FILES)
     transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
-    harness = Harness(tmp_path, [model], transport)
     calls = []
 
-    def hardware():
+    def free():
         calls.append(1)
-        return SimpleNamespace(disk_free_bytes=10**12 if len(calls) == 1 else 0)
+        return 10**12 if len(calls) == 1 else 0
 
-    assert harness.download(hardware=hardware) is False
+    harness = Harness(tmp_path, [model], transport, free=free)
+
+    assert harness.download() is False
 
     assert len(calls) == 2
     assert harness.codes() == ["low_disk"]
@@ -1819,3 +1840,174 @@ def test_old_empty_lock_is_reclaimed(tmp_path):
     os.utime(lock, (old, old))
     assert fetch._acquire_lock(str(lock)) is True
     fetch._release_lock(str(lock))
+
+
+# ---------------------------------------------------------------------------
+# 05-10 Task 1: write errors, flush, ledgered repair, evict ref, missing_bytes
+# ---------------------------------------------------------------------------
+
+
+def test_a_write_error_is_not_retried_as_a_network_error(tmp_path, monkeypatch):
+    """AC-1: only ``response.read`` is inside the catch; ENOSPC from the partial's write
+    is a disk fault, so one request is made and the OSError is not swallowed."""
+    import errno
+
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    transport = serve({"weights.safetensors": WEIGHTS})
+    harness = Harness(tmp_path, [model], transport)
+
+    class FullDisk:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._handle.close()
+            return False
+
+        def write(self, data):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    real_open = open
+    monkeypatch.setattr(
+        fetch,
+        "open",
+        lambda path, mode="r", *a, **k: (
+            FullDisk(real_open(path, mode, *a, **k)) if str(path).endswith(".incomplete")
+            else real_open(path, mode, *a, **k)
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(OSError) as raised:
+        harness.download()
+
+    assert raised.value.errno == errno.ENOSPC
+    assert len(transport.calls) == 1
+    assert harness.sleeps == []
+    # the lock is released and the residue is ledgered even though the call raised
+    assert not (harness.locks / fetch.LOCK_NAME).exists()
+    recorded = ledger_of(harness)["repos"][REPO]["created_blobs"]
+    assert str(harness.blobs / f"{SHA}.incomplete") in recorded
+
+
+def test_the_partial_is_flushed_before_the_rename_and_the_blobs_dir_after(tmp_path, monkeypatch):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    harness = Harness(tmp_path, [model], serve({"weights.safetensors": WEIGHTS}))
+    seen = []
+
+    def flush(fd):
+        seen.append((os.path.exists(harness.blobs / SHA), os.fstat(fd).st_mode))
+
+    monkeypatch.setattr(fetch, "_flush", flush)
+
+    assert harness.download() is True
+
+    # first flush: the partial, blob not yet in place; second: the directory, blob in place
+    assert [placed for placed, _ in seen] == [False, True]
+    import stat
+
+    assert stat.S_ISREG(seen[0][1]) and stat.S_ISDIR(seen[1][1])
+
+
+def test_flush_falls_back_to_fsync_when_full_fsync_is_unavailable(tmp_path, monkeypatch):
+    import fcntl
+
+    synced = []
+    monkeypatch.setattr(fcntl, "fcntl", lambda *a: (_ for _ in ()).throw(OSError("no")))
+    monkeypatch.setattr(os, "fsync", synced.append)
+    fetch._flush(7)
+    assert synced == [7]
+
+
+def test_a_ledgered_blob_that_fails_verification_is_removed_and_fetched_again(tmp_path):
+    """AC-4: a blob this app created (the ledger lists it) that no longer verifies is
+    repaired, not refused with 'nothing was overwritten'."""
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    transport = serve({"weights.safetensors": WEIGHTS})
+    harness = Harness(tmp_path, [model], transport)
+    assert harness.download() is True
+    blob = harness.blobs / SHA
+    blob.write_bytes(b"HELLO WORLD")  # same size, other bytes: the power-loss shape
+    harness.events.clear()
+
+    assert harness.download() is True
+
+    assert blob.read_bytes() == WEIGHTS
+    assert harness.codes() == []
+    assert len(transport.calls) == 2
+
+
+def test_a_bad_blob_the_ledger_does_not_list_is_still_refused(tmp_path):
+    """The ledger names a different blob of this repo, not this one: still the user's."""
+    model = make_model(TWO_FILES)
+    transport = serve({"weights.safetensors": WEIGHTS, "config.json": CONFIG})
+    harness = Harness(tmp_path, [model], transport)
+    harness.blobs.mkdir(parents=True)
+    (harness.blobs / SHA).write_bytes(b"HELLO WORLD")
+    harness.ledger.parent.mkdir(parents=True)
+    harness.ledger.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repos": {
+                    REPO: {
+                        "created_blobs": [str(harness.blobs / GIT)],
+                        "created_links": [],
+                        "created_dirs": [],
+                        "revision": REV,
+                        "time": 1.0,
+                        "bytes": 18,
+                    }
+                },
+            }
+        )
+    )
+
+    assert harness.download() is False
+
+    assert harness.codes() == ["integrity_failed"]
+    assert (harness.blobs / SHA).read_bytes() == b"HELLO WORLD"
+    assert transport.calls == []
+
+
+def test_evict_keeps_a_refs_main_it_cannot_read(tmp_path):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    harness = Harness(tmp_path, [model], serve({"weights.safetensors": WEIGHTS}))
+    assert harness.download() is True
+    harness.ref.unlink()
+    harness.ref.mkdir()  # unreadable as a file
+
+    assert harness.evict() is True
+
+    assert harness.ref.is_dir()
+    assert any("refs" in event["message"] for event in harness.events if event["type"] == "log")
+
+
+def test_missing_bytes_is_stat_only_and_present_overrides_it(tmp_path):
+    model = make_model(TWO_FILES)  # 11 + 7 bytes
+    cache = str(tmp_path / "hub")
+    blobs = tmp_path / "hub" / "models--org--name" / "blobs"
+    assert fetch.missing_bytes(model, cache) == 18
+
+    blobs.mkdir(parents=True)
+    (blobs / f"{SHA}.incomplete").write_bytes(WEIGHTS[:5])
+    assert fetch.missing_bytes(model, cache) == 6 + 7
+
+    # right size, wrong bytes: stat-only counts it as present (it never hashes)
+    (blobs / SHA).write_bytes(b"HELLO WORLD")
+    assert fetch.missing_bytes(model, cache) == 7
+    # a wrong-sized file does not
+    (blobs / SHA).write_bytes(b"short")
+    assert fetch.missing_bytes(model, cache) == 6 + 7
+
+    # a symlink is never a present blob
+    (blobs / SHA).unlink()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_bytes(WEIGHTS)
+    os.symlink(elsewhere, blobs / SHA)
+    assert fetch.missing_bytes(model, cache) == 6 + 7
+
+    assert fetch.missing_bytes(model, cache, present={"weights.safetensors": True, "config.json": False}) == 7

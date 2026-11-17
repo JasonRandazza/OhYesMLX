@@ -578,7 +578,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _get_recommendations(self) -> None:
         """``pick`` and ``exclusion_reason`` over the scan, the detections and the catalog.
 
-        The free disk is ``Hardware.disk_free_bytes``, the same number ``/hardware`` reports.
+        The free disk is ``Hardware.disk_free_bytes`` (the Hugging Face cache's volume), the
+        same number ``/hardware`` reports and the download guards use.
         The rows already in this Mac's Hugging Face cache are asked of ``fetch.downloaded``,
         which is the one definition of that question (sizes and links, never hashes), and
         passed to both functions, so a downloaded row is not excluded for disk and says so
@@ -598,6 +599,9 @@ class _Handler(BaseHTTPRequestHandler):
         statuses = self.server.detect()
         models = self.server.load_catalog()
         downloaded = frozenset(model.repo for model in models if fetch.downloaded(model))
+        # What each row still has to fetch (stat-only): the disk margin applies to it, so a
+        # partial is judged like fetch.download's own guard (S4-F7).
+        missing = {model.repo: fetch.missing_bytes(model) for model in models}
         measured = {}
         for summary in self.server.summaries().values():
             best = summary.get("best")
@@ -612,13 +616,18 @@ class _Handler(BaseHTTPRequestHandler):
                 hw.disk_free_bytes,
                 downloaded,
                 measured_here=measured,
+                missing=missing,
             )
         ]
         excluded = []
         if hw.supported:
             for model in models:
                 reason = recommend.exclusion_reason(
-                    model, hw, hw.disk_free_bytes, downloaded
+                    model,
+                    hw,
+                    hw.disk_free_bytes,
+                    downloaded,
+                    missing=missing[model.repo],
                 )
                 if reason is not None:
                     excluded.append({"model_id": model.repo, "reason": reason})

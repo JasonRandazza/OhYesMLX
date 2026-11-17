@@ -438,6 +438,9 @@ public struct QuickPlan: Codable, Sendable, Equatable {
     public let stageA: [PlannedEngine]
     public let stageB: [PlannedSibling]
     public let downloadBytes: Int64
+    /// Free bytes on the cache's volume once `downloadBytes` have landed, floored at 0; the
+    /// backend's figure, never computed here.
+    public let freeAfterBytes: Int64
     public let osaurus: Bool
     public let estimateS: Int
 
@@ -447,6 +450,7 @@ public struct QuickPlan: Codable, Sendable, Equatable {
         case stageA = "stage_a"
         case stageB = "stage_b"
         case downloadBytes = "download_bytes"
+        case freeAfterBytes = "free_after_bytes"
         case osaurus
         case estimateS = "estimate_s"
     }
@@ -457,6 +461,7 @@ public struct QuickPlan: Codable, Sendable, Equatable {
         stageA: [PlannedEngine],
         stageB: [PlannedSibling],
         downloadBytes: Int64,
+        freeAfterBytes: Int64,
         osaurus: Bool,
         estimateS: Int
     ) {
@@ -465,6 +470,7 @@ public struct QuickPlan: Codable, Sendable, Equatable {
         self.stageA = stageA
         self.stageB = stageB
         self.downloadBytes = downloadBytes
+        self.freeAfterBytes = freeAfterBytes
         self.osaurus = osaurus
         self.estimateS = estimateS
     }

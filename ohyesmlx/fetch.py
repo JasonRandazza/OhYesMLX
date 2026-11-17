@@ -31,14 +31,16 @@ The rules this module is built to keep, each from the plan's ACs:
   AC-12). A pre-existing blob is reused but never ledgered, so a user's own copy is
   never removed by evict.
 
-Every side effect is a parameter: the transport (``open_url``), the hardware scan, sleep,
+Every side effect is a parameter: the transport (``open_url``), sleep,
 clock, emitter, cancellation probe, and the four filesystem locations. Tests run entirely
 on ``tmp_path`` with a fake transport; this module never contacts a network in a test.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -50,7 +52,7 @@ from dataclasses import dataclass
 
 from ohyesmlx import app_support_dir, atomic_write_text, catalog, engines
 from ohyesmlx.catalog import Model, disk_needed
-from ohyesmlx.hardware import scan as _scan_hardware
+from ohyesmlx.hardware import free_bytes_at
 
 # The one host a request may start at. Every hop after it must still be allowed.
 HF_BASE = "https://huggingface.co"
@@ -289,9 +291,7 @@ def downloaded(model: Model, cache_dir: str | None = None) -> bool:
                 return False
             if os.path.getsize(planned_file.link) != planned_file.size:
                 return False
-            if not os.path.isfile(planned_file.blob):
-                return False
-            if os.path.getsize(planned_file.blob) != planned_file.size:
+            if not _stat_present(planned_file):
                 return False
         except OSError:
             return False
@@ -613,6 +613,67 @@ def _remove(path: str) -> None:
         pass
 
 
+def _flush(fd: int) -> None:
+    """Push *fd*'s data to the drive. macOS ``fsync`` stops at the drive's cache, so
+    ``F_FULLFSYNC`` is asked for first; where it is missing or refused, ``os.fsync``."""
+    try:
+        fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+    except (OSError, AttributeError):
+        os.fsync(fd)
+
+
+def _flush_path(path: str) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        _flush(fd)
+    finally:
+        os.close(fd)
+
+
+def _file_missing(planned_file: PlannedFile, present: bool) -> int:
+    """Bytes still to fetch for one file: none when present, else size less the partial."""
+    if present:
+        return 0
+    return max(0, planned_file.size - _partial_size(planned_file.blob + ".incomplete"))
+
+
+def _stat_present(planned_file: PlannedFile) -> bool:
+    """A blob counts as present on a stat alone: a regular, non-symlink file of the pinned size."""
+    blob = planned_file.blob
+    try:
+        return (
+            os.path.isfile(blob)
+            and not os.path.islink(blob)
+            and os.path.getsize(blob) == planned_file.size
+        )
+    except OSError:
+        return False
+
+
+def in_ledger(repo: str, cache_dir: str | None = None) -> bool:
+    """Whether the fetch ledger has an entry for *repo*: this app created something of it.
+
+    ``LedgerError`` propagates -- an unreadable ledger is not an answer either way.
+    """
+    return repo in _ledger_load(ledger_for(cache_dir), missing_ok=True)["repos"]
+
+
+def missing_bytes(model: Model, cache_dir: str | None = None, present=None) -> int:
+    """Bytes a download of *model* would still have to fetch into *cache_dir*.
+
+    The one definition of the remainder: ``download``'s disk guard calls it with the
+    ``present`` map it has already verified (path -> bool), and everything that only
+    wants a number (recommendations, the quick-bench plan) leaves *present* out and gets
+    a stat-only answer, so nothing here ever hashes a file. ``plan``'s ``ValueError``
+    propagates, as in :func:`downloaded`.
+    """
+    total = 0
+    for planned_file in plan(model, cache_dir).files:
+        here = _stat_present(planned_file) if present is None else present[planned_file.path]
+        total += _file_missing(planned_file, here)
+    return total
+
+
 def _sha256_file(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -697,7 +758,6 @@ def download(
     log_path=DEFAULT_LOG,
     lock_dir=DEFAULT_LOCK_DIR,
     open_url=_real_open,
-    hardware=_scan_hardware,
     sleep=time.sleep,
     clock=time.time,
     emit=_print_event,
@@ -749,7 +809,7 @@ def download(
 
     try:
         return _download(
-            planned, send_holding_done, created, ledger_path, open_url, hardware, sleep, clock,
+            planned, send_holding_done, created, ledger_path, open_url, sleep, clock,
             cancel,
         )
     finally:
@@ -792,16 +852,17 @@ def _record(ledger_path, planned: Planned, created: dict, clock, send) -> None:
 
 
 def _download(
-    planned: Planned, send, created, ledger_path, open_url, hardware, sleep, clock, cancel
+    planned: Planned, send, created, ledger_path, open_url, sleep, clock, cancel
 ) -> bool:
     """The body of ``download`` once the lock is held; returns True on success."""
     repo = planned.model.repo
     revision = planned.model.revision
 
     try:
-        _ledger_load(ledger_path, missing_ok=True)
+        ledger = _ledger_load(ledger_path, missing_ok=True)
     except LedgerError as error:
         return _refuse(send, "ledger_unreadable", str(error))
+    ledgered = set((ledger["repos"].get(repo) or {}).get("created_blobs", []))
 
     send("log", f"{repo} at {revision}: {len(planned.files)} files, {planned.size_bytes} bytes")
 
@@ -838,7 +899,18 @@ def _download(
                 path=blob,
             )
         if os.path.exists(blob):
-            if not os.path.isfile(blob) or not _verify(planned_file, blob):
+            verified = os.path.isfile(blob) and _verify(planned_file, blob)  # hashed once
+            if os.path.isfile(blob) and blob in ledgered and not verified:
+                # This app wrote it and it no longer verifies (S4-F14): repair, don't refuse.
+                send("log", f"{blob} no longer matches the catalog; fetching it again")
+                _remove(blob)
+                if os.path.lexists(blob):
+                    return _refuse(
+                        send, "integrity_failed", f"could not remove {blob}", path=blob
+                    )
+                present[planned_file.path] = False
+                continue
+            if not verified:
                 return _refuse(
                     send,
                     "integrity_failed",
@@ -850,15 +922,9 @@ def _download(
         else:
             present[planned_file.path] = False
 
-    def remaining(planned_file: PlannedFile) -> int:
-        if present[planned_file.path]:
-            return 0
-        return max(0, planned_file.size - _partial_size(planned_file.blob + ".incomplete"))
-
     # --- AC-6 / AC-16: missing bytes x the catalog's disk margin, before any request. ---
-    missing_bytes = sum(remaining(planned_file) for planned_file in planned.files)
-    needed = disk_needed(missing_bytes)
-    free = hardware().disk_free_bytes
+    needed = disk_needed(missing_bytes(planned.model, planned.cache_dir, present))
+    free = free_bytes_at(planned.cache_dir)
     if free < needed:
         return _refuse(
             send,
@@ -931,6 +997,7 @@ def _download(
 
     # --- the files themselves ---
     def finish(planned_file: PlannedFile, incomplete: str) -> bool:
+        _flush_path(incomplete)
         if not _verify(planned_file, incomplete):
             _remove(incomplete)
             checked = "sha256" if planned_file.sha256 is not None else "git_oid"
@@ -943,6 +1010,7 @@ def _download(
             )
         os.replace(incomplete, planned_file.blob)
         created["blobs"].append(planned_file.blob)
+        _flush_path(planned.blobs_dir)
         return True
 
     def _fetch_file(planned_file: PlannedFile) -> bool:
@@ -1109,7 +1177,10 @@ def _download(
                     while True:
                         if cancel():
                             return cancelled()
-                        chunk = response.read(CHUNK_SIZE)
+                        try:
+                            chunk = response.read(CHUNK_SIZE)
+                        except (OSError, http.client.HTTPException):
+                            break  # a dropped body is a short transfer: the backoff below
                         if not chunk:
                             break
                         if written + len(chunk) > planned_file.size:
@@ -1152,11 +1223,11 @@ def _download(
                 if written == planned_file.size:
                     return finish(planned_file, incomplete)
                 if attempts + 1 >= MAX_ATTEMPTS:
+                    # The bytes so far are a valid prefix; a Retry resumes from them (S1-F4).
                     return size_mismatch(
                         f"{planned_file.path}: the transfer ended at {written} of "
                         f"{planned_file.size} bytes",
                         path=planned_file.blob,
-                        remove=incomplete,
                     )
                 sleep(BACKOFF_S * (2**attempts))
                 attempts += 1
@@ -1169,11 +1240,13 @@ def _download(
         AC-15: a leftover ``.incomplete`` is the only residue a failed transfer leaves,
         and evict removes it -- which it can only do for a path the ledger names.
         """
-        if _fetch_file(planned_file):
-            return True
-        residue = planned_file.blob + ".incomplete"
-        if os.path.lexists(residue) and residue not in created["blobs"]:
-            created["blobs"].append(residue)
+        try:
+            if _fetch_file(planned_file):
+                return True
+        finally:
+            residue = planned_file.blob + ".incomplete"
+            if os.path.lexists(residue) and residue not in created["blobs"]:
+                created["blobs"].append(residue)
         return False
 
     accounted = sum(item.size for item in planned.files if present[item.path])
@@ -1183,9 +1256,8 @@ def _download(
         if present[planned_file.path]:
             send("log", f"reusing {planned_file.blob} ({planned_file.size} bytes already present)")
             continue
-        need = remaining(planned_file)
-        required = disk_needed(need)
-        free = hardware().disk_free_bytes
+        required = disk_needed(_file_missing(planned_file, False))
+        free = free_bytes_at(planned.cache_dir)
         if free < required:
             return _refuse(
                 send,
@@ -1292,6 +1364,17 @@ def evict(
         for path in entry["created_links"]:
             if not (os.path.islink(path) or os.path.lexists(path)):
                 continue
+            if path == os.path.join(repo_root, "refs", REF_NAME):
+                # Another tool may have rewritten it since; only this app's own text goes (S1-F8).
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        holds = handle.read().strip()
+                except OSError as error:
+                    holds = f"unreadable ({error})"
+                if holds != entry["revision"]:
+                    kept.append(path)
+                    send("log", f"keeping {path}: it holds {holds}, not {entry['revision']}")
+                    continue
             try:
                 os.remove(path)
                 removed.append(path)
