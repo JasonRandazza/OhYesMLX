@@ -224,7 +224,6 @@ class Harness:
             log_path=str(self.log),
             lock_dir=str(self.locks),
             open_url=self.transport,
-            hardware=lambda: type("H", (), {"disk_free_bytes": self.free})(),
             sleep=self.sleeps.append,
             clock=lambda: self.clock,
             emit=self.events.append,

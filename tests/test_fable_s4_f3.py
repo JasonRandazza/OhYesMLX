@@ -166,7 +166,6 @@ def run_download(tmp_path, monkeypatch, model, transport, hardware, disk_usage):
         log_path=str(support / "fetch-log.jsonl"),
         lock_dir=str(support / "locks"),
         open_url=transport,
-        hardware=hardware,
         sleep=lambda seconds: None,
         clock=lambda: 1234.5,
         emit=events.append,

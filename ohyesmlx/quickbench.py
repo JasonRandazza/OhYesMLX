@@ -520,12 +520,17 @@ def _run_owned(sibling, cache_dir) -> bool:
     (Fable S4-F11). An unreadable ledger is not an answer, so it is not ownership.
     """
     try:
-        listed = sibling.repo in fetch._ledger_load(
-            fetch.ledger_for(cache_dir), missing_ok=True
-        )["repos"]
-        return not listed and fetch.missing_bytes(sibling, cache_dir) == sibling.size_bytes
+        return not fetch.in_ledger(sibling.repo, cache_dir) and fetch.missing_bytes(sibling, cache_dir) == sibling.size_bytes
     except (fetch.LedgerError, OSError):
         return False
+
+
+def _left_something(repo, cache_dir) -> bool:
+    """Whether a failed download of *repo* left anything for evict to remove."""
+    try:
+        return fetch.in_ledger(repo, cache_dir)
+    except fetch.LedgerError:
+        return True  # unreadable: evict says so, and the repo is named in not_evicted
 
 
 def _first_unverified(model, cache_dir, verify, cancel=_never_cancelled):
@@ -602,11 +607,9 @@ def run(
     ``summary["kept"]``.
 
     Before anything else starts -- before Osaurus is pinned, before any engine -- ``verify``
-    (``fetch._verify``, the one definition of "these are the bytes the catalog pins") is run on
-    every file of the chosen row, because ``downloaded`` is size-and-link only and a blob of
-    the right size with the wrong bytes would otherwise be measured and filed under the
-    catalog's row (Fable S4-F14). ``plan`` never hashes: it serves a request thread. A sibling
-    already on disk is verified the same way just before its cell. Every ending -- finished, cancelled, restore failed, or an
+    (``fetch._verify``) is run on every file of the chosen row, since ``fetch.downloaded``
+    checks sizes only (Fable S4-F14); a sibling already on disk is verified the same way just
+    before its cell. Every ending -- finished, cancelled, restore failed, or an
     unexpected raise -- leaves a summary on disk saying which one it was.
 
     A :class:`~ohyesmlx.runtimes.RuntimeStopError` from a cell is such a raise: the engine may
@@ -993,7 +996,10 @@ def run(
                                 reason = f"{reason} ({code}): {last.get('message')}"
                         if not fetched and owned:
                             try:
-                                evict_or_record(sibling.repo)
+                                # A refusal before the first byte (low_disk, busy) ledgers
+                                # nothing: there is nothing to evict and nothing left behind.
+                                if _left_something(sibling.repo, cache_dir):
+                                    evict_or_record(sibling.repo)
                             finally:
                                 outstanding.discard(sibling.repo)
                     else:

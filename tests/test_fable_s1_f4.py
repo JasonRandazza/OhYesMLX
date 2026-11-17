@@ -118,7 +118,6 @@ class Run:
             log_path=str(self.support / "fetch-log.jsonl"),
             lock_dir=str(self.support / "locks"),
             open_url=self.open_url,
-            hardware=lambda: type("H", (), {"disk_free_bytes": 10**12})(),
             sleep=self.sleeps.append,
             clock=lambda: 1234.5,
             emit=self.events.append,

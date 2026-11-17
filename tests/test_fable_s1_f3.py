@@ -119,7 +119,6 @@ def test_a_mid_body_timeout_is_retried_and_never_escapes_download(tmp_path):
         log_path=str(support / "fetch-log.jsonl"),
         lock_dir=str(support / "locks"),
         open_url=transport,
-        hardware=lambda: type("H", (), {"disk_free_bytes": 10**12})(),
         sleep=sleeps.append,
         clock=lambda: 1234.5,
         emit=events.append,

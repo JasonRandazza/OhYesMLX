@@ -31,7 +31,7 @@ The rules this module is built to keep, each from the plan's ACs:
   AC-12). A pre-existing blob is reused but never ledgered, so a user's own copy is
   never removed by evict.
 
-Every side effect is a parameter: the transport (``open_url``), the hardware scan, sleep,
+Every side effect is a parameter: the transport (``open_url``), sleep,
 clock, emitter, cancellation probe, and the four filesystem locations. Tests run entirely
 on ``tmp_path`` with a fake transport; this module never contacts a network in a test.
 """
@@ -53,7 +53,6 @@ from dataclasses import dataclass
 from ohyesmlx import app_support_dir, atomic_write_text, catalog, engines
 from ohyesmlx.catalog import Model, disk_needed
 from ohyesmlx.hardware import free_bytes_at
-from ohyesmlx.hardware import scan as _scan_hardware
 
 # The one host a request may start at. Every hop after it must still be allowed.
 HF_BASE = "https://huggingface.co"
@@ -292,9 +291,7 @@ def downloaded(model: Model, cache_dir: str | None = None) -> bool:
                 return False
             if os.path.getsize(planned_file.link) != planned_file.size:
                 return False
-            if not os.path.isfile(planned_file.blob):
-                return False
-            if os.path.getsize(planned_file.blob) != planned_file.size:
+            if not _stat_present(planned_file):
                 return False
         except OSError:
             return False
@@ -653,6 +650,14 @@ def _stat_present(planned_file: PlannedFile) -> bool:
         return False
 
 
+def in_ledger(repo: str, cache_dir: str | None = None) -> bool:
+    """Whether the fetch ledger has an entry for *repo*: this app created something of it.
+
+    ``LedgerError`` propagates -- an unreadable ledger is not an answer either way.
+    """
+    return repo in _ledger_load(ledger_for(cache_dir), missing_ok=True)["repos"]
+
+
 def missing_bytes(model: Model, cache_dir: str | None = None, present=None) -> int:
     """Bytes a download of *model* would still have to fetch into *cache_dir*.
 
@@ -753,7 +758,6 @@ def download(
     log_path=DEFAULT_LOG,
     lock_dir=DEFAULT_LOCK_DIR,
     open_url=_real_open,
-    hardware=_scan_hardware,  # ponytail: unread since 05-10 (guards ask free_bytes_at); delete with its test call sites
     sleep=time.sleep,
     clock=time.time,
     emit=_print_event,
@@ -805,7 +809,7 @@ def download(
 
     try:
         return _download(
-            planned, send_holding_done, created, ledger_path, open_url, hardware, sleep, clock,
+            planned, send_holding_done, created, ledger_path, open_url, sleep, clock,
             cancel,
         )
     finally:
@@ -848,7 +852,7 @@ def _record(ledger_path, planned: Planned, created: dict, clock, send) -> None:
 
 
 def _download(
-    planned: Planned, send, created, ledger_path, open_url, hardware, sleep, clock, cancel
+    planned: Planned, send, created, ledger_path, open_url, sleep, clock, cancel
 ) -> bool:
     """The body of ``download`` once the lock is held; returns True on success."""
     repo = planned.model.repo

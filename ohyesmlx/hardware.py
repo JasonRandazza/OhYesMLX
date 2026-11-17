@@ -133,9 +133,10 @@ def free_bytes_at(path: str, disk_usage=None) -> int:
     """Free bytes on the volume that holds *path*, which need not exist yet.
 
     The one disk-free definition (S4-F3): the nearest existing ancestor of *path*, resolved
-    through symlinks, asked of ``shutil.disk_usage`` -- looked up at call time, so a test
-    that replaces the module attribute is honoured (*disk_usage* is only for ``scan``'s own injection). ``scan``'s ``disk_free_bytes`` and both
-    download guards ask this, so the number the screens show is the number the guards use.
+    through symlinks, asked of ``shutil.disk_usage``, looked up at call time so a test that
+    replaces the module attribute is honoured (*disk_usage* is ``scan``'s own injection).
+    ``scan``'s ``disk_free_bytes`` and both download guards ask this, so the number the
+    screens show is the number the guards use.
     """
     probe = os.path.realpath(path)
     while not os.path.exists(probe) and os.path.dirname(probe) != probe:
