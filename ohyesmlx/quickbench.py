@@ -138,7 +138,7 @@ class QuickPlan:
     download_bytes: int
     osaurus: bool
     estimate_s: int
-    free_after_bytes: int = 0  # plan() always sets it; the default keeps older constructors valid
+    free_after_bytes: int  # free bytes on the cache's volume after download_bytes land, floored at 0
 
 
 def _print_event(event: dict) -> None:

@@ -949,6 +949,7 @@ def quick_plan(monkeypatch):
         download_bytes=3_000_000_000,
         osaurus=False,
         estimate_s=240,
+        free_after_bytes=40_000_000_000,
     )
 
 

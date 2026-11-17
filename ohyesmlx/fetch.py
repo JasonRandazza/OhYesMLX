@@ -753,7 +753,7 @@ def download(
     log_path=DEFAULT_LOG,
     lock_dir=DEFAULT_LOCK_DIR,
     open_url=_real_open,
-    hardware=_scan_hardware,
+    hardware=_scan_hardware,  # ponytail: unread since 05-10 (guards ask free_bytes_at); delete with its test call sites
     sleep=time.sleep,
     clock=time.time,
     emit=_print_event,
