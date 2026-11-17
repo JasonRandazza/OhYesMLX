@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ○        ○     [05-10 (Fable plan D: downloads, disk, eviction; 10 findings) planned + audited 2026-11-16 (5 must-have, 7 strongly-rec applied), APPLY next. 05-09 closed, merged `251090d`]
+  ✓        ✓        ○     [05-10 APPLY done 2026-11-16 on `fix/05-10` (worktree ~/orca/workspaces/OhYesMLX/05-10, unmerged): T1 0d36ce7+fix, T2 1db5fe5+fix, T3 6ea4a5f; pytest 1496 + 2 skipped, swift 110, all green. Next: two-axis review, then UNIFY]
 ```
 
 ## Performance Metrics
@@ -96,8 +96,8 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-16 (Claude Opus 5.5 coordinator)
-Stopped at: 05-10 PLAN created (`.paul/phases/v5-onboarding/05-10-PLAN.md`); 05-09 closed and merged to main (local, not pushed). Known flaky Swift test (pre-existing, ~1 in 6): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail` (stderr reader vs stdout EOF race).
-Next action: `/paul:apply` 05-10; then 05-10b (port independence; scope in ROADMAP). Live Phase 5 checks (Stop now, real download) are now possible whenever Jason says when.
+Stopped at: 05-10 APPLY complete on `fix/05-10` (unmerged); 05-09 closed and merged to main (local, not pushed). Known flaky Swift test (pre-existing, ~1 in 6): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail` (stderr reader vs stdout EOF race).
+Next action: two-axis review of `fix/05-10` vs main, then `/paul:unify` 05-10 (SUMMARY must list test corrections: s4_f3 payload None-guard, s4_f9 derived partial path, s4_f14 drives run, NO_VERIFY seam; deviation: `remove=incomplete` grep); then 05-10b (port independence; scope in ROADMAP). Live Phase 5 checks (Stop now, real download) are now possible whenever Jason says when.
 Resume file: `.paul/phases/v5-onboarding/05-10-PLAN.md` (routing and traps: `.paul/HANDOFF.md`)
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
