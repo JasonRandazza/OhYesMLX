@@ -894,7 +894,8 @@ def _download(
                 path=blob,
             )
         if os.path.exists(blob):
-            if os.path.isfile(blob) and blob in ledgered and not _verify(planned_file, blob):
+            verified = os.path.isfile(blob) and _verify(planned_file, blob)  # hashed once
+            if os.path.isfile(blob) and blob in ledgered and not verified:
                 # This app wrote it and it no longer verifies (S4-F14): repair, don't refuse.
                 send("log", f"{blob} no longer matches the catalog; fetching it again")
                 _remove(blob)
@@ -904,7 +905,7 @@ def _download(
                     )
                 present[planned_file.path] = False
                 continue
-            if not os.path.isfile(blob) or not _verify(planned_file, blob):
+            if not verified:
                 return _refuse(
                     send,
                     "integrity_failed",
