@@ -28,6 +28,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from test_quickbench import (
+    NO_VERIFY,
     ENGINES,
     FakeClock,
     FakeLoad,
@@ -140,6 +141,7 @@ class UserPartialThenRunDownload:
 def a_run(tmp_path, cache, events):
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         models=MODELS,
         statuses=ENGINES,

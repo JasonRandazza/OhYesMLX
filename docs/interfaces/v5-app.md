@@ -148,3 +148,10 @@ Jason's answers to its seven questions (2026-11-13) are binding:
    `unsupported_reason`; no control leads past it.
 7. **`not_evicted`:** Results shows one plain line per repo: "Left on disk: <title> (<size>) — it was in use.
    You can remove it from Models."
+   `not_evicted` also names a repo whose evict raised, and a run-owned sibling whose download failed or was
+   cancelled and whose cleanup was refused. A run that refused the chosen model (its bytes do not verify: code
+   `integrity_failed`, "remove it on the Models screen, then download it again") writes no summary.
+8. **`kept`:** `summary["kept"]` is `[str]`, empty by default: sibling repos the run resumed or measured but did
+   not own (the user had bytes of it on disk, or a fetch-ledger entry, when its download was about to start).
+   They are never evicted. A sibling that was already complete on disk is not listed. The app's default
+   `JSONDecoder` ignores the key, so no app change is needed.

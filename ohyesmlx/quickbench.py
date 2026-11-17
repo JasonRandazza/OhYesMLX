@@ -511,6 +511,33 @@ def _emitter(emit):
     return send
 
 
+def _run_owned(sibling, cache_dir) -> bool:
+    """Whether a sibling's bytes on disk, if any, will be this run's to evict.
+
+    True only when nothing of it is on disk (``missing_bytes`` is its full size, stat-only)
+    and the fetch ledger has no entry for its repo: decided just before the download, so a
+    partial the user began on the Models screen is resumed and measured but never deleted
+    (Fable S4-F11). An unreadable ledger is not an answer, so it is not ownership.
+    """
+    try:
+        listed = sibling.repo in fetch._ledger_load(
+            fetch.ledger_for(cache_dir), missing_ok=True
+        )["repos"]
+        return not listed and fetch.missing_bytes(sibling, cache_dir) == sibling.size_bytes
+    except (fetch.LedgerError, OSError):
+        return False
+
+
+def _first_unverified(model, cache_dir, verify, cancel=_never_cancelled):
+    """``(first file failing verify, False)``, ``(None, True)`` if cancelled, else ``(None, False)``."""
+    for index, planned_file in enumerate(fetch.plan(model, cache_dir).files):
+        if index and cancel():  # between files, not before the first
+            return None, True
+        if not verify(planned_file, planned_file.blob):
+            return planned_file, False
+    return None, False
+
+
 def _refuse(send, code: str, message: str) -> bool:
     send("error", message, payload={"code": code})
     send("done", "quickbench did not start")
@@ -529,6 +556,7 @@ def run(
     download=fetch.download,
     evict=fetch.evict,
     downloaded=fetch.downloaded,
+    verify=fetch._verify,
     pin=osaurus_settings.pin,
     restore=osaurus_settings.restore,
     recover=osaurus_settings.recover,
@@ -568,7 +596,17 @@ def run(
 
     A sibling is downloaded only when it is missing, measured in its own cell, and evicted
     immediately after it, so one extra model at most is on disk. The chosen repo is never
-    downloaded and never evicted. Every ending -- finished, cancelled, restore failed, or an
+    downloaded and never evicted. Only a sibling this run owns is evicted: one with no bytes on
+    disk and no fetch-ledger entry when its download was about to start (:func:`_run_owned`).
+    A sibling the user had begun is resumed if need be, measured, left on disk and listed in
+    ``summary["kept"]``.
+
+    Before anything else starts -- before Osaurus is pinned, before any engine -- ``verify``
+    (``fetch._verify``, the one definition of "these are the bytes the catalog pins") is run on
+    every file of the chosen row, because ``downloaded`` is size-and-link only and a blob of
+    the right size with the wrong bytes would otherwise be measured and filed under the
+    catalog's row (Fable S4-F14). ``plan`` never hashes: it serves a request thread. A sibling
+    already on disk is verified the same way just before its cell. Every ending -- finished, cancelled, restore failed, or an
     unexpected raise -- leaves a summary on disk saying which one it was.
 
     A :class:`~ohyesmlx.runtimes.RuntimeStopError` from a cell is such a raise: the engine may
@@ -597,6 +635,21 @@ def run(
     except ValueError as error:
         return _refuse(send, "not_downloaded", str(error))
 
+    send("log", f"checking {model.repo}'s files")
+    bad, stopped = _first_unverified(model, cache_dir, verify, cancel)
+    if stopped:
+        return _refuse(
+            send, "cancelled", "quickbench was cancelled while checking the chosen model"
+        )
+    if bad is not None:
+        return _refuse(
+            send,
+            "integrity_failed",
+            f"{bad.path} of {model.repo} is not the file the catalog pins (its bytes do "
+            "not verify); remove it on the Models screen, then download it again. "
+            "Nothing was measured.",
+        )
+
     started = clock()
     started_iso = datetime.fromtimestamp(started, timezone.utc).isoformat()
     root = pathlib.Path(results_dir) / _stamp(started)
@@ -616,6 +669,9 @@ def run(
         # An eviction the fetch layer refused (`busy`, or any other refusal) is a fact about
         # what this run left on disk, so it is recorded rather than dropped (AC-4).
         "not_evicted": [],
+        # A sibling the run resumed but did not own (the user had begun it): measured, never
+        # evicted, listed here so the Results screen can say it was left on disk on purpose.
+        "kept": [],
         # The harness revision every run header carries, asked of the module that writes it
         # rather than hashed a second time here.
         "harness": {
@@ -654,14 +710,24 @@ def run(
             payload=payload,
         )
 
-    def note_not_evicted(name):
-        """Record one eviction the fetch layer refused, where the summary can be read."""
-        summary["not_evicted"].append(name)
+    def evict_or_record(name):
+        """The one eviction site: a refusal or a raise puts *name* in ``not_evicted``."""
+        why = None
+        try:
+            if evict(name, True, cache_dir=cache_dir, emit=_discard):
+                return True
+        except Exception as error:
+            why = str(error)
+        if name not in summary["not_evicted"]:
+            summary["not_evicted"].append(name)
         send(
             "log",
-            f"{name} was not evicted; it is still in the fetch ledger",
+            f"could not evict {name}: {why}"
+            if why
+            else f"{name} was not evicted; it is still in the fetch ledger",
             payload={"repo": name},
         )
+        return False
 
     def record_load(stage, before, after):
         noisy = max(before, after) > canary.LOAD_NOISY
@@ -890,7 +956,10 @@ def run(
                     sibling_snapshot = fetch.plan(sibling, cache_dir).snapshot_dir
                     cell_id = f"{sibling.format}__{top['engine']}"
                     fetched = False
+                    owned = False
+                    reason = None
                     if not sibling_plan.downloaded:
+                        owned = _run_owned(sibling, cache_dir)
                         send(
                             "progress",
                             f"stage B: downloading {sibling.repo} "
@@ -900,38 +969,65 @@ def run(
                                 "bytes": sibling_plan.size_bytes,
                             },
                         )
+                        if owned:
+                            # Before the download, so a failed or cancelled one is evicted
+                            # or named in not_evicted rather than forgotten (S4-F9).
+                            outstanding.add(sibling.repo)
+                        else:
+                            summary["kept"].append(sibling.repo)
                         reason = f"{sibling.repo} could not be downloaded"
+                        errors = []
                         try:
                             fetched = download(
-                                sibling.repo, True, cache_dir=cache_dir, emit=_discard
+                                sibling.repo, True, cache_dir=cache_dir, emit=errors.append
                             ) is True
                         except Exception as error:
                             reason = f"{reason}: {error}"
-                        if not fetched:
-                            summary["stage_b"]["cells"].append(
-                                _skipped(
-                                    top["engine"],
-                                    sibling.format,
-                                    sibling_snapshot,
-                                    sibling.repo,
-                                    reason,
-                                )
+                        else:
+                            last = next(
+                                (e for e in reversed(errors) if e.get("type") == "error"),
+                                None,
                             )
-                            step(
-                                f"stage B: {sibling.format} skipped: {reason}",
-                                {
-                                    "stage": "B",
-                                    "engine": top["engine"],
-                                    "format": sibling.format,
-                                    "status": "SKIPPED",
-                                    "reason": reason,
-                                },
+                            if last is not None and not fetched:
+                                code = (last.get("payload") or {}).get("code")
+                                reason = f"{reason} ({code}): {last.get('message')}"
+                        if not fetched and owned:
+                            try:
+                                evict_or_record(sibling.repo)
+                            finally:
+                                outstanding.discard(sibling.repo)
+                    else:
+                        bad, _stopped = _first_unverified(sibling, cache_dir, verify)
+                        if bad is not None:
+                            reason = (
+                                f"{bad.path} of {sibling.repo} is on disk but its bytes do "
+                                "not verify; remove it on the Models screen, then download "
+                                "it again"
                             )
-                            continue
-                        outstanding.add(sibling.repo)
-                        if cancel():
-                            summary["ended"] = "cancelled"
-                            break
+                    if reason is not None and not fetched:
+                        summary["stage_b"]["cells"].append(
+                            _skipped(
+                                top["engine"],
+                                sibling.format,
+                                sibling_snapshot,
+                                sibling.repo,
+                                reason,
+                            )
+                        )
+                        step(
+                            f"stage B: {sibling.format} skipped: {reason}",
+                            {
+                                "stage": "B",
+                                "engine": top["engine"],
+                                "format": sibling.format,
+                                "status": "SKIPPED",
+                                "reason": reason,
+                            },
+                        )
+                        continue
+                    if fetched and cancel():
+                        summary["ended"] = "cancelled"
+                        break  # an owned sibling is evicted by the run-level sweep
                     try:
                         record = measured(
                             top["engine"],
@@ -953,20 +1049,9 @@ def run(
                             },
                         )
                     finally:
-                        if fetched:
+                        if owned:
                             try:
-                                try:
-                                    if not evict(
-                                        sibling.repo, True, cache_dir=cache_dir, emit=_discard
-                                    ):
-                                        note_not_evicted(sibling.repo)
-                                except Exception as error:
-                                    send(
-                                        "log",
-                                        f"could not evict {sibling.repo}: {error}",
-                                        payload={"repo": sibling.repo},
-                                    )
-                                    summary["not_evicted"].append(sibling.repo)
+                                evict_or_record(sibling.repo)
                             finally:
                                 outstanding.discard(sibling.repo)
                     if restore_failure:
@@ -983,15 +1068,7 @@ def run(
         raise
     finally:
         for leftover in sorted(outstanding):
-            try:
-                if not evict(leftover, True, cache_dir=cache_dir, emit=_discard):
-                    note_not_evicted(leftover)
-            except Exception as error:
-                send(
-                    "log",
-                    f"could not evict {leftover}: {error}",
-                    payload={"repo": leftover},
-                )
+            evict_or_record(leftover)
         summary["actual_s"] = round(clock() - started, 3)
         if summary["ended"] == "cancelled":
             # Every planned cell has a status: one the run never reached is skipped with the

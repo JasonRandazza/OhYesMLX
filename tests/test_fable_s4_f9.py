@@ -17,6 +17,7 @@ import os
 from types import SimpleNamespace
 
 from test_quickbench import (
+    NO_VERIFY,
     CHOSEN,
     ENGINES,
     MODELS,
@@ -120,6 +121,7 @@ def a_run(tmp_path):
     fake_osaurus = FakeOsaurus(log=log)
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         models=MODELS,
         statuses=ENGINES,
@@ -158,15 +160,13 @@ def test_a_failed_sibling_download_is_evicted_or_recorded(tmp_path):
     assert ok is True, "the run did not report itself finished"
     assert summary["ended"] == "finished"
     assert SIBLING.repo in cache.downloads, "the sibling download was never attempted"
-    assert os.path.exists(cache.partials[SIBLING.repo]), (
-        "precondition: the failed download's ledgered partial is on disk"
-    )
-
+    # The fake's evict removes the partial and forgets it, so the path is derived, not looked up.
+    partial = cache._partial_for(SIBLING.repo)
     assert (
         SIBLING.repo in cache.evicts or SIBLING.repo in summary["not_evicted"]
     ), (
         f"{SIBLING.repo} failed to download and left "
-        f"{cache.partials[SIBLING.repo]} in the fetch ledger, but the run ended "
+        f"{partial} in the fetch ledger, but the run ended "
         f'"finished" without evicting it (evicts={cache.evicts!r}) and without '
         f"recording it (not_evicted={summary['not_evicted']!r})"
     )

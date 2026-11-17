@@ -85,6 +85,11 @@ def an_engine(name, *, installed=True, version="0.31.3", tested=True):
     )
 
 
+def NO_VERIFY(_planned_file, _path):
+    """`run`'s `verify` seam: these fakes write no blobs, so there are no bytes to hash."""
+    return True
+
+
 ENGINES = [an_engine("mlxlm"), an_engine("optiq")]
 WITH_OSAURUS = [an_engine("mlxlm"), an_engine("osaurus"), an_engine("optiq")]
 
@@ -314,6 +319,7 @@ def a_run(
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=confirmed,
         osaurus=osaurus,
         models=models,
@@ -876,6 +882,7 @@ def test_the_host_pinned_between_pin_and_restore_shows_no_drift(tmp_path):
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=MODELS,
@@ -965,6 +972,7 @@ def test_drift_between_pin_and_restore_fails_the_cell_and_keeps_both_copies(tmp_
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=[CHOSEN],
@@ -1035,6 +1043,7 @@ def test_no_drift_between_pin_and_restore_passes_and_keeps_nothing(tmp_path):
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=[CHOSEN],
@@ -1100,6 +1109,7 @@ def test_a_drift_check_that_raises_fails_the_cell_and_still_restores(tmp_path):
 
     ok = quickbench.run(
         CHOSEN.repo,
+        verify=NO_VERIFY,
         confirmed=True,
         osaurus=True,
         models=[CHOSEN],
@@ -1177,6 +1187,7 @@ def test_a_runtime_stop_error_ends_the_run_and_still_restores_osaurus(tmp_path):
     with pytest.raises(runtimes.RuntimeStopError):
         quickbench.run(
             CHOSEN.repo,
+            verify=NO_VERIFY,
             confirmed=True,
             osaurus=True,
             models=MODELS,
@@ -1340,6 +1351,7 @@ def test_an_unexpected_raise_still_carries_the_summary_as_a_result_event(tmp_pat
     with pytest.raises(KeyboardInterrupt):
         quickbench.run(
             CHOSEN.repo,
+            verify=NO_VERIFY,
             confirmed=True,
             models=MODELS,
             statuses=ENGINES,
@@ -1743,3 +1755,42 @@ def test_the_default_abort_probe_never_fires(tmp_path):
     ok, fakes, summary = a_run(tmp_path)
 
     assert ok is True and summary["ended"] == "finished"
+
+
+# --- 05-10 AC-9: a sibling already on disk is verified before its cell ------------------------
+
+
+def test_a_sibling_on_disk_whose_bytes_do_not_verify_is_skipped_and_the_run_continues(tmp_path):
+    log = []
+    cache = FakeCache(downloaded=(CHOSEN.repo, SIBLING_2.repo), log=log)
+    events = []
+    ok = quickbench.run(
+        CHOSEN.repo,
+        confirmed=True,
+        verify=lambda _file, path: "two-b-jang" not in path,
+        models=MODELS,
+        statuses=ENGINES,
+        hw=SimpleNamespace(),
+        run_cells=FakeRunCells(on_call=lambda cell, _kwargs: log.append(("cell", cell.id))),
+        download=cache.download,
+        evict=cache.evict,
+        downloaded=cache.downloaded,
+        port_in_use=PortProbe(),
+        osaurus_app_running=lambda: False,
+        load=FakeLoad(),
+        clock=FakeClock(),
+        emit=events.append,
+        cache_dir=str(tmp_path / "cache"),
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(tmp_path / "baseline.json"),
+    )
+    found = sorted((tmp_path / "quickbench").glob("*/summary.json"))
+    cells = json.loads(found[0].read_text(encoding="utf-8"))["stage_b"]["cells"]
+    skipped = [cell for cell in cells if cell["repo"] == SIBLING_2.repo]
+
+    assert ok is True
+    assert [cell["status"] for cell in skipped] == ["SKIPPED"]
+    assert "do not verify" in skipped[0]["reason"] and "Models screen" in skipped[0]["reason"]
+    assert [cell for cell in cells if cell["repo"] == SIBLING.repo][0]["status"] == "PASS"
+    assert SIBLING_2.repo not in cache.evicts, "a sibling the run did not download is never evicted"

@@ -18,8 +18,10 @@ Two halves, and only the second can be a failing test; the first is cited from t
    `integrity_failed ... nothing was overwritten` (:798-806), so the app cannot repair it.
 
 The test below is the finding's own idea, made concrete: a ledgered blob padded to the exact
-catalog size with the wrong bytes, then `quickbench.plan` for that row. The plan must refuse
-before an engine is started; on the current tree it does not.
+catalog size with the wrong bytes, then a quick-bench run of that row. The run must refuse
+before an engine is started (and before Osaurus is pinned). It drives `run`, not `plan`:
+`plan` serves `GET /quickbench/plan` on the request thread and must not hash (05-10 AC-9; the
+second test pins that).
 """
 
 from __future__ import annotations
@@ -28,9 +30,7 @@ import os
 from dataclasses import replace
 from types import SimpleNamespace
 
-import pytest
-
-from test_quickbench import ENGINES, a_model
+from test_quickbench import ENGINES, WITH_OSAURUS, FakeCache, FakeOsaurus, FakeRunCells, a_model
 
 from ohyesmlx import catalog, fetch, quickbench
 
@@ -80,23 +80,61 @@ def test_a_wrong_bytes_blob_of_the_right_size_is_planned_for_measurement(tmp_pat
         "precondition: `downloaded` is size-and-link only (UAT-001), so the wrong bytes pass"
     )
 
-    shown = None
-    refusal = None
-    try:
-        shown = quickbench.plan(
-            REPO,
-            SimpleNamespace(),
-            ENGINES,
-            [model],
-            cache_dir=cache_dir,
-            downloaded=fetch.downloaded,
-        )
-    except ValueError as error:
-        refusal = str(error)
-
-    assert refusal is not None or shown.stage_a == [], (
-        f"the plan offered {len(shown.stage_a)} stage-A cell(s) for a blob that fails "
-        f"`fetch._verify`, so a run would measure a corrupt artifact and file the number "
-        f"under the catalog row; nothing between the rename and the engine re-checks the "
-        f"catalog's sha256"
+    # `plan` serves a request thread and must stay a stat-only answer (05-10 AC-9), so the
+    # check is `run`'s, once, before the Osaurus pin and before any engine: it is driven here.
+    log = []
+    events = []
+    cells = FakeRunCells(on_call=lambda cell, _kwargs: log.append(("cell", cell.id)))
+    fake_osaurus = FakeOsaurus(log=log)
+    ok = quickbench.run(
+        REPO,
+        confirmed=True,
+        osaurus=True,
+        models=[model],
+        statuses=WITH_OSAURUS,
+        hw=SimpleNamespace(),
+        run_cells=cells,
+        download=FakeCache(log=log).download,
+        evict=FakeCache(log=log).evict,
+        pin=fake_osaurus.pin,
+        restore=fake_osaurus.restore,
+        recover=fake_osaurus.recover,
+        port_in_use=lambda _port: False,
+        osaurus_app_running=lambda: False,
+        load=lambda: 1.0,
+        emit=events.append,
+        cache_dir=cache_dir,
+        results_dir=str(tmp_path / "quickbench"),
+        backup_dir=str(tmp_path / "backup"),
+        baseline_path=str(tmp_path / "baseline.json"),
     )
+
+    assert ok is False
+    assert cells.calls == [], (
+        "the run started an engine for a blob that fails `fetch._verify`, so it would "
+        "measure a corrupt artifact and file the number under the catalog row"
+    )
+    assert fake_osaurus.calls == [], "Osaurus was recovered or pinned for a refused run"
+    assert not list((tmp_path / "quickbench").glob("*/summary.json")), "a refused run wrote a row"
+    error = next(e for e in events if e["type"] == "error")
+    assert error["payload"]["code"] == "integrity_failed"
+    assert "model.safetensors" in error["message"]
+    assert "remove it on the Models screen, then download it again" in error["message"]
+
+
+def test_plan_never_hashes_a_wrong_bytes_blob(tmp_path):
+    """The plan stays cheap: it accepts what `downloaded` accepts, and `run` does the hashing."""
+    model = _row()
+    cache_dir = str(tmp_path / "cache")
+    a_cache_with_right_size_wrong_bytes(cache_dir, model)
+
+    shown = quickbench.plan(
+        REPO,
+        SimpleNamespace(),
+        ENGINES,
+        [model],
+        cache_dir=cache_dir,
+        downloaded=fetch.downloaded,
+    )
+
+    assert shown.stage_a, "plan answered from size and link alone"
