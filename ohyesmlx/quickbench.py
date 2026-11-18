@@ -528,6 +528,30 @@ def _first_unverified(model, cache_dir, verify, cancel=_never_cancelled):
     return None, False
 
 
+def _stage_b_emitter(errors, send, repo):
+    """The sibling download's emitter: ``error`` events are kept for the skip reason, ``progress``
+    events go on to the caller, at most one per whole percent of the sibling's bytes (the
+    job buffer holds 10,000 events; a multi-GB fetch emits far more)."""
+    last = {"percent": -1}
+
+    def emit(event):
+        kind = event.get("type")
+        if kind == "error":
+            errors.append(event)
+        elif kind == "progress":
+            percent = int((event.get("fraction") or 0.0) * 100)
+            if percent > last["percent"]:
+                last["percent"] = percent
+                send(
+                    "progress",
+                    event.get("message") or "",
+                    fraction=event.get("fraction"),
+                    payload={"stage": "B", "repo": repo},
+                )
+
+    return emit
+
+
 def _refuse(send, code: str, message: str) -> bool:
     send("error", message, payload={"code": code})
     send("done", "quickbench did not start")
@@ -936,6 +960,30 @@ def run(
                     payload={"stage": "B", "engine": top["engine"]},
                 )
                 load_b = load()
+
+                def release_sibling(sibling, owned):
+                    if owned:
+                        try:
+                            evict_or_record(sibling.repo)
+                        finally:
+                            outstanding.discard(sibling.repo)
+
+                def skip_sibling(sibling, snapshot_dir, engine, reason, owned=False):
+                    summary["stage_b"]["cells"].append(
+                        _skipped(engine, sibling.format, snapshot_dir, sibling.repo, reason)
+                    )
+                    step(
+                        f"stage B: {sibling.format} skipped: {reason}",
+                        {
+                            "stage": "B",
+                            "engine": engine,
+                            "format": sibling.format,
+                            "status": "SKIPPED",
+                            "reason": reason,
+                        },
+                    )
+                    release_sibling(sibling, owned)
+
                 for sibling_plan in shown.stage_b:
                     if cancel():
                         summary["ended"] = "cancelled"
@@ -945,7 +993,19 @@ def run(
                     cell_id = f"{sibling.format}__{top['engine']}"
                     fetched = False
                     owned = False
-                    reason = None
+                    stopped = []  # a Stop the download itself saw; abort() is not asked again
+                    # Before any byte: a sibling the winner cannot serve (S4-F8), or an
+                    # engine that is no longer free to start (S4-F1), is never fetched.
+                    reason = (
+                        f"{sibling.format} is not listed for {top['engine']}"
+                        if top["engine"] not in sibling.engines
+                        else _skip_reason(
+                            top["engine"], osaurus, osaurus_app_running, port_refusal
+                        )
+                    )
+                    if reason is not None:
+                        skip_sibling(sibling, sibling_snapshot, top["engine"], reason)
+                        continue
                     if not sibling_plan.downloaded:
                         owned = _run_owned(sibling, cache_dir)
                         send(
@@ -965,9 +1025,19 @@ def run(
                             summary["kept"].append(sibling.repo)
                         reason = f"{sibling.repo} could not be downloaded"
                         errors = []
+
+                        def hears_stop():
+                            if cancel() or abort():
+                                stopped.append(True)
+                            return bool(stopped)
+
                         try:
                             fetched = download(
-                                sibling.repo, True, cache_dir=cache_dir, emit=errors.append
+                                sibling.repo,
+                                True,
+                                cache_dir=cache_dir,
+                                emit=_stage_b_emitter(errors, send, sibling.repo),
+                                cancel=hears_stop,
                             ) is True
                         except Exception as error:
                             reason = f"{reason}: {error}"
@@ -996,29 +1066,20 @@ def run(
                                 "it again"
                             )
                     if reason is not None and not fetched:
-                        summary["stage_b"]["cells"].append(
-                            _skipped(
-                                top["engine"],
-                                sibling.format,
-                                sibling_snapshot,
-                                sibling.repo,
-                                reason,
-                            )
-                        )
-                        step(
-                            f"stage B: {sibling.format} skipped: {reason}",
-                            {
-                                "stage": "B",
-                                "engine": top["engine"],
-                                "format": sibling.format,
-                                "status": "SKIPPED",
-                                "reason": reason,
-                            },
-                        )
+                        skip_sibling(sibling, sibling_snapshot, top["engine"], reason)
                         continue
-                    if fetched and cancel():
+                    if fetched and (cancel() or stopped):
                         summary["ended"] = "cancelled"
                         break  # an owned sibling is evicted by the run-level sweep
+                    # The download took minutes: ask again (S4-F1) before starting the engine.
+                    reason = _skip_reason(
+                        top["engine"], osaurus, osaurus_app_running, port_refusal
+                    )
+                    if reason is not None:
+                        skip_sibling(
+                            sibling, sibling_snapshot, top["engine"], reason, owned=owned
+                        )
+                        continue
                     try:
                         record = measured(
                             top["engine"],
@@ -1040,11 +1101,7 @@ def run(
                             },
                         )
                     finally:
-                        if owned:
-                            try:
-                                evict_or_record(sibling.repo)
-                            finally:
-                                outstanding.discard(sibling.repo)
+                        release_sibling(sibling, owned)
                     if restore_failure:
                         summary["ended"] = "restore_failed"
                         break
