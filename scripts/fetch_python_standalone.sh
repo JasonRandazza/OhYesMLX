@@ -9,7 +9,10 @@
 #
 # The tarball is cached under ~/Library/Caches/OhYesMLX/build/ so a rebuild never downloads it
 # again. The sha256 is checked before anything is unpacked: a mismatch unpacks nothing and exits
-# non-zero. The unpacked tree is cached beside the tarball for the same reason.
+# non-zero. The tree is unpacked into a fresh temporary directory on every run and the caller
+# removes it: a cached tree lives in a user-writable place, is mutated by ordinary use (a pip
+# install, an edited stdlib file, a planted .pth) and would be copied into the bundle while the
+# SBOM names this tarball's sha256 (S6-F2).
 set -eu
 
 RELEASE_TAG="20261026"
@@ -19,7 +22,6 @@ URL="https://github.com/astral-sh/python-build-standalone/releases/download/${RE
 
 CACHE="${HOME}/Library/Caches/OhYesMLX/build"
 ARCHIVE="${CACHE}/${TARBALL}"
-UNPACKED="${CACHE}/${TARBALL%-install_only.tar.gz}"
 
 case "${1:-}" in
     --identity)
@@ -67,17 +69,15 @@ if [ ! -f "$ARCHIVE" ]; then
     mv "${ARCHIVE}.part" "$ARCHIVE"
 fi
 
-if [ ! -x "${UNPACKED}/python/bin/python3" ]; then
-    rm -rf "${UNPACKED}.tmp"
-    mkdir -p "${UNPACKED}.tmp"
-    tar -xzf "$ARCHIVE" -C "${UNPACKED}.tmp"
-    if [ ! -x "${UNPACKED}.tmp/python/bin/python3" ]; then
-        rm -rf "${UNPACKED}.tmp"
-        echo "$0: ${TARBALL} did not unpack a python/bin/python3" >&2
-        exit 1
-    fi
-    rm -rf "$UNPACKED"
-    mv "${UNPACKED}.tmp" "$UNPACKED"
+# Never reuse an unpacked tree: bin/python3 being executable is no evidence that the tree is the
+# verified tarball's, and it is the tree the bundle copies. Unpack the bytes just verified, into a
+# directory this run made, and let the caller delete it (scripts/build_app.sh does, on exit).
+FRESH=$(mktemp -d "${TMPDIR:-/tmp}/ohyesmlx-python.XXXXXX")
+tar -xzf "$ARCHIVE" -C "$FRESH"
+if [ ! -x "${FRESH}/python/bin/python3" ]; then
+    rm -rf "$FRESH"
+    echo "$0: ${TARBALL} did not unpack a python/bin/python3" >&2
+    exit 1
 fi
 
-printf '%s\n' "${UNPACKED}/python"
+printf '%s\n' "${FRESH}/python"

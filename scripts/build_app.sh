@@ -23,6 +23,11 @@ fail() {
 
 echo "==> the pinned interpreter" >&2
 PYTHON_ROOT=$("$ROOT/scripts/fetch_python_standalone.sh")
+# The fetch unpacks the verified tarball into a fresh directory every run, so the build owns it and
+# deletes it however it exits. Keeping only the tarball cached is what stops a mutated tree from
+# being copied, signed and zipped under the tarball's sha256 (S6-F2).
+MAXCHOS=""
+trap 'rm -rf "${PYTHON_ROOT:-}"; [ -z "$MAXCHOS" ] || rm -f "$MAXCHOS"' EXIT
 IDENTITY=$("$ROOT/scripts/fetch_python_standalone.sh" --identity)
 RELEASE_TAG=$(printf '%s\n' "$IDENTITY" | sed -n 's/^release=//p')
 INTERPRETER_URL=$(printf '%s\n' "$IDENTITY" | sed -n 's/^url=//p')
@@ -30,7 +35,9 @@ INTERPRETER_SHA256=$(printf '%s\n' "$IDENTITY" | sed -n 's/^sha256=//p')
 [ -x "$PYTHON_ROOT/bin/python3" ] || fail "$PYTHON_ROOT/bin/python3 is not executable"
 
 # One definition of the version: the package's own `__version__`, read before it is copied.
-VERSION=$(OYMLX_REPO="$ROOT" "$PYTHON_ROOT/bin/python3" -I -c \
+# -B: this read imports ohyesmlx (json, tempfile, pathlib), and the interpreter's tree is the one
+# that gets copied into the bundle -- writing a pyc here would ship it (S6-F1).
+VERSION=$(OYMLX_REPO="$ROOT" "$PYTHON_ROOT/bin/python3" -I -B -c \
     'import os, sys; sys.path.insert(0, os.environ["OYMLX_REPO"]); import ohyesmlx; print(ohyesmlx.__version__)')
 [ -n "$VERSION" ] || fail "could not read ohyesmlx.__version__"
 ZIP="$DIST/OhYesMLX-$VERSION.zip"
@@ -73,9 +80,47 @@ find "$SITE_PACKAGES/ohyesmlx" -name '*.pyc' -delete
 # interpreter import the same stdlib, and a missing .pyc there would be written into the signed
 # bundle (found by check_bundle.sh, 2026-11-14). unchecked-hash pycs are never revalidated against
 # source mtimes, so a copy, a zip or a read-only volume can never make one look stale.
-"$BUNDLED" -I -B -m compileall -q -j 0 --invalidation-mode unchecked-hash \
+# -f replaces every pyc, including one a timestamp-mode import already wrote: compileall without it
+# skips any source whose pyc header matches (magic, flags 0, source mtime), which is exactly the
+# pycs the build's own imports leave behind (S6-F1).
+"$BUNDLED" -I -B -m compileall -q -f -j 0 --invalidation-mode unchecked-hash \
     "$CONTENTS/Resources/python/lib" >&2 || fail "compileall failed"
-[ -n "$(find "$SITE_PACKAGES/ohyesmlx" -name '*.pyc' -print -quit)" ] || fail "no bytecode was written"
+
+# The assertion that the tree is sealed, not just that some bytecode exists: every .py has a pyc,
+# and every pyc is unchecked-hash (flags word 1). A timestamp pyc (flags 0) is revalidated against
+# its source mtime on every import, so any transfer that does not reproduce mtimes makes it stale
+# and the next child interpreter rewrites it inside the signed bundle (S6-F1, S6-F3).
+"$BUNDLED" -I -B - "$CONTENTS/Resources/python/lib" <<'PY' || fail "the bundled bytecode is not what it must be (see above)"
+import importlib.util
+import os
+import struct
+import sys
+
+problems = []
+pycs = 0
+for root in sys.argv[1:]:
+    for directory, _, names in os.walk(root):
+        for name in names:
+            path = os.path.join(directory, name)
+            if name.endswith(".pyc"):
+                with open(path, "rb") as handle:
+                    header = handle.read(8)
+                if len(header) != 8:
+                    problems.append(f"{path}: {len(header)}-byte header")
+                    continue
+                flags = struct.unpack("<4sI", header)[1]
+                if flags != 1:
+                    problems.append(f"{path}: flags {flags}, not unchecked-hash")
+                pycs += 1
+            elif name.endswith(".py"):
+                if not os.path.exists(importlib.util.cache_from_source(path)):
+                    problems.append(f"{path}: no pyc")
+if problems:
+    print("\n".join(problems[:20]), file=sys.stderr)
+    print(f"{len(problems)} problem(s)", file=sys.stderr)
+    raise SystemExit(1)
+print(f"    {pycs} pycs, all unchecked-hash; every .py compiled", file=sys.stderr)
+PY
 
 echo "==> checking the interpreter's licence files shipped unmodified" >&2
 find "$PYTHON_ROOT" -type f \( -name 'LICENSE*' -o -name 'COPYING*' \) -print |
@@ -87,7 +132,6 @@ find "$PYTHON_ROOT" -type f \( -name 'LICENSE*' -o -name 'COPYING*' \) -print |
 
 echo "==> signing ad hoc, inside-out" >&2
 MAXCHOS=$(mktemp -t ohyesmlx-macho)
-trap 'rm -f "$MAXCHOS"' EXIT
 find "$CONTENTS/Resources/python" -type f -print |
     while IFS= read -r candidate; do
         case "$(file -b "$candidate")" in
@@ -111,6 +155,7 @@ echo "==> SBOM" >&2
 "${PYTHON:-/usr/bin/python3}" "$ROOT/scripts/make_sbom.py" \
     --out "$SBOM" \
     --python "$BUNDLED" \
+    --package "$SITE_PACKAGES/ohyesmlx" \
     --release-tag "$RELEASE_TAG" \
     --interpreter-url "$INTERPRETER_URL" \
     --interpreter-sha256 "$INTERPRETER_SHA256" \
@@ -122,8 +167,16 @@ echo "==> SBOM" >&2
 codesign --verify --deep --strict "$APP" || fail "the bundle no longer verifies after the SBOM step"
 
 echo "==> zip" >&2
-rm -f "$ZIP"
+rm -f "$ZIP" "$ZIP.sha256"
 ditto -c -k --keepParent "$APP" "$ZIP" || fail "ditto could not write $ZIP"
 [ -f "$ZIP" ] || fail "$ZIP was not written"
 
-printf '%s\n' "$APP" "$ZIP" "$SBOM"
+# The published digest: gatekeeper.md tells the user a sha256 is published next to the zip and
+# that it, not the ad-hoc signature, is what shows the download is unaltered. It is written here
+# so the value exists at release time instead of being remembered then (S6-F8). `shasum -a 256 -c`
+# reads it from the zip's own directory.
+DIGEST=$(shasum -a 256 "$ZIP" | awk '{print $1}')
+printf '%s  %s\n' "$DIGEST" "$(basename "$ZIP")" > "$ZIP.sha256"
+[ -s "$ZIP.sha256" ] || fail "$ZIP.sha256 was not written"
+
+printf '%s\n' "$APP" "$ZIP" "$ZIP.sha256" "$SBOM"
