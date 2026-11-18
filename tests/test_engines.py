@@ -227,6 +227,8 @@ def test_a_wheel_installed_optiq_reads_its_version_from_dist_info_metadata():
     env = FakeEnv(
         files={
             f"{base}/bin/optiq": "#!/bin/sh\n",
+            # S6-F4: an app-managed venv counts only while its own interpreter resolves.
+            f"{base}/bin/python": "#!/bin/sh\n",
             f"{base}/pyvenv.cfg": "version = 3.12.13\n",
             f"{base}/lib/python3.12/site-packages/mlx_optiq-0.7.8.dist-info/METADATA": (
                 "Metadata-Version: 2.4\nName: mlx-optiq\nVersion: 0.7.8\n"
@@ -297,6 +299,7 @@ def test_mlxlm_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--isolated",
             "--no-input",
             "--disable-pip-version-check",
+            "--no-cache-dir",
             "--require-hashes",
             "--only-binary",
             ":all:",
@@ -325,6 +328,7 @@ def test_optiq_plan_creates_the_pinned_venv_then_installs_the_tested_version():
             "--isolated",
             "--no-input",
             "--disable-pip-version-check",
+            "--no-cache-dir",
             "--require-hashes",
             "--only-binary",
             ":all:",
@@ -762,6 +766,7 @@ def test_two_steps_run_in_order_with_progress_after_each_and_done_last(tmp_path)
             "--isolated",
             "--no-input",
             "--disable-pip-version-check",
+            "--no-cache-dir",
             "--require-hashes",
             "--only-binary",
             ":all:",
@@ -1126,8 +1131,11 @@ def test_a_failing_step_stops_before_the_next_rolls_back_and_reports_the_tail(tm
 def test_a_venv_that_existed_before_the_call_is_never_removed(tmp_path, monkeypatch):
     # 05-11 T2: an existing root counts as this install's to keep only when a lab path
     # records it; an unrecorded one is an unfinished install that `install` clears first.
+    # S6-F4: a recorded root is kept only while its own interpreter still resolves, so the
+    # fixture carries one -- a dangling link is the moved-app case, tested in f4.
     venv = tmp_path / "engines" / "mlxlm-0.31.3"
-    venv.mkdir(parents=True)
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n", encoding="utf-8")
     (venv / "keep.txt").write_text("pre-existing", encoding="utf-8")
     (tmp_path / "lab-paths.json").write_text(
         json.dumps({"mlxlm": str(venv / "bin")}), encoding="utf-8"

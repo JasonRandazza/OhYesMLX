@@ -1,23 +1,30 @@
 #!/bin/sh
-# 045-03 clean-account smoke: build what a user gets, then drive it as a throwaway account.
+# 045-03 clean-account smoke: run the artifact a user receives, as a throwaway account.
 #
 # Runs as jrazz and does everything through `sudo -n -u oymlxtest`, so nothing it touches
 # belongs to the real account. Subcommands, in the order a smoke uses them:
 #
 #   preflight     AC-1's preconditions; exits 1 naming the one that failed
-#   setup         preflight, Jason's host snapshot, the wheel from `git archive HEAD`,
-#                 oymlxtest's venv, and that venv's `ohyesmlx` installed --no-deps --no-index
+#   setup         preflight, Jason's host snapshot, the built dist/OhYesMLX.app copied into
+#                 the test account, and the client beside it
 #   run           the client (scripts/smoke_clean_account.py) as oymlxtest, with a sweep trap
 #   verify-host   AC-7: Jason's Application Support, HF cache and Osaurus config unchanged
-#   teardown      remove oymlxtest's venv, Application Support and HF cache; keep the results
+#   teardown      remove oymlxtest's copy of the app, Application Support, HF cache and pip
+#                 cache; keep the results
 #
 # The model below is downloaded once, into oymlxtest's own HF cache, and evicted by the run.
+# The app is the one `scripts/build_app.sh` wrote, never a wheel: S6-F5 found the earlier
+# smoke spawning a console script under Homebrew's CPython, an artifact no user receives.
 set -eu
 
 TEST_USER=oymlxtest
 TEST_HOME=/Users/oymlxtest
 SMOKE=/Users/Shared/oymlx-smoke
-PY=/opt/homebrew/bin/python3.14
+APP_NAME=OhYesMLX.app
+TEST_APP="$SMOKE/$APP_NAME"
+# The launcher's own interpreter (`BackendLauncher.bundledInterpreter()`, :169-176): the
+# copied bundle's, so the backend runs the Python that was signed into it.
+TEST_PYTHON="$TEST_APP/Contents/Resources/python/bin/python3"
 PORTS="1337 8000 8080 8081 8100 8200"
 
 # Purpose (AGENTS.md, "Downloads need a reason and a record"): 045-03's clean-account smoke
@@ -62,6 +69,12 @@ preflight() {
         fail "the Osaurus app is not running ($OSAURUS_APP)"
     fi
 
+    # The bundle is the artifact under test (S6-F5): a wheel in a venv is not what a user
+    # receives, and a build that was never run is what the earlier smoke checked instead.
+    [ -d "$REPO/dist/$APP_NAME" ] || fail "dist/$APP_NAME (run scripts/build_app.sh first)"
+    [ -x "$REPO/dist/$APP_NAME/Contents/Resources/python/bin/python3" ] \
+        || fail "the bundle's Contents/Resources/python/bin/python3 is executable"
+
     xcode-select -p >/dev/null 2>&1 || fail "xcode-select -p (optiq builds pygame from source)"
 
     free_kb=$(df -k / | awk 'NR == 2 {print $4}')
@@ -69,7 +82,7 @@ preflight() {
 
     as_test_user test ! -e "$TEST_HOME/Library/Application Support/OhYesMLX" \
         || fail "$TEST_USER has no ~/Library/Application Support/OhYesMLX"
-    # Its own name: this runs before oymlxtest's venv, so ohyesmlx.fetch is not importable here.
+    # Its own name: this runs before the bundle is copied, so ohyesmlx.fetch is not importable here.
     hub="models--$(printf '%s' "$MODEL" | sed 's|/|--|g')"
     as_test_user test ! -e "$TEST_HOME/.cache/huggingface/hub/$hub" \
         || fail "$TEST_USER has no ~/.cache/huggingface/hub/$hub"
@@ -142,25 +155,20 @@ setup() {
     printf '%s\n' "$head_sha" >"$SMOKE/head"
     log "setup: HEAD $head_sha"
 
-    work=$(mktemp -d "${TMPDIR:-/tmp}/oymlx-smoke.XXXXXX")
-    trap 'rm -rf "$work"' EXIT
-    git -C "$REPO" archive --format=tar HEAD >"$work/head.tar"
-    tar -xf "$work/head.tar" -C "$work"
-    rm -f "$work/head.tar"
+    # The bundle `scripts/build_app.sh` wrote, copied whole: the smoke runs the interpreter,
+    # site-packages and signature that ship, which is what S6-F5 found the wheel route was
+    # not doing. The old copy goes first so a partial copy is never mistaken for a build.
+    log "setup: copy dist/$APP_NAME -> $TEST_APP"
+    rm -rf "$TEST_APP"
+    ditto "$REPO/dist/$APP_NAME" "$TEST_APP"
+    printf '%s\n' "$TEST_APP" >"$SMOKE/artifact"
 
-    rm -rf "$SMOKE/dist"
-    mkdir -p "$SMOKE/dist"
-    log "setup: uv build --wheel"
-    ( cd "$work" && uv build --wheel --out-dir "$SMOKE/dist" >/dev/null )
-
-    # The client comes from the same revision as the wheel, not the working tree.
+    # The client comes from the same revision as the bundle, not the working tree.
     git -C "$REPO" show HEAD:scripts/smoke_clean_account.py >"$SMOKE/smoke_clean_account.py"
-    chmod a+rX "$SMOKE" "$SMOKE/dist" "$SMOKE/dist"/* "$SMOKE/smoke_clean_account.py"
-
-    log "setup: venv for $TEST_USER"
-    as_test_user "$PY" -I -m venv "$TEST_HOME/oymlx-venv"
-    as_test_user "$TEST_HOME/oymlx-venv/bin/python" -I -m pip install \
-        --no-deps --no-index "$SMOKE"/dist/*.whl >/dev/null
+    # Recursive: the copy belongs to jrazz, and the interpreter inside it has to be one
+    # oymlxtest can read and exec. Modes are not part of the code signature.
+    chmod -R a+rX "$TEST_APP"
+    chmod a+rX "$SMOKE" "$SMOKE/smoke_clean_account.py"
 
     log "setup: done"
 }
@@ -201,9 +209,14 @@ sweep_once() {
         done
     done
     # By its own start command: the app binds an ephemeral port, so a port sweep alone would
-    # miss it and leave it holding the venv's interpreter.
-    for pid in $(as_test_user pgrep -u "$TEST_USER" -f "$TEST_HOME/oymlx-venv/bin/ohyesmlx app" 2>/dev/null || true); do
-        sweep_hit "app" "$pid"
+    # miss it and leave it holding the bundle's interpreter. The argv is the launcher's --
+    # `[python, -I, -B, -m ohyesmlx.cli, app]` -- with the copied bundle's python (S6-F5).
+    for pattern in \
+        "$TEST_PYTHON -I -B -m ohyesmlx.cli app" \
+        "$TEST_APP/Contents/MacOS/OhYesMLX"; do
+        for pid in $(as_test_user pgrep -u "$TEST_USER" -f "$pattern" 2>/dev/null || true); do
+            sweep_hit "app $pattern" "$pid"
+        done
     done
     # Engines the app started from its own engines directory, or from inside a bundle.
     for pattern in \
@@ -245,13 +258,18 @@ sweep_pid() {
 run() {
     [ -f "$SMOKE/head" ] || { log "run: no $SMOKE/head; run setup first"; exit 1; }
     head_sha=$(cat "$SMOKE/head")
+    [ -f "$SMOKE/artifact" ] || { log "run: no $SMOKE/artifact; run setup first"; exit 1; }
+    artifact=$(cat "$SMOKE/artifact")
 
     trap 'exit 130' INT TERM
     trap 'sweep' EXIT
     status=0
-    as_test_user "$TEST_HOME/oymlx-venv/bin/python" -I \
+    # The bundle's own interpreter runs the client too: the client is stdlib-only at import,
+    # so this proves the signed Python starts, and the backend it spawns is the same one.
+    as_test_user "$TEST_PYTHON" -I \
         "$SMOKE/smoke_clean_account.py" \
         --out "$SMOKE/results" --head "$head_sha" \
+        --python "$TEST_PYTHON" --artifact "$artifact" \
         --forbid /Users/jrazz --model "$MODEL" --ports "$PORTS" || status=$?
     trap - EXIT INT TERM
 
@@ -285,10 +303,11 @@ verify_host() {
 teardown() {
     log "teardown: removing $TEST_USER's smoke state"
     as_test_user rm -rf \
-        "$TEST_HOME/oymlx-venv" \
         "$TEST_HOME/Library/Application Support/OhYesMLX" \
+        "$TEST_HOME/Library/Preferences/io.github.jasonrandazza.ohyesmlx.plist" \
+        "$TEST_HOME/Library/Caches/pip" \
         "$TEST_HOME/.cache/huggingface"
-    log "teardown: removed venv, Application Support/OhYesMLX, .cache/huggingface"
+    log "teardown: removed Application Support/OhYesMLX, the app's Preferences plist, pip's cache, .cache/huggingface"
 
     for entry in "$SMOKE"/*; do
         [ -e "$entry" ] || continue

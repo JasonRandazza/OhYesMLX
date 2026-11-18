@@ -20,8 +20,10 @@ one screen saying **"Move OhYesMLX to your Applications folder, then open it aga
 
 If you move the app **after** you have installed engines, open the Engines screen and install
 **mlx-lm** and **OptiQ** again: each engine is a Python environment built inside the app's own
-copy of Python, and moving the app leaves the old one behind. Your downloaded models and your
-results are not affected — they do not live inside the app.
+copy of Python, and moving the app leaves the old one behind. The Engines screen will show those
+engines as not installed, so installing them again replaces the old environment instead of
+refusing. Your downloaded models and your results are not affected — they do not live inside the
+app.
 
 ## The first open will be refused
 
@@ -70,13 +72,15 @@ uploaded, and nothing is ever sent anywhere else.
 
 ## What the app writes, and how to remove it all
 
-OhYesMLX keeps three places on disk:
+OhYesMLX keeps five places on disk:
 
 | Where | What it holds |
 |---|---|
 | `~/Library/Application Support/OhYesMLX` | Engine environments (a Python environment per engine), the list of what has been downloaded, the install and download logs, benchmark summaries, and a single-instance lock file. Created so that only your account can read it. |
 | `~/.cache/huggingface/hub` | The models you downloaded, in the standard Hugging Face cache layout. Shared with any other tool that uses it. |
 | `~/Library/Caches/OhYesMLX` | The build cache: the copy of Python the release was assembled from. Only used when building from source, never at runtime. |
+| `~/Library/Caches/pip` | Not made by OhYesMLX, but shared with anything else on your Mac that runs pip: every tool that installs Python packages fills it. OhYesMLX's own engine installs pass `--no-cache-dir`, so they do not add to it — anything already there belongs to you or another tool, and deleting the folder only costs a re-download. |
+| `~/Library/Preferences/io.github.jasonrandazza.ohyesmlx.plist` | The app's small preferences record: window state and the last in-flight job, so a job interrupted by Quit is reported rather than silently lost. |
 
 To remove everything the app has added:
 
@@ -86,7 +90,12 @@ To remove everything the app has added:
 3. Press Shift-Command-G again, paste `~/.cache/huggingface/` (the Finder shows it as
    `.cache`, which is hidden, so the Go-to-Folder box is the easy way in), and delete the
    **hub** folder if you do not want the downloaded models for anything else.
-4. Delete `OhYesMLX.app` from Applications.
+4. Press Shift-Command-G once more, paste `~/Library/Preferences/`, and delete
+   **io.github.jasonrandazza.ohyesmlx.plist**.
+5. If you want the shared **pip** cache back too, open `~/Library/Caches/pip` the same way and
+   move the **pip** folder to the Trash. OhYesMLX's engine installs do not write there, so this
+   only reclaims what other tools cached.
+6. Delete `OhYesMLX.app` from Applications.
 
 If you only want to free model space, the Models screen removes a downloaded model for you
 without touching anything else.
