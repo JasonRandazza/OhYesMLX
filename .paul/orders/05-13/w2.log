@@ -1,0 +1,144 @@
+Updated 1.91.0 → 1.91.1
+I'll start by orienting myself in the worktree the order names.
+
+Worktree is clean at `9979c0b`. Let me read the contract documents.
+
+
+Now let me copy the red tests first, then read the relevant code.
+
+
+
+These F5/F10 tests pin today's buggy behaviour (they pass on main and must be inverted), while F4's asserts the repair. Let me read the code.
+No graph in this worktree (it's gitignored). I'll locate symbols with grep.
+
+Now the detection helpers and the install path.
+
+
+
+
+
+
+
+Now let me run the three red test files to see their current state.
+F4 fails as expected. F5 has one failing test and F10 passes (pins today's bug). Let me look at the Swift launcher argv.
+
+Now let me read the smoke client's spawn section and the driver.
+
+
+The launcher's argv has a `--lock-dir` tail the F5 test didn't anticipate. Let me read the driver and the rest of the smoke client.
+Now the gatekeeper doc.
+Now let me read the smoke client's top section and the unfinished-root tests.
+Let me check the test file's fixture constants and the install-plan helper.
+
+Let me read the lab-path functions, which gate the unfinished-root removal.
+Let me read the 05-11 unfinished-root tests and the surrounding install tests.
+
+Let me look at the existing detection tests using app venvs, so my change doesn't break them.
+
+
+Let me check the bundle layout and existing smoke-client tests before writing.
+
+Let me read the remaining pieces I need: the AC-2 check in the client, `_engine_env`, and the app-engine tests in test_engines.
+Now let me check a few remaining details: the UserDefaults usage for the plist claim, other pip argvs, and the app-venv fixtures in the engine tests.
+Let me read the rest of the client's check functions to see how the served plans and paths are used.
+
+
+Before writing, I'll check what else asserts the pip argv or the smoke's spawn, so I know every assertion my change makes impossible.
+
+I have the full picture. Starting with `engines.py` — the F4 interpreter rule and F10's pip flag.
+
+Those install-test venvs have no `bin/python`, but they're lab-path-recorded (unfinished-root only touches unrecorded roots) and my rule applies at detection time, not to the fake run's state. Let me look at `_app_engine_scripts` usage to place the check.
+Now I'll add the venv-interpreter rule to `_startable` and the removal path.
+Now wire the rule into `_startable` and narrow the recorded-root skip in `unfinished_roots`.
+I need to fix the `_dead_app_venv` signature — I called it with four args. Let me make it take the candidate script.
+
+Now the F10 pip flag and the F4 removal through the unfinished-root path.
+
+Now the install-side repair: a recorded root whose interpreter is dead must clear through the existing unfinished-root path rather than be skipped.
+Now the removal path in `unfinished_roots`.
+Now the smoke client: `--python`, the launcher's argv, and the launcher's environment.
+Now the spawn helpers and `main` in the client.
+
+Now record the artifact in the results payload.
+
+Now the driver. Let me check the launcher's default interpreter path convention.
+
+The bundle interpreter is `OhYesMLX.app/Contents/Resources/python/bin/python3`. Now I'll rewrite the driver's setup, sweep, and run.
+Now `preflight` and `setup`. The client must run under *some* interpreter; it is pure stdlib and only needs `argparse`/`http.client`, so the bundle's own interpreter can run it too — but that would mean the client is imported before the copy is verified. Simpler: run the client with the bundle interpreter, and `-I` keeps it isolated. Let me check whether the client imports `ohyesmlx` at module scope.
+The client's `ohyesmlx` imports are function-local, so the bundle's interpreter can run it. Now preflight/setup.
+
+Now the sweep (it looks for the old venv script) and `run`.
+
+Now teardown — the old venv path and pip cache (F10's disk reclaim).
+
+Good. Now the tests — first, fix F5 (it pins today's bug and must assert the new behaviour) and F10 (same). Let me rewrite the two test files.
+
+Now the gatekeeper doc — removal table and steps (F10), and the moved-app sentence (F4).
+
+Now update the existing `test_engines.py` assertions that the pip argv change makes impossible, and add F4 coverage there.
+
+The suite takes a while; I'll run it as a background task.
+While that runs, let me check the F4 tests' expectations against my implementation.
+The step names the folder via `~/Library/Caches/` rather than the full path. I'll make both steps name the path in full — clearer for a Finder user too.
+
+F5 and F10 are green. Now the existing `test_engines.py` argv assertions and a red-check of F4 against the original code.
+Five failures, all from fixtures that predate my two rules. Let me look at each and change the minimum.
+Each failing fixture predates a rule I added. Let me apply the minimum changes to `test_engines.py`.
+Now the three plan-argv assertions (F10's flag) and the pre-existing-venv fixture.
+The three sites are identical; each is an exact-argv assertion that the new flag changes. I'll add the flag to all three.
+Now the pre-existing-venv test: its fixture venv has no `bin/python`, so my rule now clears it. The test's intent is "a recorded root with a live venv is kept", so the fixture must carry a live interpreter.
+
+All engine tests pass. Now let me check the background full-suite run, then verify F4's red-check and confirm the tests actually fail on main.
+That was a stale run from before my `test_engines.py` fixes. Re-running fresh now, and checking the F5 driver test.
+While that runs, let me do the red-check: revert my `engines.py` change and confirm F4 fails with the reported symptom.
+
+Red-check confirmed for F4 — it fails with exactly the reported symptom. Restoring my version.
+Now red-check F5 and F10 against the original scripts/docs.
+Both red-check correctly. Note F10's `--no-cache-dir` test passes on main because I'd already added the flag to `engines.py` — it red-checks against the pre-fix `engines.py` (verified below). Restoring.
+Now red-check the F10 pip flag specifically, against a no-flag `engines.py`.
+Red-checks are all confirmed. Now let me check the full suite result.
+Full suite green: **1620 passed, 2 skipped** (baseline before my changes was 1614 passed, 6 failed). Let me verify the skipped ones are pre-existing and review my full diff.
+Full suite is green (1620 passed, 2 skipped — both skips are pre-existing grid-data skips). Two cleanups: dedupe the restated rationale and make the F5 test verify the environment constants against the Swift source rather than trusting my restatement.
+Now make the F5 environment test read the launcher's constants from the Swift source instead of trusting my restatement.
+
+Now let me re-read my final versions of the two scripts to check for defects.
+One scope-creep item to revert: I dropped the `xcode-select` preflight check, which is unrelated to F5.
+
+While that runs, let me review the smoke client diff.
+
+
+One fix: `chmod a+rX` on the bundle root doesn't reach its contents, so the test account may not be able to read the copied tree.
+
+That run predates my last two edits. Re-running the full suite for the final state.
+
+Green on the final state. Now committing.
+
+
+The trailer must be exactly `Co-Authored-By: Command Code <noreply@commandcode.ai>` — I typed `.com`. Fixing with an amend.
+Commit `591b805` on `fix/05-13-w2`.
+
+**Files changed (8):** `ohyesmlx/engines.py`, `tests/test_engines.py`, `scripts/smoke_clean_account.py`, `scripts/smoke_clean_account.sh`, `docs/release/gatekeeper.md` (removal table/steps + moved-app sentence only), `tests/test_fable_s6_f4.py`, `f5`, `f10`.
+
+**F4** — `_venv_interpreter_alive(root)` is the one rule: an app-managed venv counts only while `bin/python` resolves. `_startable` skips a dead app-managed candidate (so detection reads not installed); `install` clears such a root through 05-11's existing `unfinished_roots` path with its `install_in_progress` check — the recorded-root skip now requires a live interpreter. No second removal path.
+
+**F5** — client gains required `--python`/`--artifact`; spawns `[python, -I, -B, -m ohyesmlx.cli, app]` with `env=` = launchd PATH + HOME/USER/LOGNAME/TMPDIR/LANG. Driver `ditto`s `dist/OhYesMLX.app` into the smoke dir, passes `Contents/Resources/python/bin/python3`, records the artifact in the results. Wheel/venv/`git archive` route removed.
+
+**F10** — `--no-cache-dir` in the one pip argv; doc now lists five places and removes the plist and pip cache.
+
+**Tests:** 1620 passed, 2 skipped (both pre-existing `results/grid/...` skips). Baseline was 1614 passed, 6 failed.
+
+**Red-test corrections (all listed):**
+- `test_fable_s6_f5.py`: five tests **inverted** — they pinned the old spawn ("no `--python` flag", "inherits the client env"). Now assert the bundle argv/env, the `--python`/`--artifact` flags, and the driver's `ditto`.
+- `test_fable_s6_f10.py`: **inverted** — asserted `--no-cache-dir` absent and doc free of the two paths.
+- `test_engines.py` (4 minimum changes): three exact pip-argv assertions gain `--no-cache-dir`; one optiq fixture and the pre-existing-venv fixture gain `bin/python`, which both rules now require.
+
+**Red-checks:** reverted each fix and watched the reported symptom — F4 gave `already_installed`; F5 gave 5 failures; F10 (both flag and doc, then flag alone) gave 2 and 1 failures; restored and green.
+
+**Concerns:** (1) `test_fable_s6_f4.py` was unmodified from `review/fable-verify` and covers the finding fully; its 2 control tests passed on main, as designed. (2) Not verified: no smoke, build, sudo, GUI or runtime was run — `check_bundle.sh` and the real clean-account run are the coordinator's. (3) The driver runs the client with the bundle's own interpreter, since all `ohyesmlx` imports there are function-local; that is outside the explicit AC-6 line but is the only way oymlxtest gets a Python once the venv is gone.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    182   22009857   21752320   287666   98.8%   0.276487
+
+== cc-agent: git status ==
+?? .paul/orders/05-13/
+?? settings.json

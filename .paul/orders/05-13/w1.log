@@ -1,0 +1,124 @@
+I'll start by verifying my working directory and reading the key documents.
+The order names a different directory than my cwd. Let me check both.
+
+Worktree is clean on `fix/05-13-w1`, registered to this repo. I'll work there. Now the contract documents.
+
+
+Now the four scripts and the docs I may touch.
+
+
+Now I'll copy the red tests from `review/fable-verify` first, as the order directs.
+
+
+
+Now let me check the review branch's verify notes, which may pin the intended fix shapes.
+
+
+Let me look at the docs I may touch and the digest function I must reuse.
+
+
+
+Let me check what CA path the bundled interpreter reports, so the P5-4 assertion can't invent a failure.
+
+Baseline suite before any change, and the copied red tests specifically.
+Let me check existing tests that reference these scripts, and probe the two behaviours my tests will rely on.
+
+
+
+Enough orientation — starting the edits. First `fetch_python_standalone.sh` (F2).
+
+
+Now `build_app.sh` — F1, F2 cleanup, F6, F8.
+
+Now the compileall and the bytecode walk.
+Before going further, let me verify the walk can't fail spuriously — are there symlinks or uncompiled sources in the pinned tarball?
+
+
+Now `make_sbom.py` (F6).
+
+Now the `check()` and `main()` paths.
+
+
+Now the SBOM call and the zip digest in `build_app.sh`.
+
+
+
+Now `check_bundle.sh`. First the header and the P5-4 block (F11).
+
+Now the P5-9 block (F7).
+
+
+
+
+F6 test 3 asks make_sbom to hash a tree it is never told about. I'll make the minimal correction: give `_run_sbom` a `package` argument, which models the `--package` that `build_app.sh` now passes.
+
+
+Now the F11 tests — the copied ones encode the bug (assertions after the call, one failure line). I'll rewrite them around the fixed contract.
+Now the new F3 static test for `check_bundle.sh`.
+
+
+
+
+
+
+Now the docs. First `gatekeeper.md` (F8 wording).
+
+
+
+
+
+Full suite green (1631 passed, 3 skipped). Now the red-check: I'll temporarily put main's versions of the scripts back, watch the new/corrected tests fail, then restore mine.
+
+
+
+Now restore my `check_bundle.sh` and red-check F6 against main's `make_sbom.py` + `build_app.sh`.
+
+Let me verify the dirty-check can't trip on normal build artifacts, and improve the digest failure message.
+
+
+
+Let me exercise the new SBOM release path for real, against this repo, writing into the scratchpad.
+
+The bytecode walk is new logic with no runnable check. I'll add one to the F1 test file, running the script's own heredoc.
+
+Let me read the final versions of the changed shell blocks end to end.
+
+
+
+
+
+
+
+
+
+
+
+One robustness gap in the P5-9 token loop: an environment value containing a glob character would be pathname-expanded. I'll disable globbing around it.
+
+
+
+
+Committed as `398a2ff` on `fix/05-13-w1`. Working tree clean; suite run after commit is the same one reported below.
+
+**Changed**
+- `scripts/fetch_python_standalone.sh` — tarball unpacked fresh every run (F2); `build_app.sh` deletes it via its EXIT trap.
+- `scripts/build_app.sh` — `-B` on the version read, `compileall -f`, a flags/uncompiled walk replacing the "one pyc exists" check (F1); `--package` to the SBOM (F6); `.zip.sha256` written and printed (F8).
+- `scripts/make_sbom.py` — refuses a dirty `ohyesmlx`/`app` tree, digests the copied package with the bundled interpreter (`-I -B`), adds `data_files_sha256` (F6).
+- `scripts/check_bundle.sh` — writable-copy P5-6 half with `-I -m venv` and `-I -c "import email, json, tempfile, ssl"`, no `-B` (F3); P5-9 whole-token PATH + `PYTHON[A-Z]*=` + SKIP (F7); P5-4 cert checks before the network, exit 2/3/4 verdicts (F11).
+- `docs/release/gatekeeper.md` F8 wording + F9 quarantined-download section; `docs/threat-model.md` P5-9 cell.
+
+**Tests** — baseline 1614 passed / 10 failed / 3 skipped; now **1632 passed, 3 skipped**. F3 is new (5 tests); F1 gained a walk test.
+
+**Red-test corrections (2 files, minimal)**
+- `f6`: test 3 asked make_sbom to hash a tree it was never told about — unsatisfiable. `_run_sbom` now takes `package=` (models `--package`), plus a static test that the build passes it. Fails on main (unknown flag).
+- `f11`: all three copied tests asserted the bug (assertions after the call, one failure line). Rewritten as 4 tests against the fixed contract.
+- Red-checked by restoring main's `check_bundle.sh` (F3 4/5 fail, F11 4/4 fail) and main's SBOM scripts (F6 4 fail), then restoring mine.
+
+**Not verified (needs a build; forbidden here)** — the writable-copy venv/signature run, P5-4's 200 path, the walk over the real tree, the `.sha256` output, and the dirty refusal inside a real build. **Concern:** the walk now fails the build on any stdlib `.py` without a pyc; I checked the pinned tarball has no symlinks under `lib` and only three prebuilt pycs (`encodings`) that `-f` replaces, but the coordinator's build is its first real run.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    107   12106653   11918592   139900   98.4%   0.147905
+
+== cc-agent: git status ==
+?? .paul/orders/05-13/
+?? settings.json
