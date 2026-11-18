@@ -32,8 +32,9 @@ def test_no_gate_loads_a_quarantined_zip_the_way_a_downloader_does():
     assert ".zip" not in check, "check_bundle now unpacks something"
 
     smoke = texts["smoke_clean_account.sh"]
-    assert "uv build --wheel" in smoke
-    assert "*.whl" in smoke
+    # 05-13 (S6-F5): the smoke copies the built bundle rather than installing a wheel; it still
+    # never goes through the release zip, which is what this finding is about.
+    assert 'ditto "$REPO/dist/$APP_NAME"' in smoke
     assert ".zip" not in smoke, "the clean-account smoke now uses the release zip"
     assert "unzip" not in smoke
 
