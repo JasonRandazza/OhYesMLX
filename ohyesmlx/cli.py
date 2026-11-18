@@ -1095,9 +1095,13 @@ def _recover_startup() -> None:
     except Exception:
         # The probe reads a failure as the app being present, the same rule a cell uses.
         app_running = True
+    # Every location a backup can be in, not just this run's: a shell runner killed outside its
+    # trap leaves the originals in one the app never used to look at (Fable S5-F6).
+    held = osaurus_settings.backup_dirs_holding(backup_dir=backups)
+    source = str(held[0]) if held else backup_dir
     if app_running:
-        if osaurus_settings._backups(backups):
-            stderr_json({"recovery_pending": "osaurus", "backup_dir": backup_dir})
+        if held:
+            stderr_json({"recovery_pending": "osaurus", "backup_dir": source})
         return
     try:
         recovered = osaurus_settings.recover(
@@ -1109,9 +1113,9 @@ def _recover_startup() -> None:
         )
         return
     if recovered:
-        stderr_json({"recovered": "osaurus", "backup_dir": backup_dir})
-    elif osaurus_settings._backups(backups):
-        stderr_json({"recovery_failed": "osaurus", "backup_dir": backup_dir})
+        stderr_json({"recovered": "osaurus", "backup_dir": source})
+    elif held:
+        stderr_json({"recovery_failed": "osaurus", "backup_dir": source})
 
 
 def _app(args) -> int:

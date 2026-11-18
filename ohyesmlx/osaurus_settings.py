@@ -38,7 +38,7 @@ import plistlib
 import sys
 from pathlib import Path
 
-from ohyesmlx import writable_root
+from ohyesmlx import app_support_dir, writable_root
 
 DEFAULT_CONFIG_DIR = Path.home() / ".osaurus" / "config"
 
@@ -68,6 +68,30 @@ BASELINE_ABSENT = "baseline.absent"
 
 # The backup directory holds copies of the user's own settings, so nobody else gets to read it.
 BACKUP_DIR_MODE = 0o700
+
+# The one backup location, defined once and used by every caller: the shell wrapper
+# (scripts/osaurus-pin.sh), quickbench and the app's launch recovery. Two locations is how a
+# crashed shell pin's originals became invisible to the app, which then copied the *pinned*
+# files as the user's own and reported them restored (Fable S5-F6). Beside the host config, so
+# it sits next to the files it is a copy of and outside the directory Osaurus itself rewrites.
+BACKUP_DIR = DEFAULT_CONFIG_DIR.with_name("config.ohyesmlx-backup")
+
+# Where earlier versions kept the same backup, each with its own caller:
+#   <config dir>.phase4-orig -- scripts/osaurus-pin.sh before 05-12, a sibling of the config
+#                              directory it pinned, which is why it is derived from that root
+#                              rather than hard-coded: a scratch config dir gets its own.
+#   <app support>/quickbench/osaurus-backup -- quickbench's DEFAULT_BACKUP_DIR before 05-12.
+# Recovery reads them so a backup a crash left in one is not stranded, and pin refuses over
+# any of them. A function rather than a constant so a patched HOME or app-support directory is
+# seen (app_support_dir answers about the home at call time), and so the list is one definition
+# instead of a copy per caller.
+def legacy_backup_dirs(config_dir: Path | None = None) -> tuple[Path, ...]:
+    """The backup directories earlier versions used, for *config_dir*'s host."""
+    root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
+    return (
+        root.with_name("config.phase4-orig"),
+        app_support_dir() / "quickbench" / "osaurus-backup",
+    )
 
 # (file, dotted key path) for every setting that can move a measurement.
 # Kept explicit rather than hashing whole files: Osaurus writes UI state, window sizes
@@ -101,6 +125,15 @@ TRACKED_KEYS: tuple[tuple[str, str], ...] = (
 
 MISSING = "<missing>"
 UNREADABLE = "<unreadable>"
+
+# The three tracked keys `pin` sets, and their pinned values. One definition: the pin writes
+# them to the host and the baseline records them, so the two cannot disagree about what was
+# pinned or to what.
+PINNED_KEYS: dict[str, object] = {
+    "server-runtime.json:cache.blockDisk.enabled": False,
+    "server-runtime.json:cache.prefix.enabled": False,
+    "server.json:modelIdleResidencyPolicy.seconds": 900,
+}
 
 
 def _dig(payload: object, dotted: str) -> object:
@@ -214,13 +247,100 @@ def write_baseline(
     path: Path | None = None,
     config_dir: Path | None = None,
 ) -> dict[str, object]:
-    """Record the host's current settings as the baseline, and return them."""
+    """Record the host's current settings as the baseline, and return them.
+
+    This is the ``rebaseline=True`` rule -- the live host, recorded whole -- and it stays the
+    definition of it: :func:`pin` and :func:`set_key` call it rather than copying it.
+    """
     target = path if path is not None else BASELINE_PATH
     settings = capture_osaurus_settings(config_dir)
     document = {"settings": settings, "model_options": capture_model_options()}
     target.parent.mkdir(parents=True, exist_ok=True)
     _write_atomic(target, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())
     return settings
+
+
+def _record_baseline(
+    path: Path,
+    config_dir: Path | None,
+    overrides: dict[str, object],
+    *,
+    rebaseline: bool,
+) -> dict[str, object]:
+    """Write the baseline under the rule in :func:`pin`'s docstring, and return it.
+
+    ``rebaseline=True`` records the live host whole (:func:`write_baseline`). ``False`` keeps
+    an existing baseline and replaces only *overrides* in it, never reading the live host for
+    any other key -- that is what leaves the drift gate something to compare against. With no
+    baseline yet there is nothing to keep, so the live host is recorded, which is the only
+    honest answer: the gate cannot attest conditions that were never written down.
+    """
+    if rebaseline:
+        return write_baseline(path, config_dir)
+    try:
+        existing = _load_baseline_payload(path)
+    except ValueError:
+        # An unreadable baseline cannot be edited in place, and silently replacing it would
+        # destroy the only record of the conditions earlier runs were measured under.
+        raise
+    if existing is None:
+        return write_baseline(path, config_dir)
+    settings = dict(existing["settings"])
+    settings.update(overrides)
+    document = {
+        "settings": settings,
+        "model_options": existing.get("model_options", MISSING),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(path, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())
+    return settings
+
+
+def set_key(
+    key: str,
+    value: object,
+    *,
+    config_dir: Path | None = None,
+    baseline_path: Path | None = None,
+) -> object:
+    """Set one ``file:dotted`` host key atomically, read it back, and record the baseline.
+
+    The shell wrapper's ``osaurus_set_seqs`` is the caller: a concurrency sweep needs
+    ``concurrency.maxConcurrentSequences`` set to its own N on a host that takes no such flag.
+    The edit is :func:`_write_atomic`'s -- the same temp-and-replace :func:`pin` uses on the
+    same file -- so a kill mid-write leaves the user's config whole rather than truncated
+    (Fable S5-F12). The value is written before anything reads it back, and a read-back that
+    does not match raises rather than leaving a baseline that describes a host nobody has.
+
+    The baseline is recorded under :func:`pin`'s rule with this one key overridden, so the
+    drift gate still holds every other tracked key to the conditions the run was pinned under.
+    Returns the value read back.
+    """
+    filename, _separator, dotted = key.partition(":")
+    if not dotted:
+        raise ValueError(
+            f"refusing to set an Osaurus key: {key!r} is not 'file:dotted.key'"
+        )
+    if filename not in PIN_FILES:
+        raise ValueError(
+            f"refusing to set an Osaurus key in {filename!r}: only {', '.join(PIN_FILES)} "
+            "are the host files this module owns"
+        )
+    root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
+    target = root / filename
+    baseline = Path(baseline_path) if baseline_path is not None else BASELINE_PATH
+
+    document = _read_object(target)
+    _set_by_path(document, dotted, value)
+    _write_atomic(target, json.dumps(document, indent=2).encode())
+
+    read_back = capture_osaurus_settings(root)[key]
+    if read_back != value:
+        raise ValueError(
+            f"osaurus_set_seqs: {key} reads back {read_back!r}, not {value!r}"
+        )
+    _record_baseline(baseline, root, {key: value}, rebaseline=False)
+    return read_back
 
 
 def _read_object(path: Path) -> dict:
@@ -262,6 +382,17 @@ def _write_atomic(target: Path, data: bytes) -> None:
         raise
 
 
+def _set_by_path(document: dict, dotted: str, value: object) -> None:
+    """Set *dotted* in *document*, creating the objects on the way."""
+    cursor = document
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        if not isinstance(cursor.get(part), dict):
+            cursor[part] = {}
+        cursor = cursor[part]
+    cursor[parts[-1]] = value
+
+
 def _backups(backup_dir: Path) -> list[Path]:
     """The backups present in *backup_dir*, in the pin's own file order."""
     return [
@@ -269,6 +400,25 @@ def _backups(backup_dir: Path) -> list[Path]:
         for name in (*PIN_FILES, BASELINE_BACKUP, BASELINE_ABSENT)
         if (path := backup_dir / name).exists()
     ]
+
+
+def backup_dirs_holding(
+    config_dir: Path | None = None, *, backup_dir: Path | None = None
+) -> list[Path]:
+    """Every backup location that holds a backup, the caller's first and then the legacy ones.
+
+    One definition of "where a backup could be", so :func:`pin`'s refusal, :func:`recover`'s
+    search and the app's launch message cannot disagree about it. Duplicates are dropped: the
+    caller's directory is often one of the legacy ones, and the same backup counted twice
+    would read as the two-directory ambiguity recovery refuses over.
+    """
+    locations: list[Path] = []
+    if backup_dir is not None:
+        locations.append(Path(backup_dir))
+    for location in legacy_backup_dirs(config_dir):
+        if location not in locations:
+            locations.append(location)
+    return [location for location in locations if _backups(location)]
 
 
 def _log(action: str, outcome: str, files: list[Path], backup_dir: Path) -> None:
@@ -292,16 +442,32 @@ def pin(
     *,
     backup_dir: Path,
     baseline_path: Path | None = None,
-) -> None:
+    rebaseline: bool = False,
+) -> dict[str, object]:
     """Pin Osaurus's measurement-relevant host settings, backing the originals up first.
 
     Both ``PIN_FILES`` and the baseline at *baseline_path* are copied byte-exact into
-    *backup_dir* (created ``0700``, refused if a backup is already there, because overwriting it
-    would destroy the only copy of the user's own settings); with no baseline there, a
-    ``baseline.absent`` marker is written instead. Then ``cache.prefix.enabled`` and
-    ``cache.blockDisk.enabled`` are set false and ``modelIdleResidencyPolicy.seconds`` to 900,
-    and the baseline the drift guard reads is written to *baseline_path* -- ``BASELINE_PATH`` by
-    default, which is the harness's copy in the repo; the app passes its own.
+    *backup_dir* (created ``0700``, refused while a backup is already there in this directory or
+    either legacy one, because overwriting it would destroy the only copy of the user's own
+    settings); with no baseline there, a ``baseline.absent`` marker is written instead. Then
+    ``cache.prefix.enabled`` and ``cache.blockDisk.enabled`` are set false and
+    ``modelIdleResidencyPolicy.seconds`` to 900, and the baseline the drift guard reads is
+    written to *baseline_path* -- ``BASELINE_PATH`` by default, which is the harness's copy in
+    the repo; the app passes its own.
+
+    *rebaseline* decides what that baseline is. ``False`` -- the harness default, and what
+    ``scripts/osaurus-pin.sh`` and a CLI run get -- keeps a baseline that already exists and
+    overrides only the three keys this function pins, so a host that differs from the committed
+    baseline on any other tracked key is still caught by ``check_host_state``. Re-recording the
+    live host here is what made the drift gate compare the host with itself for the whole
+    pinned run (Fable S5-F8). ``True`` -- quickbench, because another Mac has no committed
+    baseline and today's live host is the only thing there is -- records the live host exactly
+    as this function always did.
+
+    Returns the settings that were recorded as the baseline, which is the condition record a
+    caller writes beside its results; the app keeps it as ``summary["osaurus"]["snapshot"]``.
+    One capture serves both, so the recorded snapshot and what the gate checks are the same
+    values rather than two reads of a host that may have moved between them.
 
     Both configs are parsed before either is replaced, so an unreadable file leaves its
     neighbour untouched, and every write is atomic.
@@ -312,12 +478,17 @@ def pin(
         Path(baseline_path) if baseline_path is not None else BASELINE_PATH
     )
 
-    existing = _backups(backups)
-    if existing:
+    held = backup_dirs_holding(root, backup_dir=backups)
+    if held:
         raise ValueError(
-            f"refusing to pin Osaurus settings: {backups} already holds a backup "
-            f"({', '.join(path.name for path in existing)}); restore it, or call "
-            "osaurus_settings.recover, rather than overwriting the user's original settings"
+            "refusing to pin Osaurus settings: "
+            + "; ".join(
+                f"{location} already holds a backup "
+                f"({', '.join(path.name for path in _backups(location))})"
+                for location in held
+            )
+            + "; restore it, or call osaurus_settings.recover, rather than overwriting the "
+            "user's original settings"
         )
     sources = [Path(root) / name for name in PIN_FILES]
     missing = [path for path in sources if not path.exists()]
@@ -345,8 +516,9 @@ def pin(
     _write_atomic(sources[0], json.dumps(runtime, indent=2).encode())
     _write_atomic(sources[1], json.dumps(server, indent=2).encode())
 
-    write_baseline(baseline, root)
+    recorded = _record_baseline(baseline, root, PINNED_KEYS, rebaseline=rebaseline)
     _log("pin", "pinned", [*sources, baseline], backups)
+    return recorded
 
 
 def _put_back(
@@ -432,18 +604,35 @@ def recover(
 ) -> bool:
     """Restore a backup that a crash between pin and restore left behind.
 
-    ``baseline_path`` is the same one :func:`restore` takes, ``BASELINE_PATH`` by default.
+    The backup is looked for in *backup_dir* and then in every legacy location
+    (:func:`legacy_backup_dirs`), so a backup the shell wrapper left in its old directory is
+    not stranded by the app looking only in its own (Fable S5-F6). ``baseline_path`` is the
+    same one :func:`restore` takes, ``BASELINE_PATH`` by default.
+
     ``True`` when every leftover backup was put back byte-exact and removed, ``False`` when
     there was nothing to recover -- the ordinary case, and deliberately not an error: this runs
     at launch and before a pin. A restore that does not verify keeps the backup and returns
     ``False`` exactly as :func:`restore` does.
+
+    Two locations holding a backup at once means the files were pinned twice without a restore
+    between, so which copy is the user's original cannot be known. That raises and names every
+    location rather than picking one or merging them: a wrong guess here overwrites the only
+    copy of the user's settings.
     """
     root = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
-    backups = Path(backup_dir)
     baseline = Path(baseline_path) if baseline_path is not None else BASELINE_PATH
-    present = _backups(backups)
-    if not present:
+    held = backup_dirs_holding(root, backup_dir=Path(backup_dir))
+    if not held:
         return False
+    if len(held) > 1:
+        raise ValueError(
+            "refusing to recover Osaurus settings: more than one directory holds a backup "
+            f"({', '.join(str(location) for location in held)}); which one is the user's "
+            "original cannot be known from here, so nothing was restored. Restore or remove "
+            "the copies by hand, then pin again."
+        )
+    backups = held[0]
+    present = _backups(backups)
     return _put_back(root, backups, present, baseline=baseline, action="recover")
 
 

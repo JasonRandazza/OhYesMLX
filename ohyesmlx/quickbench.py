@@ -89,10 +89,13 @@ ABORTED_REASON = "stopped by the user mid-cell; no number is reported"
 DEFAULT_RESULTS_DIR = str(app_support_dir(engines.DEFAULT_ENV.home) / "quickbench")
 
 # Osaurus's backup is a fixed path rather than a per-run one: a crash between a pin and its
-# restore leaves the only copy of the user's settings behind, and `recover` can only find it if
-# the next run looks in the same directory. The baseline is not: it is the one
-# `runtimes.Osaurus.check_host_state` reads, `osaurus_settings.BASELINE_PATH` by default.
-DEFAULT_BACKUP_DIR = os.path.join(DEFAULT_RESULTS_DIR, "osaurus-backup")
+# restore leaves the only copy of the user's settings behind, and recovery can only find it if
+# the next run looks in the same directory. That directory is `osaurus_settings.BACKUP_DIR` and
+# nowhere else -- the shell wrapper and the app's launch recovery use the same one, which is
+# what stops a crashed shell pin's originals from being invisible here (Fable S5-F6). The
+# baseline is the one `runtimes.Osaurus.check_host_state` reads, `osaurus_settings.BASELINE_PATH`
+# by default.
+DEFAULT_BACKUP_DIR = str(osaurus_settings.BACKUP_DIR)
 
 # The one name a quick run's record is written under, in every stamp directory.
 SUMMARY_NAME = "summary.json"
@@ -771,12 +774,24 @@ def run(
                 blocked = None
                 try:
                     recover(backup_dir=backup_dir, baseline_path=baseline_path)
-                    pin(backup_dir=backup_dir, baseline_path=baseline_path)
+                    # AC-3: rebaseline, because this app runs on Macs with no committed
+                    # baseline and today's live host is the only condition record there is.
+                    # The shell wrapper and a CLI run keep the committed baseline instead.
+                    recorded = pin(
+                        backup_dir=backup_dir,
+                        baseline_path=baseline_path,
+                        rebaseline=True,
+                    )
                 except Exception as error:
                     blocked = str(error)
                 else:
                     pinned = True
                     summary["osaurus"]["pinned"] = True
+                    # AC-3: what the cell is about to be measured under, recorded with the
+                    # results so two runs can be diffed after the fact. `pin` returns exactly
+                    # what it recorded as the baseline, so this is the gate's own values rather
+                    # than a second read of a host that may have moved.
+                    summary["osaurus"]["snapshot"] = recorded
                 if blocked is not None:
                     return _skipped(engine, fmt, artifact_dir, repo, blocked)
             results = run_cells(
@@ -829,10 +844,12 @@ def run(
                 try:
                     restored = restore(backup_dir=backup_dir, baseline_path=baseline_path)
                 except Exception as error:
-                    # A restore that raises is a restore that did not verify: handled exactly
-                    # as one that returned False, so a raise after a pin that took effect
-                    # cannot leave the run measuring on the user's pinned settings.
-                    restored = False if pinned else None
+                    # A restore that raises is a restore that did not verify, and after *any*
+                    # attempted pin -- one that took effect or one that raised part-way -- the
+                    # host may still hold the harness settings with the user's originals in
+                    # backup_dir. Recording it only when `pinned` left exactly that case as
+                    # `None`, with no reason and no event (S2-F10).
+                    restored = False
                     raised = str(error)
                 if restored is True:
                     summary["osaurus"]["restored"] = True
@@ -844,8 +861,9 @@ def run(
                         + (f" (restore raised: {raised})" if raised else "")
                     )
                     summary["osaurus"]["reason"] = message
-                    if pinned:
-                        # A pin that did take effect and a restore that did not is a run
+                    summary["osaurus"]["backup_dir"] = str(backup_dir)
+                    if pinned or raised:
+                        # A restore that did not verify while a pin was attempted is a run
                         # that must stop; the error names the backup directory the user's
                         # settings are still in.
                         restore_failure.append(message)

@@ -92,8 +92,13 @@ def test_every_application_support_path_derives_from_the_one_helper():
     assert Path(engines.LAB_PATHS_FILE) == ohyesmlx.app_support_dir() / "lab-paths.json"
     assert Path(fetch._APP_SUPPORT) == ohyesmlx.app_support_dir()
     assert Path(quickbench.DEFAULT_RESULTS_DIR) == ohyesmlx.app_support_dir() / "quickbench"
-    assert Path(quickbench.DEFAULT_BACKUP_DIR) == (
-        ohyesmlx.app_support_dir() / "quickbench" / "osaurus-backup"
+    # The Osaurus backup is the one path an application-support derivation no longer holds:
+    # 05-12 moved it beside the host config it is a copy of, so the shell wrapper, quickbench
+    # and launch recovery share one location (`osaurus_settings.BACKUP_DIR`, Fable S5-F6).
+    # It is still defined once, which is what this test is about.
+    assert Path(quickbench.DEFAULT_BACKUP_DIR) == osaurus_settings.BACKUP_DIR
+    assert osaurus_settings.BACKUP_DIR == (
+        Path.home() / ".osaurus" / "config.ohyesmlx-backup"
     )
 
 

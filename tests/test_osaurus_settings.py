@@ -483,3 +483,219 @@ def test_pin_and_restore_each_write_one_json_line_naming_the_files_and_the_outco
         "files": files,
         "backup_dir": str(backup_dir),
     }
+
+
+# --------------------------------------------------------------------------------------
+# 05-12: one backup location, and the legacy ones recovery still reads
+# --------------------------------------------------------------------------------------
+
+
+def test_recover_finds_a_backup_in_a_legacy_directory(
+    config_dir, backup_dir, baseline_path, monkeypatch
+):
+    """Fable S5-F6: a crashed shell pin's originals must not be stranded in the old path."""
+    before = originals(config_dir)
+    monkeypatch.setattr(
+        osaurus_settings, "app_support_dir", lambda home=None: backup_dir.parent / "support"
+    )
+    legacy = osaurus_settings.legacy_backup_dirs(config_dir)[0]
+    pin(config_dir, legacy, baseline_path)
+    assert originals(config_dir) != before
+
+    # Recovery is asked about the new directory and finds the backup in the legacy one.
+    assert (
+        osaurus_settings.recover(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+        is True
+    )
+    for name, original in before.items():
+        assert (config_dir / name).read_bytes() == original, name
+    assert not legacy.exists(), "a verified restore left the legacy backup behind"
+
+
+def test_recover_refuses_and_names_every_directory_that_holds_a_backup(
+    config_dir, backup_dir, baseline_path, monkeypatch
+):
+    """Two copies mean the files were pinned twice without a restore, so which one is the
+    user's original cannot be known: refuse every time rather than pick or merge."""
+    monkeypatch.setattr(
+        osaurus_settings, "app_support_dir", lambda home=None: backup_dir.parent / "support"
+    )
+    legacy = osaurus_settings.legacy_backup_dirs(config_dir)[0]
+    pin(config_dir, legacy, baseline_path)
+    # A second copy in the new directory: exactly what two runners pinning without a restore
+    # between them leave. Built by copying, because `pin` itself now refuses to make it.
+    backup_dir.mkdir(parents=True)
+    for name in osaurus_settings.PIN_FILES:
+        (backup_dir / name).write_bytes((legacy / name).read_bytes())
+
+    with pytest.raises(ValueError) as raised:
+        osaurus_settings.recover(
+            config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+        )
+
+    message = str(raised.value)
+    assert str(backup_dir) in message
+    assert str(legacy) in message
+    assert (backup_dir / "server.json").exists(), "recovery removed a backup it refused over"
+    assert (legacy / "server.json").exists()
+
+
+def test_pin_refuses_over_a_backup_in_a_directory_it_was_not_handed(
+    config_dir, backup_dir, baseline_path, monkeypatch
+):
+    """The refusal is not keyed on the directory the caller passed (Fable S5-F6)."""
+    monkeypatch.setattr(
+        osaurus_settings, "app_support_dir", lambda home=None: backup_dir.parent / "support"
+    )
+    legacy = osaurus_settings.legacy_backup_dirs(config_dir)[0]
+    pin(config_dir, legacy, baseline_path)
+    before = originals(config_dir)
+
+    with pytest.raises(ValueError, match="already holds a backup"):
+        pin(config_dir, backup_dir, baseline_path)
+
+    assert originals(config_dir) == before
+
+
+def test_the_one_backup_directory_is_the_constant_and_is_created_0700(
+    config_dir, backup_dir, baseline_path
+):
+    assert osaurus_settings.BACKUP_DIR == (
+        osaurus_settings.DEFAULT_CONFIG_DIR.with_name("config.ohyesmlx-backup")
+    )
+    pin(config_dir, backup_dir, baseline_path)
+    assert stat.S_IMODE(backup_dir.stat().st_mode) == osaurus_settings.BACKUP_DIR_MODE
+
+
+# --------------------------------------------------------------------------------------
+# 05-12 AC-3: the pin cannot overwrite the baseline it is checked against
+# --------------------------------------------------------------------------------------
+
+
+def test_a_pin_keeps_the_committed_baseline_and_overrides_only_the_keys_it_pins(
+    config_dir, backup_dir, baseline_path
+):
+    committed = osaurus_settings.capture_osaurus_settings(config_dir)
+    committed["server.json:numberOfThreads"] = 8
+    baseline_path.write_text(
+        json.dumps({"settings": committed}, indent=2) + "\n", encoding="utf-8"
+    )
+
+    pin(config_dir, backup_dir, baseline_path)
+
+    after = osaurus_settings.load_baseline(baseline_path)
+    assert after["server.json:numberOfThreads"] == 8, "the pin re-read the live host"
+    assert after["server.json:modelIdleResidencyPolicy.seconds"] == 900
+    assert after["server-runtime.json:cache.prefix.enabled"] is False
+    assert after["server-runtime.json:cache.blockDisk.enabled"] is False
+    drift = osaurus_settings.diff_against_baseline(
+        osaurus_settings.capture_osaurus_settings(config_dir), after
+    )
+    assert [name for name, _expected, _actual in drift] == ["server.json:numberOfThreads"]
+
+
+def test_a_rebaseline_pin_records_the_live_host_as_it_always_did(
+    config_dir, backup_dir, baseline_path
+):
+    committed = osaurus_settings.capture_osaurus_settings(config_dir)
+    committed["server.json:numberOfThreads"] = 8
+    baseline_path.write_text(
+        json.dumps({"settings": committed}, indent=2) + "\n", encoding="utf-8"
+    )
+
+    recorded = osaurus_settings.pin(
+        config_dir, backup_dir=backup_dir, baseline_path=baseline_path, rebaseline=True
+    )
+
+    assert recorded["server.json:numberOfThreads"] == 12
+    assert osaurus_settings.load_baseline(baseline_path) == recorded
+
+
+def test_a_pin_with_no_baseline_still_records_the_live_host(
+    config_dir, backup_dir, baseline_path
+):
+    """Nothing to keep is not a reason to leave the gate blind."""
+    recorded = osaurus_settings.pin(
+        config_dir, backup_dir=backup_dir, baseline_path=baseline_path
+    )
+
+    assert recorded == osaurus_settings.capture_osaurus_settings(config_dir)
+    assert osaurus_settings.load_baseline(baseline_path) == recorded
+
+
+# --------------------------------------------------------------------------------------
+# 05-12 AC-4: set_key is the module's edit, atomic and read back
+# --------------------------------------------------------------------------------------
+
+
+def test_set_key_writes_atomically_reads_back_and_updates_the_baseline(
+    config_dir, backup_dir, baseline_path
+):
+    pin(config_dir, backup_dir, baseline_path)
+
+    host = osaurus_settings.set_key(
+        "server-runtime.json:concurrency.maxConcurrentSequences",
+        3,
+        config_dir=config_dir,
+        baseline_path=baseline_path,
+    )
+
+    assert host == 3
+    assert (
+        json.loads((config_dir / "server-runtime.json").read_text())["concurrency"][
+            "maxConcurrentSequences"
+        ]
+        == 3
+    )
+    assert (
+        osaurus_settings.load_baseline(baseline_path)[
+            "server-runtime.json:concurrency.maxConcurrentSequences"
+        ]
+        == 3
+    )
+    # Every other tracked key still holds the conditions the run was pinned under.
+    assert (
+        osaurus_settings.load_baseline(baseline_path)[
+            "server-runtime.json:cache.prefix.enabled"
+        ]
+        is False
+    )
+
+
+def test_set_key_leaves_no_stale_temp_and_no_truncated_file(
+    config_dir, backup_dir, baseline_path, monkeypatch
+):
+    """The edit is `_write_atomic`'s: a kill between temp and replace keeps the user's bytes."""
+    pin(config_dir, backup_dir, baseline_path)
+    before = (config_dir / "server-runtime.json").read_bytes()
+    real_replace = os.replace
+
+    def killed(source, target):
+        if Path(target) == config_dir / "server-runtime.json":
+            raise OSError("killed between temp and replace")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(osaurus_settings.os, "replace", killed)
+
+    with pytest.raises(OSError):
+        osaurus_settings.set_key(
+            "server-runtime.json:concurrency.maxConcurrentSequences",
+            3,
+            config_dir=config_dir,
+            baseline_path=baseline_path,
+        )
+
+    assert (config_dir / "server-runtime.json").read_bytes() == before
+    assert not (config_dir / "server-runtime.json.pin-tmp").exists()
+
+
+def test_set_key_refuses_a_file_the_pin_does_not_own(config_dir, baseline_path):
+    with pytest.raises(ValueError, match="only server-runtime.json, server.json"):
+        osaurus_settings.set_key(
+            "some-other.json:cache.prefix.enabled",
+            False,
+            config_dir=config_dir,
+            baseline_path=baseline_path,
+        )

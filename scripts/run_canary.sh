@@ -38,5 +38,8 @@ case ",$ENGINES," in *,osaurus,*) osaurus_pin ;; esac
 $PY -m ohyesmlx.cli canary --yes $RECORD --engines "$ENGINES"
 echo "canary exit=$?"
 sweep
-osaurus_restore_check
+# A restore that did not verify must be this script's exit status, not a line in its log: the
+# standing authorisation requires the settings returned and verified, and a coordinator reads
+# the code (Fable S5-F7).
+osaurus_restore_check || exit 1
 echo "DONE $(date +%H:%M:%S)"
