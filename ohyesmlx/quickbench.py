@@ -1065,6 +1065,11 @@ def run(
                                 "not verify; remove it on the Models screen, then download "
                                 "it again"
                             )
+                    if stopped and not fetched:
+                        # A Stop (or Stop now) the download heard ends the run here; its owned
+                        # partial was evicted or named above, like any failed download.
+                        summary["ended"] = "cancelled"
+                        break
                     if reason is not None and not fetched:
                         skip_sibling(sibling, sibling_snapshot, top["engine"], reason)
                         continue

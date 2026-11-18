@@ -203,3 +203,27 @@ def test_stage_b_progress_is_throttled_to_one_event_per_whole_percent(tmp_path):
     ]
     # two siblings, each at most 101 whole-percent steps (0..100), far below 1000 per sibling
     assert 0 < len(forwarded) <= 2 * 101
+
+
+class StoppedDownload(SiblingDownload):
+    """A sibling fetch that hears a Stop now mid-transfer and gives up, as fetch.download does."""
+
+    def __call__(self, repo, confirmed, **kwargs):
+        super().__call__(repo, confirmed, **kwargs)
+        return False if kwargs["cancel"]() else True
+
+
+def test_a_stop_now_heard_by_a_sibling_download_ends_the_run_cancelled(tmp_path):
+    """Coordinator check (05-11 T1): a stopped download is not a skip; no later sibling is fetched."""
+    abort = StopProbe()
+    download = StoppedDownload(lambda _recorded: setattr(abort, "triggered", True))
+    _ok, events = a_stage_b_run(tmp_path, download, abort=abort)
+
+    assert len(download.calls) == 1, "a later sibling was fetched after Stop now"
+    summary_path = next((tmp_path / "quickbench").rglob("summary.json"))
+    summary = json.loads(summary_path.read_text())
+    assert summary["ended"] == "cancelled"
+    skipped = [c for c in summary["stage_b"]["cells"] if c.get("status") == "SKIPPED"]
+    assert skipped and all(
+        c["reason"] == "the run was cancelled before this cell" for c in skipped
+    ), "a stopped download must read as the cancelled tail, not as 'could not be downloaded'"
