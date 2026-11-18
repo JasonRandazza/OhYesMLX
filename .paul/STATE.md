@@ -99,7 +99,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-18 (Claude Opus 5.5 coordinator)
-Stopped at: 05-10b closed and merged to main `f7fe00f` (local, not pushed). Live checks this session: backend API download/cancel/resume/evict PASS (2026-11-17; details in `05-10b-SUMMARY.md` context and the 05-10b plan-session notes: 351 MB in 18.8 s, cancel kept a 108.8 MB partial, resume 12.8 s, sha256 verified); 05-10b port checkpoint PASS (2026-11-18). An unrecorded mlx-lm canary read "moved -23%" at load 4.5–5.3 (noisy, not attributed). Not yet covered: app UI download, Stop now. Known flaky Swift test (pre-existing, ~1 in 6): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail`.
+Stopped at: 05-10b closed and merged to main `f7fe00f` (local, not pushed). Live checks this session: backend API download/cancel/resume/evict PASS (2026-11-17, scratch HF cache, `Qwen3-0.6B-4bit`: 351 MB in 18.8 s, cancel kept a 108.8 MB partial, resume 12.8 s, sha256 verified); 05-10b port checkpoint PASS (2026-11-18). An unrecorded mlx-lm canary read "moved -23%" at load 4.5–5.3 (noisy, not attributed). Not yet covered: app UI download, Stop now. Known flaky Swift test (pre-existing, ~1 in 6): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail`.
 Next action: `/paul:plan` plan E (05-11) — Fable fix order A→G (`.paul/review/fable-5.2/FINDINGS.md` §5).
 Resume file: `.paul/phases/v5-onboarding/05-10b-SUMMARY.md` (routing and traps: `.paul/HANDOFF.md`)
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
