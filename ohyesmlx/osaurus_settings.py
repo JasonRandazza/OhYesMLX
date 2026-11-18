@@ -510,9 +510,10 @@ def pin(
     else:
         _write_atomic(backups / BASELINE_ABSENT, b"")
 
-    runtime.setdefault("cache", {}).setdefault("prefix", {})["enabled"] = False
-    runtime["cache"].setdefault("blockDisk", {})["enabled"] = False
-    server.setdefault("modelIdleResidencyPolicy", {})["seconds"] = 900
+    documents = {source.name: document for source, document in zip(sources, (runtime, server))}
+    for key, value in PINNED_KEYS.items():  # the one definition of what a pin sets
+        filename, _separator, dotted = key.partition(":")
+        _set_by_path(documents[filename], dotted, value)
     _write_atomic(sources[0], json.dumps(runtime, indent=2).encode())
     _write_atomic(sources[1], json.dumps(server, indent=2).encode())
 
