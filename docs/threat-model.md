@@ -605,5 +605,5 @@ is still to come (it needs Jason's sudoers step).
 | P5-8 | Met | Quit closes stdin and waits; with a job running there is no signal unless the user clicks Quit anyway after 150 s (LauncherTests, AppModelTests). A menu Quit leaves no process. |
 | P5-9 | Met | check_bundle P5-9: the backend's PATH is launchd's default and it carries no PYTHON* variable. |
 | P5-10 | Met | The stderr tail is shown as written (Couldn't start / The backend stopped); the backend never writes the token there. |
-| P5-11 | **Partly met** | The app never says "corrupt". It cannot offer "Re-download" because `Pick.downloaded` is a single bool: the client cannot tell "absent" from "present with different sizes". This needs a backend field. Open. |
+| P5-11 | **Met (05-11, 2026-11-18)** | The app never says "corrupt". `Pick.mismatch_on_disk` tells "ours" (Re-download; `fetch.download` repairs a blob it wrote) from "foreign" (no button; remove from the Hugging Face cache first, since `download` never overwrites a blob it did not write). |
 | P5-12 | Met | `scripts/make_sbom.py` lists the interpreter (tag, url, sha256), ohyesmlx (commit, source sha256), the Swift toolchain, and 105 pinned packages with hashes. |
