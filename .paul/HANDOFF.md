@@ -1,10 +1,12 @@
 ---
-description: "OhYesMLX (OYMLX) session handoff, 2026-11-18: Fable fix plans A–E (05-07..05-11, plus 05-10b) closed on main; start plan F (05-12) with Claude Code subagents"
+description: "OhYesMLX (OYMLX) session handoff, 2026-11-18: Fable fix plans A–F (05-07..05-12, plus 05-10b) closed on main; start plan G (05-13) with Command Code workers"
 type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-11-18 (plan E closed; plan F next)
+# Handoff — 2026-11-18 (plan F closed; plan G next)
+
+> **Update (plan F closed):** F ran on one Command Code worker (`.paul/orders/05-12/t1.md` is the order pattern; ~65 min, $0.43). **Workers are cc-agent again** (Jason, 2026-11-18: Claude's session budget is the scarce one); a Claude subagent only if unavoidable. Next is **plan G (05-13)**: S6-F1..F11 in `.paul/review/fable-5.2/S6-findings.md`, then re-run `scripts/check_bundle.sh dist/OhYesMLX.app`. The plan-F sections below are history.
 
 > Read this first, then `.paul/STATE.md`, then `AGENTS.md`. STATE wins wherever this note and STATE disagree.
 > Previous handoff: `.paul/archive/2026-11-16-handoff-plan-c.md`. Jason calls the project **OYMLX**.
