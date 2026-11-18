@@ -650,6 +650,36 @@ def _stat_present(planned_file: PlannedFile) -> bool:
         return False
 
 
+def mismatch_on_disk(
+    model: Model, cache_dir: str | None = None, ledger_path: str | None = None
+) -> str | None:
+    """Whether a finished blob of *model* is on disk at a size the catalog does not pin (P5-11).
+
+    ``None`` when no such blob exists -- nothing there, a ``.incomplete`` partial (05-10's
+    resumable download), or every blob the pinned size. ``"ours"`` when every mismatched blob is
+    one this app's ledger says it created, so ``download`` repairs it (S4-F14). ``"foreign"``
+    otherwise: ``download`` refuses to overwrite a blob it did not write, so the user must
+    remove it first. Stat-only, like :func:`downloaded`; an unreadable ledger answers
+    ``"foreign"``, the answer that promises no overwrite.
+    """
+    mismatched = []
+    for planned_file in plan(model, cache_dir).files:
+        blob = planned_file.blob
+        try:
+            if os.path.isfile(blob) and os.path.getsize(blob) != planned_file.size:
+                mismatched.append(blob)
+        except OSError:
+            continue
+    if not mismatched:
+        return None
+    try:
+        ledger = _ledger_load(ledger_path or ledger_for(cache_dir), missing_ok=True)
+    except LedgerError:
+        return "foreign"
+    created = set((ledger["repos"].get(model.repo) or {}).get("created_blobs", []))
+    return "ours" if all(blob in created for blob in mismatched) else "foreign"
+
+
 def in_ledger(repo: str, cache_dir: str | None = None) -> bool:
     """Whether the fetch ledger has an entry for *repo*: this app created something of it.
 

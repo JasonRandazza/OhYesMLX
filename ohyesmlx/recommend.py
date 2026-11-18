@@ -23,6 +23,8 @@ measures anything; the caller passes `Hardware`, the catalog rows and `EngineSta
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 
 from ohyesmlx.catalog import Model, disk_needed
@@ -82,20 +84,35 @@ class Pick:
     reason: str
     downloaded: bool  # every file is already in this Mac's Hugging Face cache
     measured_here: dict | None = None
+    # P5-11: a finished blob on disk at the wrong size -- None, "ours" (a download repairs
+    # it) or "foreign" (remove it first); `fetch.mismatch_on_disk` is the definition.
+    mismatch_on_disk: str | None = None
+
+
+_FIT_FACTORS = (("comfortable", COMFORTABLE_FACTOR), ("tight", TIGHT_FACTOR))
 
 
 def _fit(size_bytes: int, budget_bytes: int) -> str | None:
-    """``"comfortable"``, ``"tight"``, or None when the weights exceed the budget's lines."""
-    if size_bytes * COMFORTABLE_FACTOR <= budget_bytes:
-        return "comfortable"
-    if size_bytes * TIGHT_FACTOR <= budget_bytes:
-        return "tight"
+    """``"comfortable"``, ``"tight"``, or None when the weights exceed the budget's lines.
+
+    Every memory sentence quotes the factor of the line that decided the row (S4-F6), read
+    from ``_FIT_FACTORS`` -- the one table of fit -> factor.
+    """
+    for fit, factor in _FIT_FACTORS:
+        if size_bytes * factor <= budget_bytes:
+            return fit
     return None
 
 
-def _gb(byte_count: float) -> str:
-    """*byte_count* as decimal GB with one decimal: the only place bytes become text."""
-    return f"{byte_count / _BYTES_PER_GB:.1f}"
+def _gb(byte_count: float, *, up: bool = False) -> str:
+    """*byte_count* as decimal GB with one decimal: the only place bytes become text.
+
+    *up* rounds a need up, so a left-out row never reads as needing exactly its budget.
+    """
+    value = byte_count / _BYTES_PER_GB
+    if up:
+        value = math.ceil(value * 10 - 1e-9) / 10
+    return f"{value:.1f}"
 
 
 def _reason(model: Model, fit: str, budget_bytes: int, downloaded: bool) -> str:
@@ -105,7 +122,7 @@ def _reason(model: Model, fit: str, budget_bytes: int, downloaded: bool) -> str:
     figure the user has already paid, and the sentence would read as "download 4.8 GB"
     for a model sitting on their disk.
     """
-    spare = _gb(budget_bytes - model.size_bytes)
+    spare = _gb(budget_bytes - model.size_bytes * dict(_FIT_FACTORS)[fit])
     if fit == "comfortable":
         lead = f"Fits with about {spare} GB of memory to spare"
     else:
@@ -138,7 +155,7 @@ def exclusion_reason(
     fit = _fit(model.size_bytes, hw.model_budget_bytes)
     if fit is None:
         return (
-            f"Needs about {_gb(model.size_bytes * COMFORTABLE_FACTOR)} GB of memory at peak; "
+            f"Needs about {_gb(model.size_bytes * TIGHT_FACTOR, up=True)} GB of memory; "
             f"this Mac's budget is {_gb(hw.model_budget_bytes)} GB"
         )
     if model.repo in downloaded:
@@ -167,6 +184,7 @@ def pick(
     downloaded: frozenset[str] = frozenset(),
     measured_here: dict[str, dict] | None = None,
     missing: dict[str, int] | None = None,
+    mismatch: dict[str, str | None] | None = None,
 ) -> list[Pick]:
     """The catalog rows this Mac can hold and download, ranked; pure, and no I/O.
 
@@ -181,7 +199,7 @@ def pick(
     the caller's, built from ``quickbench.latest``, so nothing here reads a file and a row
     with no run on this Mac carries null rather than an estimate standing in for one.
     *missing* maps a repo id to the bytes still to fetch (S4-F7); a repo absent from it is
-    judged on its full size.
+    judged on its full size. *mismatch* maps a repo id to ``fetch.mismatch_on_disk``'s answer.
     """
     if not hw.supported:
         return []
@@ -217,6 +235,7 @@ def pick(
                 reason=_reason(model, fit, hw.model_budget_bytes, already_here),
                 downloaded=already_here,
                 measured_here=measured.get(model.repo),
+                mismatch_on_disk=None if already_here else (mismatch or {}).get(model.repo),
             )
         )
     return picks
