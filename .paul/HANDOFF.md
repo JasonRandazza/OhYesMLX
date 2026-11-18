@@ -4,7 +4,9 @@ type: Handoff
 about: "OhYesMLX"
 ---
 
-# Handoff — 2026-11-18 (plan F closed; plan G next)
+# Handoff — 2026-11-18 (all Fable fix plans closed; Phase 5 close next)
+
+> **Update (plan G closed):** every Fable fix plan A–G is merged. Next is the **Phase 5 close**, which is mostly Jason's live steps — see STATE "Next action" and `05-13-SUMMARY.md` "Still Jason's". Workers stay on cc-agent; G's two parallel orders are in `.paul/orders/05-13/`.
 
 > **Update (plan F closed):** F ran on one Command Code worker (`.paul/orders/05-12/t1.md` is the order pattern; ~65 min, $0.43). **Workers are cc-agent again** (Jason, 2026-11-18: Claude's session budget is the scarce one); a Claude subagent only if unavoidable. Next is **plan G (05-13)**: S6-F1..F11 in `.paul/review/fable-5.2/S6-findings.md`, then re-run `scripts/check_bundle.sh dist/OhYesMLX.app`. The plan-F sections below are history.
 
