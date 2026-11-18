@@ -250,6 +250,10 @@ public enum StubScenario: String, CaseIterable, Sendable {
     case benchmarkRunning = "benchmark-running"
     case resultsFinished = "results-finished"
     case resultsCancelled = "results-cancelled"
+    /// Stage A measured while the Mac was busy, and two engines tied (S3-F9).
+    case resultsBusyTie = "results-busy-tie"
+    /// One row with finished files of ours at the wrong size, one with files that are not (P5-11).
+    case modelsMismatch = "models-mismatch"
 
     static let stubRepo = "mlx-community/Qwen3.5-2B-4bit"
 
@@ -263,8 +267,8 @@ public enum StubScenario: String, CaseIterable, Sendable {
 
     /// The summary as a `JSONValue`, which is the shape the stream carries: a scenario stages
     /// the same record a run writes, so Results is screenshotted from the pinned shape.
-    static func summaryPayload(cancelled: Bool) -> JSONValue {
-        let data = (try? JSONEncoder().encode(stubSummary(cancelled: cancelled))) ?? Data()
+    static func summaryPayload(cancelled: Bool, busyTie: Bool = false) -> JSONValue {
+        let data = (try? JSONEncoder().encode(stubSummary(cancelled: cancelled, busyTie: busyTie))) ?? Data()
         return (try? JSONDecoder().decode(JSONValue.self, from: data)) ?? .null
     }
 
@@ -313,7 +317,7 @@ public enum StubScenario: String, CaseIterable, Sendable {
     /// so do the Results ones, because a run starts from the plan it was shown.
     private var needsPlan: Bool {
         switch self {
-        case .benchmarkPlan, .benchmarkRunning, .resultsFinished, .resultsCancelled: return true
+        case .benchmarkPlan, .benchmarkRunning, .resultsFinished, .resultsCancelled, .resultsBusyTie: return true
         default: return false
         }
     }
@@ -417,7 +421,7 @@ public enum StubScenario: String, CaseIterable, Sendable {
                 hold: true
             )
         }
-        if self == .resultsFinished || self == .resultsCancelled {
+        if self == .resultsFinished || self == .resultsCancelled || self == .resultsBusyTie {
             backend.enqueue(
                 events: [
                     JobEvent(
@@ -425,7 +429,10 @@ public enum StubScenario: String, CaseIterable, Sendable {
                         type: .result,
                         message: "quickbench finished",
                         fraction: nil,
-                        payload: Self.summaryPayload(cancelled: self == .resultsCancelled)
+                        payload: Self.summaryPayload(
+                            cancelled: self == .resultsCancelled,
+                            busyTie: self == .resultsBusyTie
+                        )
                     ),
                     JobEvent(
                         seq: 2,
@@ -616,12 +623,17 @@ public enum StubScenario: String, CaseIterable, Sendable {
         switch self {
         case .modelsDownloading, .modelsLowDisk:
             return Self.stubRecommendations(downloaded: false)
+        case .modelsMismatch:
+            return Self.stubRecommendations(downloaded: false, mismatch: true)
         default:
             return Self.stubRecommendations(downloaded: true)
         }
     }
 
-    private static func stubRecommendations(downloaded: Bool) -> Recommendations {
+    private static func stubRecommendations(
+        downloaded: Bool,
+        mismatch: Bool = false
+    ) -> Recommendations {
         Recommendations(
             picks: [
                 Pick(
@@ -652,7 +664,8 @@ public enum StubScenario: String, CaseIterable, Sendable {
                     startHere: true,
                     reason: "Fits with about 40.3 GB of memory to spare; 4.8 GB download.",
                     downloaded: false,
-                    measuredHere: nil
+                    measuredHere: nil,
+                    mismatchOnDisk: mismatch ? .ours : nil
                 ),
                 Pick(
                     modelID: "mlx-community/Qwen3.5-8B-4bit",
@@ -668,7 +681,8 @@ public enum StubScenario: String, CaseIterable, Sendable {
                     reason: "Tight fit, about 6.1 GB of memory to spare; 4.6 GB download. "
                         + "Close other apps while it runs.",
                     downloaded: false,
-                    measuredHere: nil
+                    measuredHere: nil,
+                    mismatchOnDisk: mismatch ? .foreign : nil
                 ),
                 // The stage-B sibling: a cancelled run leaves it on disk, which is the line
                 // Results draws (Q7). Its title and size are what that line needs.
@@ -736,11 +750,11 @@ public enum StubScenario: String, CaseIterable, Sendable {
     /// A run's own summary, decoded from the JSON a real run writes. The fixture is the pinned
     /// shape (`docs/interfaces/v5-quickbench.md`), so a screenshot of Results is the shape the
     /// backend sends rather than a hand-built lookalike.
-    static func stubSummaryData(cancelled: Bool) throws -> Data {
-        try JSONEncoder().encode(stubSummary(cancelled: cancelled))
+    static func stubSummaryData(cancelled: Bool, busyTie: Bool = false) throws -> Data {
+        try JSONEncoder().encode(stubSummary(cancelled: cancelled, busyTie: busyTie))
     }
 
-    private static func stubSummary(cancelled: Bool) -> QuickSummary {
+    private static func stubSummary(cancelled: Bool, busyTie: Bool = false) -> QuickSummary {
         let mlxlm = QuickCell(
             engine: "mlxlm",
             format: "mlx affine 4-bit gs64",
@@ -830,7 +844,11 @@ public enum StubScenario: String, CaseIterable, Sendable {
                 QuickEngine(name: "vmlx", version: "1.6.82", tested: false),
             ],
             load: QuickLoads(
-                stageA: QuickLoad(before: 1.42, after: 1.55, label: nil),
+                stageA: QuickLoad(
+                    before: busyTie ? 1.48 : 1.42,
+                    after: busyTie ? 1.71 : 1.55,
+                    label: busyTie ? "this Mac was busy" : nil
+                ),
                 stageB: QuickLoad(before: 1.51, after: 1.66, label: cancelled ? nil : "this Mac was busy")
             ),
             osaurus: QuickOsaurus(allowed: true, pinned: true, restored: true, reason: nil, duringRun: nil),
@@ -868,7 +886,7 @@ public enum StubScenario: String, CaseIterable, Sendable {
                     ]
                     : [mlxlm, osaurus, omlx, optiq],
                 winner: cancelled ? "mlxlm" : "omlx",
-                tie: [],
+                tie: busyTie ? ["omlx", "osaurus"] : [],
                 note: nil
             ),
             stageB: QuickStageB(
@@ -980,6 +998,8 @@ extension StubScenario {
         case .modelsDownloading:
             model.go(to: .models)
             Task { await model.download(repo: Self.stubRepo) }
+        case .modelsMismatch:
+            model.go(to: .models)
         case .modelsLowDisk:
             model.go(to: .models)
             await model.download(repo: Self.stubRepo)
@@ -997,6 +1017,10 @@ extension StubScenario {
                 try? await Task.sleep(for: .milliseconds(5))
             }
         case .resultsFinished:
+            model.go(to: .results)
+            await model.planBenchmark(repo: Self.stubRepo)
+            await model.startBenchmark()
+        case .resultsBusyTie:
             model.go(to: .results)
             await model.planBenchmark(repo: Self.stubRepo)
             await model.startBenchmark()
