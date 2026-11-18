@@ -847,12 +847,20 @@ def test_osaurus_is_recovered_pinned_and_restored_around_its_cell(tmp_path):
     for kind, kwargs in fakes.osaurus.calls:
         assert kwargs["backup_dir"] == str(tmp_path / "backup"), kind
         assert kwargs["baseline_path"] == str(tmp_path / "baseline.json"), kind
-    assert summary["osaurus"] == {
+    # 05-12 AC-3 adds one key: the snapshot the cell ran under is recorded with the results.
+    # The four keys this test has always pinned are unchanged; the fake `pin` returns None, so
+    # the snapshot of a faked pin is None rather than a settings map.
+    assert {key: summary["osaurus"][key] for key in
+            ("allowed", "pinned", "restored", "reason")} == {
         "allowed": True,
         "pinned": True,
         "restored": True,
         "reason": None,
     }
+    assert "snapshot" in summary["osaurus"]
+    assert fakes.osaurus.calls[1][1]["rebaseline"] is True, (
+        "quickbench must rebaseline: another Mac has no committed baseline"
+    )
 
 
 def test_quickbench_pins_against_the_drift_guards_baseline_by_default():

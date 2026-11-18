@@ -378,7 +378,7 @@ key is validated (E3, `G`).
 | `cache.prefix.legacyEntryCountCache` | `false` | — |
 | `cache.storedKVCodec` | `auto` | — |
 | `concurrency.continuousBatching` | `true` | "Continuous batching is off, so prefix/paged/block-disk cache reuse will be limited or disabled." |
-| `concurrency.maxConcurrentSequences` | `1` (host value) | "Max concurrent sequences must be positive." **The concurrency runner sets this key to the run's N and restores it** (2026-09-27): `osaurus_set_seqs` in `scripts/osaurus-pin.sh` writes the run's request concurrency into this key after `osaurus_pin` has copied the file byte-exact, then re-records the drift baseline exactly as `osaurus_pin` does, and `osaurus_restore_check`'s `cmp` puts the host's `1` back when the runtime's runs are done — the same rule Decision 129 wrote as `--max-concurrent-requests` in `runtimes.Omlx.start_command`. So a concurrency-sweep column's cap is its own N, and the `1` in this row is what every non-sweep cell holds. |
+| `concurrency.maxConcurrentSequences` | `1` (host value) | "Max concurrent sequences must be positive." **The concurrency runner sets this key to the run's N and restores it** (2026-09-27): `osaurus_set_seqs` in `scripts/osaurus-pin.sh` calls `osaurus_settings.set_key` — one atomic temp-and-replace on the user's own file, a read-back, and the drift baseline updated with that one key overridden — after `osaurus_pin` has copied the file byte-exact, and `osaurus_restore_check`'s byte-exact check puts the host's `1` back when the runtime's runs are done — the same rule Decision 129 wrote as `--max-concurrent-requests` in `runtimes.Omlx.start_command`. `osaurus_set_seqs` refuses `0` and anything that is not a positive integer, before the file is touched. So a concurrency-sweep column's cap is its own N, and the `1` in this row is what every non-sweep cell holds. |
 | `concurrency.smeltMode` | `disabled` | enum `engineSelected` \| `disabled` \| `flashMoE` \| `ssdStreaming` |
 | `generation.diffusionMaxDenoisingSteps` | `16` | "Diffusion budgets below 12 steps measurably break coherency on diffusiongemma-26B-A4B (8 steps produces word-salad spans)." |
 | `generation.streamInterval` | `1` | "Stream interval must be at least 1." **See §5.** |
@@ -1247,6 +1247,52 @@ How `runtimes.resident_engines` recognises this engine's server, read from the b
   the start, naming the holder.
 
 ## 10. Summary for the harness
+
+### 10.1 The pin, its one backup location, and what a restore verdict means (05-12)
+
+`scripts/osaurus-pin.sh` is the one definition of the pin, and every number below is
+`osaurus_settings`' not a copy of it:
+
+- **One backup location.** `osaurus_settings.BACKUP_DIR` is `~/.osaurus/config.ohyesmlx-backup`,
+  created `0700`. The shell wrapper, `quickbench.DEFAULT_BACKUP_DIR` and the app's launch
+  recovery all read that one constant; nobody spells a second path. Before 05-12 the shell
+  wrapper used `~/.osaurus/config.phase4-orig` and the app used
+  `<app support>/quickbench/osaurus-backup`, so a shell runner killed outside its trap left the
+  originals where the app never looked — and the app then backed the *pinned* files up as the
+  user's own and reported them restored (Fable S5-F6).
+- **Legacy directories are still read.** `osaurus_settings.legacy_backup_dirs()` names those two
+  old paths. `recover()` restores from whichever one directory holds a backup and removes it only
+  after a byte-exact restore; `pin()` refuses while any of them holds one. If two or more hold a
+  backup, `recover()` **refuses and names every one** — it never picks or merges, because which
+  copy is the user's original cannot be known from the files.
+- **A verdict is the only thing a restore says.** `osaurus_settings.restore` returns `True` only
+  when both configs and the baseline are byte-identical to their backups
+  (`filecmp.cmp(shallow=False)` — the one definition of the check). `osaurus-pin.sh` has exactly
+  one function that restores and prints that verdict, `osaurus_restore`: `  osaurus settings
+  restored byte-exact (cmp)` on success, `RESTORE FAILED: ~/.osaurus/config differs from
+  <backup dir> -- copies kept` on failure. It returns non-zero on failure and re-arms the
+  restoring trap, and the `INT TERM HUP` trap and the `EXIT` trap both call it. The `EXIT` trap
+  is what covers a `set -u` abort, a failed command and a plain return, none of which is a
+  signal (Fable S5-F7).
+- **A failed restore is the caller's exit status.** `scripts/run_canary.sh` — the pattern caller
+  — exits non-zero after `osaurus_restore_check` fails, so a coordinator reads the code rather
+  than a line in a log.
+- **The pin cannot overwrite the baseline it is checked against.** `pin(..., rebaseline=False)`,
+  which is the shell wrapper's and a CLI run's default, keeps an existing baseline file and
+  overrides only the three keys it pins (`PINNED_KEYS`: both caches off, idle residency 900). A
+  host that differs from the committed baseline on any *other* tracked key is then still refused
+  by `check_host_state` (Fable S5-F8). `quickbench` passes `rebaseline=True`, because another Mac
+  has no committed baseline and today's live host is the only record there is; it writes the
+  captured snapshot into `summary.json` under `osaurus.snapshot`. No run-header field was added:
+  a header pin needs Jason's yes, and the committed baseline is versioned by the header's
+  harness revision already.
+- **Key edits are the module's.** `osaurus_settings.set_key(key, value)` does the
+  `_write_atomic` temp-and-replace, reads the key back, and updates the baseline under the same
+  rule. `osaurus_set_seqs` calls it and writes no JSON itself, and it refuses `0` or any
+  non-positive integer before the live file is touched.
+- **A restore that raises after an attempted pin is recorded.** `quickbench` records
+  `restored: false`, a reason naming `backup_dir`, and the `restore_failed` event, whether the
+  pin took effect or raised part-way (Fable S2-F10).
 
 The three things a cell must pin, none of which is expressible on the command line:
 
