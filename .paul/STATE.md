@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [05-11 (plan E) closed 2026-11-18 (`05-11-SUMMARY.md`): stage B re-checks the winner before/after each sibling download, hears Stop/Stop now, skips siblings the winner is not listed for; install rolls back on any late failure, lab engines installed only when startable; memory sentences quote the deciding factor; Results shows busy + tie; `Pick.mismatch_on_disk` (P5-11). Review fixes `5af0bc2`; pytest 1580, swift 122. Next: plan F (05-12)]
+  ✓        ✓        ✓     [05-12 (plan F) closed 2026-11-18 (`05-12-SUMMARY.md`): one Osaurus backup location (`~/.osaurus/config.ohyesmlx-backup`, legacy dirs searched), shell restore returns non-zero on a failed verify, harness pin keeps the committed baseline (app rebaselines + records a snapshot), `set_key` atomic, raised restore recorded. Command Code worker; pytest 1606. Next: plan G (05-13)]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-18: 05-12 closed; Jason: no run-header Osaurus snapshot (committed baseline + harness revision already identify a harness run's conditions); harness pin keeps the committed baseline, the app rebaselines from the live host; one backup dir `~/.osaurus/config.ohyesmlx-backup`. Workers back on cc-agent (Claude session budget) | v5.0 review fixes | `05-12-SUMMARY.md` |
 | 2026-11-18: 05-11 closed: P5-11 field is `mismatch_on_disk` null/"ours"/"foreign" (download repairs only blobs it wrote); exclusion sentence quotes 1.25x size rounded up, no "at peak"; tied stage A heads the card "Fastest measured here (top engines tied)"; a lab engine whose start would be refused reads not installed; install refuses `install_in_progress` while a process names an unfinished root | v5.0 review fixes | `05-11-SUMMARY.md` |
 | 2026-11-18: Enterprise audit performed on .paul/phases/v5-onboarding/05-11-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 review fixes | reinstall refuses `install_in_progress` while a pip survives in the root; P5-11 field is `differs_on_disk` (a `.incomplete` partial is not); detection PATH injectable; sibling progress throttled to 1% steps; stage B re-checks before the download |
 | 2026-11-10: Enterprise audit performed on .paul/phases/v5-onboarding/045-02b-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 4. Verdict: conditionally acceptable | v5.0 Phase 4.5 | pip step gains `--only-binary :all:` (hash mode skips sdist build deps); late-uploaded files reviewed before trusting a freeze; live install proves real Application Support untouched |
@@ -101,9 +102,9 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-18 (Claude Opus 5.5 coordinator)
-Stopped at: 05-11 (plan E) closed and merged to main (local, not pushed). Known flaky Swift test (pre-existing, ~1 in 6, worse under full-suite load): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail`.
-Next action: `/paul:plan` plan F (05-12, Osaurus pin and restore: S2-F10, S5-F6, S5-F7, S5-F8, S5-F12) — Claude subagents, not cc-agent.
-Resume file: `.paul/phases/v5-onboarding/05-11-SUMMARY.md` (routing and traps: `.paul/HANDOFF.md`)
+Stopped at: 05-12 (plan F) closed and merged to main (local, not pushed).
+Next action: `/paul:plan` plan G (05-13, packaging and release: S6-F1..F11; re-run scripts/check_bundle.sh) — Command Code workers (cc-agent); Claude subagents only if unavoidable.
+Resume file: `.paul/phases/v5-onboarding/05-12-SUMMARY.md` (routing and traps: `.paul/HANDOFF.md`)
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
