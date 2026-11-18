@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [05-10b closed 2026-11-18 (`05-10b-SUMMARY.md`): resident engines found by process on any port (`runtimes.resident_engines`), one `port_plan` for start and quickbench, free-port fallback for a non-engine on a default port (Osaurus never moves), `port` on every row, ledger stop by runtime name; live checkpoint PASS; review fixes `fa0023b`; merged to main `f7fe00f`; pytest 1542. Next: plan E (05-11)]
+  ✓        ○        ○     [05-11 (plan E) PLAN created + audited 2026-11-18 (3 must-have, 4 recommended applied); APPLY in progress. Prior: 05-10b closed 2026-11-18 (`05-10b-SUMMARY.md`): resident engines found by process on any port (`runtimes.resident_engines`), one `port_plan` for start and quickbench, free-port fallback for a non-engine on a default port (Osaurus never moves), `port` on every row, ledger stop by runtime name; live checkpoint PASS; review fixes `fa0023b`; merged to main `f7fe00f`; pytest 1542. Next: plan E (05-11)]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-18: Enterprise audit performed on .paul/phases/v5-onboarding/05-11-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | v5.0 review fixes | reinstall refuses `install_in_progress` while a pip survives in the root; P5-11 field is `differs_on_disk` (a `.incomplete` partial is not); detection PATH injectable; sibling progress throttled to 1% steps; stage B re-checks before the download |
 | 2026-11-10: Enterprise audit performed on .paul/phases/v5-onboarding/045-02b-PLAN.md. Applied 3 must-have, 4 strongly-recommended upgrades. Deferred 4. Verdict: conditionally acceptable | v5.0 Phase 4.5 | pip step gains `--only-binary :all:` (hash mode skips sdist build deps); late-uploaded files reviewed before trusting a freeze; live install proves real Application Support untouched |
 | ~~2026-11-10: OptiQ install exempts pygame from `--only-binary :all:` (`engines._SOURCE_BUILDS`)~~ **Superseded 2026-11-13 (045-03):** the source build needs SDL headers a clean Mac lacks; optiq now installs with `--no-deps` and no pygame (used only by `optiq game`). | v5.0 Phase 4.5 | Jason's call at a 045-02b BLOCKED: pygame 2.6.1 has no cp314 wheel and mlx-optiq 0.5.13 requires it (game command only); built from source as the lab copy was; build tools unhashed, recorded in threat-model §9 |
 | 2026-11-09: 045-02a AC-7 drift check is an injectable `run()` keyword; one existing quickbench test (`test_the_host_pinned_between_pin_and_restore_shows_no_drift`) is edited to inject it at its tmp config dir | v5.0 Phase 4.5 | Jason's call at a BLOCKED from the part-B worker: the plan's 'existing tests unmodified' and 'live config vs pinned baseline' could not both hold, because that test pins a tmp config dir while the default check reads the real ~/.osaurus. No test reads the real Osaurus settings. |
@@ -100,8 +101,8 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 Last session: 2026-11-18 (Claude Opus 5.5 coordinator)
 Stopped at: 05-10b closed and merged to main `f7fe00f` (local, not pushed). Live checks this session: backend API download/cancel/resume/evict PASS (2026-11-17, scratch HF cache, `Qwen3-0.6B-4bit`: 351 MB in 18.8 s, cancel kept a 108.8 MB partial, resume 12.8 s, sha256 verified); 05-10b port checkpoint PASS (2026-11-18). An unrecorded mlx-lm canary read "moved -23%" at load 4.5–5.3 (noisy, not attributed). Not yet covered: app UI download, Stop now. Known flaky Swift test (pre-existing, ~1 in 6): `LauncherTests.testEOFBeforeTheLaunchLineIsCouldntStartWithTheStderrTail`.
-Next action: `/paul:plan` plan E (05-11) — Fable fix order A→G (`.paul/review/fable-5.2/FINDINGS.md` §5).
-Resume file: `.paul/phases/v5-onboarding/05-10b-SUMMARY.md` (routing and traps: `.paul/HANDOFF.md`)
+Next action: APPLY 05-11 (T1 Sonnet, T2 Opus, T3 coordinator, T4 Sonnet after T3), then two-axis review and UNIFY.
+Resume file: `.paul/phases/v5-onboarding/05-11-PLAN.md` (routing and traps: `.paul/HANDOFF.md`)
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
