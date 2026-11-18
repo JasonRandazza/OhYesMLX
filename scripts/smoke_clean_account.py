@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """The client half of the 045-03 clean-account smoke, run as the throwaway user.
 
-It spawns ``ohyesmlx app`` the way the Swift client will -- stdin held open, stdout the only
-place the launch line is read from -- and then drives every API surface a first-time user
-reaches: the four GETs, two hash-pinned installs, one download, one quickbench run, an
-eviction, and the stdin-EOF shutdown. Everything it observes is one ``checks`` entry, and it
-never stops at a failure: a check whose prerequisite did not pass is a SKIP naming it.
+It spawns the built app's backend the way the Swift client does -- ``--python``'s interpreter
+with ``-I -B -m ohyesmlx.cli app`` under the launcher's own environment, stdin held open,
+stdout the only place the launch line is read from -- and then drives every API surface a
+first-time user reaches: the four GETs, two hash-pinned installs, one download, one
+quickbench run, an eviction, and the stdin-EOF shutdown. Everything it observes is one
+``checks`` entry, and it never stops at a failure: a check whose prerequisite did not pass is
+a SKIP naming it.
+
+``--python`` is the interpreter inside the copied ``OhYesMLX.app``, never the client's own:
+the artifact a user receives is the bundle, so the smoke runs the bundle (S6-F5).
 
 Run by ``scripts/smoke_clean_account.sh``, never by hand on a real account. The pure parts
 (launch-line parse, SSE parse, the ``/Users/jrazz`` scan, the pip-argv check and the result
@@ -89,6 +94,34 @@ def parse_launch(text: str) -> tuple[int, str]:
 def parse_ports(text: str) -> tuple[int, ...]:
     """The AC-1 port list, from the ``.sh``'s ``PORTS`` -- the one definition of it."""
     return tuple(int(token) for token in text.split())
+
+
+# The environment the Swift launcher hands its child: launchd's PATH and five inherited keys,
+# restated from `BackendLauncher.childEnvironment()` (S6-F5). The smoke spawns the bundle's
+# interpreter with these and not the client's own environment, so what it exercises is what a
+# user's first open gets -- no Homebrew PATH, no PYTHON* variable, no inherited cwd entry.
+LAUNCHER_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+LAUNCHER_INHERITED_KEYS = ("HOME", "USER", "LOGNAME", "TMPDIR", "LANG")
+
+
+def launcher_argv(python: str) -> list[str]:
+    """The backend argv the Swift launcher spawns, with *python* as its interpreter (P5-9).
+
+    ``-I`` so no user site-packages or ``PYTHON*`` variable shapes the backend, ``-B`` so no
+    bytecode is written into the signed bundle (P5-6), ``-m ohyesmlx.cli app`` from the
+    bundle's own site-packages. This is ``BackendLauncher.swift``'s argv, listed once here so
+    the test that compares the two reads the same tokens the smoke then spawns.
+    """
+    return [python, "-I", "-B", "-m", "ohyesmlx.cli", "app"]
+
+
+def launcher_environment(environ) -> dict[str, str]:
+    """``BackendLauncher.childEnvironment()``: launchd's PATH plus the inherited keys present."""
+    environment = {"PATH": LAUNCHER_PATH}
+    for key in LAUNCHER_INHERITED_KEYS:
+        if key in environ:
+            environment[key] = environ[key]
+    return environment
 
 
 def _sse_frame(block: str) -> dict | None:
@@ -825,9 +858,22 @@ def check_ac6(checks, process, stdin_closed_error, ports):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="045-03 clean-account smoke client")
     parser.add_argument("--out", required=True, help="results and stderr log directory")
-    parser.add_argument("--head", required=True, help="the git revision the wheel was built from")
+    parser.add_argument("--head", required=True, help="the git revision the bundle was built from")
     parser.add_argument("--forbid", required=True, help="a string no response may contain")
     parser.add_argument("--model", required=True, help="the catalog repo id to download")
+    parser.add_argument(
+        "--python",
+        required=True,
+        help=(
+            "the interpreter inside OhYesMLX.app/Contents/Resources/python, which the backend "
+            "is spawned with (never the client's own)"
+        ),
+    )
+    parser.add_argument(
+        "--artifact",
+        required=True,
+        help="what was run: the copied bundle's path, recorded in the results",
+    )
     parser.add_argument(
         "--ports", required=True, help="AC-1's ports, space-separated, from the .sh's PORTS"
     )
@@ -840,7 +886,8 @@ def main(argv=None) -> int:
     started = datetime.datetime.now(datetime.timezone.utc).isoformat()
     checks: list[dict] = []
 
-    binary = os.path.join(sys.prefix, "bin", "ohyesmlx")
+    command = launcher_argv(args.python)
+    binary = args.python
     log_path = out / f"app-stderr-{stamp}.log"
     extras: list[str] = []
     launch_error = None
@@ -848,10 +895,11 @@ def main(argv=None) -> int:
     with open(log_path, "wb") as log:
         try:
             process = subprocess.Popen(
-                [binary, "app"],
+                command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=log,
+                env=launcher_environment(os.environ),
             )
         except OSError as error:
             launch_error = f"could not start {binary}: {error}"
@@ -934,6 +982,11 @@ def _finish(out: pathlib.Path, stamp: str, args, started: str, checks: list[dict
         "ended": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "checks": checks,
     }
+    artifact = getattr(args, "artifact", None)
+    if artifact:
+        # Which artifact ran (S6-F5): a results file that does not name it cannot say whether
+        # the numbers came from the bundle a user receives or from something built here.
+        payload["artifact"] = artifact
     path = out / f"{stamp}.json"
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.chmod(path, 0o644)
