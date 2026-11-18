@@ -177,3 +177,25 @@ def test_a_refusal_before_the_download_spends_no_bytes(tmp_path):
     assert cache.downloads == [], "a refused engine's siblings are not fetched"
     assert all(c["status"] == "SKIPPED" for c in stage_b_siblings(summary))
     assert probe.asks == len(ENGINES) + 2, "one ask per sibling; none after a refusal"
+
+
+def test_a_refusal_after_the_download_evicts_the_owned_sibling_and_moves_on(tmp_path):
+    """05-11 review: the post-download re-check (AC-1) skips, evicts what it fetched, continues."""
+    probe = BusyAfterStageA(len(ENGINES) + 1)  # free for the first sibling's pre-check only
+    cache = FakeCache(downloaded=(CHOSEN.repo,))
+    ok, cells, _osaurus, summary = verified_run(
+        tmp_path,
+        probe=probe,
+        answers={"mlxlm": ("PASS", 40), "optiq": ("PASS", 60)},
+        cache=cache,
+    )
+
+    assert ok is True
+    first, second = stage_b_siblings(summary)
+    assert first["status"] == second["status"] == "SKIPPED"
+    assert first["reason"] == second["reason"] == "quit optiq first"
+    assert cache.downloads == [first["repo"]], "only the first sibling was fetched"
+    assert first["repo"] in cache.evicts, "the fetched sibling was evicted"
+    assert summary["ended"] == "finished"
+    measured_ids = {call["cells"][0].id for call in cells.calls}
+    assert not {"oq4__optiq", "jang4__optiq"} & measured_ids

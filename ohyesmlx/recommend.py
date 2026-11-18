@@ -24,7 +24,6 @@ measures anything; the caller passes `Hardware`, the catalog rows and `EngineSta
 from __future__ import annotations
 
 import math
-
 from dataclasses import dataclass
 
 from ohyesmlx.catalog import Model, disk_needed
@@ -89,7 +88,7 @@ class Pick:
     mismatch_on_disk: str | None = None
 
 
-_FIT_FACTORS = (("comfortable", COMFORTABLE_FACTOR), ("tight", TIGHT_FACTOR))
+_FIT_FACTORS = {"comfortable": COMFORTABLE_FACTOR, "tight": TIGHT_FACTOR}  # checked in order
 
 
 def _fit(size_bytes: int, budget_bytes: int) -> str | None:
@@ -98,7 +97,7 @@ def _fit(size_bytes: int, budget_bytes: int) -> str | None:
     Every memory sentence quotes the factor of the line that decided the row (S4-F6), read
     from ``_FIT_FACTORS`` -- the one table of fit -> factor.
     """
-    for fit, factor in _FIT_FACTORS:
+    for fit, factor in _FIT_FACTORS.items():
         if size_bytes * factor <= budget_bytes:
             return fit
     return None
@@ -107,7 +106,7 @@ def _fit(size_bytes: int, budget_bytes: int) -> str | None:
 def _gb(byte_count: float, *, up: bool = False) -> str:
     """*byte_count* as decimal GB with one decimal: the only place bytes become text.
 
-    *up* rounds a need up, so a left-out row never reads as needing exactly its budget.
+    *up* rounds a need up, so a left-out row's need never reads as less than it is.
     """
     value = byte_count / _BYTES_PER_GB
     if up:
@@ -122,7 +121,7 @@ def _reason(model: Model, fit: str, budget_bytes: int, downloaded: bool) -> str:
     figure the user has already paid, and the sentence would read as "download 4.8 GB"
     for a model sitting on their disk.
     """
-    spare = _gb(budget_bytes - model.size_bytes * dict(_FIT_FACTORS)[fit])
+    spare = _gb(budget_bytes - model.size_bytes * _FIT_FACTORS[fit])
     if fit == "comfortable":
         lead = f"Fits with about {spare} GB of memory to spare"
     else:
@@ -154,10 +153,10 @@ def exclusion_reason(
     """
     fit = _fit(model.size_bytes, hw.model_budget_bytes)
     if fit is None:
-        return (
-            f"Needs about {_gb(model.size_bytes * TIGHT_FACTOR, up=True)} GB of memory; "
-            f"this Mac's budget is {_gb(hw.model_budget_bytes)} GB"
-        )
+        need, budget = _gb(model.size_bytes * TIGHT_FACTOR, up=True), _gb(hw.model_budget_bytes)
+        if need == budget:  # need > budget, so one more tenth is still an honest round-up
+            need = f"{float(need) + 0.1:.1f}"
+        return f"Needs about {need} GB of memory; this Mac's budget is {budget} GB"
     if model.repo in downloaded:
         return None
     needed = disk_needed(model.size_bytes if missing is None else missing)

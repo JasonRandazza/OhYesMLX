@@ -542,11 +542,12 @@ def _lab_script(lab_path: str | None, script: str) -> tuple[str, ...]:
 def _startable(env, name: str, script: str, lab_path, candidates: tuple[str, ...]) -> str | None:
     """The first existing candidate a start of pip engine *name* would actually run, or None.
 
-    A candidate counts when it is *lab_path*'s script, or when it is the first *script* on
-    the PATH a start of *name* hands its child. That PATH is ``runtimes._engine_env``'s
-    answer -- the one definition of how a lab prefix joins PATH -- built on *env*'s own
-    ``environ``, so a fixture never reads this process's. Anything else is a file no start
-    can find: the app's PATH is launchd's, and an unrecorded venv under Application Support
+    A candidate counts when it is *lab_path*'s script (unless ``runtimes._engine_env``
+    refuses that lab, as a start would), or when it is the first *script* on the PATH a start
+    of *name* hands its child. That PATH is ``_engine_env``'s answer -- the one definition of
+    how a lab prefix joins PATH -- built on *env*'s own ``environ``; only ``environ`` comes
+    from *env*: ``_engine_env`` still reads the lab-paths file, the manifest and the lab
+    directory from the real filesystem. Anything else is a file no start can find: the app's PATH is launchd's, and an unrecorded venv under Application Support
     or a ``~/.local/bin`` script is on it only from a developer's shell (S4-F2).
     """
     lab = _lab_script(lab_path, script)
@@ -557,7 +558,7 @@ def _startable(env, name: str, script: str, lab_path, candidates: tuple[str, ...
             environ=getattr(env, "environ", {}),
         ).get("PATH", "")
     except (RuntimeStartError, ValueError):
-        start_path = ""  # the start itself would refuse, so only a lab script is reachable
+        return None  # the start itself would refuse: nothing here is startable
     first = next(
         (
             os.path.join(directory, script)
@@ -1374,7 +1375,7 @@ def install(
                     f"a running process is still writing {root}; let it finish or quit it, "
                     "then install again"
                 )
-            _rollback([root], engines_dir, send)
+            _rollback([root], engines_dir, quietly)
             if os.path.lexists(root):
                 return "stale_install", f"could not remove the unfinished install at {root}"
         return None

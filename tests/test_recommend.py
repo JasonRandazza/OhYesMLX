@@ -16,7 +16,7 @@ import pytest
 from ohyesmlx.catalog import Model, ModelFile
 from ohyesmlx.engines import EngineStatus
 from ohyesmlx.hardware import Hardware
-from ohyesmlx.recommend import Pick, exclusion_reason, pick
+from ohyesmlx.recommend import TIGHT_FACTOR, Pick, exclusion_reason, pick
 
 # hardware.model_budget's own answers: two thirds of unified memory less 2 GiB under 36 GiB.
 BUDGET_8_GIB = 3_579_139_413
@@ -478,3 +478,11 @@ def test_measured_here_is_the_callers_run_for_that_repo_and_null_without_one():
     by_id = {pick.model_id: pick for pick in picks}
     assert by_id[QWEN_06B["repo"]].measured_here == best
     assert by_id[LFM_8B["repo"]].measured_here is None
+
+
+def test_a_left_out_row_never_reads_as_needing_exactly_its_budget():
+    """05-11 review: 10.07 GB need vs 10.06 GB budget would both print 10.1."""
+    budget = 10_060_000_000
+    size = int(10_070_000_000 / TIGHT_FACTOR) + 1
+    reason = exclusion_reason(model(size=size), hardware(budget), 10**15)
+    assert reason == "Needs about 10.2 GB of memory; this Mac's budget is 10.1 GB"

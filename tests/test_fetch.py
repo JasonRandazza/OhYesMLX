@@ -2045,3 +2045,14 @@ def test_missing_bytes_is_stat_only_and_present_overrides_it(tmp_path):
     assert fetch.missing_bytes(model, cache) == 6 + 7
 
     assert fetch.missing_bytes(model, cache, present={"weights.safetensors": True, "config.json": False}) == 7
+
+
+def test_mismatch_on_disk_is_foreign_for_a_snapshot_link_download_would_refuse(tmp_path):
+    """05-11 review: a regular file where the snapshot symlink goes is refused by download."""
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    harness = Harness(tmp_path, [model], serve({}))
+    link = fetch.plan(model, str(harness.cache)).files[0].link
+    os.makedirs(os.path.dirname(link))
+    with open(link, "wb") as handle:
+        handle.write(WEIGHTS)
+    assert fetch.mismatch_on_disk(model, str(harness.cache)) == "foreign"

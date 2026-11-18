@@ -1922,3 +1922,27 @@ def test_a_bad_lab_paths_file_refuses_before_any_step(tmp_path):
     assert ok is False
     assert events[-2]["payload"]["code"] == "lab_paths_invalid"
     assert run.calls == [] and not (tmp_path / "engines").exists()
+
+
+def test_a_pip_engine_whose_start_is_refused_is_not_installed(monkeypatch):
+    """05-11 review: a lab (or PATH) that `_engine_env` refuses leaves nothing startable."""
+    def refuse(*_args, **_kwargs):
+        raise engines.RuntimeStartError("lab bin is group-writable")
+
+    monkeypatch.setattr(engines, "_engine_env", refuse)
+    env = installed_env()
+    env.environ = {"PATH": CLI_PATH}
+    optiq = {status.name: status for status in detect_all(env)}["optiq"]
+    assert optiq.installed is False
+
+
+def test_a_created_venv_root_and_bin_are_0755_whatever_the_umask(tmp_path):
+    old = os.umask(0o002)
+    try:
+        ok, events, _, _ = do_install(tmp_path, run=FakeRun())
+    finally:
+        os.umask(old)
+    assert ok is True, events
+    root = tmp_path / "engines" / f"mlxlm-{engines.TESTED_VERSIONS['mlxlm']}"
+    assert oct(root.stat().st_mode & 0o777) == oct(0o755)
+    assert oct((root / "bin").stat().st_mode & 0o777) == oct(0o755)

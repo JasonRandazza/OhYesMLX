@@ -30,7 +30,6 @@ final class Plan0511T4Tests: XCTestCase {
         let row = try XCTUnwrap(recs.picks.first)
         XCTAssertNil(row.mismatchOnDisk)
         XCTAssertEqual(row.downloadTitle, "Download")
-        XCTAssertTrue(row.offersDownload)
         XCTAssertNil(row.mismatchLine)
     }
 
@@ -44,14 +43,12 @@ final class Plan0511T4Tests: XCTestCase {
         let row = try pick(mismatch: "ours")
         XCTAssertEqual(row.mismatchOnDisk, .ours)
         XCTAssertEqual(row.downloadTitle, "Re-download")
-        XCTAssertTrue(row.offersDownload)
         XCTAssertNil(row.mismatchLine)
     }
 
     func testForeignOffersNoButtonAndSaysRemoveFirstWithoutCorrupt() throws {
         let row = try pick(mismatch: "foreign")
         XCTAssertEqual(row.mismatchOnDisk, .foreign)
-        XCTAssertFalse(row.offersDownload)
         let line = try XCTUnwrap(row.mismatchLine)
         XCTAssertTrue(line.contains("Hugging Face cache"))
         XCTAssertFalse(line.lowercased().contains("corrupt"))
@@ -82,6 +79,7 @@ final class Plan0511T4Tests: XCTestCase {
         let summary = try finished()
         XCTAssertFalse(summary.stageA.isTied)
         XCTAssertNil(summary.bestTieLine)
+        XCTAssertEqual(summary.bestHeading, "Best on your Mac")
         let badges = summary.stageA.cells.compactMap { summary.stageA.badge(for: $0) }
         XCTAssertEqual(badges, [.fastest])
     }
@@ -97,6 +95,7 @@ final class Plan0511T4Tests: XCTestCase {
             Set(summary.stageA.tie)
         )
         XCTAssertTrue(try XCTUnwrap(summary.bestTieLine).contains("tied"))
+        XCTAssertNotEqual(summary.bestHeading, "Best on your Mac")
         XCTAssertEqual(summary.busyLine(stageA: true), "this Mac was busy")
     }
 }

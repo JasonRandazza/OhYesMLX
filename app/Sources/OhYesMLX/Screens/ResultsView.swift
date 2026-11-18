@@ -91,7 +91,7 @@ struct ResultsView: View {
             if let best = summary.best {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Best on your Mac")
+                        Text(summary.bestHeading)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Text("\(model.engineTitle(best.engine)) with \(summary.bestFormat)")

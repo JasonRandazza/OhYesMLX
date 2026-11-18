@@ -666,6 +666,10 @@ def mismatch_on_disk(
     for planned_file in plan(model, cache_dir).files:
         blob = planned_file.blob
         try:
+            # A symlinked blob or a snapshot link that is not the download's own symlink is
+            # refused by ``download`` whoever wrote it, so either is "foreign" outright.
+            if os.path.islink(blob) or _link_conflicts(planned_file.link, blob):
+                return "foreign"
             if os.path.isfile(blob) and os.path.getsize(blob) != planned_file.size:
                 mismatched.append(blob)
         except OSError:

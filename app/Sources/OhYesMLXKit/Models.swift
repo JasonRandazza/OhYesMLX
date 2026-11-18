@@ -382,12 +382,8 @@ extension Pick {
         mismatchOnDisk == .ours ? "Re-download" : "Download"
     }
 
-    /// False for `foreign` files: `fetch.download` would refuse them, so no button is offered.
-    public var offersDownload: Bool {
-        mismatchOnDisk != .foreign
-    }
-
-    /// The one plain line shown instead of a button when the files on disk are not ours.
+    /// The one plain line shown instead of a button when the files on disk are not ours:
+    /// `fetch.download` would refuse them, so a non-nil line means no download button.
     public var mismatchLine: String? {
         mismatchOnDisk == .foreign
             ? "The files already on this Mac don't match this version. "
@@ -839,6 +835,11 @@ extension QuickSummary {
     public func busyLine(stageA isStageA: Bool) -> String? {
         let label = (isStageA ? load.stageA : load.stageB)?.label
         return label?.isEmpty == false ? label : nil
+    }
+
+    /// The best card's heading: on a stage-A tie it does not call one engine best (S3-F9).
+    public var bestHeading: String {
+        stageA.isTied ? "Fastest measured here (top engines tied)" : "Best on your Mac"
     }
 
     /// Said on the best card when stage A's top engines tied; `best` still names one engine
