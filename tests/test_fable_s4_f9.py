@@ -74,7 +74,7 @@ class RefusingSiblingCache:
         with open(self.ledger_path, "w", encoding="utf-8") as handle:
             json.dump(ledger, handle)
 
-    def download(self, repo, confirmed, *, cache_dir=None, emit=None):
+    def download(self, repo, confirmed, *, cache_dir=None, emit=None, cancel=None):
         self.downloads.append(repo)
         self.log.append(("download", repo))
         partial = self._partial_for(repo)
