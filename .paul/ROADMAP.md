@@ -28,9 +28,9 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 3 | Models (catalog, recommender, fetch) | Complete 2026-11-02 (reviewed) |
 | 4 | Server and quickbench | Complete 2026-11-03 (reviewed, UAT 8/8) |
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Complete 2026-11-13 (045-01, 02a, 02b, 03; reviewed; clean-account smoke 21/21; `PHASE-4.5-SUMMARY.md`) |
-| 5 | SwiftUI app and packaging | Built + reviewed 2026-11-14 (05-01..05-06); Fable fix plans 05-07..05-13 — 05-07..05-10 closed 2026-11-16; **05-10b inserted after plan D** (port independence, Jason 2026-11-16; planned 2026-11-17); open: clean-account smoke, live checks, UAT |
+| 5 | SwiftUI app and packaging | Built + reviewed 2026-11-14 (05-01..05-06); Fable fix plans 05-07..05-13 — 05-07..05-10 closed 2026-11-16; **05-10b inserted after plan D** (port independence, Jason 2026-11-16; closed 2026-11-18); open: clean-account smoke, live checks, UAT |
 
-### Plan 05-10b — Port independence [INSERTED 2026-11-16, runs after 05-10 / plan D] — Planning (`05-10b-PLAN.md`)
+### Plan 05-10b — Port independence [INSERTED 2026-11-16, runs after 05-10 / plan D] — **Complete 2026-11-18** (`05-10b-SUMMARY.md`)
 
 Jason's call after 05-09: the harness passes `--port` to all six runtimes, but the ports are fixed in `RUNTIMES` and a
 resident engine is detected only by those six ports. A user's engine on a non-default port is invisible to the
