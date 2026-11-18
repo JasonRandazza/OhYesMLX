@@ -226,6 +226,7 @@ class CellResult:
     cold_load_after_lost_visit: bool = False
     measured_pin: int | None = None         # the run's batch pin; not written to the record
     request_seed: int | None = None         # what this cell's requests sent. See "the seed" below.
+    port: int | None = None                 # 05-10b: the port the first started visit served on.
 
 def run_cells(cells: list[Cell], workloads: list[Workload], *,
               warmup: int | str = "plateau", measured: int = 9, concurrency: int = 1,
@@ -247,7 +248,10 @@ visit was lost) and `cold_load_after_lost_visit`. `load_run` reads those three b
 and a result rebuilt by `load_run` carries `None`. `request_seed` is carried like any other
 field, and unlike those three it is written on **every** record — the header states the run's
 policy and the row states what its own cell sent, so an OptiQ-at-depth row reads `0` under a
-header whose ordinary answer is `null`.
+header whose ordinary answer is `null`. `port` (05-10b) is written whenever a visit started, which
+is every record since, and is absent on older ones; `load_run` reads its absence as `None`. It is
+the runtime's default unless `runtimes.port_plan` moved the engine off a default held by a
+non-engine. A later visit on another port is a `port_moved` stderr note, never a failure.
 
 ### `seed` is a policy, and `request_seed` is what a row sent
 

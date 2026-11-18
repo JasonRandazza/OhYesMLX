@@ -71,7 +71,7 @@ def seams(monkeypatch, tmp_path):
     monkeypatch.setattr(runtimes, "_sleep", clock.advance)
     monkeypatch.setattr(runtimes, "_log_path", lambda name: log_file)
     monkeypatch.setattr(runtimes, "writable_root", lambda: tmp_path)
-    monkeypatch.setattr(runtimes, "_resident_osaurus_pids", lambda: ())
+    monkeypatch.setattr(runtimes, "resident_engines", lambda: ())
     monkeypatch.setattr(runtimes, "_port_is_free", lambda port: True)
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: state["alive"])
     monkeypatch.setattr(runtimes, "_inventory", lambda base_url, api_key=None: (MODEL_ID,))

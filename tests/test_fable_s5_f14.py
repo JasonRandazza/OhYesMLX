@@ -34,7 +34,7 @@ def test_resident_osaurus_pids_sees_a_home_directory_install(monkeypatch):
     monkeypatch.setattr(runtimes, "_run", lambda command, timeout_s: ps_output(os.path.expanduser(HOME_APP)))
     monkeypatch.setattr(runtimes, "_process_alive", lambda pid: True)
 
-    assert runtimes._resident_osaurus_pids() == (7311,), (
+    assert [pid for name, pid, _ports in runtimes.resident_engines() if name == "osaurus"] == [7311], (
         "the resident Osaurus app at "
         f"{os.path.expanduser(HOME_APP)} was not recognised; it stays resident through "
         "every later cell"

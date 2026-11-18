@@ -20,7 +20,7 @@ On `{"now": true}` the server sets the job's cancel flag **and** its abort flag,
 `{"now": true}` on the same job answers `202` and starts no second stop (audit 05-01).
 
 `runtimes.stop_own_engines(root=None) -> int` stops every engine in **this process's** running-engines ledger
-file (`_ledger_path()`), each through `_shutdown(pid, port, _stop_command_for_port(port))` (the spawned pid;
+file (`_ledger_path()`), each through `_shutdown(pid, port, _stop_command_for(entry))` (the spawned pid;
 `_shutdown` already takes every other listener on the port), and returns how many it stopped. It reads the
 ledger and never writes it: `Handle.stop` still drops its own entry when the cell's own stop path runs. A
 `RuntimeStopError` from one entry is written as one stderr line

@@ -265,15 +265,16 @@ class AbortProbe:
 
 
 class PortProbe:
-    """The port probe: answers from a set and records every port asked about."""
+    """The port decision (`runtimes.port_plan` via quickbench): refuses the engines in *busy* and
+    records every engine asked about."""
 
     def __init__(self, busy=()):
         self.busy = set(busy)
-        self.ports = []
+        self.names = []
 
-    def __call__(self, port):
-        self.ports.append(port)
-        return port in self.busy
+    def __call__(self, name):
+        self.names.append(name)
+        return f"quit {name} first" if name in self.busy else None
 
 
 def a_run(
@@ -334,7 +335,7 @@ def a_run(
         pin=fake_osaurus.pin,
         restore=fake_osaurus.restore,
         recover=fake_osaurus.recover,
-        port_in_use=probe,
+        port_refusal=probe,
         osaurus_app_running=lambda: app_running,
         load=FakeLoad(loads),
         clock=FakeClock(),
@@ -766,24 +767,30 @@ def test_a_run_without_consent_starts_nothing(tmp_path):
 # --- AC-3: nothing the user owns is changed without consent -----------------------------------
 
 
-def test_the_default_port_probe_asks_runtimes_and_reads_unknown_as_busy(monkeypatch):
-    """One guard, not a second TCP probe: `runtimes._port_is_free`, with its no-answer as busy."""
-    monkeypatch.setattr(runtimes, "_port_is_free", lambda port: port == 8100)
+def test_the_port_refusal_is_runtimes_port_plan(monkeypatch):
+    """One decision, not a second probe: quickbench's skip reason is `runtimes.port_plan`'s."""
+    seen = []
 
-    assert quickbench._port_busy(8100) is False
-    assert quickbench._port_busy(8081) is True
+    def plan(runtime):
+        seen.append(runtime.name)
+        return runtimes.PortPlan(None, refusal="no") if runtime.name == "omlx" else runtimes.PortPlan(1)
+
+    monkeypatch.setattr(runtimes, "port_plan", plan)
+
+    assert quickbench._port_refusal("omlx") == "no"
+    assert quickbench._port_refusal("mlxlm") is None
+    assert seen == ["omlx", "mlxlm"]
 
 
 def test_an_engine_whose_port_is_in_use_is_skipped_with_quit_first(tmp_path):
-    busy = runtimes.RUNTIMES["optiq"].port
-    _ok, fakes, summary = a_run(tmp_path, port_busy=(busy,))
+    _ok, fakes, summary = a_run(tmp_path, port_busy=("optiq",))
 
     optiq = next(
         cell for cell in summary["stage_a"]["cells"] if cell["engine"] == "optiq"
     )
     assert optiq["status"] == "SKIPPED"
     assert optiq["reason"] == "quit optiq first"
-    assert busy in fakes.probe.ports, "the port is probed before the engine is skipped"
+    assert "optiq" in fakes.probe.names, "the port decision is asked before the engine is skipped"
     assert all(
         call["cells"][0].runtime != "optiq" for call in fakes.run_cells.calls
     ), "nothing on that port was started"
@@ -903,7 +910,7 @@ def test_the_host_pinned_between_pin_and_restore_shows_no_drift(tmp_path):
         keep_during_run=lambda **kwargs: quickbench._keep_during_run(
             config_dir=config_dir, **kwargs
         ),
-        port_in_use=lambda port: False,
+        port_refusal=lambda name: None,
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),
@@ -991,7 +998,7 @@ def test_drift_between_pin_and_restore_fails_the_cell_and_keeps_both_copies(tmp_
         keep_during_run=lambda **kwargs: quickbench._keep_during_run(
             config_dir=config_dir, **kwargs
         ),
-        port_in_use=lambda port: False,
+        port_refusal=lambda name: None,
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),
@@ -1062,7 +1069,7 @@ def test_no_drift_between_pin_and_restore_passes_and_keeps_nothing(tmp_path):
         keep_during_run=lambda **kwargs: quickbench._keep_during_run(
             config_dir=config_dir, **kwargs
         ),
-        port_in_use=lambda port: False,
+        port_refusal=lambda name: None,
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),
@@ -1126,7 +1133,7 @@ def test_a_drift_check_that_raises_fails_the_cell_and_still_restores(tmp_path):
         keep_during_run=lambda **kwargs: quickbench._keep_during_run(
             config_dir=config_dir, **kwargs
         ),
-        port_in_use=lambda port: False,
+        port_refusal=lambda name: None,
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),
@@ -1202,7 +1209,7 @@ def test_a_runtime_stop_error_ends_the_run_and_still_restores_osaurus(tmp_path):
             pin=fake_osaurus.pin,
             restore=fake_osaurus.restore,
             recover=fake_osaurus.recover,
-            port_in_use=PortProbe(),
+            port_refusal=PortProbe(),
             osaurus_app_running=lambda: False,
             load=FakeLoad(),
             clock=FakeClock(),
@@ -1362,7 +1369,7 @@ def test_an_unexpected_raise_still_carries_the_summary_as_a_result_event(tmp_pat
             download=cache.download,
             evict=cache.evict,
             downloaded=cache.downloaded,
-            port_in_use=PortProbe(),
+            port_refusal=PortProbe(),
             osaurus_app_running=lambda: False,
             load=FakeLoad(),
             clock=FakeClock(),
@@ -1537,16 +1544,20 @@ def test_a_stage_b_sibling_win_is_keyed_by_the_sibling_not_the_chosen_repo(tmp_p
 # --- plan 045-02a AC-5: the Osaurus-app probe names its tool absolutely -----------------------
 
 
-def test_the_osaurus_app_probe_runs_the_absolute_ps():
+def test_the_osaurus_app_probe_runs_the_absolute_ps(monkeypatch):
     calls = []
 
-    def run(argv, **kwargs):
+    def run(argv, timeout_s):
         calls.append(list(argv))
-        return SimpleNamespace(stdout="")
+        return SimpleNamespace(stdout=f"  12 {runtimes.OSAURUS_APP_EXECUTABLES[0]}\n 13 /x/osaurus\n")
 
-    assert quickbench._osaurus_app_running(run=run) is False
+    monkeypatch.setattr(runtimes, "_run", run)
+    assert quickbench._osaurus_app_running() is True
     assert runtimes.PS == "/bin/ps"
-    assert calls == [[runtimes.PS, "-axo", "comm="]]
+    assert [runtimes.PS, "-ww", "-axo", "pid=,comm="] in calls
+    assert all(call[0] in (runtimes.PS, runtimes.LSOF) for call in calls)
+    monkeypatch.setattr(runtimes, "_run", lambda argv, timeout_s: None)
+    assert quickbench._osaurus_app_running() is True, "an unreadable ps reads as present"
 
 
 # --- 05-01 AC-3/AC-7: "Stop now", a stop that lands while a cell is being measured ----------
@@ -1777,7 +1788,7 @@ def test_a_sibling_on_disk_whose_bytes_do_not_verify_is_skipped_and_the_run_cont
         download=cache.download,
         evict=cache.evict,
         downloaded=cache.downloaded,
-        port_in_use=PortProbe(),
+        port_refusal=PortProbe(),
         osaurus_app_running=lambda: False,
         load=FakeLoad(),
         clock=FakeClock(),

@@ -99,7 +99,7 @@ def test_a_wrong_bytes_blob_of_the_right_size_is_planned_for_measurement(tmp_pat
         pin=fake_osaurus.pin,
         restore=fake_osaurus.restore,
         recover=fake_osaurus.recover,
-        port_in_use=lambda _port: False,
+        port_refusal=lambda _name: None,
         osaurus_app_running=lambda: False,
         load=lambda: 1.0,
         emit=events.append,

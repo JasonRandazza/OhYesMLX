@@ -84,7 +84,7 @@ def run(repo, *, confirmed, osaurus=False, models=None, statuses=None, hw=None,
         downloaded=fetch.downloaded, pin=osaurus_settings.pin,
         restore=osaurus_settings.restore, recover=osaurus_settings.recover,
         osaurus_drift=_osaurus_drift, keep_during_run=_keep_during_run,
-        port_in_use=_port_busy, osaurus_app_running=_osaurus_app_running,
+        port_refusal=_port_refusal, osaurus_app_running=_osaurus_app_running,
         load=canary.load, clock=time.time, emit=_print_event, cancel=_never_cancelled,
         cache_dir=None, results_dir=DEFAULT_RESULTS_DIR,
         backup_dir=DEFAULT_BACKUP_DIR, baseline_path=osaurus_settings.BASELINE_PATH) -> bool: ...

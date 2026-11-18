@@ -2640,6 +2640,8 @@ def test_a_concurrency_one_run_is_byte_identical_to_one_that_never_heard_of_conc
         "first_request_workload_id", "memory", "runtime_version", "disk_bytes",
         "measured_count", "warmup_count", "warmup_plateau", "drift", "observations",
         "warmup_observations", "request_seed",
+        # 05-10b: the port the first started visit served on.
+        "port",
     }
     assert pinned[0].batch_spans == []
     assert len(pinned[0].observations) == MEASURED
@@ -3610,3 +3612,23 @@ def test_drift_ignores_one_delta_rates():
     assert measure.decode_tps(whole) is None
     assert measure.measured_drift([whole, *streamed]) == measure.measured_drift(streamed)
 
+
+
+def test_the_port_is_on_every_row_and_a_record_without_one_loads_as_none(harness):
+    """05-10b AC-5: the first started visit's port is written to the row and read back; a
+    record from before 05-10b has no key and loads as ``None``."""
+    harness.add_runtime("mlxlm")
+    harness.run([harness.cell("oq__mlxlm", "mlxlm")], measured=1)
+
+    line = harness.lines()[0]
+    assert isinstance(line["port"], int)
+    _header, results = measure.load_run(harness.results_file())
+    assert results[0].port == line["port"]
+    assert measure._record(results[0]) == line
+
+    path = harness.results_file()
+    rows = path.read_text().splitlines()
+    old = [rows[0]] + [json.dumps({k: v for k, v in json.loads(r).items() if k != "port"}) for r in rows[1:]]
+    path.write_text("\n".join(old) + "\n")
+    _header, results = measure.load_run(path)
+    assert results[0].port is None

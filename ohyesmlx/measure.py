@@ -97,7 +97,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import __version__, coherence, runtimes, sample, token_counter, transport
+from . import __version__, coherence, runtimes, sample, stderr_json, token_counter, transport
 from .runtimes import (
     CACHE_STATES,
     KV_QUANTS,
@@ -204,6 +204,10 @@ STILL_THINKING = "still thinking: no content within max_tokens"
 _sleep = time.sleep
 
 
+# The stderr note a later visit writes when it served on another port than the cell's first
+# (05-10b): distinct from `runtimes.PORT_MOVED_CODE`, which is a start moving off its default.
+PORT_CHANGED_CODE = "port_changed_between_visits"
+
 @dataclass(frozen=True)
 class Cell:
     """One measured configuration. ``id`` is ``<format>__<runtime>``."""
@@ -282,6 +286,11 @@ class CellResult:
     # or a runtime with no such surface).
     mlx_version: str | None = None
     host_model_options: object = None
+    # The port the first started visit served on (05-10b): the runtime's default, or the free
+    # port it moved to because something that is not an engine held the default
+    # (runtimes.port_plan). ``None`` on a record written before 05-10b. A later visit on another
+    # port is one stderr line, not a failure: where an engine listens does not change a number.
+    port: int | None = None
     # Whether the start that recorded ``cold_load_s`` came after a lost visit rather than
     # first. The figure is still the start's own, but it is a later, warm-page-cache start and
     # not the cell's cold one, which the cold load column alone cannot say.
@@ -880,6 +889,7 @@ def _visit(
                 result.runtime_version = handle.version
                 result.mlx_version = getattr(handle, "mlx_version", None)
                 result.host_model_options = getattr(handle, "host_model_options", None)
+                result.port = handle.port
             elif handle.version != result.runtime_version:
                 result.status = "FAIL"
                 result.reason = (
@@ -894,6 +904,17 @@ def _visit(
                     f"and {getattr(handle, 'mlx_version', None)!r}"
                 )
                 version_mismatch = True
+        moved = sorted({r.port for r in results if r.port is not None and r.port != handle.port})
+        if moved:
+            stderr_json(
+                {
+                    "note": {
+                        "code": PORT_CHANGED_CODE,
+                        "message": f"this visit serves on port {handle.port}; the cells' first "
+                        f"visits served on {', '.join(map(str, moved))}",
+                    }
+                }
+            )
         if version_mismatch:
             return "skip"
 
@@ -1562,6 +1583,8 @@ def _record(result: CellResult) -> dict:
         record["mlx_version"] = result.mlx_version
     if result.host_model_options is not None:
         record["host_model_options"] = result.host_model_options
+    if result.port is not None:
+        record["port"] = result.port
     if result.cold_load_after_lost_visit:
         record["cold_load_after_lost_visit"] = result.cold_load_after_lost_visit
     return record
@@ -1657,6 +1680,8 @@ def _cell_result(record: dict, path: Path, number: int) -> CellResult:
             # Lenient: absent on every record written before 05-07, and absent means not recorded.
             mlx_version=record.get("mlx_version"),
             host_model_options=record.get("host_model_options"),
+            # Lenient: absent on every record written before 05-10b.
+            port=record.get("port"),
             cold_load_after_lost_visit=record.get("cold_load_after_lost_visit", False),
             # Read leniently, and the default is the historical fact rather than a stand-in:
             # every record on disk that lacks this key was written before the seed was omitted

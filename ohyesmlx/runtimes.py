@@ -71,12 +71,13 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import stderr_json, writable_root
@@ -141,6 +142,9 @@ LEDGER_ERROR_CODE = "running_engine_ledger"
 # "Stop now"'s failure line: one entry of this process's own ledger that would not stop.
 # :func:`stop_own_engines` states why it is written per entry and never raised.
 ABORT_STOP_ERROR_CODE = "abort_stop_failed"
+
+# The stderr line a start writes when its default port was held and it moved (05-10b).
+PORT_MOVED_CODE = "port_moved"
 
 # The Osaurus app bundle's two spellings (docs/runtimes/osaurus.md §1.3): the DMG's drag
 # install leaves lowercase `osaurus.app`, the Homebrew cask's artifact is `Osaurus.app`, and
@@ -682,26 +686,263 @@ def _process_alive(pid: int) -> bool:
     return True
 
 
-def _resident_osaurus_pids() -> tuple[int, ...]:
-    """Every live Osaurus app process, this run's own included.
+# --- An engine is a process, not a port (05-10b) ---------------------------------------------
+#
+# The one-model-resident rule is about memory, and a port is only where an engine happens to
+# listen: a user's engine on 8001 holds its weights as surely as one on 8000. So a resident
+# engine is recognised by what `ps` says it is running, and the port is read off it afterwards.
+#
+# `ps comm` is the executable (for a script, its interpreter) and `ps args` the argument vector
+# joined by spaces, unquoted -- lab venvs live under "Application Support", so argv is never split
+# on whitespace. What follows the executable is matched with anchored patterns: a script by the
+# path its interpreter was handed (`.../bin/optiq serve`), a module by `-m`, a binary by its own
+# name, and the Osaurus app by full executable path only (`osaurus mcp` is a user's client).
+# The servers each app launches on its own are recorded in docs/runtimes/<name>.md, including
+# where the bundle does not settle their argv. The match is best-effort in both directions: an
+# interpreter handed some other argument ending in `/optiq serve` reads as an engine (a false
+# refusal, the safe side), and an unusual interpreter flag with a value (`-W ignore`) hides one.
+# On a default port a missed engine is still refused when it lives in an engine root or answers
+# /v1/models (`port_plan`); on any other port the scan is the only guard.
+_INTERPRETER = re.compile(r"python[0-9.]*", re.IGNORECASE)
+_FLAGS = r"(?: -\S+)*"
+# runtime -> (the program its server runs, the subcommand that makes it a server, the module form)
+_ENGINE_PROGRAMS: dict[str, tuple[str, str, str | None]] = {
+    "mlxlm": ("mlx_lm.server", "", "mlx_lm.server"),
+    "optiq": ("optiq", "serve", None),
+    "omlx": ("omlx", "serve", "omlx.cli serve"),
+    "vmlx": ("vmlx", "serve", None),
+    "mtplx": ("mtplx", "serve", None),
+}
 
-    An app this run started that is still alive at a new start is one whose stop failed: it
-    still holds its weights, so it blocks the start like any other (Fable S5-F3).
-    """
-    result = _run((PS, "-axo", "pid=,args="), STOP_TIMEOUT_S)
+
+def _engine_of(comm: str, args: str) -> str | None:
+    """The runtime whose server *comm*/*args* is, or None. The one definition of "an engine"."""
+    if comm in OSAURUS_APP_EXECUTABLES:
+        return "osaurus"
+    if args.startswith(comm):
+        rest = args[len(comm):]
+    else:  # argv0 was a bare name (`python -m ...` resolved through PATH)
+        rest = " " + args.partition(" ")[2]
+    if comm in ENGINE_BUNDLE_EXECUTABLES["osaurus"] and re.match(rf"{_FLAGS} serve(?: |$)", rest):
+        return "osaurus"
+    base = os.path.basename(comm)
+    for name, (program, sub, module) in _ENGINE_PROGRAMS.items():
+        tail = (f" {re.escape(sub)}" if sub else "") + "(?: |$)"
+        if base == program and re.match(_FLAGS + tail, rest):
+            return name
+        if not _INTERPRETER.fullmatch(base):
+            continue
+        if re.match(rf"{_FLAGS} \S.*/{re.escape(program)}{tail}", rest):
+            return name
+        if module and re.match(rf"{_FLAGS} -m {re.escape(module)}(?: |$)", rest):
+            return name
+    return None
+
+
+def _ps_column(column: str) -> dict[int, str]:
+    result = _run((PS, "-ww", "-axo", f"pid=,{column}="), STOP_TIMEOUT_S)
     if result is None:
-        raise RuntimeStartError(
-            "could not inspect running processes for resident Osaurus app instances"
-        )
-    pids = []
+        raise RuntimeStartError("could not inspect running processes for resident engines")
+    found = {}
     for line in result.stdout.splitlines():
-        pid_text, _, argv = line.strip().partition(" ")
-        argv0 = argv.split(maxsplit=1)[:1]
-        if pid_text.isdigit() and argv0 and argv0[0] in OSAURUS_APP_EXECUTABLES:
-            # `ps` just listed it, so it is alive; `_process_alive` is not asked, because its
-            # reaped-pid answer is about this process's own children, not a listed app.
-            pids.append(int(pid_text))
-    return tuple(pids)
+        pid_text, _, value = line.strip().partition(" ")
+        if pid_text.isdigit():
+            found[int(pid_text)] = value.strip()
+    return found
+
+
+def _listening_ports(pids: tuple[int, ...]) -> dict[int, tuple[int, ...]] | None:
+    """The TCP ports each of *pids* listens on, per ``lsof``; None when lsof cannot be read."""
+    result = _run(
+        (LSOF, "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", ",".join(map(str, pids)), "-F", "pn"),
+        STOP_TIMEOUT_S,
+    )
+    if result is None:
+        return None
+    ports: dict[int, list[int]] = {}
+    pid = None
+    for line in result.stdout.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None:
+            port = line.rpartition(":")[2]
+            if port.isdigit() and int(port) not in ports.setdefault(pid, []):
+                ports[pid].append(int(port))
+    return {pid: tuple(found) for pid, found in ports.items()}
+
+
+def resident_engines() -> tuple[tuple[str, int, tuple[int, ...] | None], ...]:
+    """Every live engine process as ``(runtime, pid, ports)``, this run's own included.
+
+    *ports* is what it listens on now (``()`` while it is still loading) or None when lsof
+    could not read it. A ``ps`` that cannot be read raises: an unknown is never "nothing
+    resident". A pid gone between the two ``ps`` reads is skipped.
+    """
+    comms, argvs = _ps_column("comm"), _ps_column("args")
+    found = [
+        (name, pid)
+        for pid, comm in comms.items()
+        if pid in argvs and (name := _engine_of(comm, argvs[pid])) is not None
+    ]
+    if not found:
+        return ()
+    ports = _listening_ports(tuple(pid for _name, pid in found))
+    return tuple(
+        (name, pid, None if ports is None else ports.get(pid, ())) for name, pid in found
+    )
+
+
+def _describe_engine(name: str, pid: int, ports: tuple[int, ...] | None) -> str:
+    if ports is None:
+        where = "port unknown"
+    elif not ports:
+        where = "no port yet"
+    else:
+        where = "port " + ", ".join(map(str, ports))
+    return f"{name} (pid {pid}, {where})"
+
+
+def _engine_roots() -> tuple[str, ...]:
+    """Directories whose executables are engines whatever their argv (AC-3b): every engine app
+    bundle, MTPLX's runtime homes, and each lab copy's venv. A lab file that cannot be read
+    leaves the bundles; the /v1/models probe still stands behind them."""
+    roots = {
+        *(
+            path.split(".app/", 1)[0] + ".app"
+            for paths in ENGINE_BUNDLE_EXECUTABLES.values()
+            for path in paths
+        ),
+        *OSAURUS_APP_BUNDLES,
+        "/Applications/MTPLX.app",
+        os.path.dirname(os.path.dirname(MTPLX_BINARY)),
+        os.path.expanduser("~/Library/Application Support/MTPLX"),
+    }
+    try:
+        for lab in _lab_paths().values():
+            lab = os.path.expanduser(lab).rstrip("/")
+            roots.add(os.path.dirname(lab) if os.path.basename(lab) == "bin" else lab)
+    except Exception:  # an unreadable lab file narrows the roots; it never fails a start
+        pass
+    return tuple(sorted(roots))
+
+
+def _models_probe(port: int) -> str | None:
+    """Why the listener on *port* looks like a model server, or None.
+
+    One unauthenticated ``GET /v1/models`` with a 2 s budget: a JSON object holding a ``data``
+    list, or a 401/403 (oMLX answers 401 without its key), is a model server. No answer is not
+    one -- the residual is an engine mid-load whose argv and executable are both unrecognised.
+    """
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            connection.request("GET", "/v1/models")
+            response = connection.getresponse()
+            body = response.read(65536)
+        finally:
+            connection.close()
+    except (OSError, http.client.HTTPException):
+        return None
+    if response.status in (401, 403):
+        return f"answers /v1/models with HTTP {response.status}"
+    if response.status == 200:
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return None
+        if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+            return "answers /v1/models with a model list"
+    return None
+
+
+def _free_port() -> int:
+    """A loopback port nothing listens on right now.
+
+    # ponytail: bind-close-spawn race -- another process can take the port before the engine
+    # binds it; readiness and `_serving_pid` already refuse a stranger on the port. Upgrade:
+    # retry the start on a second free port, only if that is ever seen.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@dataclass(frozen=True)
+class PortPlan:
+    """Where a runtime may start: *port*, or a *refusal*; *note* is the one stderr line a move
+    writes (default port, its holder, the port chosen)."""
+
+    port: int | None
+    refusal: str | None = None
+    note: str | None = None
+
+
+def port_plan(runtime: "Runtime") -> PortPlan:
+    """The one port decision, asked by :meth:`Runtime.start` and quickbench (05-10b).
+
+    Refused while any engine is resident on any port. Otherwise the default port when it is
+    free; when something holds it, refused if that holder is a model server by AC-3b's tests
+    or the runtime is Osaurus (its port also lives in ``~/.osaurus/config/server.json``, which
+    the harness does not edit, and whether ``serve --port`` rewrites that file is not
+    established); else a free loopback port. A port lsof cannot read is refused.
+    """
+    resident = resident_engines()
+    if resident:
+        return PortPlan(
+            None,
+            refusal=(
+                "quit "
+                + "; ".join(_describe_engine(*engine) for engine in resident)
+                + f" first: an engine is resident, so {runtime.name} is not started "
+                "(one model resident at a time)"
+            ),
+        )
+    if _port_is_free(runtime.port):
+        return PortPlan(runtime.port)
+    holders = _listener_pids(runtime.port)
+    if not holders:
+        return PortPlan(
+            None,
+            refusal=(
+                f"port {runtime.port} ({runtime.name}) is not free, or could not be read; "
+                f"check `{LSOF} -nP -iTCP:{runtime.port} -sTCP:LISTEN`"
+            ),
+        )
+    comms = _ps_column("comm")
+    roots = _engine_roots()
+    named = []
+    for pid in holders:
+        exe = comms.get(pid, "an unknown executable")
+        why = next(
+            (f"lives in {root}" for root in roots if exe.startswith(root.rstrip("/") + "/")),
+            None,
+        ) or _models_probe(runtime.port)
+        if why is not None:
+            return PortPlan(
+                None,
+                refusal=(
+                    f"port {runtime.port} ({runtime.name}) is held by pid {pid} ({exe}), which "
+                    f"{why}; refusing to start {runtime.name} beside what may be a model server"
+                ),
+            )
+        named.append(f"pid {pid} ({exe})")
+    holder = ", ".join(named)
+    if runtime.name == "osaurus":
+        return PortPlan(
+            None,
+            refusal=(
+                f"port {runtime.port} is held by {holder}, which is not an engine; Osaurus "
+                "never moves off its configured port (~/.osaurus/config/server.json): free it"
+            ),
+        )
+    chosen = _free_port()
+    return PortPlan(
+        chosen,
+        note=(
+            f"port {runtime.port} ({runtime.name}) is held by {holder}, which is not an engine; "
+            f"starting {runtime.name} on free port {chosen}"
+        ),
+    )
 
 
 def _signal_tree(pid: int, sig: int) -> None:
@@ -1921,6 +2162,7 @@ def _record_running_engine(
     pid: int,
     serving_pid: int,
     port: int,
+    runtime: str | None = None,
 ) -> None:
     """Record one spawned engine in this process's ledger file.
 
@@ -1934,8 +2176,8 @@ def _record_running_engine(
     ``cold_load_s``. Raises when the entry cannot be written; :meth:`Runtime.start` logs that
     and keeps the start alive.
 
-    A stop command is not stored: it is derived from the port when it is needed
-    (:func:`_stop_command_for_port`), never read back from disk (Fable S5-F13).
+    A stop command is not stored: it is derived from the entry's *runtime* name when it is
+    needed (:func:`_stop_command_for`), never read back from disk (Fable S5-F13).
 
     A file at this process's path that this process did not write is an earlier process's
     orphan. Its entries are never merged in as this process's own and never dropped unseen:
@@ -1965,6 +2207,7 @@ def _record_running_engine(
             "serving_lstart": serving_lstart,
             "serving_argv": serving_argv,
             "port": port,
+            "runtime": runtime,
         }
     )
     _write_ledger(path, entries)
@@ -2021,15 +2264,20 @@ def _recorded_identity(entry: dict, pid: int) -> tuple[str, str] | None:
     return None
 
 
-def _stop_command_for_port(port: int) -> tuple[str, ...]:
-    """The stop command of the runtime that owns *port*, or none for a port no runtime owns.
+def _stop_command_for(entry: dict) -> tuple[str, ...]:
+    """The stop command of the runtime a ledger *entry* names, or none.
 
     Derived from :data:`RUNTIMES`, never read from a ledger: a file on disk does not choose
-    an argv this process runs (Fable S5-F13). A ledger written before 05-09 still carries a
-    ``stop_command`` field; it is ignored.
+    an argv this process runs (Fable S5-F13). The entry's ``runtime`` name decides, because an
+    engine moved off its default port (05-10b) is on a port no runtime owns; an entry written
+    before 05-10b has no name and resolves by its port, as it always did. A ledger written
+    before 05-09 still carries a ``stop_command`` field; it is ignored.
     """
+    runtime = RUNTIMES.get(entry.get("runtime"))
+    if runtime is not None:
+        return runtime.stop_command()
     for runtime in RUNTIMES.values():
-        if runtime.port == port:
+        if runtime.port == entry.get("port"):
             return runtime.stop_command()
     return ()
 
@@ -2083,7 +2331,7 @@ def _stop_orphan(entry: dict) -> str | None:
         identity = _recorded_identity(entry, target)
         if identity is None or not same_process(target, identity):
             return "identity unproven"
-    _shutdown(pid, port, _stop_command_for_port(port))
+    _shutdown(pid, port, _stop_command_for(entry))
     return None
 
 
@@ -2197,7 +2445,7 @@ def stop_own_engines(root=None) -> int:
                     "recorded; not signalled"
                 )
             else:
-                _shutdown(pid, port, _stop_command_for_port(port))
+                _shutdown(pid, port, _stop_command_for(entry))
                 stopped += 1
                 continue
         except RuntimeStopError as error:
@@ -2572,24 +2820,15 @@ class Runtime:
         runtimes that carry a cap and ignored by the three that do not. :meth:`Omlx.start_command`
         is where that rule and its reason are written.
         """
-        # One model resident: every runtime's port is checked, not only this one's. An unreadable
-        # port is reported busy by `_port_is_free`, so the message does not claim a listener.
-        for name, port in (
-            (self.name, self.port),
-            *((n, r.port) for n, r in RUNTIMES.items() if r.port != self.port),
-        ):
-            if not _port_is_free(port):
-                raise RuntimeStartError(
-                    f"port {port} ({name}) is not free, or could not be read; refusing to "
-                    f"start {self.name} while another engine may be resident; "
-                    f"check `{LSOF} -nP -iTCP:{port} -sTCP:LISTEN`"
-                )
-        resident_osaurus = _resident_osaurus_pids()
-        if resident_osaurus:
-            raise RuntimeStartError(
-                "resident Osaurus app process(es): "
-                + ", ".join(str(pid) for pid in resident_osaurus)
-            )
+        # One model resident, on any port; and the port this start takes (05-10b, `port_plan`).
+        # A move rebinds `self` to the same runtime on the chosen port, so every argv, probe,
+        # ledger write and stop below reads one value; `RUNTIMES` itself is never changed.
+        plan = port_plan(self)
+        if plan.refusal is not None:
+            raise RuntimeStartError(plan.refusal)
+        if plan.port != self.port:
+            stderr_json({"note": {"code": PORT_MOVED_CODE, "message": plan.note}})
+            self = replace(self, port=plan.port)
         self.check_host_state()
         command, scratch = self.build_command(
             artifact_dir,
@@ -2617,7 +2856,7 @@ class Runtime:
             # it is not subtracted: the engine goes on loading while it runs, so it delays only
             # the first readiness poll. A failed write never fails the start.
             try:
-                _record_running_engine(pid, pid, self.port)
+                _record_running_engine(pid, pid, self.port, self.name)
             except Exception as error:
                 stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
             resolved = self.await_ready(
@@ -2649,7 +2888,7 @@ class Runtime:
         # ledger write follow it. A failed ledger write never fails the start.
         stop_command = self.stop_command()
         try:
-            _record_running_engine(pid, serving_pid, self.port)
+            _record_running_engine(pid, serving_pid, self.port, self.name)
         except Exception as error:
             stderr_json({"error": {"code": LEDGER_ERROR_CODE, "message": str(error)}})
         return Handle(

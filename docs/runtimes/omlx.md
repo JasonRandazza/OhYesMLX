@@ -1111,6 +1111,20 @@ that produced it. It is cited, not re-derived.
 
 ---
 
+## Process signature (05-10b)
+
+How `runtimes.resident_engines` recognises this engine's server, read from the bundle on
+2026-11-17 (no engine was started). The patterns themselves live once, in `runtimes._engine_of`.
+
+- `omlx-cli` (`Contents/MacOS/omlx-cli`) is a `sh` script that ends in
+  `exec "$PYTHON" -m omlx.cli "$@"`, with `$PYTHON` = `Contents/Resources/Python/cpython-3.11/bin/python3`.
+  The serving process is therefore that interpreter with `-m omlx.cli serve ...`: matched.
+- The menu-bar app (`Contents/MacOS/oMLX`, Swift: `PythonRuntime`, `ServerProcess`) starts its own
+  server. Its exact argv is **not established from the bundle** (the strings do not settle it).
+  It runs the same bundled interpreter, so on a default port it is refused by the engine-root
+  test (`runtimes._engine_roots`); on another port it is visible only if its argv is
+  `-m omlx.cli serve`, which is likely and unconfirmed.
+
 ## 12. Summary — the eight questions this document was written to answer
 
 1. **Entry points.** Three shell scripts and a bundled CPython 3.11.10. `omlx-cli` resolves its
