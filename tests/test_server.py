@@ -524,6 +524,7 @@ def test_recommendations_is_the_pinned_composition(launch):
         "reason",
         "downloaded",
         "measured_here",
+        "mismatch_on_disk",
     }
     assert pick["params_b"] == 3.0
     assert isinstance(pick["size_bytes"], int)

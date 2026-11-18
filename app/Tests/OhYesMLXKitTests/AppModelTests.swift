@@ -1090,7 +1090,7 @@ final class AppModelTests: XCTestCase {
             case .models:
                 XCTAssertEqual(model.screen, .models, scenario.rawValue)
                 XCTAssertFalse(model.downloadedPicks.isEmpty, "the picker has a default")
-            case .modelsDownloading, .modelsLowDisk:
+            case .modelsDownloading, .modelsLowDisk, .modelsMismatch:
                 XCTAssertEqual(model.screen, .models, scenario.rawValue)
             case .benchmarkPlan:
                 XCTAssertEqual(model.screen, .benchmark, scenario.rawValue)
@@ -1098,7 +1098,7 @@ final class AppModelTests: XCTestCase {
                 XCTAssertTrue(model.benchmarkCells.isEmpty, "nothing has run in the plan frame")
             case .benchmarkRunning:
                 XCTAssertEqual(model.screen, .benchmark, scenario.rawValue)
-            case .resultsFinished, .resultsCancelled:
+            case .resultsFinished, .resultsCancelled, .resultsBusyTie:
                 XCTAssertEqual(model.screen, .results, scenario.rawValue)
                 XCTAssertNotNil(model.summary, scenario.rawValue)
             case .interrupted:

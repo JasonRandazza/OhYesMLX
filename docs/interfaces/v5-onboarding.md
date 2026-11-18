@@ -71,7 +71,8 @@ artifact. A violation raises `ValueError` naming the file, the repo and the fiel
 **`Pick`** (`recommend.pick(hw, models, engines, free_disk, downloaded=frozenset()) -> list[Pick]`, pure; plan 03-02)
 `{"model_id": str, "title": str, "params_b": float, "format": str, "size_bytes": int,
 "fit": "comfortable|tight", "fit_basis": "estimated", "engines": [str], "install_needed": bool,
-"start_here": bool, "reason": str, "downloaded": bool, "measured_here": object|null}`.
+"start_here": bool, "reason": str, "downloaded": bool, "measured_here": object|null,
+"mismatch_on_disk": "ours"|"foreign"|null}`.
 `model_id` is the catalog row's repo id and `params_b` the **base** count in billions, one decimal.
 `fit` is an estimate from `Hardware.model_budget_bytes` alone -- comfortable when twice `size_bytes`
 fits it, tight when 1.25x does, otherwise the row is left out -- and `fit_basis` is always
@@ -89,6 +90,17 @@ download, and still answers to memory. `measured_here` is non-null only for a ru
 Mac (Decision D5); it is null until a finished quickbench summary names the row, and is never filled from our M2 Max
 rows. `pick` takes it as an optional `measured_here={repo: block}` argument (plan 04-03b), so the module still reads
 no file itself.
+
+Memory sentences quote the factor of the line that decided the row (S4-F6, plan 05-11): a left-out row reads
+"Needs about {size x 1.25, rounded up} GB of memory; this Mac's budget is {budget} GB", and an offered row's
+"about N GB of memory to spare" is `budget - size x factor` (2.0 comfortable, 1.25 tight).
+
+`mismatch_on_disk` (P5-11, plan 05-11; `fetch.mismatch_on_disk`, stat-only) is null unless a finished blob of a
+not-downloaded row sits on disk at a size the catalog does not pin; a `.incomplete` partial alone is null (it is a
+resumable Download). `"ours"`: every such blob is in this app's fetch ledger, so Download repairs it -- the app's
+button reads **Re-download**. `"foreign"`: `fetch.download` refuses to overwrite a blob it did not write
+(`integrity_failed`), so the app offers no download button and says, without the word "corrupt", that the files
+already on this Mac don't match and must be removed from the Hugging Face cache before downloading again.
 
 `recommend.exclusion_reason(model, hw, free_disk, downloaded=frozenset()) -> str | None` is the pure
 companion for the rows `pick` leaves out: a fixed-template reason naming the memory or disk

@@ -1643,6 +1643,40 @@ def test_downloaded_is_false_for_a_blob_of_the_wrong_size(tmp_path):
     assert fetch.downloaded(harness.models[0], str(harness.cache)) is False
 
 
+# P5-11: mismatch_on_disk tells a resumable partial from a finished blob at the wrong size,
+# and a blob this app wrote (a download repairs it) from one it did not (download refuses).
+
+
+def test_mismatch_on_disk_is_none_for_nothing_and_for_a_partial(tmp_path):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    harness = Harness(tmp_path, [model], serve({}))
+    assert fetch.mismatch_on_disk(model, str(harness.cache)) is None
+    incomplete = harness.blobs / f"{SHA}.incomplete"
+    incomplete.parent.mkdir(parents=True)
+    incomplete.write_bytes(WEIGHTS[:5])
+    assert fetch.mismatch_on_disk(model, str(harness.cache)) is None
+
+
+def test_mismatch_on_disk_is_none_once_downloaded(tmp_path):
+    harness = cached(tmp_path)
+    assert fetch.mismatch_on_disk(harness.models[0], str(harness.cache)) is None
+
+
+def test_mismatch_on_disk_is_ours_for_a_ledgered_blob_of_the_wrong_size(tmp_path):
+    harness = cached(tmp_path)
+    (harness.blobs / SHA).write_bytes(WEIGHTS[:5])
+    found = fetch.mismatch_on_disk(harness.models[0], str(harness.cache), str(harness.ledger))
+    assert found == "ours"
+
+
+def test_mismatch_on_disk_is_foreign_for_a_blob_this_app_did_not_write(tmp_path):
+    model = make_model([("weights.safetensors", WEIGHTS, "lfs")])
+    harness = Harness(tmp_path, [model], serve({}))
+    harness.blobs.mkdir(parents=True)
+    (harness.blobs / SHA).write_bytes(WEIGHTS[:5])
+    assert fetch.mismatch_on_disk(model, str(harness.cache)) == "foreign"
+
+
 def test_downloaded_is_false_when_a_snapshot_link_is_missing(tmp_path):
     harness = cached(tmp_path)
 
