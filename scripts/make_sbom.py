@@ -1,15 +1,19 @@
 """Write the release SBOM: the bundled interpreter and every pinned engine dependency (P5-12).
 
-Plan 05-06, AC-3. Stdlib only, and the one definition of what the release records:
+Plan 05-06, AC-3; plan 05-13, AC-4. Stdlib only, and the one definition of what the release
+records:
 
     python3 scripts/make_sbom.py --check          # the runnable check, no arguments needed
     python3 scripts/make_sbom.py --out dist/OhYesMLX-0.3.0-sbom.json \
         --python dist/OhYesMLX.app/Contents/Resources/python/bin/python3 \
+        --package dist/OhYesMLX.app/Contents/Resources/python/lib/python3.14/site-packages/ohyesmlx \
         --release-tag 20261026 --interpreter-url URL --interpreter-sha256 SHA \
         --swift-version "swift-driver version: ..."
 
 The package's own source sha256 is asked of ``ohyesmlx.measure._source_sha256()``, never copied:
-that function is the record of what the measurement code was when the binary was built.
+that function is the record of what the measurement code was when the binary was built. It is
+asked of the *bundled interpreter* over the *copied package* (S6-F6): the tree hashed is the tree
+that shipped, not the checkout minutes later, and the same interpreter runs the import.
 """
 
 from __future__ import annotations
@@ -24,6 +28,29 @@ from pathlib import Path
 
 SCHEMA = "ohyesmlx-sbom/1"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Run by ``--python``, not by the interpreter running this script. sys.argv[1] is the directory
+# that holds the package (so the import resolves to the copy under test), sys.argv[2] the package
+# itself. The source digest is the package's own ``_source_sha256``; the second digest covers
+# every other shipped file, which that one deliberately does not (it is the harness's definition
+# of the measurement code and is not widened here).
+DIGESTS = """\
+import hashlib, json, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from ohyesmlx.measure import _source_sha256
+
+package = pathlib.Path(sys.argv[2])
+data = hashlib.sha256()
+for path in sorted(package.rglob("*")):
+    if not path.is_file() or path.suffix == ".pyc" or "__pycache__" in path.parts:
+        continue
+    if path.suffix == ".py":
+        continue
+    data.update(path.relative_to(package).as_posix().encode("utf-8"))
+    data.update(b"\\0")
+    data.update(hashlib.sha256(path.read_bytes()).digest())
+print(json.dumps({"source_sha256": _source_sha256(), "data_files_sha256": data.hexdigest()}))
+"""
 
 
 def parse_requirements(text: str) -> list[dict]:
@@ -104,6 +131,31 @@ def git_commit(repo: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def require_clean(repo: Path) -> None:
+    """Refuse a release SBOM for a working tree that holds edits the commit does not.
+
+    ``build_app.sh`` copies ``ohyesmlx`` with ``ditto``, untracked and modified files included, so
+    a commit recorded beside a dirty copy is a claim about code the commit does not contain. The
+    two shipped trees are the ones the copy covers (S6-F6).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--", "ohyesmlx", "app"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"make_sbom.py: cannot ask git whether {repo} is clean: {error}")
+    if result.stdout.strip():
+        listing = "\n".join(result.stdout.splitlines()[:10])
+        raise SystemExit(
+            "make_sbom.py: the worktree has uncommitted changes under ohyesmlx/ or app/, which "
+            "the build copies into the bundle; a release SBOM would name a commit that does not "
+            f"hold the shipped code. Commit or discard them, then build again:\n{listing}"
+        )
+
+
 def source_sha256() -> str:
     """The package's own source digest, asked of the one function that defines it."""
     if str(REPO_ROOT) not in sys.path:
@@ -113,11 +165,33 @@ def source_sha256() -> str:
     return _source_sha256()
 
 
+def bundle_digests(python: Path, package: Path) -> tuple[str, str]:
+    """The shipped source and data digests, from the bundled interpreter over the copied tree.
+
+    ``--python`` is the interpreter inside the app and ``--package`` the copy the build put into
+    it, so both digests describe what shipped rather than the checkout the script runs in.
+    """
+    try:
+        result = subprocess.run(
+            [str(python), "-I", "-B", "-c", DIGESTS, str(package.parent), str(package)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            f"make_sbom.py: {python} could not digest {package}:\n{error.stderr.strip()}"
+        )
+    facts = json.loads(result.stdout)
+    return facts["source_sha256"], facts["data_files_sha256"]
+
+
 def build_document(
     *,
     app_version: str,
     commit: str | None,
     digest: str,
+    data_digest: str,
     python_version: str,
     release_tag: str,
     interpreter_url: str,
@@ -133,6 +207,7 @@ def build_document(
             "version": app_version,
             "git_commit": commit,
             "source_sha256": digest,
+            "data_files_sha256": data_digest,
         },
         "interpreter": {
             "name": "CPython",
@@ -186,6 +261,7 @@ def check() -> int:
         app_version="0.0.0",
         commit="0" * 40,
         digest=digest,
+        data_digest="0" * 64,
         python_version="3.14.10",
         release_tag="20261026",
         interpreter_url="https://example.invalid/python.tar.gz",
@@ -206,7 +282,12 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="run the check and write nothing")
     parser.add_argument("--out", help="the SBOM to write")
-    parser.add_argument("--python", help="the bundled interpreter to record")
+    parser.add_argument("--python", help="the bundled interpreter to record, and to ask")
+    parser.add_argument(
+        "--package",
+        default=str(REPO_ROOT / "ohyesmlx"),
+        help="the copied ohyesmlx tree that shipped (build_app.sh passes the bundle's)",
+    )
     parser.add_argument("--release-tag", help="the python-build-standalone release")
     parser.add_argument("--interpreter-url", help="where the interpreter tarball came from")
     parser.add_argument("--interpreter-sha256", help="the tarball's pinned sha256")
@@ -235,10 +316,14 @@ def main(argv: list[str]) -> int:
         sys.path.insert(0, str(REPO_ROOT))
     from ohyesmlx import __version__
 
+    require_clean(REPO_ROOT)
+    digest, data_digest = bundle_digests(Path(arguments.python), Path(arguments.package))
+
     document = build_document(
         app_version=__version__,
         commit=git_commit(REPO_ROOT),
-        digest=source_sha256(),
+        digest=digest,
+        data_digest=data_digest,
         python_version=interpreter_version(Path(arguments.python)),
         release_tag=arguments.release_tag,
         interpreter_url=arguments.interpreter_url,

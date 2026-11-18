@@ -339,6 +339,21 @@ def _first_existing(env, paths: tuple[str, ...]) -> str | None:
     return None
 
 
+def _venv_interpreter_alive(root: str, exists=os.path.exists) -> bool:
+    """Whether the venv at *root* still has an interpreter a script in it could run.
+
+    An app-managed venv's ``bin/python`` is a symlink to the base interpreter inside the app
+    bundle, and moving the app -- or replacing it with a build on another Python -- leaves the
+    link dangling while ``pyvenv.cfg``, the version file and the console script are all still
+    regular files. Those are all detection used to read, so the engine read as installed and
+    every start failed on a dead shebang (S6-F4). ``exists`` follows the link the way
+    ``os.path.exists`` does, so a link whose target is gone is not alive.
+
+    *exists* is *env*'s predicate for the fixture filesystem; ``install`` asks the real one.
+    """
+    return exists(os.path.join(root, "bin", "python"))
+
+
 # The app's own Application Support directory: plan 02-02's venvs live in `engines/`
 # under it, and plan 02-03's install log sits beside that. Its one definition is
 # `ohyesmlx.app_support_dir`, so `fetch` and `quickbench` ask the same helper.
@@ -364,6 +379,23 @@ def _app_engine_venvs(env, name: str) -> tuple[str, ...]:
 
 def _app_engine_scripts(env, name: str, script: str) -> tuple[str, ...]:
     return tuple(os.path.join(root, "bin", script) for root in _app_engine_venvs(env, name))
+
+
+def _dead_app_venv(env, name: str, script: str) -> bool:
+    """Whether the app-managed venv *script* sits in has lost its own interpreter (S6-F4).
+
+    A start would exec *script* and fail on its shebang, so such a script is no more startable
+    than one that is absent: that is what lets ``detect_all`` report the engine not installed
+    and ``install`` repair it instead of refusing ``already_installed``. The rule itself is
+    :func:`_venv_interpreter_alive`'s; this is only the question of whether *script* is in an
+    app-managed venv at all. A script outside the app's engines directory (a global install, a
+    harness venv, a recorded lab copy) is not judged here.
+    """
+    for root in _app_engine_venvs(env, name):
+        prefix = root.rstrip(os.sep) + os.sep
+        if script.startswith(prefix):
+            return not _venv_interpreter_alive(root, env.exists)
+    return False
 
 
 # The machine-local lab copies, and the only place a real lab path is written. A lab path
@@ -569,7 +601,11 @@ def _startable(env, name: str, script: str, lab_path, candidates: tuple[str, ...
     )
     reached = env.realpath(first) if first is not None else None
     for candidate in candidates:
-        if env.exists(candidate) and (candidate in lab or env.realpath(candidate) == reached):
+        if not env.exists(candidate):
+            continue
+        if _dead_app_venv(env, name, candidate):
+            continue  # its venv's interpreter moved with the app: no start can reach it
+        if candidate in lab or env.realpath(candidate) == reached:
             return candidate
     return None
 
@@ -867,6 +903,10 @@ def _command_plan(name: str) -> Plan:
                 # `optiq game`, which this harness never starts, and pygame 2.6.1 has no
                 # CPython 3.14 wheel, so pip could only build it from source, needing SDL
                 # headers a Mac without Homebrew lacks (045-03).
+                # --no-cache-dir (S6-F10): a hash-checked wheel is fetched once per install
+                # anyway, and the default cache would leave the whole 105-package closure --
+                # hundreds of MB of the MLX stack -- in ~/Library/Caches/pip after a user has
+                # followed the release notes' "remove everything the app has added".
                 command=[
                     os.path.join(root, "bin", "python"),
                     "-I",
@@ -876,6 +916,7 @@ def _command_plan(name: str) -> Plan:
                     "--isolated",
                     "--no-input",
                     "--disable-pip-version-check",
+                    "--no-cache-dir",
                     "--require-hashes",
                     "--only-binary",
                     ":all:",
@@ -1353,6 +1394,11 @@ def install(
         """Clear the roots this plan creates that an unfinished install left; a refusal's reason.
 
         Returns None when every root is absent or removed, else ``(code, message)``.
+
+        A root a lab path records is repaired in place, never removed -- unless its own
+        ``bin/python`` is gone, which is what an app move or a build on another Python leaves
+        behind (S6-F4). That venv cannot run in place: every script in it has a dead shebang,
+        so it is the same repair an unfinished root gets, through the same process check.
         """
         labs = lab_paths(_lab_paths_beside(engines_dir))
         recorded = [os.path.realpath(os.path.expanduser(path)) for path in labs.values()]
@@ -1361,8 +1407,10 @@ def install(
             if root is None or not os.path.lexists(root):
                 continue
             real = os.path.realpath(root)
-            if any(os.path.commonpath([real, path]) == real for path in recorded):
-                continue  # a lab path records it: repaired in place, never removed
+            if any(
+                os.path.commonpath([real, path]) == real for path in recorded
+            ) and _venv_interpreter_alive(root):
+                continue  # a lab path records it and it still runs: repaired in place
             try:
                 running = processes()
             except Exception as error:
