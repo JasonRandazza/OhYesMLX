@@ -27,9 +27,10 @@ results are not affected — they do not live inside the app.
 
 OhYesMLX is **not notarized**. Notarization is Apple's automated security check on software
 distributed outside the App Store, and it needs a paid Apple Developer account. This app is a
-free, unsigned project release, so it ships **ad-hoc signed only**: macOS can tell the files
-have not been changed since they were built, but it has no developer to vouch for them, and it
-refuses the first launch.
+free, unsigned project release, so it ships **ad-hoc signed only**. The signature's one job is to
+let macOS run the code: it carries no developer identity, so anyone who altered the app could
+sign it again and it would still run. The **published sha256 — not the signature — is what shows
+your download is unaltered**. macOS refuses the first launch.
 
 The first time you open it you will see a dialog saying Apple could not verify OhYesMLX.
 
@@ -49,9 +50,10 @@ You only do this once per copy of the app. If you move or replace the app, macOS
 You do not have to take the release on trust, and the release is built so you can see what it
 is made of:
 
-- **A sha256 is published next to the zip.** The release notes list the zip's sha256. Anyone
-  can compute the same value from the file they received, and the two matching means the file
-  you have is the file that was published. It takes one line in Terminal
+- **A sha256 file is published next to the zip.** The release build writes
+  `OhYesMLX-<version>.zip.sha256` beside the zip, and the release notes list the same value.
+  Anyone can compute it from the file they received, and the two matching means the file you have
+  is the file that was published. It takes one line in Terminal
   (`shasum -a 256 OhYesMLX-<version>.zip`); if you would rather not open Terminal, skip this
   one and read the SBOM instead.
 - **An SBOM ships with every release.** `OhYesMLX-<version>-sbom.json` is a plain text file you
@@ -96,3 +98,28 @@ needs a paid Apple Developer account first. When an account exists, the plan is 
 Developer ID, notarize the zip, staple the ticket to the bundle, and re-check every packaging
 rule on the notarized build. Until then the instructions above are the whole procedure, and the
 SBOM and sha256 are how you check the download instead.
+
+## Release check: quarantined download
+
+This section is the release maintainer's check, not a step for a user. It runs the path every
+downloader takes, once per release, on a Mac that did not build the app. It is the one check no
+script performs: `check_bundle.sh` opens a locally built bundle that has never been quarantined.
+
+1. Put the browser's quarantine flag on the zip that will be published:
+
+   ```
+   xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;" OhYesMLX-<version>.zip
+   ```
+
+2. Double-click the zip and let Archive Utility unpack it. Leave `OhYesMLX.app` in Downloads.
+3. Open it **from Downloads**. Expect the move screen — "Move OhYesMLX to your Applications
+   folder, then open it again" — and no backend start. A crash or a "Couldn't start" here is
+   the translocation guard failing under a real quarantine flag.
+4. Move the app to Applications, open it, and approve it with the steps above (Apple could not
+   verify → Open Anyway → Open).
+5. Confirm the app is running its own backend: the Hardware screen shows this Mac's chip and
+   memory, which is a served `/hardware`. A "Couldn't start" here means the quarantined bundled
+   interpreter, or one of its extension modules, would not load: the first public release would
+   fail that way on every Mac but the builder's.
+
+Record in the release summary that this ran, and the macOS version it ran on.
