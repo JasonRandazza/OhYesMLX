@@ -1554,7 +1554,8 @@ def test_the_osaurus_app_probe_runs_the_absolute_ps(monkeypatch):
     monkeypatch.setattr(runtimes, "_run", run)
     assert quickbench._osaurus_app_running() is True
     assert runtimes.PS == "/bin/ps"
-    assert calls == [[runtimes.PS, "-ww", "-axo", "pid=,comm="]]
+    assert [runtimes.PS, "-ww", "-axo", "pid=,comm="] in calls
+    assert all(call[0] in (runtimes.PS, runtimes.LSOF) for call in calls)
     monkeypatch.setattr(runtimes, "_run", lambda argv, timeout_s: None)
     assert quickbench._osaurus_app_running() is True, "an unreadable ps reads as present"
 

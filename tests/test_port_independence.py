@@ -294,3 +294,15 @@ def test_quickbench_does_not_skip_an_engine_whose_default_port_a_non_engine_hold
     host.procs[555] = ("/usr/local/bin/node", "node dev.js", (8000,))
     monkeypatch.setattr(runtimes, "_free_port", lambda: 54321)
     assert quickbench._port_refusal("vmlx") is None
+
+
+def test_a_resident_engine_skip_reads_quit_first_with_pid_and_port(host):
+    """AC-7's wording: "quit {name} first", naming the resident engine's pid and port."""
+    host.procs[700] = (VENV_PY, "python -m mlx_lm.server", (8091,))
+    reason = quickbench._port_refusal("optiq")
+    assert reason.startswith("quit mlxlm (pid 700, port 8091) first")
+
+
+def test_quickbench_skips_rather_than_crashes_when_ps_is_unreadable(host):
+    host.ps_fails = True
+    assert "could not inspect running processes" in quickbench._port_refusal("optiq")

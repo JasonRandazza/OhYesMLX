@@ -174,23 +174,25 @@ def _port_refusal(name: str) -> str | None:
     quickbench skips rather than ending a process it did not start. A default port held by
     something that is not an engine is not a reason: the start moves to a free port.
     """
-    return runtimes.port_plan(runtimes.RUNTIMES[name]).refusal
+    try:
+        return runtimes.port_plan(runtimes.RUNTIMES[name]).refusal
+    except runtimes.RuntimeStartError as error:  # processes unreadable: skip, never crash the stage
+        return str(error)
 
 
 def _osaurus_app_running() -> bool:
     """Whether the Osaurus app has a process at its own executable path.
 
-    Asked of the runtimes' one process read (``_ps_column``, absolute ``ps``) and matched by
+    Asked of the one resident scan (:func:`runtimes.resident_engines`), which matches Osaurus by
     full executable path, never by the name ``osaurus``: ``osaurus mcp`` is a user's
     long-running client that shares the name. A read that fails is the app being present,
     because the alternative -- starting Osaurus's cell anyway -- is what ends the user's own
     app (AGENTS.md).
     """
     try:
-        comms = runtimes._ps_column("comm")
+        return any(name == "osaurus" for name, _pid, _ports in runtimes.resident_engines())
     except runtimes.RuntimeStartError:
         return True
-    return any(comm in runtimes.OSAURUS_APP_EXECUTABLES for comm in comms.values())
 
 
 def _osaurus_drift(*, baseline_path, config_dir=None) -> str | None:

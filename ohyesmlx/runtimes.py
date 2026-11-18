@@ -698,8 +698,11 @@ def _process_alive(pid: int) -> bool:
 # path its interpreter was handed (`.../bin/optiq serve`), a module by `-m`, a binary by its own
 # name, and the Osaurus app by full executable path only (`osaurus mcp` is a user's client).
 # The servers each app launches on its own are recorded in docs/runtimes/<name>.md, including
-# where the bundle does not settle their argv; a default-port holder those patterns miss is
-# still refused when it lives in an engine root or answers /v1/models (`_holder_is_model_server`).
+# where the bundle does not settle their argv. The match is best-effort in both directions: an
+# interpreter handed some other argument ending in `/optiq serve` reads as an engine (a false
+# refusal, the safe side), and an unusual interpreter flag with a value (`-W ignore`) hides one.
+# On a default port a missed engine is still refused when it lives in an engine root or answers
+# /v1/models (`port_plan`); on any other port the scan is the only guard.
 _INTERPRETER = re.compile(r"python[0-9.]*", re.IGNORECASE)
 _FLAGS = r"(?: -\S+)*"
 # runtime -> (the program its server runs, the subcommand that makes it a server, the module form)
@@ -888,9 +891,10 @@ def port_plan(runtime: "Runtime") -> PortPlan:
         return PortPlan(
             None,
             refusal=(
-                "an engine is resident: "
+                "quit "
                 + "; ".join(_describe_engine(*engine) for engine in resident)
-                + f"; refusing to start {runtime.name} (one model resident at a time)"
+                + f" first: an engine is resident, so {runtime.name} is not started "
+                "(one model resident at a time)"
             ),
         )
     if _port_is_free(runtime.port):
@@ -2817,22 +2821,14 @@ class Runtime:
         is where that rule and its reason are written.
         """
         # One model resident, on any port; and the port this start takes (05-10b, `port_plan`).
-        # A move re-enters start as the same runtime on the chosen port, so every argv, probe,
-        # ledger write and stop below reads one value.
+        # A move rebinds `self` to the same runtime on the chosen port, so every argv, probe,
+        # ledger write and stop below reads one value; `RUNTIMES` itself is never changed.
         plan = port_plan(self)
         if plan.refusal is not None:
             raise RuntimeStartError(plan.refusal)
         if plan.port != self.port:
             stderr_json({"note": {"code": PORT_MOVED_CODE, "message": plan.note}})
-            return replace(self, port=plan.port).start(
-                artifact_dir,
-                model_id,
-                cache_state=cache_state,
-                kv_quant=kv_quant,
-                mtp_depth=mtp_depth,
-                stream_experts=stream_experts,
-                concurrency=concurrency,
-            )
+            self = replace(self, port=plan.port)
         self.check_host_state()
         command, scratch = self.build_command(
             artifact_dir,

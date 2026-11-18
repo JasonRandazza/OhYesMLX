@@ -204,6 +204,10 @@ STILL_THINKING = "still thinking: no content within max_tokens"
 _sleep = time.sleep
 
 
+# The stderr note a later visit writes when it served on another port than the cell's first
+# (05-10b): distinct from `runtimes.PORT_MOVED_CODE`, which is a start moving off its default.
+PORT_CHANGED_CODE = "port_changed_between_visits"
+
 @dataclass(frozen=True)
 class Cell:
     """One measured configuration. ``id`` is ``<format>__<runtime>``."""
@@ -905,7 +909,7 @@ def _visit(
             stderr_json(
                 {
                     "note": {
-                        "code": runtimes.PORT_MOVED_CODE,
+                        "code": PORT_CHANGED_CODE,
                         "message": f"this visit serves on port {handle.port}; the cells' first "
                         f"visits served on {', '.join(map(str, moved))}",
                     }
