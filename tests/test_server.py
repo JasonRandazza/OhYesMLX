@@ -524,6 +524,7 @@ def test_recommendations_is_the_pinned_composition(launch):
         "reason",
         "downloaded",
         "measured_here",
+        "mismatch_on_disk",
     }
     assert pick["params_b"] == 3.0
     assert isinstance(pick["size_bytes"], int)
@@ -2324,3 +2325,16 @@ def test_a_second_job_posted_the_moment_a_reader_sees_done_is_accepted(launch):
     assert sse_events(body)[-1][1]["type"] == "done"
 
     assert post_job(listener, DOWNLOAD)[0] == 202
+
+
+def test_recommendations_carries_fetch_mismatch_on_disk_into_each_pick(launch, monkeypatch):
+    """05-11 review: the server hands `fetch.mismatch_on_disk` to `pick` (P5-11)."""
+    monkeypatch.setattr(fetch, "mismatch_on_disk", lambda model, *a, **k: "foreign")
+    listener = launch(
+        scan=Recorder(this_mac()),
+        detect=Recorder([status("mlxlm", installed=True, version="0.31.3")]),
+        load_catalog=Recorder(MODELS),
+    )
+    code, _, raw = request(listener, "/recommendations", token=TOKEN)
+    assert code == 200
+    assert json.loads(raw)["picks"][0]["mismatch_on_disk"] == "foreign"

@@ -4,8 +4,9 @@ The Engines screen's first question is answered here and nowhere else: is Osauru
 oMLX, OptiQ, mlx-lm or vMLX installed, at what version, and where does it really live?
 ``detect_all(env)`` takes every side effect as a parameter, the way ``hardware.scan``
 takes its commands -- *env* offers ``exists(path)``, ``read_text(path)``,
-``listdir(path)``, ``realpath(path)`` and ``home`` -- so the detection is checked against a fixture
-filesystem and this machine is one default away.
+``listdir(path)``, ``realpath(path)``, ``home`` and, optionally, ``environ`` (the process
+environment a start inherits; a fixture without it has an empty one) -- so the detection is
+checked against a fixture filesystem and this machine is one default away.
 
 Two rules shape every probe below, both paid for in
 ``docs/research/2026-10-29-engine-install-paths.md``:
@@ -17,6 +18,9 @@ Two rules shape every probe below, both paid for in
   names sit in directories a fresh Mac does not export (§6.2), and
   ``/opt/homebrew/bin/osaurus`` outlives the app it pointed at, so a ``which`` hit is
   not an install.
+- **A pip engine is installed only where a start can reach it** (S4-F2). mlx-lm and OptiQ
+  have no app bundle to fall back to, so a script a start cannot find on its PATH is not an
+  install for this process: see :func:`_startable`.
 
 ``install_plan(name, macos_major)`` answers the screen's second question -- what installing
 an engine would do -- as data, so the user can see the source, the size and every step
@@ -46,7 +50,14 @@ from xml.parsers.expat import ExpatError
 
 from ohyesmlx import app_support_dir, atomic_write_text
 from ohyesmlx.hardware import scan as _scan_hardware
-from ohyesmlx.runtimes import OSAURUS_APP_BUNDLES, RUNTIMES, VMLX_ENGINE_INIT
+from ohyesmlx.runtimes import (
+    OSAURUS_APP_BUNDLES,
+    RUNTIMES,
+    VMLX_ENGINE_INIT,
+    RuntimeStartError,
+    _engine_env,
+    _ps_column,
+)
 
 # The five engines of Decision D2, in the registry's own order. MTPLX joins when its
 # branch lands; until then its registry entry is filtered out rather than probed.
@@ -205,6 +216,10 @@ class _Filesystem:
     """The real filesystem, read-only: the default for every side effect above."""
 
     home = os.path.expanduser("~")
+
+    @property
+    def environ(self):
+        return os.environ
 
     def exists(self, path: str) -> bool:
         return os.path.exists(path)
@@ -524,9 +539,47 @@ def _lab_script(lab_path: str | None, script: str) -> tuple[str, ...]:
     return (os.path.join(os.path.expanduser(lab_path), script),)
 
 
+def _startable(env, name: str, script: str, lab_path, candidates: tuple[str, ...]) -> str | None:
+    """The first existing candidate a start of pip engine *name* would actually run, or None.
+
+    A candidate counts when it is *lab_path*'s script (unless ``runtimes._engine_env``
+    refuses that lab, as a start would), or when it is the first *script* on the PATH a start
+    of *name* hands its child. That PATH is ``_engine_env``'s answer -- the one definition of
+    how a lab prefix joins PATH -- built on *env*'s own ``environ``; only ``environ`` comes
+    from *env*: ``_engine_env`` still reads the lab-paths file, the manifest and the lab
+    directory from the real filesystem. Anything else is a file no start can find: the app's PATH is launchd's, and an unrecorded venv under Application Support
+    or a ``~/.local/bin`` script is on it only from a developer's shell (S4-F2).
+    """
+    lab = _lab_script(lab_path, script)
+    try:
+        start_path = _engine_env(
+            lab_paths_path=_lab_paths_file(env.home),
+            engine=name,
+            environ=getattr(env, "environ", {}),
+        ).get("PATH", "")
+    except (RuntimeStartError, ValueError):
+        return None  # the start itself would refuse: nothing here is startable
+    first = next(
+        (
+            os.path.join(directory, script)
+            for directory in start_path.split(os.pathsep)
+            if directory and env.exists(os.path.join(directory, script))
+        ),
+        None,
+    )
+    reached = env.realpath(first) if first is not None else None
+    for candidate in candidates:
+        if env.exists(candidate) and (candidate in lab or env.realpath(candidate) == reached):
+            return candidate
+    return None
+
+
 def _detect_optiq(env, lab_path=None) -> tuple[str | None, str | None]:
-    found = _first_existing(
+    found = _startable(
         env,
+        "optiq",
+        "optiq",
+        lab_path,
         _lab_script(lab_path, "optiq")
         + _app_engine_scripts(env, "optiq", "optiq")
         + (
@@ -543,8 +596,11 @@ def _detect_mlxlm(env, lab_path=None) -> tuple[str | None, str | None]:
     # A console script is the only durable evidence: mlx-lm has no app bundle and no
     # global location (`runtimes.py` carries none either), so the harness venv and the
     # app's own venvs are the two known homes.
-    found = _first_existing(
+    found = _startable(
         env,
+        "mlxlm",
+        "mlx_lm.server",
+        lab_path,
         _lab_script(lab_path, "mlx_lm.server")
         + _app_engine_scripts(env, "mlxlm", "mlx_lm.server")
         + (
@@ -594,9 +650,9 @@ def detect_all(env=DEFAULT_ENV) -> list[EngineStatus]:
     engines cannot have a lab path at all (:func:`lab_paths` refuses one), so they are
     asked without it.
 
-    A lab path with nothing at it is not an error *here*: detection reports what it finds,
-    and the refusal belongs to starting an engine (``runtimes._engine_env``), which is
-    where falling back to the global install would corrupt a measurement.
+    A pip engine is found only where a start can reach it (:func:`_startable`): a script
+    elsewhere -- or behind a lab path whose start ``runtimes._engine_env`` refuses -- reads as
+    not installed, so ``install`` may repair it rather than refuse ``already_installed``.
     """
     labs = lab_paths(_lab_paths_file(env.home), read=env.read_text)
     statuses = []
@@ -1124,6 +1180,11 @@ def _rollback(created: list[str], engines_dir: str, send) -> None:
             send("log", f"rollback could not remove {path}: {error}", payload={"path": path})
 
 
+def _process_args() -> dict[int, str]:
+    """Every live process's argv as one string, by pid (``runtimes._ps_column``'s ``ps``)."""
+    return _ps_column("args")
+
+
 def _job_event(seq: int, kind: str, message: str, fraction=None, payload=None) -> dict:
     """The pinned job-event shape (``docs/interfaces/v5-onboarding.md`` **Job**), built in one place.
 
@@ -1176,6 +1237,7 @@ def install(
     timeout_s: float = STEP_TIMEOUT_S,
     poll_s: float = POLL_S,
     poll_timeout_s: float = POLL_TIMEOUT_S,
+    processes=_process_args,
 ) -> bool:
     """Install *engine*, but only with consent and never over an existing install.
 
@@ -1194,6 +1256,19 @@ def install(
     does and ends with ``error`` code ``cancelled`` and ``done``. A pip step in
     progress therefore keeps its own timeout and the installer's rollback still
     applies, which is what lets an abandoned guided wait release the job slot.
+
+    Once a step may have created the venv, every way out but success rolls it back *first*
+    and only then sends ``error`` and ``done``, best-effort: a refused lab-path record, a raise
+    from the runner, the emitter or the install log (which is itself best-effort) can never
+    leave a venv behind that nothing records (S1-F7, S4-F10). The lab-paths file is read
+    before the first step, so a file the final record would refuse refuses with nothing made.
+
+    A venv root this plan would create that already exists, unrecorded, is an install that
+    never finished (a hard-killed backend). *processes* (pid -> argv) is asked first: if any
+    live argv names the root, a pip that outlived its backend is still writing it and the
+    install refuses ``install_in_progress``; otherwise the root is removed through the
+    rollback helper (inside *engines_dir* only) and installed afresh. A root a lab path
+    records is never removed.
     """
     seq = 0
 
@@ -1201,17 +1276,41 @@ def install(
         nonlocal seq
         seq += 1
         event = _job_event(seq, kind, message, fraction, payload)
-        _append_install_log(
-            log_path,
-            engine=engine,
-            confirmed=confirmed,
-            kind=kind,
-            step=step,
-            exit_code=exit_code,
-            code=(payload or {}).get("code"),
-        )
+        try:
+            _append_install_log(
+                log_path,
+                engine=engine,
+                confirmed=confirmed,
+                kind=kind,
+                step=step,
+                exit_code=exit_code,
+                code=(payload or {}).get("code"),
+            )
+        except OSError:
+            pass  # the log is a local record; a full disk must not stop the event or a cleanup
         emit(event)
         return event
+
+    def quietly(kind, message, **kwargs):
+        """``send`` on the failure path: an emitter that raises must not stop the cleanup."""
+        try:
+            send(kind, message, **kwargs)
+        except Exception:
+            pass
+
+    def fail(created, code, message, done_message, **payload):
+        """Every failure after a step may have run: roll back first, then error and done."""
+        _rollback(created, engines_dir, quietly)
+        exit_code = payload.pop("exit_code", None)
+        quietly(
+            "error",
+            message,
+            payload={"code": code, **payload},
+            step=payload.get("step"),
+            exit_code=exit_code,
+        )
+        quietly("done", done_message)
+        return False
 
     def refuse(code, message, **payload):
         send("error", message, payload={"code": code, **payload})
@@ -1231,11 +1330,13 @@ def install(
         )
 
     def cancelled(created: list[str]) -> bool:
-        """The failure path a cancel takes: error, the same rollback, then done."""
-        send("error", f"the install of {engine} was cancelled", payload={"code": "cancelled"})
-        _rollback(created, engines_dir, send)
-        send("done", "install cancelled; nothing else was run")
-        return False
+        """The failure path a cancel takes: the same rollback, then error and done."""
+        return fail(
+            created,
+            "cancelled",
+            f"the install of {engine} was cancelled",
+            "install cancelled; nothing else was run",
+        )
 
     if not confirmed:
         return refuse("consent_required", "consent was not given; nothing was installed")
@@ -1248,52 +1349,114 @@ def install(
     if not lock.acquire(engine):
         return refuse("busy", f"another install of {engine} is already running")
 
+    def unfinished_roots(source_dir) -> tuple[str, str] | None:
+        """Clear the roots this plan creates that an unfinished install left; a refusal's reason.
+
+        Returns None when every root is absent or removed, else ``(code, message)``.
+        """
+        labs = lab_paths(_lab_paths_beside(engines_dir))
+        recorded = [os.path.realpath(os.path.expanduser(path)) for path in labs.values()]
+        for step in plan.steps:
+            root = _venv_root(_relocate(step.command or [], source_dir, engines_dir))
+            if root is None or not os.path.lexists(root):
+                continue
+            real = os.path.realpath(root)
+            if any(os.path.commonpath([real, path]) == real for path in recorded):
+                continue  # a lab path records it: repaired in place, never removed
+            try:
+                running = processes()
+            except Exception as error:
+                return "install_in_progress", (
+                    f"{root} is an unfinished install, and the running processes could not "
+                    f"be read to rule out a pip still writing it: {error}"
+                )
+            if any(root in args or real in args for args in running.values()):
+                return "install_in_progress", (
+                    f"a running process is still writing {root}; let it finish or quit it, "
+                    "then install again"
+                )
+            _rollback([root], engines_dir, quietly)
+            if os.path.lexists(root):
+                return "stale_install", f"could not remove the unfinished install at {root}"
+        return None
+
     def run_steps() -> bool:
         created: list[str] = []
         source_dir = _plan_engines_dir(plan)
+        try:
+            # The record a successful install ends with reads this file; a file it would
+            # refuse is refused here, before anything exists to roll back (S1-F7).
+            blocked = unfinished_roots(source_dir)
+        except ValueError as error:
+            return refuse("lab_paths_invalid", str(error))
+        if blocked is not None:
+            return refuse(*blocked)
         installed_bin: str | None = None
-        for position, step in enumerate(plan.steps):
-            if cancel():
-                return cancelled(created)
-            if step.command is None:
-                continue
-            argv = _relocate(
-                [python if token == "{python}" else token for token in step.command],
-                source_dir,
-                engines_dir,
-            )
-            root = _venv_root(argv)
-            existed = root is not None and os.path.lexists(root)
-            exit_code, output = run(argv, timeout_s, _hermetic_env())
-            tail = _cap(output or "")
-            if root is not None and not existed and os.path.lexists(root):
-                created.append(root)
-            if exit_code != 0:
+        try:
+            for position, step in enumerate(plan.steps):
+                if cancel():
+                    return cancelled(created)
+                if step.command is None:
+                    continue
+                argv = _relocate(
+                    [python if token == "{python}" else token for token in step.command],
+                    source_dir,
+                    engines_dir,
+                )
+                root = _venv_root(argv)
+                existed = root is not None and os.path.lexists(root)
+                try:
+                    exit_code, output = run(argv, timeout_s, _hermetic_env())
+                finally:
+                    if root is not None and not existed and os.path.lexists(root):
+                        created.append(root)
+                tail = _cap(output or "")
+                if exit_code != 0:
+                    return fail(
+                        created,
+                        "step_failed",
+                        f"step {step.id} failed with exit code {exit_code}",
+                        "install failed; nothing else was run",
+                        step=step.id,
+                        output_tail=tail,
+                        exit_code=exit_code,
+                    )
+                if root is not None:
+                    if root in created:
+                        # The umask chose these modes; the lab-path record refuses a bin
+                        # another account or group could write (`check_lab_dir`).
+                        for path in (root, os.path.join(root, "bin")):
+                            if os.path.isdir(path):
+                                os.chmod(path, 0o755)
+                    # The venv this install created is the one a later start must find on
+                    # PATH (AC-0); it is recorded only after the step succeeded, and beside
+                    # the engines directory this call was handed rather than this Mac's.
+                    installed_bin = os.path.join(root, "bin")
                 send(
-                    "error",
-                    f"step {step.id} failed with exit code {exit_code}",
-                    payload={"code": "step_failed", "step": step.id, "output_tail": tail},
+                    "progress",
+                    step.label,
+                    fraction=(position + 1) / len(plan.steps),
+                    payload={"step": step.id},
                     step=step.id,
                     exit_code=exit_code,
                 )
-                _rollback(created, engines_dir, send)
-                send("done", "install failed; nothing else was run")
-                return False
-            if root is not None:
-                # The venv this install created is the one a later start must find on PATH
-                # (AC-0); it is recorded only after the step succeeded, and beside the engines
-                # directory this call was handed rather than this Mac's real one.
-                installed_bin = os.path.join(root, "bin")
-            send(
-                "progress",
-                step.label,
-                fraction=(position + 1) / len(plan.steps),
-                payload={"step": step.id},
-                step=step.id,
-                exit_code=exit_code,
+            if installed_bin is not None:
+                try:
+                    record_lab_path(engine, installed_bin, path=_lab_paths_beside(engines_dir))
+                except ValueError as error:
+                    return fail(
+                        created,
+                        "lab_path_refused",
+                        f"{engine} installed, but its lab path could not be recorded: {error}",
+                        "install rolled back; nothing was recorded",
+                    )
+        except Exception as error:
+            return fail(
+                created,
+                "install_failed",
+                f"the install of {engine} stopped: {error}",
+                "install failed; what it created was rolled back",
             )
-        if installed_bin is not None:
-            record_lab_path(engine, installed_bin, path=_lab_paths_beside(engines_dir))
         send("done", "install finished")
         return True
 

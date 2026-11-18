@@ -22,7 +22,8 @@ struct ResultsView: View {
                     caveat: summary.stageA.caveat,
                     note: summary.stageA.note,
                     cells: summary.stageA.cells,
-                    winner: summary.stageA.winner,
+                    busy: summary.busyLine(stageA: true),
+                    badge: { summary.stageA.badge(for: $0) },
                     byFormat: false
                 )
                 stageSection(
@@ -31,7 +32,8 @@ struct ResultsView: View {
                     caveat: summary.stageB.caveat,
                     note: summary.stageB.note,
                     cells: summary.stageB.cells,
-                    winner: nil,
+                    busy: summary.busyLine(stageA: false),
+                    badge: { _ in nil },
                     byFormat: true
                 )
                 if !model.notEvictedLines.isEmpty {
@@ -89,13 +91,19 @@ struct ResultsView: View {
             if let best = summary.best {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Best on your Mac")
+                        Text(summary.bestHeading)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Text("\(model.engineTitle(best.engine)) with \(summary.bestFormat)")
                             .font(.title3)
                             .fontWeight(.semibold)
                         Badge("quick: measured on this Mac")
+                        if let tie = summary.bestTieLine {
+                            Text(tie)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
@@ -126,7 +134,8 @@ struct ResultsView: View {
         caveat: String,
         note: String?,
         cells: [QuickCell],
-        winner: String?,
+        busy: String?,
+        badge: @escaping (QuickCell) -> StageBadge?,
         byFormat: Bool
     ) -> some View {
         Section {
@@ -140,7 +149,7 @@ struct ResultsView: View {
                     // Stage B holds the engine fixed and varies the format, so its rows are named by
                     // format (the engine is in the section title); stage A's by engine and version.
                     title: byFormat ? cell.format : model.engineTitle(cell.engine),
-                    isWinner: cell.engine == winner && cell.status == "PASS",
+                    badge: badge(cell),
                     showsVersion: !byFormat
                 )
             }
@@ -154,6 +163,12 @@ struct ResultsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let busy {
+                Label("Measured while \(busy).", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } header: {
             Text(title)
         }
@@ -223,7 +238,7 @@ struct ResultsView: View {
 struct ResultCellRow: View {
     let cell: QuickCell
     let title: String
-    let isWinner: Bool
+    let badge: StageBadge?
     var showsVersion = true
 
     var body: some View {
@@ -231,14 +246,16 @@ struct ResultCellRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(title)
-                        .fontWeight(isWinner ? .semibold : .regular)
+                        .fontWeight(badge == .fastest ? .semibold : .regular)
                     if showsVersion, let version = cell.runtimeVersion {
                         Text(version)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
-                    if isWinner {
-                        Badge("fastest in stage")
+                    switch badge {
+                    case .fastest: Badge("fastest in stage")
+                    case .tied: Badge("tied")
+                    case nil: EmptyView()
                     }
                 }
                 Spacer(minLength: 12)

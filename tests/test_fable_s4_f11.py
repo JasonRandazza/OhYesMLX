@@ -105,7 +105,7 @@ class UserPartialThenRunDownload:
     def downloaded(self, model, cache_dir=None):
         return fetch.downloaded(model, cache_dir)
 
-    def download(self, repo, confirmed, *, cache_dir=None, emit=None):
+    def download(self, repo, confirmed, *, cache_dir=None, emit=None, cancel=None):
         """Stage B's fetch: finish the user's partial, then link the snapshot like `download`."""
         self.downloads.append(repo)
         remaining = self.planned_file.size - os.path.getsize(self.incomplete)

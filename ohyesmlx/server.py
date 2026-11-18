@@ -602,6 +602,11 @@ class _Handler(BaseHTTPRequestHandler):
         # What each row still has to fetch (stat-only): the disk margin applies to it, so a
         # partial is judged like fetch.download's own guard (S4-F7).
         missing = {model.repo: fetch.missing_bytes(model) for model in models}
+        mismatch = {
+            model.repo: fetch.mismatch_on_disk(model)
+            for model in models
+            if model.repo not in downloaded
+        }
         measured = {}
         for summary in self.server.summaries().values():
             best = summary.get("best")
@@ -617,6 +622,7 @@ class _Handler(BaseHTTPRequestHandler):
                 downloaded,
                 measured_here=measured,
                 missing=missing,
+                mismatch=mismatch,
             )
         ]
         excluded = []

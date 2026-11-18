@@ -234,11 +234,19 @@ private struct ModelRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(width: 150, alignment: .trailing)
                 }
-                Button("Download") {
-                    Task { await model.download(repo: pick.modelID) }
+                if let line = pick.mismatchLine {
+                    Text(line)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Button(pick.downloadTitle) {
+                        Task { await model.download(repo: pick.modelID) }
+                    }
+                    .disabled(!model.canStartJob)
+                    .accessibilityHint(Text(model.oneSlotReason ?? ""))
                 }
-                .disabled(!model.canStartJob)
-                .accessibilityHint(Text(model.oneSlotReason ?? ""))
             }
             .layoutPriority(2)
         }
@@ -256,6 +264,9 @@ private struct ModelRow: View {
         }
         if pick.downloaded {
             label += ", downloaded"
+        }
+        if let line = pick.mismatchLine {
+            label += ", \(line)"
         }
         return label
     }

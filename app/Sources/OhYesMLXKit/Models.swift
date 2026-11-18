@@ -300,6 +300,14 @@ public struct MeasuredHere: Codable, Sendable, Equatable {
     }
 }
 
+/// P5-11: finished files of a not-downloaded row sit on disk at a size the catalog does not
+/// pin. `ours` are in this app's fetch ledger (Download repairs them); `foreign` are not
+/// (`fetch.download` refuses to overwrite them). Absent or null means nothing mismatched.
+public enum MismatchOnDisk: String, Codable, Sendable, Equatable {
+    case ours
+    case foreign
+}
+
 public struct Pick: Codable, Sendable, Equatable, Identifiable {
     public let modelID: String
     public let title: String
@@ -314,6 +322,7 @@ public struct Pick: Codable, Sendable, Equatable, Identifiable {
     public let reason: String
     public let downloaded: Bool
     public let measuredHere: MeasuredHere?
+    public let mismatchOnDisk: MismatchOnDisk?
 
     public var id: String { modelID }
 
@@ -331,6 +340,7 @@ public struct Pick: Codable, Sendable, Equatable, Identifiable {
         case reason
         case downloaded
         case measuredHere = "measured_here"
+        case mismatchOnDisk = "mismatch_on_disk"
     }
 
     public init(
@@ -346,7 +356,8 @@ public struct Pick: Codable, Sendable, Equatable, Identifiable {
         startHere: Bool,
         reason: String,
         downloaded: Bool,
-        measuredHere: MeasuredHere?
+        measuredHere: MeasuredHere?,
+        mismatchOnDisk: MismatchOnDisk? = nil
     ) {
         self.modelID = modelID
         self.title = title
@@ -361,6 +372,23 @@ public struct Pick: Codable, Sendable, Equatable, Identifiable {
         self.reason = reason
         self.downloaded = downloaded
         self.measuredHere = measuredHere
+        self.mismatchOnDisk = mismatchOnDisk
+    }
+}
+
+extension Pick {
+    /// The download button's title: "Re-download" only for files this app wrote (P5-11).
+    public var downloadTitle: String {
+        mismatchOnDisk == .ours ? "Re-download" : "Download"
+    }
+
+    /// The one plain line shown instead of a button when the files on disk are not ours:
+    /// `fetch.download` would refuse them, so a non-nil line means no download button.
+    public var mismatchLine: String? {
+        mismatchOnDisk == .foreign
+            ? "The files already on this Mac don't match this version. "
+                + "Remove them from the Hugging Face cache, then download again."
+            : nil
     }
 }
 
@@ -645,6 +673,24 @@ public struct QuickStageA: Codable, Sendable, Equatable {
     }
 }
 
+/// How a stage-A cell is marked: one engine "fastest in stage", or each engine inside the
+/// noise band "tied" (S3-F9).
+public enum StageBadge: Sendable, Equatable {
+    case fastest
+    case tied
+}
+
+extension QuickStageA {
+    /// Two or more engines inside the tie band are one reading on this host.
+    public var isTied: Bool { tie.count > 1 }
+
+    public func badge(for cell: QuickCell) -> StageBadge? {
+        guard cell.status == "PASS" else { return nil }
+        if isTied { return tie.contains(cell.engine) ? .tied : nil }
+        return cell.engine == winner ? .fastest : nil
+    }
+}
+
 public struct QuickStageB: Codable, Sendable, Equatable {
     public let caveat: String
     public let engine: String?
@@ -785,6 +831,25 @@ public struct QuickSummary: Codable, Sendable, Equatable {
 }
 
 extension QuickSummary {
+    /// The run's own contention label for a stage ("this Mac was busy"), nil when clean.
+    public func busyLine(stageA isStageA: Bool) -> String? {
+        let label = (isStageA ? load.stageA : load.stageB)?.label
+        return label?.isEmpty == false ? label : nil
+    }
+
+    /// The best card's heading: on a stage-A tie it does not call one engine best (S3-F9).
+    public var bestHeading: String {
+        stageA.isTied ? "Fastest measured here (top engines tied)" : "Best on your Mac"
+    }
+
+    /// Said on the best card when stage A's top engines tied; `best` still names one engine
+    /// because the backend picks by decode rate alone.
+    public var bestTieLine: String? {
+        stageA.isTied
+            ? "The top engines tied within the noise band, so this one is not clearly the best on its own."
+            : nil
+    }
+
     /// The winning cell's own format, falling back to the chosen row's on a summary written
     /// before the win named its artifact.
     public var bestFormat: String {

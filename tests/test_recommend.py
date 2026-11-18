@@ -16,7 +16,7 @@ import pytest
 from ohyesmlx.catalog import Model, ModelFile
 from ohyesmlx.engines import EngineStatus
 from ohyesmlx.hardware import Hardware
-from ohyesmlx.recommend import Pick, exclusion_reason, pick
+from ohyesmlx.recommend import TIGHT_FACTOR, Pick, exclusion_reason, pick
 
 # hardware.model_budget's own answers: two thirds of unified memory less 2 GiB under 36 GiB.
 BUDGET_8_GIB = 3_579_139_413
@@ -127,7 +127,7 @@ def test_excluded_past_1_25_times_the_budget():
     size = 1_000_000_000
     assert pick(hardware(1_000_000_000), [model(size=size)], [], PLENTY_OF_DISK) == []
     assert exclusion_reason(model(size=size), hardware(1_000_000_000), PLENTY_OF_DISK) == (
-        "Needs about 2.0 GB of memory at peak; this Mac's budget is 1.0 GB"
+        "Needs about 1.3 GB of memory; this Mac's budget is 1.0 GB"
     )
 
 
@@ -144,7 +144,7 @@ def test_8_gib_mac_holds_the_2b_oq4_as_tight_only():
 def test_8_gib_mac_excludes_the_8b_moe():
     assert pick(hardware(BUDGET_8_GIB), [model(**LFM_8B)], [], PLENTY_OF_DISK) == []
     assert exclusion_reason(model(**LFM_8B), hardware(BUDGET_8_GIB), PLENTY_OF_DISK) == (
-        "Needs about 9.6 GB of memory at peak; this Mac's budget is 3.6 GB"
+        "Needs about 6.0 GB of memory; this Mac's budget is 3.6 GB"
     )
 
 
@@ -189,7 +189,7 @@ def test_the_unsupported_sentence_is_never_copied_into_a_reason():
         unsupported_reason="this Mac has less than 8 GiB of unified memory",
     )
     reason = exclusion_reason(model(size=1_000_000_000), hw, PLENTY_OF_DISK)
-    assert reason == "Needs about 2.0 GB of memory at peak; this Mac's budget is 0.0 GB"
+    assert reason == "Needs about 1.3 GB of memory; this Mac's budget is 0.0 GB"
     assert "unified memory" not in reason
 
 
@@ -341,14 +341,14 @@ def test_fewer_than_three_picks_are_all_start_here():
 
 def test_comfortable_reason_is_the_fixed_template():
     [only] = pick(hardware(BUDGET_16_GIB), [model(**QWEN_2B_OQ4)], [], PLENTY_OF_DISK)
-    assert only.reason == "Fits with about 7.5 GB of memory to spare; 1.8 GB download"
+    assert only.reason == "Fits with about 5.7 GB of memory to spare; 1.8 GB download"
     assert "tok/s" not in only.reason
     assert "M2" not in only.reason
 
 
 def test_tight_reason_is_the_fixed_template():
     [only] = pick(hardware(BUDGET_8_GIB), [model(**QWEN_2B_OQ4)], [], PLENTY_OF_DISK)
-    assert only.reason == "Tight fit, about 1.8 GB of memory to spare; 1.8 GB download"
+    assert only.reason == "Tight fit, about 1.3 GB of memory to spare; 1.8 GB download"
     assert "tok/s" not in only.reason
     assert "M2" not in only.reason
 
@@ -365,13 +365,13 @@ def test_a_downloaded_row_says_it_is_on_this_mac_and_names_no_download_size():
     [comfortable] = pick(hardware(BUDGET_16_GIB), [row], [], PLENTY_OF_DISK, here)
     assert comfortable.downloaded is True
     assert comfortable.reason == (
-        "Fits with about 7.5 GB of memory to spare; already on this Mac"
+        "Fits with about 5.7 GB of memory to spare; already on this Mac"
     )
     assert "GB download" not in comfortable.reason
 
     [tight] = pick(hardware(BUDGET_8_GIB), [row], [], PLENTY_OF_DISK, here)
     assert tight.fit == "tight"
-    assert tight.reason == "Tight fit, about 1.8 GB of memory to spare; already on this Mac"
+    assert tight.reason == "Tight fit, about 1.3 GB of memory to spare; already on this Mac"
     assert "GB download" not in tight.reason
 
 
@@ -405,7 +405,7 @@ def test_memory_still_excludes_a_downloaded_row():
 
     assert pick(hw, [row], [], 0, frozenset({row.repo})) == []
     assert exclusion_reason(row, hw, 0, frozenset({row.repo})) == (
-        "Needs about 9.6 GB of memory at peak; this Mac's budget is 3.6 GB"
+        "Needs about 6.0 GB of memory; this Mac's budget is 3.6 GB"
     )
 
 
@@ -429,6 +429,7 @@ def test_pick_has_exactly_the_pinned_fields():
         "reason",
         "downloaded",
         "measured_here",
+        "mismatch_on_disk",
     ]
 
 
@@ -477,3 +478,11 @@ def test_measured_here_is_the_callers_run_for_that_repo_and_null_without_one():
     by_id = {pick.model_id: pick for pick in picks}
     assert by_id[QWEN_06B["repo"]].measured_here == best
     assert by_id[LFM_8B["repo"]].measured_here is None
+
+
+def test_a_left_out_row_never_reads_as_needing_exactly_its_budget():
+    """05-11 review: 10.07 GB need vs 10.06 GB budget would both print 10.1."""
+    budget = 10_060_000_000
+    size = int(10_070_000_000 / TIGHT_FACTOR) + 1
+    reason = exclusion_reason(model(size=size), hardware(budget), 10**15)
+    assert reason == "Needs about 10.2 GB of memory; this Mac's budget is 10.1 GB"

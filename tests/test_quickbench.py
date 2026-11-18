@@ -170,7 +170,7 @@ class FakeCache:
     def downloaded(self, model, cache_dir=None):
         return model.repo in self.repos
 
-    def download(self, repo, confirmed, *, cache_dir=None, emit=None):
+    def download(self, repo, confirmed, *, cache_dir=None, emit=None, cancel=None):
         self.cache_dirs.append(cache_dir)
         self.downloads.append(repo)
         self.log.append(("download", repo))
