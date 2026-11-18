@@ -80,11 +80,12 @@ def app_plist(version):
 class FakeEnv:
     """A filesystem made of the literal paths it is given; nothing else exists."""
 
-    def __init__(self, home=HOME, files=None, links=None, dirs=()):
+    def __init__(self, home=HOME, files=None, links=None, dirs=(), environ=None):
         self.home = home
         self.files = dict(files or {})
         self.links = dict(links or {})
         self.dirs = set(dirs)
+        self.environ = dict(environ or {})
 
     def exists(self, path):
         return path in self.files or path in self.links or path in self.dirs
@@ -110,6 +111,11 @@ class FakeEnv:
         return path
 
 
+# A developer's shell, the CLI's PATH: the harness's mlx-lm venv and ~/.local/bin are on it,
+# so the two pip engines found there are startable (S4-F2).
+CLI_PATH = f"{MLXLM_VENV}/bin:{HOME}/.local/bin:/usr/bin:/bin"
+
+
 def installed_env(versions=VERSIONS):
     """Every engine installed at ``versions[name]``, at the paths the research found.
 
@@ -117,6 +123,7 @@ def installed_env(versions=VERSIONS):
     from the stdlib's venv, ``version_info`` from uv.
     """
     return FakeEnv(
+        environ={"PATH": CLI_PATH},
         files={
             f"{OSAURUS_BUNDLE}/Contents/Info.plist": app_plist(versions["osaurus"]),
             f"{OMLX_BUNDLE}/Contents/Info.plist": app_plist(versions["omlx"]),
@@ -224,6 +231,8 @@ def test_a_wheel_installed_optiq_reads_its_version_from_dist_info_metadata():
             f"{base}/lib/python3.12/site-packages/mlx_optiq-0.7.8.dist-info/METADATA": (
                 "Metadata-Version: 2.4\nName: mlx-optiq\nVersion: 0.7.8\n"
             ),
+            # The app's install records its venv; without the record no start reaches it.
+            LAB_PATHS_FILE: json.dumps({"optiq": f"{base}/bin"}),
         },
     )
     optiq = {status.name: status for status in detect_all(env)}["optiq"]
@@ -639,6 +648,7 @@ def do_install(tmp_path, engine="mlxlm", confirmed=True, *, run=None, detect=Non
         python="/fake/python",
         engines_dir=str(tmp_path / "engines"),
         timeout_s=900,
+        processes=lambda: {},
     )
     kwargs.update(overrides)
     previous_home = engines.DEFAULT_ENV.home
@@ -1114,9 +1124,14 @@ def test_a_failing_step_stops_before_the_next_rolls_back_and_reports_the_tail(tm
 
 
 def test_a_venv_that_existed_before_the_call_is_never_removed(tmp_path, monkeypatch):
+    # 05-11 T2: an existing root counts as this install's to keep only when a lab path
+    # records it; an unrecorded one is an unfinished install that `install` clears first.
     venv = tmp_path / "engines" / "mlxlm-0.31.3"
     venv.mkdir(parents=True)
     (venv / "keep.txt").write_text("pre-existing", encoding="utf-8")
+    (tmp_path / "lab-paths.json").write_text(
+        json.dumps({"mlxlm": str(venv / "bin")}), encoding="utf-8"
+    )
     plan = command_plan(
         str(venv),
         [
@@ -1280,6 +1295,7 @@ def test_a_stray_pyproject_above_a_non_venv_script_does_not_set_optiq_version():
             f"{site}/mlx_optiq-0.7.8.dist-info/METADATA": "Name: mlx-optiq\nVersion: 0.7.8\n",
             f"{HOME}/pyproject.toml": '[project]\nversion = "1.2.3"\n',
         },
+        environ={"PATH": CLI_PATH},
     )
     optiq = {status.name: status for status in detect_all(env)}["optiq"]
     assert optiq.version == "0.7.8"
@@ -1825,3 +1841,84 @@ def test_a_kill_started_while_a_step_is_spawning_waits_for_and_kills_it(monkeypa
     killer.join(5)
 
     assert killed == [(9101, signal.SIGKILL)]
+
+
+# --- 05-11 T2: "installed" means startable; an unfinished root is cleared, never a live one --
+
+APP_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+
+@pytest.mark.parametrize("path, installed", [(CLI_PATH, True), (APP_PATH, False)])
+def test_a_global_optiq_counts_as_installed_only_on_a_path_a_start_uses(path, installed):
+    """The CLI's PATH reaches ~/.local/bin/optiq (no CLI change); launchd's does not."""
+    env = installed_env()
+    env.environ = {"PATH": path}
+    optiq = {status.name: status for status in detect_all(env)}["optiq"]
+    assert optiq.installed is installed
+    assert optiq.path == (f"{OPTIQ_VENV}/bin/optiq" if installed else None)
+
+
+def unfinished_root(tmp_path):
+    root = tmp_path / "engines" / f"mlxlm-{engines.TESTED_VERSIONS['mlxlm']}"
+    (root / "bin").mkdir(parents=True)
+    (root / "half-written").write_text("pip was here", encoding="utf-8")
+    return root
+
+
+def test_an_unfinished_root_a_live_process_is_writing_refuses_and_survives(tmp_path):
+    root = unfinished_root(tmp_path)
+    run = FakeRun()
+    ok, events, _, _ = do_install(
+        tmp_path, run=run, processes=lambda: {4242: f"{root}/bin/python -m pip install -r x"}
+    )
+    assert ok is False
+    assert [e["payload"]["code"] for e in events if e["type"] == "error"] == [
+        "install_in_progress"
+    ]
+    assert events[-1]["type"] == "done"
+    assert (root / "half-written").exists()
+    assert run.calls == []
+
+
+def test_an_unfinished_root_nothing_is_writing_is_removed_and_installed_afresh(tmp_path):
+    root = unfinished_root(tmp_path)
+    ok, events, _, _ = do_install(tmp_path, run=FakeRun())
+    assert ok is True, events
+    assert not (root / "half-written").exists()
+    assert json.loads((tmp_path / "lab-paths.json").read_text()) == {"mlxlm": str(root / "bin")}
+
+
+def test_a_root_a_lab_path_records_is_never_removed_or_scanned(tmp_path):
+    root = unfinished_root(tmp_path)
+    (tmp_path / "lab-paths.json").write_text(json.dumps({"mlxlm": str(root / "bin")}))
+
+    def processes():
+        raise AssertionError("a recorded root is never a candidate for removal")
+
+    do_install(tmp_path, run=FakeRun([(0, ""), (1, "boom")]), processes=processes)
+    assert (root / "half-written").exists()
+
+
+def test_a_runner_that_raises_after_the_venv_exists_rolls_back_then_errors_then_done(tmp_path):
+    root = tmp_path / "engines" / f"mlxlm-{engines.TESTED_VERSIONS['mlxlm']}"
+
+    def run(argv, timeout, env):
+        if engines._venv_root(argv) is not None:
+            (root / "bin").mkdir(parents=True)
+            return 0, ""
+        raise OSError("Popen failed")
+
+    ok, events, _, _ = do_install(tmp_path, run=run)
+    assert ok is False
+    assert not root.exists()
+    assert [e["type"] for e in events[-2:]] == ["error", "done"]
+    assert events[-2]["payload"]["code"] == "install_failed"
+
+
+def test_a_bad_lab_paths_file_refuses_before_any_step(tmp_path):
+    (tmp_path / "lab-paths.json").write_text(json.dumps({"osaurus": "/x"}))
+    run = FakeRun()
+    ok, events, _, _ = do_install(tmp_path, run=run)
+    assert ok is False
+    assert events[-2]["payload"]["code"] == "lab_paths_invalid"
+    assert run.calls == [] and not (tmp_path / "engines").exists()

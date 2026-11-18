@@ -482,7 +482,9 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _engine_env(manifest_path=None, lab_paths_path=None, *, engine=None) -> dict[str, str]:
+def _engine_env(
+    manifest_path=None, lab_paths_path=None, *, engine=None, environ=None
+) -> dict[str, str]:
     """The ambient environment, with only *engine*'s lab bin prefixed to PATH.
 
     A pinned (lab) copy keeps the build a published table measured while the global install
@@ -494,10 +496,12 @@ def _engine_env(manifest_path=None, lab_paths_path=None, *, engine=None) -> dict
     lab copies are neither prefixed nor validated here.
 
     *manifest_path* and *lab_paths_path* let tests drive the two loaders with scratch files.
+    *environ* replaces ``os.environ`` as the ambient environment: ``engines.detect_all`` asks
+    this function what PATH a start would use, from its own (possibly fixture) environment.
     The local imports keep the module-level dependency one way: ``engines`` imports
     ``RUNTIMES`` from this module.
     """
-    env = dict(os.environ)
+    env = dict(os.environ if environ is None else environ)
     if engine is None:
         return env
 
