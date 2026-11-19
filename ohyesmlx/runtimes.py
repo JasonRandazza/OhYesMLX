@@ -128,6 +128,9 @@ LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
 # path: a PATH carrying a lab directory or a user's own `ps` must not decide which process
 # list the harness reads (AGENTS.md, plan 045-02a T-09).
 PS = "/bin/ps"
+# A lab directory is a private user-owned venv bin, so a program in one of these can never
+# have one: the system helpers need no lab PATH prefix and no lab-file read.
+SYSTEM_BIN_DIRS = ("/bin", "/sbin", "/usr/bin", "/usr/sbin")
 LOGS_DIR = writable_root() / "results" / "logs"
 
 # The running-engines ledger: one file per owner process under this directory, so two harness
@@ -549,6 +552,10 @@ def _engine_command(
     An engine's bare program becomes absolute only when its own engine PATH resolves it. The
     process helpers then recognize that absolute lab directory and prefix exactly that one
     directory, so the child can find the rest of its venv without exposing it to other engines.
+    A system helper (:data:`SYSTEM_BIN_DIRS`, and ``LSOF``/``PS`` by name, because ``LSOF`` may
+    resolve to a Homebrew path) is never inside a lab directory, so it skips the read: a
+    malformed lab file must not disable stopping and recovery (S5-F10). A start still reads
+    them, so a broken lab file still refuses a start.
     """
     env = _engine_env() if engine is None else _engine_env(engine=engine)
     # Only an engine with a lab copy has its program pinned to an absolute path; every other
@@ -571,15 +578,16 @@ def _engine_command(
                 )
     if command and os.path.isabs(command[0]):
         directory = os.path.dirname(command[0])
-        for lab_path in _lab_paths().values():
-            if os.path.expanduser(lab_path) == directory:
-                entries = env.get("PATH", "").split(os.pathsep)
-                if not entries or entries[0] != directory:
-                    ambient = env.get("PATH")
-                    env["PATH"] = os.pathsep.join(
-                        [directory] + ([ambient] if ambient else [])
-                    )
-                break
+        if command[0] not in (LSOF, PS) and directory not in SYSTEM_BIN_DIRS:
+            for lab_path in _lab_paths().values():
+                if os.path.expanduser(lab_path) == directory:
+                    entries = env.get("PATH", "").split(os.pathsep)
+                    if not entries or entries[0] != directory:
+                        ambient = env.get("PATH")
+                        env["PATH"] = os.pathsep.join(
+                            [directory] + ([ambient] if ambient else [])
+                        )
+                    break
     return command, env
 
 
