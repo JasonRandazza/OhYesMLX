@@ -1,0 +1,130 @@
+I'll start by finding all published cold-load mentions and reading the referenced findings.
+Now the summary files with the measured figures and the fix.
+The task's table equals the summary's probe figures plus the 0.068 s `lsof` — consistent. Now I'll find every published cross-engine cold-load comparison.
+Rich set. Let me read the primary cross-engine cold-load publications.
+Let me read the remaining cross-engine claims and check which run directories exist.
+Now let me check which of these claims trace to run directories, and read the remaining candidates.
+Now I need to know whether each claim came from the harness (`cold_load_s` in `Runtime.start`) or from a standalone probe script. Let me check the run headers and the git history of the timed window.
+Critical question: did the September runs actually run code that included the version probe? I'll check the code history and current implementation.
+
+The version probe is outside the timed window now. I need to check what the September code did, and whether the claims trace to harness runs or standalone probes.
+
+Now I need to know whether `_serving_pid` (the `lsof` call) was inside the timed window for the September runs, and the remaining cross-engine claims.
+Let me check the remaining candidate docs and the run dates behind each claim.
+Now I'll check the `_serving_pid` placement in its original commit, and the 35B serving doc's cold-load table.
+
+Let me pin down when the `lsof` actually sat *inside* the timed window, since that decides which runs are affected.
+The argument order matters — `cold_load_s` was evaluated before `serving_pid` at that commit. Let me trace exactly when the probe and `lsof` moved inside the timed window.
+Now I'll pull the raw numbers for each claim from the run directories.
+Let me determine exactly when the `lsof` entered the timed window, and pull the raw cold loads.
+I have the publication set. Now let me pull raw numbers from the run directories for each claim.
+I have raw numbers. Now the decisive detail: when `lsof` entered the timed window, since the September runs predate it.
+Let me verify whether the `lsof` sat inside the timed window for the September runs at all — the argument order decides it.
+
+The critical detail is when `lsof` entered the timed window. Let me verify the argument-order history and the probe outputs.
+The argument order matters for the September runs. Let me verify precisely which probes were inside the timed window at each relevant revision.
+Let me precisely trace when the `lsof` moved into the timed window.
+The lsof entered the timed window at `ef01396` (2026-09-23) — every published doc predates that. Let me verify the version probe history and per-engine commands for the September code.
+Let me verify the key premise: whether `lsof` was in the timed window for the September runs, and check the later docs.
+Let me check the remaining candidate docs for cross-engine cold-load claims.
+The lsof entered the timed window only on 2026-09-23 (`ef01396`), which matters because every published ordering predates it. Let me verify the exact per-revision window and the double-call question.
+Let me check whether any doc publishes the harness grid's own cold loads, and scan remaining docs for cross-engine load claims.
+I have the picture forming. Let me check the remaining candidate docs and confirm no cross-engine cold ordering was published after 2026-09-20.
+I have most of the picture. Let me verify harness revisions in run headers and check remaining docs for any post-September cross-engine ordering.
+No generated grid report publishes a cold-load ordering. Let me check the sweep docs and leaderboards.
+I need to verify the September version commands and compute the corrections precisely.
+I have the revision timeline. Now let me pull exact per-cell numbers and read the remaining table headers.
+Let me verify the remaining raw evidence and compute the corrections exactly.
+I have the raw data. Now let me compute the corrections for every published ordering.
+I have the correction arithmetic. Let me verify the remaining candidate claims and the current per-engine version commands.
+Let me pull the complete probe datasets and verify what traces to a run directory.
+
+I have the raw data and the revision timeline. Let me compute the corrections precisely.
+
+
+I have the full picture. Let me verify one important detail — the `lsof` was only inside the timed window from 2026-09-23, and whether it was called twice.
+I have the raw data and the revision timeline. Let me verify the last citations and the harness-key availability.
+I have enough to compute. Let me verify the arithmetic programmatically before writing.
+
+The correction arithmetic is done. Now let me verify the `lsof` window history and traceability of each claim.
+I have the correction arithmetic. Let me now produce the final discrete-bound table the task asks for.
+
+Let me see the first half of the audit output.
+
+I have the core arithmetic. Let me compute the per-cell sum ratios the JANG studies publish, then write the doc.
+Let me check the runtime docs and README for any published ordering, then generate the final numbers.
+I have the arithmetic and the raw data. Let me pin exact line numbers for each claim.
+I have all the arithmetic. Let me confirm the last line numbers and the README text.
+I have the full picture. Let me compute the final numbers exactly.
+
+I found a bug in my verdict logic. Let me recompute cleanly at each bound as a deterministic scenario.
+
+Now I have solid numbers. Let me confirm a few source facts before writing.
+Let me verify the lsof call path and a few remaining facts.
+I have the correction arithmetic. Let me gather the remaining provenance facts.
+
+Let me verify the stated ratio bases before writing.
+Important finding: the version probe was inside the timed window for *all* published runs, but the `lsof` only entered it on 2026-09-23 — after every published claim. Let me verify and compute the final ratios.
+The transitions are decisive: `lsof` was never inside the timed window for any published run (2026-09-23 onward only), while the version probe was. Let me confirm the remaining source facts, then write.
+Let me verify whether `await_ready` itself ran an `lsof` at those revisions, and confirm the generated reports.
+Important finding: the `lsof` entered the timed window only on 2026-09-23 — after every published claim. Let me check `await_ready`'s conditional `lsof`, which complicates the Osaurus constant.
+Important nuance: `await_ready` itself calls `lsof` when the spawned pid is dead — which is Osaurus's normal path. Let me quantify that.
+Let me confirm one more detail that affects the Osaurus constant.
+Excellent finding: the 0.068 s `lsof` is one call per engine, so it cancels out of every gap. Let me verify that and the await_ready nuance.
+I have a bug in one earlier one-off script (I used mlx-lm's constant for vMLX). Let me recompute everything cleanly with assertions.
+
+I have the arithmetic and the revision timeline. Let me run the test suite for the baseline, then write the doc.
+Baseline: 1652 passed. Now let me verify a few final facts so the doc's claims are evidence-backed.
+Baseline is 1652 passed. Let me confirm the remaining line numbers and the `await_ready` lsof path, then write.
+Baseline recorded: 1652 passed. Let me settle the range-based pairs and the lsof-cancellation fact before writing.
+Two decisive facts: the `lsof` term cancels in every gap, and the version probe was in-window for all published runs while the `lsof` was not. Let me verify the last details.
+Baseline is 1652 passed. Let me compute the final ratio and sum figures precisely.
+
+Baseline: **1652 passed**. I have the revision timeline and the arithmetic. Writing the doc now.
+Let me verify a few claims I made before finalizing.
+Two corrections needed in my prose. Let me verify the exact bands.
+I need to recheck a few computed bands and fix some prose errors.
+A few of my prose numbers need correcting. Let me recompute them all cleanly.
+Now I'll fix the prose inaccuracies I introduced.
+Let me verify the table's true-cost rows match my recomputation and fix the multiple ratios.
+
+Now the ratio table and the dense sum band need fixing.
+One direction claim is backwards. Let me verify and fix.
+My direction claim was wrong — the ratio widens, not narrows. Fixing.
+Now let me verify the verdict section's count and the §5 claims.
+`measurement-core.md:293` is correct as-is: oMLX is third of four, i.e. second slowest. Let me fix my verdict line.
+`measurement-core.md:293` says "second slowest" which is correct (third of four). Let me fix my verdict line.
+Now let me verify the verdict count and the remaining §5 statements.
+
+
+
+Let me verify the "all but one" claim and check the doc renders cleanly.
+Eight flips, seven of which are oMLX-adjacent. Let me correct that sentence and verify the ratio-change direction claim.
+All consistent. Final verification: check the doc renders, the numbers are self-consistent, and the tests still pass.
+One footnote needs tightening. Let me fix it.
+Let me verify the claim that 05-14's measured mlx-lm figures reconcile, then run the suite and commit.
+Test suite passes unchanged (1652 passed, same as baseline). Committing the new file.
+
+Committed as `b5c38be`, one file.
+
+**What flips:** eight adjacent pairs across nine docs.
+
+- **`grid-loadability-probe.md:101`** oMLX/optiq — holds warm, inverts cold. `:14` oMLX/mlx-lm — dead heat warm (3.002 vs 3.002), mlx-lm ahead cold.
+- **`cold-load-is-not-one-quantity.md:30`** and **`first-live-run.md:39`** oMLX/mlx-lm — invert at both bounds. The 0.20 s claim becomes a 0.70–1.48 s lead the other way.
+- **`moe-loadability-probe.md:28`** oMLX/mlx-lm — the published 1.9–2.2 s overlap was the probe; corrected bands don't touch.
+- **`multiturn-conversation-sweep.md:82`**, **`35b-moe-serving.md:62`** and **`:191`** oMLX/optiq — invert at both bounds.
+- **`attribution-35b.md:48`** oMLX/optiq — cold bound only. **`:23`** osaurus/mlxlm — the "completely inverts" ranking stops inverting at cold (2.81 vs 3.11 s).
+- The JANG studies and `jang-cross-runtime.md` don't flip; their 5.5–6.3× ratio sentences become 6.7–8.3× (argument strengthens).
+
+**Doesn't flip:** both recommendations that name a winner. Osaurus stays fastest cold load at 35B (2.36 s against 2.99–3.03 s), and the sum comparisons survive.
+
+Three findings the audit turns on: the 0.068 s `lsof` cancels in every gap, so no verdict depends on it; the version probe was in the timed window for every audited run but the `lsof` only from 2026-09-23 (`ef01396`), so the full constant over-corrects published levels by 0.068 s; and `attribution-35b.md`'s 5.40 GB/s derives from a cold-minus-warm subtraction that gives 7.04 GB/s if the two starts paid different probes — flagged, not corrected.
+
+Verified: baseline 1652 passed, 1652 after; no red-check applies since no code changed. Not verified: whether any flipped ordering flips back on re-measurement — the corrected bands overlap across 1.5–3.0 s for optiq, mlx-lm and oMLX, and only a rerun settles those.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash    108   15799476   15562496   423162   98.5%   0.336132
+
+== cc-agent: git status ==
+?? .paul/orders/05-15/
+?? settings.json
