@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [055-01 complete. Next: `/paul:plan` for the next Phase 5.5 plan (app: items 2, 3, 8)]
+  ✓        ○        ○     [Plan 055-02 (app: items 2, 3, 8) created, awaiting approval]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-19: Jason approved 055-02 incl. the new `Hardware.disk_volume` field (+ DEBUG stub `models-external-cache`). Enterprise audit: 2 must-have, 2 strongly-recommended applied, 2 deferred; conditionally acceptable | v5.0 Phase 5.5 | `disk_volume` null on probe failure, defaulted last field; evict request gated by the Remove predicate |
 | 2026-11-19: 055-01 closed: system helpers skip the lab-file read (system dir or exact `LSOF`/`PS`); hash cancel via `_Cancelled` every `CANCEL_CHECK_CHUNKS`=64 chunks; legacy bare-pid lock reclaimed when its pid's argv lacks `ohyesmlx` (own pid / unreadable argv stay busy) | v5.0 Phase 5.5 | `055-01-SUMMARY.md` |
 | 2026-11-19: Enterprise audit performed on .paul/phases/v5-onboarding/055-01-PLAN.md. Applied 3 must-have, 3 strongly-recommended upgrades. Deferred 2. Verdict: conditionally acceptable | v5.0 Phase 5.5 | helpers skip the lab read by system dir or exact `LSOF`/`PS`; own-pid legacy lock stays held; cancel check every 64 chunks (16 MiB) |
 | 2026-11-19: Phase 5 complete — UAT 9/9 (Jason), 4 UAT issues fixed in 05-14; cold-load audit: several published oMLX/mlx-lm/OptiQ orderings flip, 35B recommendations hold (corrections are Phase 5.5 item 10) | v5.0 Phase 5 | `PHASE-5-SUMMARY.md` |
@@ -108,8 +109,8 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 Last session: 2026-11-19 (Claude Opus 5.5 coordinator)
 Stopped at: 055-01 closed and merged to main (local, not pushed).
-Next action: `/paul:plan` Phase 5.5 app plan (items 2, 3, 8)
-Resume file: `.paul/phases/v5-onboarding/055-01-SUMMARY.md`
+Next action: approve 055-02 (new `disk_volume` Hardware field needs Jason's yes), then audit + apply
+Resume file: `.paul/phases/v5-onboarding/055-02-PLAN.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
