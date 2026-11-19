@@ -22,22 +22,14 @@ mkdir -p "$OUT"
 LOG="$OUT/runner-$(date +%Y%m%dT%H%M%S).log"
 exec > "$LOG" 2>&1
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1)
-    [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  for h in $(pgrep -f "^/Applications/[oO]saurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 3
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
-sweep
+sweep || exit 1
 case ",$ENGINES," in *,osaurus,*) osaurus_pin ;; esac
 $PY -m ohyesmlx.cli canary --yes $RECORD --engines "$ENGINES"
 echo "canary exit=$?"
-sweep
+sweep || exit 1
 # A restore that did not verify must be this script's exit status, not a line in its log: the
 # standing authorisation requires the settings returned and verified, and a coordinator reads
 # the code (Fable S5-F7).

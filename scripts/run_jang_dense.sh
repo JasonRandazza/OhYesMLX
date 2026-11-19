@@ -52,19 +52,8 @@ SERVER_ORIG="$SERVER.grid-orig"
 
 FAILED=0
 
-sweep() {  # ports first, then stale apps; a leaked resident would contend for the memory the next column measures
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Osaurus releases its port on `stop` and leaves the app running, so a port sweep misses
-  # it and the leftovers accumulate at ~900 MB each -- three of them, aged 5-7 h, were
-  # resident through both grids on 2026-09-16. Swept by FULL EXECUTABLE PATH, never by the
-  # name `osaurus`: `osaurus mcp` is a long-running user process and must not be touched.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 newest_run_dir() {  # <results-dir>: run dirs are stamped UTC and sort chronologically
   ls -1d "$1"/*-format 2>/dev/null | sort | tail -1
@@ -85,6 +74,8 @@ osaurus_restore() {  # byte-exact, both files; the drift guard is not the check 
   cp -p "$SERVER_ORIG" "$SERVER"
 }
 
+# ponytail: kept rather than pointed at osaurus-pin.sh -- this pin sets
+# modelIdleResidencyPolicy.seconds only and leaves the host's caches alone.
 osaurus_pin() {
   if [ ! -f "$CONF_ORIG" ]; then
     cp -p "$CONF" "$CONF_ORIG"        # byte-exact; the ohyesmlx-backup differs in whitespace
@@ -120,9 +111,9 @@ restore_and_check() {
   rm -f "$CONF_ORIG" "$SERVER_ORIG"
 }
 
-# Pre-sweep: ensure all ports are free and no stale runtimes are resident.
+# Pre-sweep: ensure no runtime is resident (by process scan, not by port).
 echo "--- pre-sweep $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 # Step 1 -- the vMLX column.
 column vmlx "$OUT" "$OUT/log-vmlx.log" "$CELLS_vmlx"
@@ -131,7 +122,7 @@ VMLX_DIR=$(newest_run_dir "$OUT")
 
 # Step 2 -- sweep between columns.
 echo "--- sweep after vmlx $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 # Step 3 -- the Osaurus column, under the pinned idle residency.
 osaurus_pin
@@ -141,7 +132,7 @@ OSAURUS_DIR=$(newest_run_dir "$OUT")
 # Step 4 -- sweep, then restore: a still-running Osaurus app must be dead before the host's
 # own files go back.
 echo "--- sweep after osaurus $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 restore_and_check
 
 # Step 5 -- join the two columns. The run directories are named one by one; `grid` refuses to
@@ -162,11 +153,11 @@ fi
 # replicates.
 column vmlx-repl "$OUT/replicate" "$OUT/replicate/log-vmlx-repl.log" "$REPL_vmlx"
 echo "--- sweep after vmlx-repl $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 osaurus_pin
 column osaurus-repl "$OUT/replicate" "$OUT/replicate/log-osaurus-repl.log" "$REPL_osaurus"
 echo "--- sweep after osaurus-repl $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 restore_and_check
 
 # Step 7 -- summary.

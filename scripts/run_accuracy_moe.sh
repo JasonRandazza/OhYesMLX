@@ -35,16 +35,8 @@ VMLX_SCHEDULER="/Applications/vMLX.app/Contents/Resources/vmlx-engine-source/vml
 
 FAILED=0
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Sweep stale Osaurus app instances by full executable path, NEVER by bare name `osaurus`.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 verify_vmlx() {
   echo "--- verifying vMLX engine patch ---"
@@ -66,6 +58,8 @@ osaurus_restore() {
   cp -p "$SERVER_ORIG" "$SERVER"
 }
 
+# ponytail: kept rather than pointed at osaurus-pin.sh -- this pin sets
+# modelIdleResidencyPolicy.seconds only and leaves the host's caches alone.
 osaurus_pin() {
   if [ ! -f "$CONF_ORIG" ]; then
     cp -p "$CONF" "$CONF_ORIG"
@@ -114,7 +108,7 @@ run_cell() {
   rc=$?
   echo "=== CELL $cell exit=$rc $(date +%H:%M:%S) ==="
   [ "$rc" -eq 0 ] || FAILED=1
-  sweep
+  sweep || exit 1
   return 0
 }
 
@@ -126,7 +120,7 @@ echo "Target mode: $TARGET"
 echo "=========================================================="
 
 echo "--- pre-sweep $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 if [ "$TARGET" = "all" ] || [ "$TARGET" = "vmlx" ]; then
   verify_vmlx
@@ -153,7 +147,7 @@ if [ "$TARGET" = "all" ] || [ "$TARGET" = "study2c" ]; then
   echo "\n>>> STARTING STUDY 2C MoE: Osaurus (1 cell) $(date +%H:%M:%S)"
   osaurus_pin
   run_cell osaurus "jang2l__osaurus" "$JG" "$OUT/study-2c/jang2l__osaurus"
-  sweep
+  sweep || exit 1
   restore_and_check
   echo ">>> FINISHED STUDY 2C MoE $(date +%H:%M:%S)\n"
 fi

@@ -26,16 +26,8 @@ OUT=results/accuracy-penalty
 OSAURUS_PLIST=/Applications/osaurus.app/Contents/Info.plist
 FAILED=0
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Stale Osaurus apps by FULL executable path, NEVER by the bare name `osaurus`.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 . "$(dirname "$0")/osaurus-pin.sh"
 
 build_scratch() {
@@ -64,14 +56,14 @@ cell() {  # <label> <artifact>
   [ "$rc" -eq 0 ] || FAILED=1
   v1=$(defaults read "$OSAURUS_PLIST" CFBundleShortVersionString)
   [ "$v1" = "$RUN_VERSION" ] || { echo "WARNING: osaurus is $v1, run started on $RUN_VERSION -- the arms no longer share a build"; FAILED=1; }
-  sweep
+  sweep || exit 1
 }
 
 mkdir -p "$OUT"
 exec > "$OUT/runner.log" 2>&1
 RUN_VERSION=$(defaults read "$OSAURUS_PLIST" CFBundleShortVersionString)
 echo "Penalty test starting $(date +%H:%M:%S); Osaurus build for both arms: $RUN_VERSION"
-sweep
+sweep || exit 1
 build_scratch
 osaurus_pin
 cell optiq-shipped__osaurus "$OQ"

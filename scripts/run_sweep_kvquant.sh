@@ -40,16 +40,8 @@ else
   exec > "$OUT/runner.log" 2>&1
 fi
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # By FULL EXECUTABLE PATH, never the name `osaurus`: `osaurus mcp` is Jason's.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 # A killed runner must not leave a runtime holding a port, so the trap sweeps exactly as a
 # finished run does before it exits; around Osaurus, osaurus-pin.sh's trap also restores settings.
@@ -96,10 +88,10 @@ for r in $RUNTIMES; do
     for kv in $codecs; do
       # Before as well as after: an Osaurus app relaunched between runs must not sit resident
       # through another runtime's cell. The kill is logged.
-      [ "$DRY" = 1 ] || sweep
+      [ "$DRY" = 1 ] || sweep || exit 1
       run_one "$r-t$t-$kv" --study format --cells "oq4__$r=$Q4" --kv-quant "$kv" \
           --prompt-tokens "$t" --results-dir "$OUT/oq4__$r/p$t"
-      [ "$DRY" = 1 ] || sweep
+      [ "$DRY" = 1 ] || sweep || exit 1
     done
   done
   [ "$DRY" = 1 ] || { [ "$r" = osaurus ] && osaurus_restore_check; }

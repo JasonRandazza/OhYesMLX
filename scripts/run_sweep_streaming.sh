@@ -35,16 +35,8 @@ else
   exec > "$OUT/runner.log" 2>&1
 fi
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # By FULL EXECUTABLE PATH, never the name `osaurus`: `osaurus mcp` is Jason's.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 # No Osaurus settings are toggled in this study, so the trap has nothing to put back -- it sweeps
 # so that a killed runner does not leave a runtime holding a port.
@@ -81,10 +73,10 @@ join_sweep() {  # $1 = the swept pin; $2 = the run-dir glob under $OUT; $3 = the
 stream_sweep() {  # $1 = runtime; $2 $3 = the pin's two states, in the order they run
   echo "--- stock4bit__$1: stream-experts $2 $3"
   for state in "$2" "$3"; do
-    [ "$DRY" = 1 ] || sweep
+    [ "$DRY" = 1 ] || sweep || exit 1
     run_one "stock4bit-$1-$state" --study format --cells "stock4bit__$1=$S4" \
         --stream-experts "$state" --results-dir "$OUT/stock4bit__$1"
-    [ "$DRY" = 1 ] || sweep
+    [ "$DRY" = 1 ] || sweep || exit 1
   done
 }
 

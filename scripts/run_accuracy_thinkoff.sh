@@ -55,20 +55,9 @@ fi
 
 osaurus_version() { defaults read "$OSAURUS_PLIST" CFBundleShortVersionString 2>/dev/null || echo unknown; }
 
-sweep() {
-  if [ "$DRY_MODE" = "1" ]; then
-    echo "[DRY RUN] sweep: terminate pids on ports 8081 1337 8100 8080 8000 and stale osaurus app instances (by full path)"
-    return 0
-  fi
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Stale Osaurus apps by FULL executable path, NEVER by the bare name `osaurus`.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY. DRY runs guard the call
+# sites instead, so a dry run still touches nothing.
+. "$(dirname "$0")/sweep.sh"
 
 osaurus_restore() {
   [ -f "$CONF_ORIG" ] || return 0
@@ -76,6 +65,8 @@ osaurus_restore() {
   cp -p "$SERVER_ORIG" "$SERVER"
 }
 
+# ponytail: kept rather than pointed at osaurus-pin.sh -- this pin sets
+# modelIdleResidencyPolicy.seconds only and leaves the host's caches alone.
 osaurus_pin() {
   if [ "$DRY_MODE" = "1" ]; then
     echo "[DRY RUN] osaurus_pin: backup $CONF and $SERVER; pin modelIdleResidencyPolicy.seconds=900"
@@ -127,7 +118,7 @@ vmlx_refusal_probe() {
     return 0
   fi
   echo "=== vMLX refusal probe starting $(date +%H:%M:%S)"
-  sweep
+  [ "$DRY_MODE" = 1 ] || sweep || exit 1
   cmd=$($PY -c "
 import shlex
 from ohyesmlx import runtimes
@@ -154,7 +145,7 @@ print(runtimes.vmlx_served_name('$S4'))")
   } > "$rec" 2>&1
   rm -f "$OUT/.probe-body"
   kill "$pid" 2>/dev/null; sleep 3; kill -9 "$pid" 2>/dev/null
-  sweep
+  [ "$DRY_MODE" = 1 ] || sweep || exit 1
   echo "=== vMLX refusal probe done $(date +%H:%M:%S); see $rec"
 }
 
@@ -182,7 +173,7 @@ osaurus_cell() {
   [ "$v1" = "$RUN_VERSION" ] || { echo "WARNING: osaurus is $v1, run started on $RUN_VERSION -- the arms no longer share a build"; FAILED=1; }
   echo "--- offline re-score $cell think-$arm"
   $PY scripts/rescore_moe_mmlu.py --cell-dir "$cdir" || FAILED=1
-  sweep
+  [ "$DRY_MODE" = 1 ] || sweep || exit 1
 }
 
 echo "=========================================================="
@@ -193,7 +184,7 @@ echo "Osaurus build for every cell: $RUN_VERSION"
 echo "=========================================================="
 
 echo "--- pre-sweep $(date +%H:%M:%S)"
-sweep
+[ "$DRY_MODE" = 1 ] || sweep || exit 1
 
 if [ "$TARGET" = "all" ] || [ "$TARGET" = "probe" ]; then
   vmlx_refusal_probe
@@ -207,7 +198,7 @@ if [ "$TARGET" = "all" ] || [ "$TARGET" = "osaurus" ] || [ "$TARGET" = "on" ]; t
   osaurus_cell "jang2l__osaurus" "$JG" on
   [ "$TARGET" = "on" ] || osaurus_cell "stock4bit__osaurus" "$S4" off
   osaurus_cell "stock4bit__osaurus" "$S4" on
-  sweep
+  [ "$DRY_MODE" = 1 ] || sweep || exit 1
   restore_and_check
   echo ">>> FINISHED Osaurus 2x2 $(date +%H:%M:%S)"
 fi

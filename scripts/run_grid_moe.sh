@@ -20,6 +20,8 @@ OUT=${OUT:-results/grid-moe}
 mkdir -p "$OUT"
 PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 CONF="$HOME/.osaurus/config/server-runtime.json"
 SERVER="$HOME/.osaurus/config/server.json"
 CONF_ORIG="$CONF.grid-moe-orig"
@@ -31,6 +33,8 @@ osaurus_restore() {  # byte-exact, both files; the drift guard is not the check 
   cp -p "$SERVER_ORIG" "$SERVER"
 }
 
+# ponytail: kept rather than pointed at osaurus-pin.sh -- this pin sets
+# modelIdleResidencyPolicy.seconds only and leaves the host's caches alone.
 osaurus_pin() {
   if [ ! -f "$CONF_ORIG" ]; then
     cp -p "$CONF" "$CONF_ORIG"        # byte-exact; the ohyesmlx-backup differs in whitespace
@@ -73,16 +77,8 @@ for r in mlxlm omlx optiq vmlx osaurus; do
   $PY -m ohyesmlx.cli run --study format --cells "$c" --results-dir "$OUT" \
       > "$OUT/log-$r.log" 2>&1
   echo "=== COLUMN $r exit=$? $(date +%H:%M:%S)"
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Osaurus releases its port on `stop` and leaves the app running, so a port sweep misses it
-  # and the leftovers accumulate at ~900 MB each -- three of them, aged 5-7 h, were resident
-  # through both grids on 2026-09-16. Swept by FULL EXECUTABLE PATH, never by the name
-  # `osaurus`: `osaurus mcp` is a long-running user process and must not be touched.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
+  # Sweep between columns: a leaked resident would contend for the memory the next column measures.
+  sweep || exit 1
   # Restore after the sweep: a still-running Osaurus app must be dead before the host's own
   # files go back.
   [ "$r" = osaurus ] && restore_and_check
