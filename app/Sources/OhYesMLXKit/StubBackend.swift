@@ -474,7 +474,11 @@ public enum StubScenario: String, CaseIterable, Sendable {
         return backend
     }
 
-    private static func stubHardware(supported: Bool, diskFreeBytes: Int64 = 43_377_606_656) -> Hardware {
+    private static func stubHardware(
+        supported: Bool,
+        diskFreeBytes: Int64 = 43_377_606_656,
+        diskTotalBytes: Int64? = 994_662_584_320
+    ) -> Hardware {
         Hardware(
             supported: supported,
             unsupportedReason: supported
@@ -489,6 +493,7 @@ public enum StubScenario: String, CaseIterable, Sendable {
             ramBytes: supported ? 68_719_476_736 : 32_000_000_000,
             macos: "27.2.1",
             diskFreeBytes: diskFreeBytes,
+            diskTotalBytes: diskTotalBytes,
             volumes: [Volume(path: "/", freeBytes: diskFreeBytes)],
             modelBudgetBytes: supported ? 49_392_123_904 : 24_000_000_000
         )

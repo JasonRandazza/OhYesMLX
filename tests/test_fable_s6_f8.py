@@ -1,18 +1,19 @@
-"""Fable 5.2 S6-F8: the release promises a zip sha256 that no step produces.
+"""Fable 5.2 S6-F8: the release promises a download sha256 that no step produces.
 
-``docs/release/gatekeeper.md:52`` tells the reader "A sha256 is published next to the zip.
-The release notes list the zip's sha256", and ``:98`` says "the SBOM and sha256 are how you
-check the download".  ``scripts/build_app.sh`` — the only release build — names ``shasum``
-in its header (:8) but never runs it: its last line (:129) prints ``$APP``, ``$ZIP`` and
-``$SBOM`` and computes no digest, and ``scripts/make_sbom.py:128-147`` has no field that
-could tie the SBOM to the zip, the Swift binary or the bundled tree.
+``docs/release/gatekeeper.md`` tells the reader "A sha256 is published next to the disk image.
+The release notes list the image's sha256", and says "the SBOM and sha256 are how you check
+the download".  ``scripts/build_app.sh`` — the only release build — names ``shasum``
+in its header but never runs it: its last line printed ``$APP``, ``$ZIP`` and
+``$SBOM`` and computed no digest, and ``scripts/make_sbom.py:128-147`` has no field that
+could tie the SBOM to the shipped file, the Swift binary or the bundled tree.
 
-The first test is the finding's reproduction and is red on current code.  The second is
-evidence for the finding's other limb — the doc credits the ad-hoc signature with tamper
-evidence (``gatekeeper.md:30-31``) — by showing that any third party can replace a sealed
-file, re-sign ad hoc, and verify again, and that the signature names no developer.  That
-test is green by construction: it demonstrates the property the doc overstates.  Nothing
-here runs ``build_app.sh``, signs the real bundle, starts a server or loads a model.
+Plan 05-14 replaced the zip with ``OhYesMLX-<v>.dmg``; the digest and its ``.sha256`` file
+follow it (AC-1). The first test pins that pair. The second is evidence for the finding's
+other limb — the doc credits the ad-hoc signature with tamper evidence — by showing that any
+third party can replace a sealed file, re-sign ad hoc, and verify again, and that the
+signature names no developer. That test is green by construction: it demonstrates the property
+the doc overstates. Nothing here runs ``build_app.sh``, signs the real bundle, starts a server
+or loads a model.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def test_the_build_produces_the_digest_the_release_doc_promises():
-    """Nothing in the release build computes the zip digest gatekeeper.md says is published."""
+    """The release build computes the shipped image's digest and writes it beside the image."""
     script = BUILD_APP.read_text(encoding="utf-8")
     commands = [
         line.strip()
@@ -51,11 +52,34 @@ def test_the_build_produces_the_digest_the_release_doc_promises():
         if DIGEST_COMMAND.search(line) and not line.lstrip().startswith("#")
     ]
     assert commands, (
-        "scripts/build_app.sh computes no digest: line 8 lists shasum among the tools it "
-        "uses, but no command hashes the zip, and the last line (129) prints only $APP, "
-        "$ZIP and $SBOM. docs/release/gatekeeper.md:52 tells the user a sha256 is published "
-        "next to the zip and :98 says it is how the download is checked."
+        "scripts/build_app.sh computes no digest: docs/release/gatekeeper.md tells the user a "
+        "sha256 is published next to the disk image and that it is how the download is checked."
     )
+    assert ".sha256" in script, (
+        "no step names a .sha256 file, so nothing is written beside the image for the user to "
+        "compare against the value the release notes list"
+    )
+    assert 'DMG="$DIST/OhYesMLX-$VERSION.dmg"' in script, (
+        "the digest must be of the shipped disk image (plan 05-14, AC-1)"
+    )
+    assert '"$DMG.sha256"' in script, "the digest file does not follow the disk image's name"
+    assert "shasum -a 256 \"$DMG\"" in script, "the digest is not taken from the disk image"
+
+
+def test_the_build_writes_a_dmg_and_no_zip():
+    """AC-1: the shipped file is a read-only UDZO image with an /Applications symlink."""
+    script = BUILD_APP.read_text(encoding="utf-8")
+    live = "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert ".zip" not in live, "build_app.sh still writes a zip"
+    assert (
+        "hdiutil create -quiet -volname OhYesMLX -srcfolder \"$STAGE\" -format UDZO" in script
+    ), "the disk image is not made by hdiutil from the staging directory as UDZO"
+    assert 'ln -s /Applications "$STAGE/Applications"' in script, (
+        "the image carries no /Applications symlink, so there is nothing to drag onto"
+    )
+    assert 'ditto "$APP" "$STAGE/OhYesMLX.app"' in script, "the app is not staged into the image"
     assert ".sha256" in script, (
         "no step names a .sha256 file, so nothing is written beside the zip for the user to "
         "compare against the value gatekeeper.md:52 says the release notes list"

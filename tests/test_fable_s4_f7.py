@@ -65,6 +65,7 @@ def a_mac(free_disk):
         ram_bytes=64 * 1024**3,
         macos="15.4",
         disk_free_bytes=free_disk,
+        disk_total_bytes=free_disk,
         volumes=[],
         model_budget_bytes=BUDGET_64_GIB,
     )

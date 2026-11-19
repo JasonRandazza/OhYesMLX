@@ -50,6 +50,7 @@ class Hardware:
     ram_bytes: int
     macos: str
     disk_free_bytes: int
+    disk_total_bytes: int
     volumes: list[dict]
     model_budget_bytes: int
 
@@ -129,19 +130,26 @@ def _volume_paths(root: str = "/Volumes") -> list[str]:
     return paths
 
 
-def free_bytes_at(path: str, disk_usage=None) -> int:
-    """Free bytes on the volume that holds *path*, which need not exist yet.
+def disk_bytes_at(path: str, disk_usage=None) -> tuple[int, int]:
+    """``(free, total)`` bytes on the volume that holds *path*, which need not exist yet.
 
-    The one disk-free definition (S4-F3): the nearest existing ancestor of *path*, resolved
-    through symlinks, asked of ``shutil.disk_usage``, looked up at call time so a test that
-    replaces the module attribute is honoured (*disk_usage* is ``scan``'s own injection).
-    ``scan``'s ``disk_free_bytes`` and both download guards ask this, so the number the
-    screens show is the number the guards use.
+    The one disk-space definition (S4-F3): the nearest existing ancestor of *path*, resolved
+    through symlinks, asked of ``shutil.disk_usage`` once, looked up at call time so a test
+    that replaces the module attribute is honoured (*disk_usage* is ``scan``'s own
+    injection). ``scan``'s ``disk_free_bytes`` and ``disk_total_bytes`` are this call's two
+    halves, and both download guards ask ``free_bytes_at``, which is this function's free
+    half, so the number the screens show is the number the guards use.
     """
     probe = os.path.realpath(path)
     while not os.path.exists(probe) and os.path.dirname(probe) != probe:
         probe = os.path.dirname(probe)
-    return (disk_usage or shutil.disk_usage)(probe).free
+    usage = (disk_usage or shutil.disk_usage)(probe)
+    return usage.free, usage.total
+
+
+def free_bytes_at(path: str, disk_usage=None) -> int:
+    """Free bytes on the volume that holds *path*: ``disk_bytes_at``'s free half."""
+    return disk_bytes_at(path, disk_usage)[0]
 
 
 def scan(
@@ -152,8 +160,9 @@ def scan(
 ) -> Hardware:
     """Describe this Mac through *run* and its volumes through *disk_usage*.
 
-    ``disk_free_bytes`` is the free space of the volume the Hugging Face cache lives on
-    (*cache_dir*, else ``fetch.default_cache_dir()``), not of ``/``.
+    ``disk_free_bytes`` and ``disk_total_bytes`` are the free and total space of the volume
+    the Hugging Face cache lives on (*cache_dir*, else ``fetch.default_cache_dir()``), not of
+    ``/``, and both come from one ``disk_bytes_at`` call.
     """
     from ohyesmlx import fetch  # fetch imports this module; the cycle is broken here
 
@@ -170,9 +179,11 @@ def scan(
     family, tier = _chip_identity(chip)
     supported, reason = _support(chip, ram_bytes)
     try:
-        disk_free_bytes = free_bytes_at(cache_dir or fetch.default_cache_dir(), disk_usage)
+        disk_free_bytes, disk_total_bytes = disk_bytes_at(
+            cache_dir or fetch.default_cache_dir(), disk_usage
+        )
     except OSError:
-        disk_free_bytes = 0
+        disk_free_bytes = disk_total_bytes = 0
     volumes: list[dict] = []
     for path in volume_paths():
         try:
@@ -191,6 +202,7 @@ def scan(
         ram_bytes=ram_bytes,
         macos=macos,
         disk_free_bytes=disk_free_bytes,
+        disk_total_bytes=disk_total_bytes,
         volumes=volumes,
         model_budget_bytes=model_budget(ram_bytes),
     )

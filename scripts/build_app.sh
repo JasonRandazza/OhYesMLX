@@ -1,13 +1,15 @@
 #!/bin/sh
 # Build dist/OhYesMLX.app: the release Swift binary, the pinned python-build-standalone
-# interpreter with the ohyesmlx package in its site-packages, ad-hoc signed inside-out, zipped
-# and recorded in an SBOM (plan 05-06, tasks 1; AC-1..AC-3, AC-7).
+# interpreter with the ohyesmlx package in its site-packages, ad-hoc signed inside-out, put
+# in a read-only disk image with an /Applications symlink beside it, and recorded in an SBOM
+# (plan 05-06, tasks 1; AC-1..AC-3, AC-7; plan 05-14, AC-1).
 #
 #   scripts/build_app.sh
 #
-# Every tool is macOS's own (swift, ditto, codesign, plutil, PlistBuddy, shasum, file) or the
-# interpreter this script fetches, so there is no new dependency. Not notarized and not signed
-# with a Developer ID: D7, no Apple Developer account (docs/release/gatekeeper.md).
+# Every tool is macOS's own (swift, ditto, codesign, plutil, PlistBuddy, shasum, file,
+# hdiutil) or the interpreter this script fetches, so there is no new dependency. Not
+# notarized and not signed with a Developer ID: D7, no Apple Developer account
+# (docs/release/gatekeeper.md).
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -25,9 +27,10 @@ echo "==> the pinned interpreter" >&2
 PYTHON_ROOT=$("$ROOT/scripts/fetch_python_standalone.sh")
 # The fetch unpacks the verified tarball into a fresh directory every run, so the build owns it and
 # deletes it however it exits. Keeping only the tarball cached is what stops a mutated tree from
-# being copied, signed and zipped under the tarball's sha256 (S6-F2).
+# being copied, signed and put in the shipped image under the tarball's sha256 (S6-F2).
 MAXCHOS=""
-trap 'rm -rf "${PYTHON_ROOT:-}"; [ -z "$MAXCHOS" ] || rm -f "$MAXCHOS"' EXIT
+STAGE=""
+trap 'rm -rf "${PYTHON_ROOT:-}"; [ -z "$MAXCHOS" ] || rm -f "$MAXCHOS"; [ -z "$STAGE" ] || rm -rf "$STAGE"' EXIT
 IDENTITY=$("$ROOT/scripts/fetch_python_standalone.sh" --identity)
 RELEASE_TAG=$(printf '%s\n' "$IDENTITY" | sed -n 's/^release=//p')
 INTERPRETER_URL=$(printf '%s\n' "$IDENTITY" | sed -n 's/^url=//p')
@@ -40,7 +43,7 @@ INTERPRETER_SHA256=$(printf '%s\n' "$IDENTITY" | sed -n 's/^sha256=//p')
 VERSION=$(OYMLX_REPO="$ROOT" "$PYTHON_ROOT/bin/python3" -I -B -c \
     'import os, sys; sys.path.insert(0, os.environ["OYMLX_REPO"]); import ohyesmlx; print(ohyesmlx.__version__)')
 [ -n "$VERSION" ] || fail "could not read ohyesmlx.__version__"
-ZIP="$DIST/OhYesMLX-$VERSION.zip"
+DMG="$DIST/OhYesMLX-$VERSION.dmg"
 SBOM="$DIST/OhYesMLX-$VERSION-sbom.json"
 
 echo "==> swift build -c release (OhYesMLX $VERSION)" >&2
@@ -166,17 +169,27 @@ echo "==> SBOM" >&2
 # one: a .pyc written into the bundle breaks it (and P5-6).
 codesign --verify --deep --strict "$APP" || fail "the bundle no longer verifies after the SBOM step"
 
-echo "==> zip" >&2
-rm -f "$ZIP" "$ZIP.sha256"
-ditto -c -k --keepParent "$APP" "$ZIP" || fail "ditto could not write $ZIP"
-[ -f "$ZIP" ] || fail "$ZIP was not written"
+echo "==> disk image" >&2
+# The shipped artifact is a read-only UDZO image holding the app and an /Applications symlink,
+# so the install is a drag from the mounted window (plan 05-14, AC-1). The app is staged rather
+# than pointed at directly: the image must contain exactly these two entries, and the symlink is
+# made by this script, not expected in the tree. `hdiutil` is one of macOS's own tools.
+STAGE=$(mktemp -d -t ohyesmlx-dmg)
+ditto "$APP" "$STAGE/OhYesMLX.app" || fail "could not stage the app"
+ln -s /Applications "$STAGE/Applications" || fail "could not stage the /Applications symlink"
+rm -f "$DMG" "$DMG.sha256"
+hdiutil create -quiet -volname OhYesMLX -srcfolder "$STAGE" -format UDZO -fs HFS+ "$DMG" \
+    || fail "hdiutil could not write $DMG"
+[ -f "$DMG" ] || fail "$DMG was not written"
+rm -rf "$STAGE"
+STAGE=""
 
-# The published digest: gatekeeper.md tells the user a sha256 is published next to the zip and
-# that it, not the ad-hoc signature, is what shows the download is unaltered. It is written here
-# so the value exists at release time instead of being remembered then (S6-F8). `shasum -a 256 -c`
-# reads it from the zip's own directory.
-DIGEST=$(shasum -a 256 "$ZIP" | awk '{print $1}')
-printf '%s  %s\n' "$DIGEST" "$(basename "$ZIP")" > "$ZIP.sha256"
-[ -s "$ZIP.sha256" ] || fail "$ZIP.sha256 was not written"
+# The published digest: gatekeeper.md tells the user a sha256 is published next to the disk
+# image and that it, not the ad-hoc signature, is what shows the download is unaltered. It is
+# written here so the value exists at release time instead of being remembered then (S6-F8).
+# `shasum -a 256 -c` reads it from the image's own directory.
+DIGEST=$(shasum -a 256 "$DMG" | awk '{print $1}')
+printf '%s  %s\n' "$DIGEST" "$(basename "$DMG")" > "$DMG.sha256"
+[ -s "$DMG.sha256" ] || fail "$DMG.sha256 was not written"
 
-printf '%s\n' "$APP" "$ZIP" "$ZIP.sha256" "$SBOM"
+printf '%s\n' "$APP" "$DMG" "$DMG.sha256" "$SBOM"
