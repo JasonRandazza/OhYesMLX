@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [05-13 (plan G) closed 2026-11-18 (`05-13-SUMMARY.md`): sealed bundle (fresh interpreter tree, unchecked-hash walk), check_bundle P5-6 writable-copy half, P5-9 SKIP/whole-token, P5-4 cert vs network, SBOM refuses dirty + bundled digest, `.zip.sha256`, moved-app venv repair, pip --no-cache-dir, smoke runs the bundle. **All Fable fix plans A–G done.** pytest 1646, swift 122, build + check_bundle all PASS. Next: Phase 5 close (Jason's live checks, clean-account smoke, quarantined download, UAT)]
+  ✓        ✓        ✓     [05-14 closed 2026-11-19 (`05-14-SUMMARY.md`): DMG replaces zip, disk meter used/total, Pause, approval-first gatekeeper doc. Live Phase 5 checks: quarantined open PASS, app download/pause/resume PASS, clean-account smoke 21/21 vs the bundle, canaries Osaurus 0.25.33 + vMLX 1.6.84 no effect (vMLX cold load 15–22 s vs ~2.5 s), S5-F2 constant measured. Next: Jason's DMG install + Stop now + sudoers removal, then UAT and PHASE-5-SUMMARY]
 ```
 
 ## Performance Metrics
@@ -76,7 +76,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Issue | Origin | Effort | Revisit |
 |-------|--------|--------|---------|
-| S5-F2 constant: the version probe + lsof time that used to sit inside `cold_load_s`, unmeasured | 05-07 | S | Measure once per runtime in the live Phase 5 checks session (after plan B), after canaries for Osaurus 0.25.33 and vMLX 1.6.84; decides whether a published cold-load ordering could have flipped. Needs Jason's "when" |
+| ~~S5-F2 constant~~ **MEASURED 2026-11-19 (05-14-SUMMARY)**: old cold_load_s overstated ≈1.0–1.8 s mlx-lm/OptiQ, ≈0.3 s Osaurus, ≈0.1 s oMLX/vMLX | 05-07 | S | Remaining: paper audit of published cold-load orderings where mlx-lm/OptiQ sat within ~1.8 s of another engine |
 | README.md needs a full rewrite, including a lineage/acknowledgement section naming LMRE as the predecessor and linking its archived repo (`JasonRandazza/local-model-runtime-evaluation-harness`) | Docs 2026-10-09 | M | Jason's call: address the README as a whole, not piecemeal. The lineage wording to draw on is in the Deep Wiki charter record (`OhYesMLX Charter and Origin - 2026-09-14`) |
 | Disk audit incomplete — two workers hit the turn cap | Phase 2.1 | S | **Disk has tightened: 40 GiB free on 2026-11-13** (was 238 GiB 2026-09-16). Phase 5 needs little (python-build-standalone ~100 MB, Swift build cache); revisit before any model fetch |
 | ~~P5-11: the app cannot offer "Re-download"~~ **DONE 2026-11-18 (05-11)** | Phase 5 | S | `Pick.mismatch_on_disk`: "ours" → Re-download, "foreign" → remove-first line, no button |
@@ -103,11 +103,11 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-18 (Claude Opus 5.5 coordinator)
-Stopped at: 05-13 (plan G) closed and merged to main (local, not pushed); dist/ rebuilt from main, check_bundle all PASS.
-Next action: Phase 5 close — needs Jason's "when": quarantined-download check (docs/release/gatekeeper.md), clean-account smoke against dist/OhYesMLX.app as oymlxtest, live app-UI download + Stop now, Osaurus 0.25.33 / vMLX 1.6.84 canaries + S5-F2 constant; then /paul:verify (UAT) and PHASE-5-SUMMARY.md.
-Resume file: `.paul/phases/v5-onboarding/05-13-SUMMARY.md` (routing and traps: `.paul/HANDOFF.md`)
+Stopped at: 05-14 closed and merged (local, not pushed); live Phase 5 checks mostly done (see 05-14-SUMMARY).
+Next action: Jason installs from dist/OhYesMLX-0.3.0.dmg (drag), checks the disk bar + Pause, runs one Stop now; `sudo rm /etc/sudoers.d/oymlxtest`; then /paul:verify (UAT) and PHASE-5-SUMMARY.md. Optional: RECORD=--record canary to adopt Osaurus 0.25.33 / vMLX 1.6.84 (quiet window).
+Resume file: `.paul/phases/v5-onboarding/05-14-SUMMARY.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
-Osaurus on this host is now 0.25.33 and vMLX 1.6.84 (both untested; checked 2026-11-16 from the app Info.plists).
+Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
 
 ---
