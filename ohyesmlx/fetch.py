@@ -65,6 +65,11 @@ REF_NAME = "main"
 # a server sending more than the catalog size is caught before much of it is buffered.
 CHUNK_SIZE = 256 * 1024
 
+# How often a hashing loop asks `cancel`: every this many chunks, so about 16 MiB at
+# CHUNK_SIZE. A per-chunk check on a 20 GB file is tens of thousands of reads of a flag
+# that changes once; a whole-file check left a cancel on a 20 GB file hanging ~10 s.
+CANCEL_CHECK_CHUNKS = 64
+
 # AC-4: an in-flight progress event is emitted at most once this often on the injected
 # clock, so a fast transfer cannot write one event per chunk (a few GB is tens of thousands
 # of chunks).
@@ -106,6 +111,14 @@ class HostNotAllowed(Exception):
 
 class LedgerError(Exception):
     """The fetch ledger cannot be read, so nothing may be created or removed."""
+
+
+class _Cancelled(Exception):
+    """A hash saw ``cancel()`` turn true and stopped; the caller reports the cancel.
+
+    Not a return value: ``_verify``'s False already means "does not match" and triggers a
+    removal or a repair, so a cancel must not be able to spell itself that way.
+    """
 
 
 @dataclass(frozen=True)
@@ -361,7 +374,8 @@ LOCK_WRITE_WINDOW_S = 10.0
 def _read_lock(path: str):
     """``(pid, identity)`` the lock names, or ``None`` when empty or unparseable.
 
-    A bare integer is the legacy format: a pid with no identity.
+    A bare integer is the legacy format: a pid with no identity. No current code writes it;
+    :func:`_acquire_lock` says what is done with one.
     """
     try:
         with open(path, encoding="utf-8") as handle:
@@ -385,7 +399,12 @@ def _read_lock(path: str):
 def _acquire_lock(path: str) -> bool:
     """Create the lock file, reclaiming one whose owner is gone; False means busy.
 
-    The owner is checked by :func:`runtimes.same_process`, the one liveness definition.
+    The owner is checked by :func:`runtimes.same_process`, the one liveness definition. The
+    legacy bare-pid format (:func:`_read_lock`) has no identity to compare, so a live pid is
+    also read for its argv: a recycled pid belongs to whatever program took it, and only a
+    launcher of this one names ``ohyesmlx`` there (``-m ohyesmlx.cli``, the console script,
+    or the app's bundled ``-m ohyesmlx.cli app``). An argv that cannot be read is busy, and
+    a lock naming this process is held without a read -- its own argv need not name it.
     """
     from ohyesmlx import runtimes
 
@@ -398,7 +417,12 @@ def _acquire_lock(path: str) -> bool:
         except FileExistsError:
             owner = _read_lock(path)
             if owner is not None:
-                if runtimes.same_process(*owner):
+                pid, identity = owner
+                held = runtimes.same_process(pid, identity)
+                if held and identity is None and pid != os.getpid():
+                    current = runtimes._process_identity(pid)
+                    held = current is None or "ohyesmlx" in current[1]
+                if held:
                     return False
             else:
                 try:
@@ -708,24 +732,37 @@ def missing_bytes(model: Model, cache_dir: str | None = None, present=None) -> i
     return total
 
 
-def _sha256_file(path: str) -> str:
-    digest = hashlib.sha256()
+def _file_chunks(path: str, cancel):
+    """Yield *path*'s chunks, raising :class:`_Cancelled` when *cancel* turns true.
+
+    The one place the cancel interval is defined: checked every ``CANCEL_CHECK_CHUNKS``
+    chunks, because a 20 GB file is tens of thousands of chunks and a per-chunk check reads
+    a flag that changes once. One interval at :data:`CHUNK_SIZE` is about 16 MiB, so a
+    cancel during a hash is felt in a fraction of a second rather than after the file.
+    """
     with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
-            digest.update(chunk)
+        for index, chunk in enumerate(iter(lambda: handle.read(CHUNK_SIZE), b"")):
+            if cancel is not None and index % CANCEL_CHECK_CHUNKS == 0 and cancel():
+                raise _Cancelled()
+            yield chunk
+
+
+def _sha256_file(path: str, *, cancel=None) -> str:
+    digest = hashlib.sha256()
+    for chunk in _file_chunks(path, cancel):
+        digest.update(chunk)
     return digest.hexdigest()
 
 
-def _git_blob_sha1(path: str, size: int) -> str:
+def _git_blob_sha1(path: str, size: int, *, cancel=None) -> str:
     """The sha1 a git blob id names: ``sha1("blob <size>\\0" + bytes)``, streamed."""
     digest = hashlib.sha1(b"blob %d\x00" % size)
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
-            digest.update(chunk)
+    for chunk in _file_chunks(path, cancel):
+        digest.update(chunk)
     return digest.hexdigest()
 
 
-def _verify(planned_file: PlannedFile, path: str) -> bool:
+def _verify(planned_file: PlannedFile, path: str, *, cancel=None) -> bool:
     """Whether *path* is the file the catalog pins.
 
     An LFS file is checked by sha256. A non-LFS file's catalog id is a git blob oid -- a
@@ -733,6 +770,9 @@ def _verify(planned_file: PlannedFile, path: str) -> bool:
     recomputing exactly that and comparing it to ``git_oid``. The CDN's ``ETag`` is the xet
     hash rather than the file's (research 2026-10-30 §3.4). This is the one place the two
     verification rules and their rationale live.
+
+    *cancel* is honoured every 64 chunks by raising :class:`_Cancelled`; with none, the
+    answer is the plain True/False.
     """
     try:
         if os.path.getsize(path) != planned_file.size:
@@ -740,8 +780,8 @@ def _verify(planned_file: PlannedFile, path: str) -> bool:
     except OSError:
         return False
     if planned_file.sha256 is not None:
-        return _sha256_file(path) == planned_file.sha256
-    return _git_blob_sha1(path, planned_file.size) == planned_file.git_oid
+        return _sha256_file(path, cancel=cancel) == planned_file.sha256
+    return _git_blob_sha1(path, planned_file.size, cancel=cancel) == planned_file.git_oid
 
 
 def _make_dirs(path: str, created: list[str], stop: str) -> None:
@@ -933,7 +973,12 @@ def _download(
                 path=blob,
             )
         if os.path.exists(blob):
-            verified = os.path.isfile(blob) and _verify(planned_file, blob)  # hashed once
+            try:
+                verified = os.path.isfile(blob) and _verify(  # hashed once
+                    planned_file, blob, cancel=cancel
+                )
+            except _Cancelled:
+                return cancelled()
             if os.path.isfile(blob) and blob in ledgered and not verified:
                 # This app wrote it and it no longer verifies (S4-F14): repair, don't refuse.
                 send("log", f"{blob} no longer matches the catalog; fetching it again")
@@ -1032,7 +1077,12 @@ def _download(
     # --- the files themselves ---
     def finish(planned_file: PlannedFile, incomplete: str) -> bool:
         _flush_path(incomplete)
-        if not _verify(planned_file, incomplete):
+        try:
+            verified = _verify(planned_file, incomplete, cancel=cancel)
+        except _Cancelled:
+            # Before `_remove`: the partial is kept so a resume re-verifies it.
+            return cancelled()
+        if not verified:
             _remove(incomplete)
             checked = "sha256" if planned_file.sha256 is not None else "git_oid"
             return _refuse(
