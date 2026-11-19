@@ -1,0 +1,104 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I have the shape of the work. Let me check the remaining call sites that build `Hardware`, the docs sections, and anything that consumes the build's output.
+
+
+Baseline: `1646 passed, 3 skipped`. Now I'll make the Python change first — one probe helper returning free and total, with `free_bytes_at` delegating so its three callers keep working.
+
+
+Now the Python test call sites for `Hardware(...)`, plus a real check for the new field.
+
+Now a runnable check for the new field: it must be the same volume's total, and both numbers must come from one probe.
+
+Python side is green. Now the DMG in `build_app.sh`.
+
+
+
+
+Now the Swift model. `diskTotalBytes` is `Int64?` and decodes when absent.
+Now `DiskMeter`: used out of total, with the download's remaining bytes as a second segment, hidden when the total is nil.
+
+
+
+
+I'll put the used-bytes arithmetic on `Hardware` so the Swift suite can actually check it, and have the meter read it.
+That edit mangled a line — fixing it.
+
+
+
+
+
+
+The duplicate `used` helpers are now dead (the view uses `hardware.usedBytes`). Removing both.
+
+Now the "Pause" wording (AC-3) and the stub/fixture/tests.
+
+Now the Swift decoding test: assert the new field, and add a case for an old backend that omits it.
+
+
+Now `check_bundle.sh` and its two tests. First, decide the AC-1 question: pointing it at the real DMG means mounting a UDZO image (read-only by construction), but P5-6 needs its *own* writable run plus a read-only mount. Simplest correct route: `--dmg <path>` mounts the released image for the read-only half; otherwise it keeps building its own.
+
+`check_bundle` keeps its own temporary image — the AC permits that, and its UDRO mount is what P5-6 needs. Now the gatekeeper rewrite (AC-4).
+The release-check step 5 is muddled; let me make it clean and ordered.
+Now the two zip-pinning tests. `test_fable_s6_f9.py` asserts `-srcfolder "$APP"` in check_bundle (unchanged) and `.zip` absence (still true). `test_fable_s6_f8.py` should pin the DMG beside the digest.
+
+Now `test_fable_s6_f9.py` — it declares check_bundle's own image is built from the built app, which stays true, but I'll note the DMG substitution decision. Let me check it still holds, then run both.
+
+Now the full Python suite, then the Swift build and tests.
+1649 passed (baseline 1646, +3 new). Now the Swift venv and tests.
+
+
+That's the known flake. Rerunning it alone, as the order says.
+
+
+Failing every time, not intermittently. Let me see whether it's my change at all — it touches the launcher's EOF path, which I didn't edit.
+
+The failing assertion expects the stderr tail in the message; let me read the EOF branch to see whether that's a timing race in the test (stderr read before the 200-line buffer fills).
+The message lacks the stderr tail, so `session.stderrTail` is empty when the EOF branch runs. Let me look at the session's stderr reader to see whether this is a race.
+
+That's the documented flake, and it fails consistently when run alone (no other load to let the stderr drain win). My diff touches no launcher file. Let me rerun the full suite — it passed 123/123 once already.
+Swift: 123 tests, 0 failures on the full run. Now the red-check — revert the `disk_total_bytes` field and watch the new tests fail.
+The field red-check failed with exactly the reported symptom. Now the one-probe rule — make `scan` probe twice and confirm my test catches it.
+Both red-checks reproduce their symptoms. Now the Swift optional-field check: remove `disk_total_bytes` from the fixture and confirm an old backend still decodes (that's my new test's own assertion; it passed). Let me red-check the Swift test by making the field non-optional.
+
+The compile failure came from the stub; let me make the field required *and* compile, so the red lands on the decode.
+The cascade is in the view; a cleaner red-check is to break the key mapping so the total never decodes.
+Red-checks confirmed for the field, the one-probe rule, and Swift decoding. Now confirm the final state is clean and green on both suites.
+The two remaining `zip` hits in `build_app.sh` are comments; one now misdescribes the step. Fixing that, then validating the exact `hdiutil` invocation on a throwaway image in the scratchpad.
+Image validated: read-only HFS mount, app plus `/Applications` symlink, digest computes. Let me confirm no stale `ZIP` references remain and review the final build tail.
+Clean. Now commit on `fix/05-14-t1`.
+
+**Commit `f705a00`** on `fix/05-14-t1`, tree clean.
+
+**Files:** `scripts/build_app.sh` (DMG + `.sha256`, zip step deleted, staging dir removed on exit), `scripts/check_bundle.sh` (unchanged — it keeps its own temporary image; its UDRO mount is what P5-6 needs), `ohyesmlx/hardware.py`, `docs/interfaces/v5-onboarding.md`, `docs/interfaces/v5-app.md`, `docs/release/gatekeeper.md` (rewritten steps + release check), `app/Sources/OhYesMLXKit/Models.swift`, `app/Sources/OhYesMLX/Screens/ModelsView.swift`, `app/Sources/OhYesMLXKit/StubBackend.swift`, fixtures/tests.
+
+**Tests:** pytest **1649 passed, 3 skipped** (baseline 1646 passed, 3 skipped — the +3 are the new hardware checks). Swift: **123 tests, 0 failures**; the known flake `testEOFBefore…StderrTail` failed on one full run and on lone reruns, passed on the second full run — no launcher file is in the diff.
+
+**Test edits outside the design list (all pin the field list or the zip):** `tests/test_server.py` (fixture + key list), `tests/test_recommend.py`, `tests/test_fable_s4_f6.py`, `tests/test_fable_s4_f7.py` (each gained `disk_total_bytes` in a `Hardware(...)`), `tests/test_fable_s6_f8.py` (re-pinned from zip to image), plus Swift `AppModelTests`, `FableS3F10Tests`, `DecodingTests`, `fixtures/hardware.json`.
+
+**Red-checks (each reverted after):** removing `disk_total_bytes` → `AttributeError` in the new test; probing twice instead of once → "one probe must answer both numbers"; a wrong `CodingKey` → decode assertions returned nil.
+
+**Concerns:** I could not run `build_app.sh` or `check_bundle.sh` (forbidden), so the full build and the mounted-image launch are unverified; I validated the exact `hdiutil` invocation separately on a throwaway image (read-only HFS mount, app + `/Applications` symlink present, digest computed). `check_bundle.sh` still builds its own image rather than mounting the release DMG — simple substitution was not enough, since P5-6 also needs a writable copy and a freshly-formatted read-only mount.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     87   10437330   10269952    79451   98.4%   0.103587
+
+== cc-agent: git status ==
+?? .paul/orders/05-14/t1.log
+?? settings.json
