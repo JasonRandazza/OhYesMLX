@@ -1089,7 +1089,7 @@ final class AppModelTests: XCTestCase {
                 break
             case .engines, .enginesConsent, .enginesBusy, .enginesFailed:
                 XCTAssertEqual(model.screen, .engines, scenario.rawValue)
-            case .models:
+            case .models, .modelsExternalCache:
                 XCTAssertEqual(model.screen, .models, scenario.rawValue)
                 XCTAssertFalse(model.downloadedPicks.isEmpty, "the picker has a default")
             case .modelsDownloading, .modelsLowDisk, .modelsMismatch:

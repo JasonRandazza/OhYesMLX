@@ -151,12 +151,28 @@ public final class BackendLauncher: @unchecked Sendable {
         self.otherInstanceRunning = otherInstanceRunning
     }
 
+    /// The one selection of "the other instance": of *pids*, the first that is not *me*.
+    /// Nil when this process is the only one — the other quit in between, or never was.
+    public static func otherPID(
+        among pids: [Int32],
+        me: Int32 = ProcessInfo.processInfo.processIdentifier
+    ) -> Int32? {
+        pids.first { $0 != me }
+    }
+
+    /// The other running process with this app's bundle id; nil without a bundle id or when
+    /// this process is the only one. `anotherInstanceIsRunning` is this answer, asked as a
+    /// question, and the second launch activates the same one.
+    public static func otherInstance() -> NSRunningApplication? {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return nil }
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        guard let pid = otherPID(among: running.map(\.processIdentifier)) else { return nil }
+        return running.first { $0.processIdentifier == pid }
+    }
+
     /// Whether another process with this app's bundle id is running. False without a bundle id.
     public static func anotherInstanceIsRunning() -> Bool {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
-        let me = ProcessInfo.processInfo.processIdentifier
-        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .contains { $0.processIdentifier != me }
+        otherInstance() != nil
     }
 
     public static func defaultAppSupportDirectory() -> URL {

@@ -26,7 +26,7 @@ struct YourMacView: View {
                     LabeledContent("Memory") {
                         Figure("\(Format.memory(hardware.ramBytes)) unified")
                     }
-                    LabeledContent("Free disk") {
+                    LabeledContent(hardware.freeDiskLabel) {
                         Figure(Format.size(hardware.diskFreeBytes))
                     }
                     LabeledContent("macOS") {
