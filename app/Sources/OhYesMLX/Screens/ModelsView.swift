@@ -62,8 +62,11 @@ struct ModelsView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 680)
         .onAppear {
+            openRequestedEvict()
             Task { await model.refreshRecommendations() }
         }
+        .onChange(of: model.evictRequest) { openRequestedEvict() }
+        .onChange(of: model.recommendations) { openRequestedEvict() }
         .sheet(item: $evicting) { pick in
             EvictSheet(pick: pick) {
                 Task { await model.evict(repo: pick.modelID) }
@@ -74,6 +77,13 @@ struct ModelsView: View {
                 DiskMeter(hardware: model.hardware, download: activeDownload)
             }
         }
+    }
+
+    /// Retry of an interrupted evict lands here: the same `evicting` state and sheet the row's
+    /// Remove button opens, and the same gate that button takes, so nothing is evicted without
+    /// the user's confirmation and a greyed Remove is never offered a sheet (S3-F15).
+    private func openRequestedEvict() {
+        if let pick = model.takeEvictRequest() { evicting = pick }
     }
 
     private var activeDownload: DiskMeter.Download? {
@@ -221,7 +231,7 @@ private struct ModelRow: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 Button("Remove…", action: remove)
-                    .disabled(!model.canStartJob)
+                    .disabled(!model.canRemove(pick))
                     .accessibilityHint(Text(model.oneSlotReason ?? ""))
             }
             .layoutPriority(2)
@@ -293,7 +303,7 @@ private struct DiskMeter: View {
         if let hardware {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text("Free disk")
+                    Text(hardware.freeDiskLabel)
                         .foregroundStyle(.secondary)
                     Figure(Format.size(hardware.diskFreeBytes))
                 }
@@ -317,7 +327,8 @@ private struct DiskMeter: View {
     }
 
     private func accessibilityLabel(total: Int64) -> String {
-        var label = "Disk: \(Format.size(hardware?.diskFreeBytes ?? 0)) free of \(Format.size(total))"
+        let disk = hardware?.diskVolumeName.map { "Disk on \($0)" } ?? "Disk"
+        var label = "\(disk): \(Format.size(hardware?.diskFreeBytes ?? 0)) free of \(Format.size(total))"
         if let download {
             label += ", \(Format.size(download.remaining)) needed for \(download.title)"
         }

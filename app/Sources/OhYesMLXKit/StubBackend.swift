@@ -244,6 +244,8 @@ public enum StubScenario: String, CaseIterable, Sendable {
     case backendStopped = "backend-stopped"
     case interrupted
     case models
+    /// `models` with the cache on another volume, so the meter's label names it (055-02 AC-3).
+    case modelsExternalCache = "models-external-cache"
     case modelsDownloading = "models-downloading"
     case modelsLowDisk = "models-low-disk"
     case benchmarkPlan = "benchmark-plan"
@@ -332,6 +334,11 @@ public enum StubScenario: String, CaseIterable, Sendable {
         if self == .modelsLowDisk {
             // The refusal's numbers are the payload's; the disk the meter re-reads is this one.
             backend.setHardware(Self.stubHardware(supported: true, diskFreeBytes: 39_000_000_000))
+        }
+        if self == .modelsExternalCache {
+            backend.setHardware(
+                Self.stubHardware(supported: true, diskVolume: "/Volumes/Storage")
+            )
         }
         if self == .couldntStart {
             backend.setError(
@@ -477,7 +484,8 @@ public enum StubScenario: String, CaseIterable, Sendable {
     private static func stubHardware(
         supported: Bool,
         diskFreeBytes: Int64 = 43_377_606_656,
-        diskTotalBytes: Int64? = 994_662_584_320
+        diskTotalBytes: Int64? = 994_662_584_320,
+        diskVolume: String? = nil
     ) -> Hardware {
         Hardware(
             supported: supported,
@@ -494,8 +502,10 @@ public enum StubScenario: String, CaseIterable, Sendable {
             macos: "27.2.1",
             diskFreeBytes: diskFreeBytes,
             diskTotalBytes: diskTotalBytes,
-            volumes: [Volume(path: "/", freeBytes: diskFreeBytes)],
-            modelBudgetBytes: supported ? 49_392_123_904 : 24_000_000_000
+            volumes: [Volume(path: "/", freeBytes: diskFreeBytes)]
+                + (diskVolume.map { [Volume(path: $0, freeBytes: diskFreeBytes)] } ?? []),
+            modelBudgetBytes: supported ? 49_392_123_904 : 24_000_000_000,
+            diskVolume: diskVolume
         )
     }
 
@@ -998,7 +1008,7 @@ extension StubScenario {
             model.installConsent = false
         case .interrupted:
             model.go(to: .yourMac)
-        case .models:
+        case .models, .modelsExternalCache:
             model.go(to: .models)
         case .modelsDownloading:
             model.go(to: .models)

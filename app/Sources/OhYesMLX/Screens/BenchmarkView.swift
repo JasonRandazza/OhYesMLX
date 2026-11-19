@@ -200,7 +200,7 @@ struct BenchmarkView: View {
             LabeledContent("Downloads") {
                 Figure(Format.size(plan.downloadBytes))
             }
-            LabeledContent("Free disk after") {
+            LabeledContent("\(model.hardware?.freeDiskLabel ?? Hardware.startupDiskLabel) after") {
                 HStack(spacing: 6) {
                     Figure(Format.size(plan.freeAfterBytes))
                     Badge("estimated")

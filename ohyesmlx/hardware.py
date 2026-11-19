@@ -53,6 +53,9 @@ class Hardware:
     disk_total_bytes: int
     volumes: list[dict]
     model_budget_bytes: int
+    # The mount point of the volume the disk figures measure, or None when the probe failed.
+    # Last and defaulted so a constructor that predates it still builds (plan 055-02, AC-3).
+    disk_volume: str | None = None
 
 
 def _run(argv: list[str]) -> str:
@@ -130,19 +133,44 @@ def _volume_paths(root: str = "/Volumes") -> list[str]:
     return paths
 
 
-def disk_bytes_at(path: str, disk_usage=None) -> tuple[int, int]:
-    """``(free, total)`` bytes on the volume that holds *path*, which need not exist yet.
+def _existing_ancestor(path: str) -> str:
+    """The nearest ancestor of *path* that exists, symlinks resolved: the one disk probe path.
 
-    The one disk-space definition (S4-F3): the nearest existing ancestor of *path*, resolved
-    through symlinks, asked of ``shutil.disk_usage`` once, looked up at call time so a test
-    that replaces the module attribute is honoured (*disk_usage* is ``scan``'s own
-    injection). ``scan``'s ``disk_free_bytes`` and ``disk_total_bytes`` are this call's two
-    halves, and both download guards ask ``free_bytes_at``, which is this function's free
-    half, so the number the screens show is the number the guards use.
+    ``disk_bytes_at`` and ``_volume_mount_point`` both start here: *path* (the cache) need not
+    exist yet, and ``realpath`` makes the answer the same however it is spelled.
     """
     probe = os.path.realpath(path)
     while not os.path.exists(probe) and os.path.dirname(probe) != probe:
         probe = os.path.dirname(probe)
+    return probe
+
+
+def _volume_mount_point(path: str, ismount=None) -> str:
+    """The mount point of the volume that holds *path*, which need not exist yet.
+
+    The probe is ``disk_bytes_at``'s, walked up to the first ``os.path.ismount`` directory, so
+    the volume named here is the one whose free bytes that call reports. ``/`` is the last
+    answer and the startup disk's own. *ismount* is looked up at call time, like ``disk_usage``,
+    so a test can inject it.
+    """
+    ismount = ismount or os.path.ismount
+    probe = _existing_ancestor(path)
+    while not ismount(probe) and os.path.dirname(probe) != probe:
+        probe = os.path.dirname(probe)
+    return probe
+
+
+def disk_bytes_at(path: str, disk_usage=None) -> tuple[int, int]:
+    """``(free, total)`` bytes on the volume that holds *path*, which need not exist yet.
+
+    The one disk-space definition (S4-F3): the nearest existing ancestor of *path*
+    (``_existing_ancestor``), asked of ``shutil.disk_usage`` once, looked up at call time so a
+    test that replaces the module attribute is honoured (*disk_usage* is ``scan``'s own
+    injection). ``scan``'s ``disk_free_bytes`` and ``disk_total_bytes`` are this call's two
+    halves, and both download guards ask ``free_bytes_at``, which is this function's free
+    half, so the number the screens show is the number the guards use.
+    """
+    probe = _existing_ancestor(path)
     usage = (disk_usage or shutil.disk_usage)(probe)
     return usage.free, usage.total
 
@@ -162,11 +190,13 @@ def scan(
 
     ``disk_free_bytes`` and ``disk_total_bytes`` are the free and total space of the volume
     the Hugging Face cache lives on (*cache_dir*, else ``fetch.default_cache_dir()``), not of
-    ``/``, and both come from one ``disk_bytes_at`` call.
+    ``/``, and both come from one ``disk_bytes_at`` call. ``disk_volume`` is that volume's
+    mount point, or ``None`` when the probe failed.
     """
     from ohyesmlx import fetch  # fetch imports this module; the cycle is broken here
 
     disk_usage = disk_usage or shutil.disk_usage
+    cache = cache_dir or fetch.default_cache_dir()
 
     chip = run([SYSCTL, "-n", "machdep.cpu.brand_string"])
     ram_bytes = int(run([SYSCTL, "-n", "hw.memsize"]))
@@ -179,11 +209,11 @@ def scan(
     family, tier = _chip_identity(chip)
     supported, reason = _support(chip, ram_bytes)
     try:
-        disk_free_bytes, disk_total_bytes = disk_bytes_at(
-            cache_dir or fetch.default_cache_dir(), disk_usage
-        )
+        disk_free_bytes, disk_total_bytes = disk_bytes_at(cache, disk_usage)
+        disk_volume = _volume_mount_point(cache)
     except OSError:
         disk_free_bytes = disk_total_bytes = 0
+        disk_volume = None
     volumes: list[dict] = []
     for path in volume_paths():
         try:
@@ -205,4 +235,5 @@ def scan(
         disk_total_bytes=disk_total_bytes,
         volumes=volumes,
         model_budget_bytes=model_budget(ram_bytes),
+        disk_volume=disk_volume,
     )

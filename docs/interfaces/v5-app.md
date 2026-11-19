@@ -122,7 +122,10 @@ second segment, and hides the bar when the total is nil while still reading "Fre
 `GET /quickbench/plan` carries `free_after_bytes` (that volume's free bytes minus `download_bytes`, floored at 0),
 which Benchmark shows as "Free disk after"; the client does no disk arithmetic. `download_bytes` there counts only
 what is still to fetch (a partial sibling counts its remainder). `AppModel` re-reads `hardware()` beside
-`recommendations()` when a download or evict job ends.
+`recommendations()` when a download or evict job ends. `Hardware.diskVolume` (optional, key `disk_volume`) names that
+volume, and `Hardware.freeDiskLabel` is the one label text: absent or `/` reads exactly as before ("Free disk",
+"Free disk after"), another volume reads "Free disk on Storage" and the meter's accessibility text names it too
+(plan 055-02, AC-3).
 
 ## The app model (`AppModel`, plan 05-02; screens in 05-04/05-05)
 

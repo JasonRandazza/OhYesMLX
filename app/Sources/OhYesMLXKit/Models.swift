@@ -124,6 +124,9 @@ public struct Hardware: Codable, Sendable, Equatable {
     public let diskTotalBytes: Int64?
     public let volumes: [Volume]
     public let modelBudgetBytes: Int64
+    /// The mount point of the volume `diskFreeBytes` measures; nil when the probe failed, so a
+    /// broken probe never names a volume it did not read.
+    public let diskVolume: String?
 
     enum CodingKeys: String, CodingKey {
         case supported
@@ -139,6 +142,7 @@ public struct Hardware: Codable, Sendable, Equatable {
         case diskTotalBytes = "disk_total_bytes"
         case volumes
         case modelBudgetBytes = "model_budget_bytes"
+        case diskVolume = "disk_volume"
     }
 
     public init(
@@ -154,7 +158,8 @@ public struct Hardware: Codable, Sendable, Equatable {
         diskFreeBytes: Int64,
         diskTotalBytes: Int64?,
         volumes: [Volume],
-        modelBudgetBytes: Int64
+        modelBudgetBytes: Int64,
+        diskVolume: String? = nil
     ) {
         self.supported = supported
         self.unsupportedReason = unsupportedReason
@@ -169,6 +174,7 @@ public struct Hardware: Codable, Sendable, Equatable {
         self.diskTotalBytes = diskTotalBytes
         self.volumes = volumes
         self.modelBudgetBytes = modelBudgetBytes
+        self.diskVolume = diskVolume
     }
 
     /// Bytes in use on the measured volume, or nil when the backend sent no total.
@@ -178,6 +184,24 @@ public struct Hardware: Codable, Sendable, Equatable {
     public var usedBytes: Int64? {
         guard let diskTotalBytes else { return nil }
         return min(diskTotalBytes, max(0, diskTotalBytes - diskFreeBytes))
+    }
+
+    /// The volume's name for a label: "Storage" for "/Volumes/Storage", nil for the startup
+    /// disk ("/" or absent), which is every label's unchanged case.
+    public var diskVolumeName: String? {
+        guard let diskVolume, diskVolume != "/" else { return nil }
+        return URL(fileURLWithPath: diskVolume).lastPathComponent
+    }
+
+    /// The label text when there is no other volume to name: the startup disk's, and a Mac
+    /// whose hardware has not been read yet.
+    public static let startupDiskLabel = "Free disk"
+
+    /// The one definition of the "Free disk" label: `diskFreeBytes` is the cache volume's,
+    /// so the label names that volume when it is not the startup disk.
+    public var freeDiskLabel: String {
+        guard let name = diskVolumeName else { return Self.startupDiskLabel }
+        return "Free disk on \(name)"
     }
 }
 

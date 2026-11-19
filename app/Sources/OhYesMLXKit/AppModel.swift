@@ -184,8 +184,10 @@ public final class AppModel {
     public private(set) var shouldExit = false
 
     /// Retry's hand-off to the screens that own a gate: the Engines screen opens its consent
-    /// sheet for this engine, and the Benchmark screen shows this repo's plan. Never a start.
+    /// sheet for this engine, the Models screen opens its remove sheet for this repo, and the
+    /// Benchmark screen shows this repo's plan. Never a start.
     public var consentRequest: String?
+    public var evictRequest: String?
     public var requestedBenchmarkRepo: String?
 
     public var installConsent = false
@@ -286,6 +288,31 @@ public final class AppModel {
 
     public var canStartJob: Bool {
         oneSlotReason == nil
+    }
+
+    /// Whether the row offers Remove, and so whether an evict request may open its sheet: the
+    /// model is on disk and the one job slot is free. The row's button and Retry both ask this.
+    public func canRemove(_ pick: Pick) -> Bool {
+        pick.downloaded && canStartJob
+    }
+
+    /// The pick an evict request names, out of the picks on screen; nil when it is no longer
+    /// there (the model left the disk).
+    public static func requestedEvictPick(_ request: String?, in picks: [Pick]) -> Pick? {
+        guard let request else { return nil }
+        return picks.first { $0.modelID == request }
+    }
+
+    /// The pick an evict request opens the remove sheet for, taken once by ModelsView. Until the
+    /// picks have loaded the request waits (Retry can land before them); once they have, it is
+    /// cleared, and a pick no longer listed, or one Remove would refuse, opens nothing.
+    public func takeEvictRequest() -> Pick? {
+        guard let request = evictRequest, recommendations != nil else { return nil }
+        evictRequest = nil
+        guard let pick = Self.requestedEvictPick(request, in: recommendations?.picks ?? []),
+              canRemove(pick)
+        else { return nil }
+        return pick
     }
 
     public var notEvictedLines: [String] {
@@ -613,6 +640,7 @@ public final class AppModel {
         case .download:
             await start(.download(repo: interrupted.name))
         case .evict:
+            evictRequest = interrupted.name
             go(to: .models)
         case .quickbench:
             if downloadedPicks.contains(where: { $0.modelID == interrupted.name }) {

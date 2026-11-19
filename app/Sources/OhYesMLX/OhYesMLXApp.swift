@@ -39,12 +39,7 @@ struct OhYesMLXApp: App {
                 }
                 .onChange(of: model.alreadyRunning) { _, already in
                     guard already else { return }
-                    if let bundleID = Bundle.main.bundleIdentifier {
-                        NSRunningApplication
-                            .runningApplications(withBundleIdentifier: bundleID)
-                            .first?
-                            .activate()
-                    }
+                    BackendLauncher.otherInstance()?.activate()
                     NSApp.terminate(nil)
                 }
         }
