@@ -817,6 +817,13 @@ Osaurus reaches first token **1.6–2.6x sooner than vMLX** on all ten cell pair
 4.03 against 8.29 in the primary; `stock4bit` 4.81 against 8.31). Ranking on `cold_load_s` alone
 would name Osaurus 5.5–6.3x the faster loader, which is a time-to-listening, not a cold start.
 
+> **Correction (2026-11-19, S5-F2):** the `cold_load_s` figures carry the engine's version
+> probe, which sat inside the timed window until plan 05-07. Corrected, ranking on
+> `cold_load_s` alone would name Osaurus **6.7–8.3×** the faster loader, not 5.5–6.3x. The
+> argument strengthens: the gap widens, and the sum remains the figure to use — Osaurus 0.96
+> and vMLX 7.02 are the corrected load levels.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §4.1.
+
 ### 7.3 Storage economics, and where the trade lands
 
 The campaign's five MoE artifacts total **23,307,610,790 B (21.71 GiB / 23.31 GB)**, of which

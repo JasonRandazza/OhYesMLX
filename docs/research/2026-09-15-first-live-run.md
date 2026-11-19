@@ -39,6 +39,12 @@ of every future runtime-axis run depends on it.
 | `oq4__mlxlm` | mlxlm | FAIL | 0/5 | 3.48 | 19,456 | 0.31.3 | still thinking: no content within max_tokens |
 | `oq4__omlx` | omlx | FAIL | 0/5 | 3.11 | 119 | 0.6.4 | 5 of 5 measured requests failed; first: chat request returned HTTP 401 |
 
+> **Correction (2026-11-19, S5-F2):** the cold-load column above includes the engine's version
+> probe, which plan 05-07 moved out of the timed window. Corrected, the two rows read mlx-lm
+> 1.65–2.47 and oMLX 2.96–3.00, so the published oMLX 3.11 s < mlx-lm 3.48 s inverts at both
+> bounds. The rows' FAIL verdicts are untouched — they turn on coherence, not on load time.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.4.
+
 Not one published metric was produced. The harness is nonetheless the thing that worked here:
 it started both runtimes, waited on the log rather than the port, sampled memory at 1 Hz for
 26.7 s and 24 samples, recorded `phys_footprint`, read the artifact's size on disk, captured
@@ -51,6 +57,11 @@ Two things the run proves in passing and that were previously only assumed: the 
 resident cost really is about 19.5 GB against 64 GiB of unified memory. Both numbers are from
 the run record, and both hold regardless of the coherence verdict, because they are measured
 before any token is generated.
+
+> **Correction (2026-11-19, S5-F2):** "about three and a half seconds" is really about
+> 1.6–2.5 s. The observation that the number is measured before any token is generated still
+> holds; its size does not, because the timed window included the engine's version probe.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.4.
 
 ## Defect 1 — `transport.py` reads the wrong field name for reasoning deltas
 

@@ -14,6 +14,15 @@ Plan 03-02 isolates how storage I/O, macOS page cache state, and Metal memory ac
 1. **Hypothesis 1 Confirmed (APFS Storage I/O Bounds Cold Load to ~5.4 GB/s):**
    At verified 0.00% buffer cache residency (completely cold APFS storage read), loading 19.00 GiB of weights requires **5.61 s** in `mlxlm`. Once resident in the macOS unified buffer cache (>99.9% cache), reloading drops to **2.09 s** — a **2.68× speedup**. Storage I/O from Apple Silicon internal NVMe accounts for 3.52 s of cold startup time, demonstrating real-world sustained sequential read throughput of **5.40 GB/s**.
 
+   > **Correction (2026-11-19, S5-F2) — flagged, not corrected:** `cold_load_s` included the
+   > engine's version probe until plan 05-07, and these two readings are one engine at two
+   > cache states, so the probe nearly cancels. If the cold start paid the cold-first-call
+   > probe and the warm reload the warm one, the denominator is 2.70–3.52 s, i.e.
+   > **5.40–7.04 GB/s**, and the printed 2.68× and 1.91× reload speedups become **4.06×** and
+   > **2.65×** at the warm bound. Deciding it needs the two starts' actual probe times, which
+   > were not recorded per start.
+   > See docs/research/2026-11-19-cold-load-ordering-audit.md §4.3.
+
 2. **Hypothesis 2 Confirmed (The Lazy Loading Penalty Inverts Cold-Load Rankings at 35B):**
    `cold_load_s` alone (time from spawn to port readiness) severely distorts runtime comparison:
    - `omlx` reports a 2.17 s startup, but hides **+4.92 s** inside Request #1 (5.28 s vs 0.36 s steady state).
@@ -21,6 +30,15 @@ Plan 03-02 isolates how storage I/O, macOS page cache state, and Metal memory ac
    - In contrast, `mlxlm` and `vmlx` are eager loaders with minimal first-request deltas (**+0.34 s** and **+0.27 s**).
    - Evaluating **True Time to First Output** ($t_{\text{ready}} + t_{\text{req1}}$) completely inverts the startup ranking:
      `osaurus` (3.42 s) > `mlxlm` (4.64 s) > `omlx` (7.45 s) > `vmlx` (8.66 s) > `optiq` (12.44 s).
+
+   > **Correction (2026-11-19, S5-F2):** only the `t_ready` half of each figure is
+   > probe-contaminated (`first_request_s` is a request latency the probe never touched), so
+   > the correction is smaller than elsewhere, but the leading pair is inside it. Corrected,
+   > the figures read osaurus 3.11, mlx-lm 2.81–3.63, oMLX 7.30–7.34, vMLX 8.59, optiq
+   > 10.68–11.41: at the cold bound mlx-lm's true cost is 2.81 s against Osaurus's 3.11 s, so
+   > the ranking no longer inverts at all — Osaurus is first to ready and second to first
+   > token. Warm, Osaurus stays first. The next three positions are unaffected.
+   > See docs/research/2026-11-19-cold-load-ordering-audit.md §3.8.
 
 3. **Hypothesis 3 Confirmed (Metal Region Dissection of the 0.74× Osaurus Footprint Gap):**
    In Plan 03-01, Osaurus reported 12.3–15.4 GB peak footprint against 19.5–27.6 GB for other runtimes. Detailed `vmmap` per-region accounting settles the mechanism:
@@ -51,10 +69,28 @@ Plan 03-02 isolates how storage I/O, macOS page cache state, and Metal memory ac
 | **`vmlx`** | 8.08 s *(9.09 s @ 66% cache)* | 0.58 s | 0.32 s | **+0.27 s** | **8.66 s** | 7.07 s | **1.14×** |
 | **`osaurus`** | 1.39 s | 2.03 s | 0.25 s | **+1.78 s** | **3.42 s** | 1.26 s | **1.10×** |
 
+> **Correction (2026-11-19, S5-F2):** the Cold Startup ($t_{\text{ready}}$) column includes
+> the engine's version probe, which sat inside the timed window until plan 05-07. Corrected,
+> it reads osaurus 1.08, oMLX 2.02–2.06, optiq 1.52–2.25, mlx-lm 2.16–2.98, vMLX 8.01. The
+> published order `osaurus < omlx < optiq < mlxlm < vmlx` is a strict ordering that does not
+> exist: at the warm bound it is `osaurus < optiq < omlx < mlxlm < vmlx`, and at the cold
+> bound `osaurus < optiq < omlx` becomes `osaurus < optiq`, with oMLX dropping behind optiq
+> by half a second. Either way oMLX is not second-fastest; it is third. The request-latency
+> and true-cost columns are not load figures and are unaffected except through their
+> $t_{\text{ready}}$ term.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.7.
+
 ### 2.3 Key Observations
 - **True Storage Throughput:** The difference between `mlxlm`'s verified cold start (5.61 s at 0.00% cache) and warm reload (2.09 s at 100.0% cache) is **3.52 s**. Dividing 19.00 GiB by 3.52 s yields **5.40 GB/s**, matching the peak sequential read capability of the Apple internal APFS SSD.
 - **oMLX Deferred Initialization:** Even on a warm OS page cache (90.9% resident), oMLX takes **5.93 s** on Request #1. This confirms that oMLX does not touch or instantiate the weight graph during `omlx serve`, deferring tensor loading to the first HTTP request.
 - **OptiQ JIT Compilation Spike:** OptiQ takes 9.16 s to 14.36 s on Request #1 before dropping to an ultra-fast 0.24 s on Request #2. This 9–14 s spike is one-shot Metal kernel compilation for the 35B MoE routed graph.
+
+> **Correction (2026-11-19, S5-F2) — flagged, not corrected:** the 5.40 GB/s above is the same
+> derivation as in §1, and it rests on a `cold_load_s` subtraction between two starts. If the
+> cold start paid the cold-first-call probe and the warm reload the warm one, the denominator
+> is 2.70–3.52 s, i.e. **5.40–7.04 GB/s**, and the printed speedups become **4.06×** and
+> **2.65×** at the warm bound.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §4.3.
 
 ---
 

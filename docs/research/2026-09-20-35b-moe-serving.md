@@ -64,6 +64,14 @@ Prior to running the grid, all 20 combinations (4 formats × 5 runtimes) were ev
 | `oq4` | **LOADS** (4.4s, 23 deltas) | **LOADS** (2.2s, 3 deltas) | **LOADS** (3.3s, 1 delta) | **LOADS** (10.1s, 24 deltas) | **LOADS** (1.4s, 16 deltas) |
 | `jangtq4` | **Refused** (360 missing params) | **Refused** (HTTP 409) | **Refused** (request timed out) | **LOADS** (12.1s, 24 deltas) | **Refused** (stream produced no content) |
 
+> **Correction (2026-11-19, S5-F2):** the probe seconds above include the engine's version
+> probe, which sat inside the timed window until plan 05-07. Corrected, the `stock4bit` row
+> reads osaurus 1.13, oMLX 2.94–2.98, optiq 1.49–2.22, mlx-lm 2.17–2.99, vMLX 10.02. A
+> 0.16 s claim becomes a 0.76–1.45 s lead the other way: optiq loaded faster than oMLX on
+> this artifact, and the published row says the opposite. The `LOADS`/`Refused` verdicts are
+> untouched — only the seconds move.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.9.
+
 **Probe Discoveries:**
 - **Vision Tower Compatibility:** vMLX successfully loaded and served `optiq` in 11.1s, confirming that multimodal vision tower tensors did not cause parameter-rejection crashes on this model.
 - **JANGTQ Loader Restriction:** JANGTQ4 was refused by mlx-lm (unsupported tensor parameters), oMLX (HTTP 409), OptiQ (server hang), and Osaurus (empty stream). Only vMLX contains the native `mxtq` kernel loader.
@@ -191,6 +199,15 @@ Both passes clear the pre-registered 2.5% tie band (`R-tie` passed), confirming 
 | **Fastest Cold Load** | **`stock4bit` in `osaurus`** | **2.67s** cold load; 14.3 GB reported footprint | Rapid startup from native Swift loader. |
 | **Configurations to Avoid** | **`optiq` (any runtime)** | 24.69 GB disk; slowest decode; highest RAM | Strictly Pareto-dominated across all frontiers. |
 | **Configurations to Avoid** | **`jangtq4` outside `vmlx`** | Refused / Crash / Hang | Unsupported by mlx-lm, oMLX, OptiQ, and Osaurus. |
+
+> **Correction (2026-11-19, S5-F2):** the "Fastest Cold Load" row's seconds include the
+> engine's version probe, which sat inside the timed window until plan 05-07. Corrected, the
+> grid reads osaurus 2.36, oMLX 2.99–3.03, optiq 1.56–2.29, mlx-lm 1.75–2.57, vMLX 10.04.
+> **The recommendation holds.** `stock4bit` in `osaurus` stays the fastest cold load at
+> 2.36 s against 2.99–3.03 s for the next engine, and its margin widens. The interior order
+> `omlx < optiq < mlxlm` does not: corrected, optiq is third-fastest ahead of oMLX. Since the
+> recommendation names only the winner, no recommendation in this section changes.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.10.
 
 ---
 

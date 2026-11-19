@@ -16,6 +16,14 @@ the guesses were wrong.
 | oQ4e | ✓ 3.83 s | ✓ 2.12 s | ✓ 3.24 s | ✓ 16.10 s | ⚠ port held |
 | OptiQ-4bit | ✓ 3.87 s | ✓ 2.17 s | ✓ 3.21 s | ✗ **refused** | ⚠ port held |
 
+> **Correction (2026-11-19, S5-F2):** the `stock-4bit` row's cold loads are overstated by the
+> engine's version probe, which sat inside the timed window until plan 05-07. Corrected, the
+> four cells are mlx-lm 2.18–3.00, oMLX 2.96–3.00, optiq 2.44–3.17, vMLX 18.06: oMLX and
+> mlx-lm are exactly level at the warm bound, and mlx-lm is ahead at the cold bound, so the
+> published oMLX 3.11 s < mlx-lm 4.01 s is "only at cold bound" — it inverts cold and ties
+> warm.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.2.
+
 **15 live cells of 20 probed.** Every cell marked ✓ loaded the artifact and returned coherent
 text. The grid is far denser than predicted.
 
@@ -92,8 +100,11 @@ cannot read OptiQ", which is false.
 > `2026-09-15-cold-load-is-not-one-quantity.md`. oMLX loads its weights lazily on the first
 > request, so its `cold_load_s` is a time-to-listening, not a load time, and it hides
 > 3.08-3.85 s in request #1. True time-to-first-token puts mlx-lm first at 3.39 s and oMLX
-> third at 6.63 s — the runtime named fastest below is second slowest. The figures in the
-> table are accurate as `cold_load_s`; the comparison drawn from them is not.
+> third at 6.63 s — the runtime named fastest below is second slowest. ~~The figures in the
+> table are accurate as `cold_load_s`; the comparison drawn from them is not.~~
+> **Amended 2026-11-19 (S5-F2):** the struck sentence no longer holds — the figures are not
+> accurate as `cold_load_s` either, because the timed window included the engine's version
+> probe. See the correction note under the table below.
 
 The first genuinely comparable figure this project has produced. Each runtime loaded the same
 four artifacts; the runtime is the only thing that varies within a column.
@@ -109,6 +120,14 @@ vMLX is **7.4× slower to load** than oMLX, consistently, across three different
 (18.13 / 16.13 / 16.10 s). This is a load-time figure only and says nothing about throughput —
 a runtime that starts slowly may still generate fastest, which is exactly why the grid reports
 cold load as its own column rather than folding it into a score.
+
+> **Correction (2026-11-19, S5-F2):** the median table above and its 7.4× ratio both move.
+> Corrected, the four runtimes sit at oMLX 2.03–2.07, optiq 1.47–2.20, mlx-lm 2.02–2.84,
+> vMLX 16.06, and the ratio becomes 7.5–7.9× — the sentence understates the gap. oMLX and
+> optiq invert at the cold bound: even as a time-to-listening column the order is
+> `optiq < mlx-lm < oMLX < vMLX` at the cold bound and `oMLX < optiq < mlx-lm < vMLX` warm,
+> and the oMLX-vs-optiq position is not resolvable from these numbers.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.1.
 
 ## Four runtimes, four output conventions, one model
 

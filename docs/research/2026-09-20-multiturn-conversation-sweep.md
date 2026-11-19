@@ -89,6 +89,14 @@ In conversational applications, LLM serving does not operate on independent sing
 | **Peak Memory Footprint** | 19.46 GB | 20.48 GB | 19.46 GB | 20.48 GB | **14.34 GB** |
 | **Coherence Pass Rate** | **100% (10/10)** | **100% (10/10)** | **100% (10/10)** | **100% (10/10)** | **100% (10/10)** |
 
+> **Correction (2026-11-19, S5-F2):** the "Startup / Cold Load Time" row includes the
+> engine's version probe, which sat inside the timed window until plan 05-07. Corrected, it
+> reads mlx-lm 0.31–1.20, osaurus 2.35, oMLX 2.95–2.99, optiq 1.54–2.34, vMLX 8.05. The
+> published order `mlx-lm < osaurus < oMLX < optiq < vMLX` becomes
+> `mlx-lm < optiq < osaurus < oMLX < vMLX` — optiq is faster than oMLX, and the two leading
+> pairs hold. Every other row of this table is unaffected.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.6.
+
 ---
 
 ## 3. Analysis & Hypothesis Evaluation
