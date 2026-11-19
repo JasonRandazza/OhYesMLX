@@ -17,9 +17,24 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(hardware.gpuCores, 30)
         XCTAssertEqual(ram, 68_719_476_736)
         XCTAssertEqual(disk, 43_377_606_656)
+        XCTAssertEqual(hardware.diskTotalBytes, 994_662_584_320)
+        XCTAssertEqual(hardware.usedBytes, 994_662_584_320 - 43_377_606_656)
         XCTAssertEqual(budget, 49_392_123_904)
         XCTAssertEqual(hardware.macos, "27.2.1")
         XCTAssertEqual(hardware.volumes, [Volume(path: "/", freeBytes: 43_377_606_656)])
+    }
+
+    func testHardwareWithoutDiskTotalStillDecodesAndDrawsNoBar() throws {
+        let json = try Fixtures.text("hardware.json")
+        let withoutTotal = json
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.contains("\"disk_total_bytes\"") }
+            .joined(separator: "\n")
+        let hardware = try JSONDecoder().decode(Hardware.self, from: Data(withoutTotal.utf8))
+
+        XCTAssertNil(hardware.diskTotalBytes, "an old backend sends no total")
+        XCTAssertNil(hardware.usedBytes, "no total means no used figure and no bar")
+        XCTAssertEqual(hardware.diskFreeBytes, 43_377_606_656)
     }
 
     func testEngineStatusDecodes() throws {

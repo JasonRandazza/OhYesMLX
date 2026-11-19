@@ -11,9 +11,10 @@ sizes in bytes, no floats for byte counts.
 **`Hardware`** (`hardware.scan(run=...) -> Hardware`; `GET /hardware`)
 `{"supported": bool, "unsupported_reason": str|null, "chip": "Apple M2 Max", "family": "M2", "tier": "base|pro|max|ultra",
 "cpu_cores": int, "gpu_cores": int|null, "ram_bytes": int, "macos": "15.4", "disk_free_bytes": int,
-"volumes": [{"path": str, "free_bytes": int}], "model_budget_bytes": int}`
+"disk_total_bytes": int, "volumes": [{"path": str, "free_bytes": int}], "model_budget_bytes": int}`
 `supported` is false off Apple Silicon or under 8 GiB RAM; every other field is still reported. `model_budget_bytes`
-is defined once, in `hardware.py`.
+is defined once, in `hardware.py`. `disk_free_bytes` and `disk_total_bytes` are the free and total space of the same
+volume -- the one the Hugging Face cache lives on -- and both come from one `hardware.disk_bytes_at` call.
 
 **`EngineStatus`** (`engines.detect_all(env) -> list`; `GET /engines`)
 `{"name": "osaurus|omlx|optiq|mlxlm|vmlx", "title": str, "blurb": str, "installed": bool, "version": str|null,

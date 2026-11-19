@@ -121,6 +121,7 @@ public struct Hardware: Codable, Sendable, Equatable {
     public let ramBytes: Int64
     public let macos: String
     public let diskFreeBytes: Int64
+    public let diskTotalBytes: Int64?
     public let volumes: [Volume]
     public let modelBudgetBytes: Int64
 
@@ -135,6 +136,7 @@ public struct Hardware: Codable, Sendable, Equatable {
         case ramBytes = "ram_bytes"
         case macos
         case diskFreeBytes = "disk_free_bytes"
+        case diskTotalBytes = "disk_total_bytes"
         case volumes
         case modelBudgetBytes = "model_budget_bytes"
     }
@@ -150,6 +152,7 @@ public struct Hardware: Codable, Sendable, Equatable {
         ramBytes: Int64,
         macos: String,
         diskFreeBytes: Int64,
+        diskTotalBytes: Int64?,
         volumes: [Volume],
         modelBudgetBytes: Int64
     ) {
@@ -163,8 +166,18 @@ public struct Hardware: Codable, Sendable, Equatable {
         self.ramBytes = ramBytes
         self.macos = macos
         self.diskFreeBytes = diskFreeBytes
+        self.diskTotalBytes = diskTotalBytes
         self.volumes = volumes
         self.modelBudgetBytes = modelBudgetBytes
+    }
+
+    /// Bytes in use on the measured volume, or nil when the backend sent no total.
+    ///
+    /// `total - free` because both numbers describe the same volume; clamped at both ends so a
+    /// free figure above a stale total can never draw an inverted bar.
+    public var usedBytes: Int64? {
+        guard let diskTotalBytes else { return nil }
+        return min(diskTotalBytes, max(0, diskTotalBytes - diskFreeBytes))
     }
 }
 

@@ -185,7 +185,7 @@ private struct ModelRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                Button("Cancel") {
+                Button("Pause") {
                     Task { await model.cancelJob(now: false) }
                 }
                 .controlSize(.small)
@@ -272,12 +272,13 @@ private struct ModelRow: View {
     }
 }
 
-/// The toolbar's free-disk meter: free disk in decimal GB over a linear gauge (comp 5).
+/// The toolbar's disk meter: used out of total, and what a download still needs, in decimal GB.
 ///
-/// The payload carries free bytes and no capacity (`Hardware.disk_free_bytes`), so the bar's
-/// track is the free disk itself and the fill is what a download in progress still needs from
-/// it. That is the one ratio the numbers sent can draw, and it is the comp's own reading:
-/// "0.8 GB set aside for the download in progress" inside a bar labelled 40.4 GB free.
+/// `Hardware.disk_total_bytes` is the capacity of the volume `disk_free_bytes` measures, so
+/// used is `total - free` and the bar's first segment is that share of the disk (comp 5). A
+/// download in progress sets its remaining bytes apart as a second segment inside the same bar,
+/// since those bytes are spoken for but not yet used. A backend that sends no total has no
+/// capacity to draw against, so the bar is hidden and the free figure stands alone (AC-2).
 private struct DiskMeter: View {
     struct Download {
         let title: String
@@ -297,16 +298,15 @@ private struct DiskMeter: View {
                     Figure(Format.size(hardware.diskFreeBytes))
                 }
                 .font(.caption)
-                Gauge(value: reserved(free: hardware.diskFreeBytes)) {
-                    EmptyView()
+                if let used = hardware.usedBytes, let total = hardware.diskTotalBytes, total > 0 {
+                    Bar(used: Double(used), needed: download?.remaining ?? 0, total: total)
+                        .frame(width: 180, height: 6)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text(accessibilityLabel(total: total)))
                 }
-                .gaugeStyle(.linearCapacity)
-                .tint(.secondary)
-                .frame(width: 180)
-                .accessibilityLabel(Text("Free disk \(Format.size(hardware.diskFreeBytes))"))
                 if let download {
                     Text(
-                        "\(Format.size(download.remaining)) set aside for \(download.title)"
+                        "\(Format.size(download.remaining)) needed for \(download.title)"
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -316,14 +316,48 @@ private struct DiskMeter: View {
         }
     }
 
-    private func reserved(free: Int64) -> Double {
-        guard let download, free > 0 else { return 0 }
-        return min(1, Double(download.remaining) / Double(free))
+    private func accessibilityLabel(total: Int64) -> String {
+        var label = "Disk: \(Format.size(hardware?.diskFreeBytes ?? 0)) free of \(Format.size(total))"
+        if let download {
+            label += ", \(Format.size(download.remaining)) needed for \(download.title)"
+        }
+        return label
     }
 }
 
 private extension DiskMeter.Download {
     var remaining: Int64 { max(0, total - done) }
+}
+
+/// A capacity bar with two segments, left to right: used, then the bytes a running download
+/// still needs. A `Gauge` carries one value, and a charting framework is not a dependency.
+private struct Bar: View {
+    let used: Double
+    let needed: Int64
+    let total: Int64
+
+    var body: some View {
+        GeometryReader { geometry in
+            let usedShare = fraction(used)
+            let neededShare = min(fraction(Double(max(0, needed))), 1 - usedShare)
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                HStack(spacing: 1) {
+                    Capsule().fill(.secondary).frame(width: geometry.size.width * usedShare)
+                    if neededShare > 0 {
+                        Capsule().fill(.tertiary).frame(width: geometry.size.width * neededShare)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    /// *bytes* as a share of the disk, and the two segments never claim more than the bar.
+    private func fraction(_ bytes: Double) -> Double {
+        guard total > 0 else { return 0 }
+        return min(1, max(0, bytes / Double(total)))
+    }
 }
 
 /// Remove's confirmation: it names the size the removal frees, and says the row stays.
