@@ -733,13 +733,8 @@ def missing_bytes(model: Model, cache_dir: str | None = None, present=None) -> i
 
 
 def _file_chunks(path: str, cancel):
-    """Yield *path*'s chunks, raising :class:`_Cancelled` when *cancel* turns true.
-
-    The one place the cancel interval is defined: checked every ``CANCEL_CHECK_CHUNKS``
-    chunks, because a 20 GB file is tens of thousands of chunks and a per-chunk check reads
-    a flag that changes once. One interval at :data:`CHUNK_SIZE` is about 16 MiB, so a
-    cancel during a hash is felt in a fraction of a second rather than after the file.
-    """
+    """Yield *path*'s chunks, raising :class:`_Cancelled` when *cancel* turns true
+    (checked every :data:`CANCEL_CHECK_CHUNKS` chunks)."""
     with open(path, "rb") as handle:
         for index, chunk in enumerate(iter(lambda: handle.read(CHUNK_SIZE), b"")):
             if cancel is not None and index % CANCEL_CHECK_CHUNKS == 0 and cancel():
@@ -771,8 +766,8 @@ def _verify(planned_file: PlannedFile, path: str, *, cancel=None) -> bool:
     hash rather than the file's (research 2026-10-30 §3.4). This is the one place the two
     verification rules and their rationale live.
 
-    *cancel* is honoured every 64 chunks by raising :class:`_Cancelled`; with none, the
-    answer is the plain True/False.
+    *cancel* is honoured during the hash (:func:`_file_chunks`) by raising :class:`_Cancelled`;
+    with none, the answer is the plain True/False.
     """
     try:
         if os.path.getsize(path) != planned_file.size:
