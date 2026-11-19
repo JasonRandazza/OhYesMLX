@@ -17,8 +17,8 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v5.0 — Onboarding App (started 2026-10-29). Phases 0–5 complete; **Phase 5 complete 2026-11-19** (`PHASE-5-SUMMARY.md`, `05-UAT.md`). Next: Phase 5.5 deferred cleanup (10 items, ROADMAP), then Phase 5.6 UI aesthetics (Jason's list pending). Release artifact: `dist/OhYesMLX-0.3.0.dmg` (ad-hoc signed, not notarized).
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 5.5 — plan 055-01 (backend: items 4, 6, 7) created + audited, awaiting approval.
-Last activity: 2026-11-19 — UAT 9/9, PHASE-5-SUMMARY, recorded canaries (Osaurus 0.25.33, vMLX 1.6.84), S5-F2 constant + cold-load ordering audit.
+Status: Phase 5.5 in progress — 055-01 (backend items 4, 6, 7) closed and merged; app (2, 3, 8) and scripts/docs (1, 5, 10) plans next; item 9 waits on Jason's 'when'.
+Last activity: 2026-11-19 — 055-01 unified (`055-01-SUMMARY.md`), pytest 1664 passed.
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
 ## Loop Position
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ○        ○     [Plan 055-01 created, awaiting approval (Phase 5.5 backend: items 4, 6, 7)]
+  ✓        ✓        ✓     [055-01 complete. Next: `/paul:plan` for the next Phase 5.5 plan (app: items 2, 3, 8)]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-19: 055-01 closed: system helpers skip the lab-file read (system dir or exact `LSOF`/`PS`); hash cancel via `_Cancelled` every `CANCEL_CHECK_CHUNKS`=64 chunks; legacy bare-pid lock reclaimed when its pid's argv lacks `ohyesmlx` (own pid / unreadable argv stay busy) | v5.0 Phase 5.5 | `055-01-SUMMARY.md` |
 | 2026-11-19: Enterprise audit performed on .paul/phases/v5-onboarding/055-01-PLAN.md. Applied 3 must-have, 3 strongly-recommended upgrades. Deferred 2. Verdict: conditionally acceptable | v5.0 Phase 5.5 | helpers skip the lab read by system dir or exact `LSOF`/`PS`; own-pid legacy lock stays held; cancel check every 64 chunks (16 MiB) |
 | 2026-11-19: Phase 5 complete — UAT 9/9 (Jason), 4 UAT issues fixed in 05-14; cold-load audit: several published oMLX/mlx-lm/OptiQ orderings flip, 35B recommendations hold (corrections are Phase 5.5 item 10) | v5.0 Phase 5 | `PHASE-5-SUMMARY.md` |
 | 2026-11-19: Jason: Phase 5.5 (deferred cleanup, 10 items, ROADMAP) and Phase 5.6 (UI aesthetics, list pending from Jason) inserted after the Phase 5 close; Osaurus 0.25.33 / vMLX 1.6.84 baselines recorded (vMLX TTFT question carried into 5.5) | v5.0 | ROADMAP Phase 5.5 / 5.6 |
@@ -106,9 +107,9 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-19 (Claude Opus 5.5 coordinator)
-Stopped at: Plan 055-01 created (Phase 5.5 backend items 4, 6, 7).
-Next action: `/paul:audit` then `/paul:apply .paul/phases/v5-onboarding/055-01-PLAN.md`
-Resume file: `.paul/phases/v5-onboarding/055-01-PLAN.md`
+Stopped at: 055-01 closed and merged to main (local, not pushed).
+Next action: `/paul:plan` Phase 5.5 app plan (items 2, 3, 8)
+Resume file: `.paul/phases/v5-onboarding/055-01-SUMMARY.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).

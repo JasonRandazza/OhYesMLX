@@ -30,7 +30,7 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Complete 2026-11-13 (045-01, 02a, 02b, 03; reviewed; clean-account smoke 21/21; `PHASE-4.5-SUMMARY.md`) |
 | 5 | SwiftUI app and packaging | **Complete 2026-11-19** (`PHASE-5-SUMMARY.md`): first pass 05-01..05-06, Fable fix plans A–G (05-07..05-13 + 05-10b), close 05-14; UAT 9/9 (`05-UAT.md`), clean-account smoke 21/21, check_bundle all PASS |
 
-| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | Planning — 055-01 backend (items 4, 6, 7) |
+| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | In progress — 055-01 backend (items 4, 6, 7) done 2026-11-19 |
 | 5.6 | UI aesthetics [INSERTED 2026-11-19] | Waiting on Jason's list |
 
 ### Phase 5.5 — Deferred cleanup [INSERTED 2026-11-19, Jason]
@@ -40,13 +40,13 @@ These are the deferrals from Phases 4.5–5 that are worth doing. Each one is in
 1. **README full rewrite (M).** It covers the CLI and the app as a whole, and adds a lineage section naming LMRE and linking its archived repository. The source wording is the Deep Wiki charter record.
 2. **Retrying an interrupted evict (S).** The retry opens the Models screen but not the confirm sheet; it should auto-open the sheet. The change is in `ModelsView.swift`, and it comes from 05-08.
 3. **The `alreadyRunning` handler (S).** It activates `.first` of the processes with this bundle id, which can be the app itself. It should activate the *other* instance. From 05-08.
-4. **Malformed `lab-paths.json` (S).** It makes the `_engine_command` reads raise for plain `lsof`/`ps` calls. Those calls should not consult the lab files. From 05-07.
+4. **Malformed `lab-paths.json` (S).** **Done 2026-11-19 (055-01).** It makes the `_engine_command` reads raise for plain `lsof`/`ps` calls. Those calls should not consult the lab files. From 05-07.
 5. **The old runner scripts (M).**
    - Point the remaining Osaurus pin copies at `scripts/osaurus-pin.sh` where their semantics match. The copies are in `run_grid*.sh`, `run_sweep_*.sh`, `run_accuracy_*`, `run_jang_*` and `run_sweep_prompt.sh`.
    - Replace their `sweep()` kill -9-by-port with the `runtimes.resident_engines` process scan.
    - From v3.1 and 05-10b.
-6. **`_verify` mid-file cancel (S).** Cancellation is honoured only between files today, so a 20 GB file runs about 10 s before a cancel takes effect. From 05-10.
-7. **A legacy bare-pid `download.lock` (S).** One whose pid was recycled by the same user still wedges the downloader. Treat an identity-less lock as stale once its pid no longer belongs to an ohyesmlx process. From 05-09.
+6. **`_verify` mid-file cancel (S).** **Done 2026-11-19 (055-01).** Cancellation is honoured only between files today, so a 20 GB file runs about 10 s before a cancel takes effect. From 05-10.
+7. **A legacy bare-pid `download.lock` (S).** **Done 2026-11-19 (055-01).** One whose pid was recycled by the same user still wedges the downloader. Treat an identity-less lock as stale once its pid no longer belongs to an ohyesmlx process. From 05-09.
 8. **"Free disk" copy (S).** It now means the HF cache volume, and the label should say so when that volume is not `/`. From 05-10.
 9. **vMLX 1.6.84 (S).**
    - TTFT read 0.183 → 0.189 → 0.196 s across three canaries against a baseline of 0.181 s. Confirm or rule out the rise with a quiet-machine repeat.

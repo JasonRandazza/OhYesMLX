@@ -1,0 +1,73 @@
+I'll start by reading the contract files.
+Now let me examine the code at the specified locations.
+
+
+
+
+
+
+
+
+
+
+Let me get the baseline test count before I touch anything.
+
+
+
+Baseline is 1649 passed, 3 skipped. Now I'll write the Task 1 tests (red first).
+
+Red confirmed: `ValueError` escapes both helper probes. Now the fix in `runtimes.py`.
+
+
+
+
+
+Task 1 green. Now the Task 2 tests.
+
+The pre-existing-blob test passes today for the wrong reason (the between-file cancel catches it after a full hash). Let me strengthen it.
+
+All four red. Now the `fetch.py` implementation.
+
+
+
+
+
+
+Task 2 green and existing fetch tests unaffected. Now the Task 3 tests (red first).
+
+Red confirmed. Now the `_acquire_lock` rule.
+
+
+All 15 green. Running the full suite now.
+Full suite green at 1664 (baseline 1649 + 15). Let me review the complete diff.
+
+Everything checks out: only the three intended files changed. Committing.
+Done.
+
+**Commit:** `e2a4bb8` on `fix/055-01`
+
+**Files changed** (nothing else):
+- `ohyesmlx/runtimes.py` — `SYSTEM_BIN_DIRS` tuple next to `PS`/`LSOF`; `_engine_command` skips the `_lab_paths()` read for a system directory or a program that is exactly `LSOF`/`PS`; starts still read the lab files.
+- `ohyesmlx/fetch.py` — `_Cancelled`, `CANCEL_CHECK_CHUNKS`, `_file_chunks`; `_sha256_file`/`_git_blob_sha1`/`_verify` take `cancel=None`; both `_verify` sites in `_download` return `cancelled()` (the `finish` catch is before `_remove`); `_acquire_lock` applies the legacy bare-pid argv rule (own pid and unreadable argv stay held; JSON identity unchanged; `_release_lock` untouched).
+- `tests/test_055_01_backend_cleanup.py` — new, 15 tests, scratch paths only.
+
+**Tests:** baseline 1649 passed / 3 skipped → now **1664 passed, 3 skipped** (`test-venv pytest -q`). No existing test edited.
+
+**Red output, one line each:**
+- Task 1: `ValueError: the lab paths file .../lab-paths.json is not JSON` escaped `_listener_pids` and `_process_identity` (2 tests).
+- Task 2: `TypeError` on `_verify(..., cancel=...)`, and the two download-level tests failed their own assertions (incomplete renamed into the blob, full 500-chunk hash completed) (4 tests).
+- Task 3: `_acquire_lock` returned `False` (busy) for a recycled pid (1 test).
+
+Red was observed red-first, before each fix — the same evidence a post-hoc revert would give.
+
+**Concerns:**
+- The plan's `<output>` names `055-01-SUMMARY.md`, but my order restricted me to three files, so no SUMMARY was written — the coordinator owns it.
+- `_file_chunks` is a new private helper (not named in the order); without it the 64-chunk rule would exist twice.
+- Audit deferred item 1 is unchanged by design: a process whose argv contains `.../ohyesmlx/...` (e.g. pytest from test-venv) keeps a legacy lock busy — fail-closed.
+- Not verified: real wall-clock cancel latency on a 20 GB hash; no runtime, model or download was started.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     45    3751672    3639296    39154   97.0%   0.051267
+
+== cc-agent: git status ==
+?? .paul/orders/055-01/
