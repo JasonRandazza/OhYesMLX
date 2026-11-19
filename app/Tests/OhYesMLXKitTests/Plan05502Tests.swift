@@ -95,6 +95,23 @@ final class Plan05502Tests: XCTestCase {
         XCTAssertNil(AppModel.requestedEvictPick(nil, in: [downloaded]))
     }
 
+    /// Review finding: Retry can land on Models before the picks have loaded. The request must
+    /// wait for them rather than be dropped, or the sheet never opens.
+    func testAnEvictRequestWaitsForThePicksRatherThanBeingDropped() async throws {
+        let downloaded = pick(modelID: repo, downloaded: true)
+        let (model, _, _) = try makeModel(picks: [downloaded], kind: nil)
+        model.evictRequest = repo
+        XCTAssertNil(model.recommendations, "precondition: nothing loaded yet")
+
+        XCTAssertNil(model.takeEvictRequest(), "no picks yet, so no sheet yet")
+        XCTAssertEqual(model.evictRequest, repo, "the request must survive until the picks load")
+
+        await model.launch()
+        XCTAssertEqual(model.takeEvictRequest(), downloaded)
+        XCTAssertNil(model.evictRequest, "taken once")
+        XCTAssertNil(model.takeEvictRequest())
+    }
+
     func testTheEvictRequestUsesTheRemoveButtonsOwnGate() async throws {
         let downloaded = pick(modelID: repo, downloaded: true)
         let (model, backend, _) = try makeModel(picks: [downloaded], kind: nil)

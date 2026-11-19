@@ -66,6 +66,7 @@ struct ModelsView: View {
             Task { await model.refreshRecommendations() }
         }
         .onChange(of: model.evictRequest) { openRequestedEvict() }
+        .onChange(of: model.recommendations) { openRequestedEvict() }
         .sheet(item: $evicting) { pick in
             EvictSheet(pick: pick) {
                 Task { await model.evict(repo: pick.modelID) }
@@ -82,12 +83,7 @@ struct ModelsView: View {
     /// Remove button opens, and the same gate that button takes, so nothing is evicted without
     /// the user's confirmation and a greyed Remove is never offered a sheet (S3-F15).
     private func openRequestedEvict() {
-        guard let request = model.evictRequest else { return }
-        model.evictRequest = nil
-        guard let pick = AppModel.requestedEvictPick(request, in: model.recommendations?.picks ?? []),
-              model.canRemove(pick)
-        else { return }
-        evicting = pick
+        if let pick = model.takeEvictRequest() { evicting = pick }
     }
 
     private var activeDownload: DiskMeter.Download? {

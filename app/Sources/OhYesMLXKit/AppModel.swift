@@ -303,6 +303,18 @@ public final class AppModel {
         return picks.first { $0.modelID == request }
     }
 
+    /// The pick an evict request opens the remove sheet for, taken once by ModelsView. Until the
+    /// picks have loaded the request waits (Retry can land before them); once they have, it is
+    /// cleared, and a pick no longer listed, or one Remove would refuse, opens nothing.
+    public func takeEvictRequest() -> Pick? {
+        guard let request = evictRequest, recommendations != nil else { return nil }
+        evictRequest = nil
+        guard let pick = Self.requestedEvictPick(request, in: recommendations?.picks ?? []),
+              canRemove(pick)
+        else { return nil }
+        return pick
+    }
+
     public var notEvictedLines: [String] {
         (summary?.notEvicted ?? []).map { repo in
             let pick = recommendations?.picks.first { $0.modelID == repo }
