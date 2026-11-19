@@ -1,0 +1,92 @@
+I'll start by reading the plan and audit documents that define the contract.
+Now let me read the Swift sources I need to change.
+
+
+
+
+
+
+
+
+
+
+
+
+Let me build the branch venv and check the baseline, while I read the two doc sections.
+
+
+
+
+
+
+
+
+
+Now I'll write the Task 1 tests (red first).
+
+Red confirmed for Task 1. Now the implementation.
+Now ModelsView: wire the request and lift the Remove gate.
+
+Task 1 green. Now Task 2's test, red first.
+
+Red confirmed. Implementing Task 2.
+
+Task 2 green. Now Task 3 — Python tests first. Let me check the test conventions.
+
+
+Red confirmed. Now the Python implementation.
+
+
+
+Now the Task 3 Swift tests (red).
+
+Red confirmed. Implementing the Hardware field and label.
+
+
+
+
+
+The new scenario breaks an exhaustive switch in an existing test. Adding the case is a compile necessity — I'll make the minimal edit and list it.
+
+All seven green. Now the two interface docs.
+Now the red-checks. I'll revert each fix in turn and watch the behavioural failure.
+
+Red-check 1 confirmed: nil request, screen still `.models`. Restoring and doing red-check 2.
+
+
+
+
+Red-check 3 confirmed (guessed "/" instead of the mount). Restoring, then the Swift label red-check.
+
+
+All red-checks done and restored. Let me verify no other "Free disk" site was missed, then run both full suites.
+
+Now the full Swift suite.
+Swift suite: 130 tests green. Let me review the full diff for scope before committing.
+
+
+
+
+Commit `be4b738` on `fix/055-02`.
+
+**Files changed (14):** `AppModel.swift`, `ModelsView.swift`, `OhYesMLXApp.swift`, `BackendLauncher.swift`, `Models.swift`, `YourMacView.swift`, `BenchmarkView.swift`, `StubBackend.swift`, `ohyesmlx/hardware.py`, `docs/interfaces/v5-onboarding.md`, `docs/interfaces/v5-app.md`, new `Plan05502Tests.swift`, new `tests/test_055_02_disk_volume.py`, plus one line in `AppModelTests.swift`.
+
+**Test counts:** pytest 1669 passed, 3 skipped (baseline 1664 passed, 3 skipped). Swift 130 executed, 0 failures (7 new in Plan05502; baseline was green at exit 0, 123 tests by subtraction).
+
+**Red output, one line each:**
+- Task 1: `value of type 'AppModel' has no member 'evictRequest'`; behavioural revert gave `XCTAssertEqual failed: ("nil") is not equal to ("…/Qwen3.5-2B-4bit") - Retry must name the pick it wants confirmed` with screen still `.models`.
+- Task 2: `type 'BackendLauncher' has no member 'otherPID'`; reverting to `pids.first` gave `("Optional(111)") is not equal to ("Optional(222)") - the second launch must activate the other instance, never itself` (plus the nil case).
+- Task 3: Python `'Hardware' object has no attribute 'disk_volume'`; guessing "/" gave `assert '/' == '/private/var/…` on three tests and `disk_volume is None` failing; Swift label revert gave `("Free disk") is not equal to ("Free disk on Storage")`.
+
+**Existing test edited:** `AppModelTests.testEveryStubScenarioReachesItsScreen` — its exhaustive `StubScenario` switch needed `case .models, .modelsExternalCache:`. That is a compile requirement of the approved stub scenario, not a Hardware key-set test; no assertions changed. No other existing test touched (the Python `Hardware(...)` constructors needed nothing, as the field is last and defaulted).
+
+**Concerns:**
+- ModelsView's `onChange`/`onAppear` → sheet wiring, and `NSRunningApplication.activate()`, can't be exercised from `OhYesMLXKitTests`: the pure halves (request→pick, the pid selector, the predicate) are tested, the view half is verified by reading only — the coordinator's screenshots are its evidence.
+- `openRequestedEvict` clears the request even when `recommendations` is nil at `onAppear`; in practice `launch()` has loaded them before any Retry, but that ordering is not asserted anywhere.
+- `graphify update` not run (dispatch leaves it to the coordinator); no server, model, download or GUI was started.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     70    7258590    6856832    44577   94.5%   0.107580
+
+== cc-agent: git status ==
+?? .paul/orders/055-02/
