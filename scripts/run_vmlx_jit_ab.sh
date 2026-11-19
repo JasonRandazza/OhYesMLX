@@ -16,9 +16,9 @@
 #
 # The sweep before each column and the 30 s cooldown between them are the two places this
 # runner defends "nothing else runs while a cell measures". Osaurus releases its port on
-# `stop` and leaves the app resident at ~900 MB, so a port sweep misses it by design; a
-# leftover resident would contend for the unified memory the next column's numbers are
-# measured against.
+# `stop` and leaves the app resident at ~900 MB, so the sweep goes by process, not by port
+# (scripts/sweep.sh); a leftover resident would contend for the unified memory the next
+# column's numbers are measured against.
 #
 # `set -e` is deliberately absent: a column's exit code is a fact this runner reports, and
 # exiting on it mid-flow would leave the machine unswept with the next column never run.
@@ -41,22 +41,12 @@ exec > "$OUT/runner.log" 2>&1
 
 FAILED=0
 
-sweep() {  # ports first, then stale apps; a leaked resident would contend for the memory the next column measures
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Osaurus releases its port on `stop` and leaves the app running, so a port sweep misses
-  # it. Swept by FULL EXECUTABLE PATH, never by the name `osaurus`: `osaurus mcp` is Jason's
-  # long-running process and must not be touched.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
-# Step 1 -- initial sweep: no earlier tenant of these five ports may be resident.
+# Step 1 -- initial sweep: no earlier resident engine may be holding weights.
 echo "--- initial sweep $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 # Step 2 -- column 1, JIT off. This is the byte-identical default and the column the JIT-on
 # one is read against.
@@ -70,7 +60,7 @@ echo "=== COLUMN jit-off exit=$rc $(date +%H:%M:%S)"
 # and throttles under sustained inference, so the second column starts from the temperature
 # the first one did.
 echo "--- sweep after jit-off $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 echo "--- 30 s thermal cooldown $(date +%H:%M:%S)"
 sleep 30
 
@@ -83,7 +73,7 @@ echo "=== COLUMN jit-on exit=$rc $(date +%H:%M:%S)"
 
 # Step 5 -- final sweep: nothing this runner started stays resident.
 echo "--- final sweep $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 # Step 6 -- summary.
 echo "SUMMARY $(date +%H:%M:%S)"

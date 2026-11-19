@@ -33,16 +33,8 @@ else
   exec > "$OUT/runner.log" 2>&1
 fi
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # By FULL EXECUTABLE PATH, never the name `osaurus`: `osaurus mcp` is Jason's.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 # No Osaurus settings are toggled in this study, so the trap has nothing to put back -- it sweeps
 # so that a killed runner does not leave a runtime holding a port.
@@ -77,11 +69,11 @@ join_grid() {  # $1 = the grid to write; $2 = the run-dir glob under $OUT
 
 # Before as well as after: an Osaurus app relaunched between runs must not sit resident through
 # another runtime's cell. The kill is logged.
-[ "$DRY" = 1 ] || sweep
+[ "$DRY" = 1 ] || sweep || exit 1
 # One run holds every cell, so the Osaurus pin spans it; the other runtimes never read these files.
 case "$CELLS" in *osaurus*) [ "$DRY" = 1 ] || osaurus_pin ;; esac
 run_one multiturn --study runtime --cells "$CELLS" --workloads multiturn --results-dir "$OUT"
-[ "$DRY" = 1 ] || sweep
+[ "$DRY" = 1 ] || sweep || exit 1
 case "$CELLS" in *osaurus*) [ "$DRY" = 1 ] || osaurus_restore_check ;; esac
 
 join_grid "$OUT/grid.md" '*/'

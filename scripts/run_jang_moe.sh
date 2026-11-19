@@ -16,15 +16,14 @@
 # joined with any v1 run directory, and a prose comparison has to name the difference.
 #
 # Osaurus takes no tuning flags, so what its column measures lives in ~/.osaurus/config.
-# Around that column only, both files are copied byte-exact, the prefix and block-disk caches
-# are turned off (with them on, a repeated prefill prompt is a lookup and the prefill column
-# measures a cache hit), modelIdleResidencyPolicy.seconds is pinned to 900 (the host's 30
-# unloads the model inside the 30 s cooldown, and 900 is what the recorded baseline holds, so
-# the pin is also what lets the drift guard pass), and both are restored byte-exact afterwards
-# and on INT/TERM/HUP, checked with `cmp`. The committed baseline is restored with the files,
-# because the cache toggle moves tracked keys off it. vMLX sees no settings write at all. The
-# replication pass runs the same protocol a second time, so it is one function called twice
-# rather than one inline block.
+# Around that column only, scripts/osaurus-pin.sh is the one definition of the edit: both files
+# are copied byte-exact, the prefix and block-disk caches are turned off (with them on, a
+# repeated prefill prompt is a lookup and the prefill column measures a cache hit), and
+# modelIdleResidencyPolicy.seconds is pinned to 900 (the host's 30 unloads the model inside the
+# 30 s cooldown, and 900 is what the recorded baseline holds, so the pin is also what lets the
+# drift guard pass). Afterwards all three files go back byte-exact and are checked with `cmp`.
+# vMLX sees no settings write at all. The replication pass runs the same protocol a second
+# time, so it is one function called twice rather than one inline block.
 #
 # `set -e` is deliberately absent: a column's exit code is a fact this runner reports, and
 # exiting on it mid-flow would leave Jason's Osaurus with its caches off and no restore
@@ -37,6 +36,7 @@ set -u
 cd /Users/jrazz/Dev/active/OhYesMLX
 PY=/Users/jrazz/.local/share/ohyesmlx/test-venv/bin/python
 export PATH="$HOME/.local/share/ohyesmlx/mlx-lm-0.31.3/bin:$PATH"
+. "$(dirname "$0")/osaurus-pin.sh"
 
 H=$HOME/.cache/huggingface/hub
 S4="$H/models--mlx-community--LFM2.5-8B-A1B-MLX-4bit/snapshots/146590a491db88581884033023f51f6b49a27b89"
@@ -55,26 +55,10 @@ mkdir -p "$OUT/replicate"
 # cannot be separated from. The per-column redirects below still override per command.
 exec > "$OUT/runner.log" 2>&1
 
-CONF="$HOME/.osaurus/config/server-runtime.json"
-SERVER="$HOME/.osaurus/config/server.json"
-CONF_ORIG="$CONF.grid-orig"
-SERVER_ORIG="$SERVER.grid-orig"
-
 FAILED=0
 
-sweep() {  # ports first, then stale apps; a leaked resident would contend for the memory the next column measures
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # Osaurus releases its port on `stop` and leaves the app running, so a port sweep misses
-  # it and the leftovers accumulate at ~900 MB each -- three of them, aged 5-7 h, were
-  # resident through both grids on 2026-09-16. Swept by FULL EXECUTABLE PATH, never by the
-  # name `osaurus`: `osaurus mcp` is a long-running user process and must not be touched.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 newest_run_dir() {  # <results-dir>: run dirs are stamped UTC and sort chronologically
   ls -1d "$1"/*-format 2>/dev/null | sort | tail -1
@@ -88,57 +72,6 @@ column() {  # <label> <results-dir> <log> <cells>: one --study format column, st
   echo "=== COLUMN $1 exit=$rc $(date +%H:%M:%S)"
   [ "$rc" -eq 0 ] || FAILED=1
   return 0
-}
-
-osaurus_restore() {  # byte-exact, both files; the drift guard is not the check here
-  [ -f "$CONF_ORIG" ] || return 0   # nothing was toggled, so nothing is Jason's to get back
-  cp -p "$CONF_ORIG" "$CONF"
-  cp -p "$SERVER_ORIG" "$SERVER"
-  git checkout -- config/osaurus-settings-baseline.json
-}
-
-osaurus_cache() {  # off | on
-  if [ ! -f "$CONF_ORIG" ]; then
-    cp -p "$CONF" "$CONF_ORIG"        # byte-exact; the ohyesmlx-backup differs in whitespace
-    cp -p "$SERVER" "$SERVER_ORIG"
-    # A killed run must not leave Jason's Osaurus with its caches off or its model unloading
-    # inside a cooldown.
-    trap 'echo "ABORTED -- restoring Osaurus settings"; osaurus_restore; exit 130' INT TERM HUP
-  fi
-  # Both states are built from the host's own files, so the state is the host's state with the
-  # study's changes applied -- not whatever the previous state left behind.
-  cp -p "$CONF_ORIG" "$CONF"
-  cp -p "$SERVER_ORIG" "$SERVER"
-  $PY -c "
-import json
-conf, server, state = '$CONF', '$SERVER', '$1'
-runtime = json.load(open(conf))
-if state == 'off':
-    runtime['cache']['prefix']['enabled'] = False
-    runtime['cache']['blockDisk']['enabled'] = False
-json.dump(runtime, open(conf, 'w'), indent=2)
-hardware = json.load(open(server))
-hardware.setdefault('modelIdleResidencyPolicy', {})['seconds'] = 900
-json.dump(hardware, open(server, 'w'), indent=2)"
-  # The cache flags move tracked keys off the committed baseline, so it is re-recorded for the
-  # run and put back by the restore.
-  $PY -c "from ohyesmlx import osaurus_settings as s; s.write_baseline()"
-  echo "  osaurus cache $1 (idle residency pinned to 900 s)"
-}
-
-restore_and_check() {
-  if [ ! -f "$CONF_ORIG" ]; then
-    echo "  osaurus settings were never toggled; nothing to restore"
-    return 0
-  fi
-  osaurus_restore
-  if cmp -s "$CONF" "$CONF_ORIG" && cmp -s "$SERVER" "$SERVER_ORIG"; then
-    echo "  osaurus settings restored byte-exact (cmp)"
-  else
-    echo "RESTORE FAILED: ~/.osaurus/config is not byte-identical to the copies"
-    exit 1
-  fi
-  rm -f "$CONF_ORIG" "$SERVER_ORIG"
 }
 
 artifact_of() {  # <label>: the snapshot that label named in this campaign's columns
@@ -174,9 +107,9 @@ print(best if best in ('stock4bit', 'oq4', 'oq4e', 'optiq') else '$2')
 " 2>/dev/null || echo "$2"
 }
 
-# Pre-sweep: ensure all ports are free and no stale runtimes are resident.
+# Pre-sweep: ensure no runtime is resident (by process scan, not by port).
 echo "--- pre-sweep $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 # Step 1 -- the vMLX column.
 column vmlx "$OUT" "$OUT/log-vmlx.log" "$CELLS_vmlx"
@@ -185,10 +118,10 @@ VMLX_DIR=$(newest_run_dir "$OUT")
 
 # Step 2 -- sweep between columns.
 echo "--- sweep after vmlx $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
-# Step 3 -- the Osaurus column, with the host's caches off and the idle residency pinned.
-osaurus_cache off
+# Step 3 -- the Osaurus column, under the pin osaurus-pin.sh defines.
+osaurus_pin
 column osaurus "$OUT" "$OUT/log-osaurus.log" "$CELLS_osaurus"
 OSAURUS_DIR=$(newest_run_dir "$OUT")
 [ -n "$OSAURUS_DIR" ] || { echo "OSAURUS COLUMN WROTE NO RUN DIR"; FAILED=1; }
@@ -196,8 +129,8 @@ OSAURUS_DIR=$(newest_run_dir "$OUT")
 # Step 4 -- sweep, then restore: a still-running Osaurus app must be dead before the host's
 # own files go back.
 echo "--- sweep after osaurus $(date +%H:%M:%S)"
-sweep
-restore_and_check
+sweep || exit 1
+osaurus_restore_check
 
 # Step 5 -- join the two columns. The run directories are named one by one; `grid` refuses to
 # render rather than join runs whose pins or versions disagree.
@@ -225,15 +158,15 @@ REPL_vmlx="jang2l__vmlx=$JG,${BEST_vmlx}__vmlx=$(artifact_of "$BEST_vmlx")"
 echo "  replicate cells: osaurus '$REPL_osaurus'"
 echo "  replicate cells: vmlx    '$REPL_vmlx'"
 
-osaurus_cache off
+osaurus_pin
 column osaurus-repl "$OUT/replicate" "$OUT/replicate/log-osaurus-repl.log" "$REPL_osaurus"
 echo "--- sweep after osaurus-repl $(date +%H:%M:%S)"
-sweep
-restore_and_check
+sweep || exit 1
+osaurus_restore_check
 
 column vmlx-repl "$OUT/replicate" "$OUT/replicate/log-vmlx-repl.log" "$REPL_vmlx"
 echo "--- sweep after vmlx-repl $(date +%H:%M:%S)"
-sweep
+sweep || exit 1
 
 # Step 7 -- summary.
 echo "SUMMARY $(date +%H:%M:%S)"

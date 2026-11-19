@@ -814,6 +814,45 @@ def _describe_engine(name: str, pid: int, ports: tuple[int, ...] | None) -> str:
     return f"{name} (pid {pid}, {where})"
 
 
+def sweep_resident_engines() -> list[str]:
+    """Kill every resident engine process, returning one line per pid acted on.
+
+    This replaces the runner scripts' own sweeps, which killed whatever held 8000/8080/8081/
+    8100/1337 -- a user's dev server included -- and still missed an engine on any other port
+    (AGENTS.md, "Ports"). What counts as an engine is :func:`_engine_of`, the rule a start is
+    refused by, so what this signals is exactly what :func:`resident_engines` reports and
+    nothing else: ``osaurus mcp`` among them is never matched.
+
+    SIGKILL, as the old sweeps used: these instances ignore SIGTERM, and the weights have to be
+    out of memory before the next column starts rather than eventually. A pid that has gone, or
+    that this user is not permitted to signal, is a line and not an error -- by the time the
+    sweep reached it, it was not this sweep's to stop. An engine still alive after the grace
+    fails the call: a run that cannot show the machine clear must not start a column. A ``ps``
+    that cannot be read already raises from :func:`resident_engines`; unknown is never clear.
+    """
+    lines: list[str] = []
+    survivors: list[str] = []
+    for name, pid, ports in resident_engines():
+        what = _describe_engine(name, pid, ports)
+        if not _process_alive(pid):
+            lines.append(f"  {what} gone before the sweep reached it")
+            continue
+        try:
+            _signal_process(pid, signal.SIGKILL)
+        except RuntimeStopError as error:
+            lines.append(f"  {what} not signalled: {error}")
+            continue
+        if _await_exit(pid, KILL_GRACE_S):
+            lines.append(f"  swept {what}")
+        else:
+            survivors.append(f"{what} is alive {KILL_GRACE_S:g}s after SIGKILL")
+    if survivors:
+        raise RuntimeStopError(
+            "; ".join(survivors) + "; the machine is not clear of resident engines"
+        )
+    return lines
+
+
 def _engine_roots() -> tuple[str, ...]:
     """Directories whose executables are engines whatever their argv (AC-3b): every engine app
     bundle, MTPLX's runtime homes, and each lab copy's venv. A lab file that cannot be read

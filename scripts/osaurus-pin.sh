@@ -11,11 +11,14 @@
 # 2026-09-25: the Phase 4 night ran without this and every Osaurus cell was N/A. The edit, the
 # copies and the byte-exact check live in ohyesmlx/osaurus_settings.py -- one definition, which
 # quickbench calls too; this file is the shell wrapper around it.
-# ponytail: copies remain in run_grid.sh / run_grid_moe.sh (they pin idle 900 only and leave the
-# host's caches alone), run_sweep_cache*.sh (there the Osaurus cache IS the varied pin), and
-# run_accuracy_*.sh / run_jang_*.sh / run_sweep_prompt.sh; point them here when next touched.
-# Needs $PY and a sweep() from the caller. osaurus_pin installs a restoring trap; callers call
-# osaurus_restore_check when their Osaurus runs are done.
+# ponytail: copies remain in run_grid.sh / run_grid_moe.sh / run_accuracy_*.sh / run_jang_dense.sh
+# (they pin idle 900 only and leave the host's caches alone) and in run_sweep_cache*.sh /
+# run_sweep_prompt.sh (there the Osaurus cache IS the varied pin); point them here when next
+# touched. run_jang_moe.sh's edit was this one's and now calls this file.
+# Needs $PY. It sources sweep.sh itself, because its signal trap runs `sweep; osaurus_restore`
+# and a trap whose sweep is undefined would abort instead of restoring. osaurus_pin installs a
+# restoring trap; callers call osaurus_restore_check when their Osaurus runs are done.
+. "$(dirname "$0")/sweep.sh"
 CONFIG_DIR="$HOME/.osaurus/config"
 # `osaurus_settings.BACKUP_DIR`, derived from CONFIG_DIR rather than respelled so a scratch HOME
 # pins under its own backup directory. That module is the one definition; quickbench's default

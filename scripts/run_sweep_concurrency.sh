@@ -46,16 +46,8 @@ else
   exec > "$OUT/runner.log" 2>&1
 fi
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # By FULL EXECUTABLE PATH, never the name `osaurus`: `osaurus mcp` is Jason's.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 # A killed runner must not leave a runtime holding a port, so the trap sweeps exactly as a
 # finished run does before it exits; around Osaurus, osaurus-pin.sh's trap also restores settings.
@@ -98,7 +90,7 @@ for r in $RUNTIMES; do
   for n in $levels; do
     # Before as well as after: an Osaurus app relaunched between runs must not sit resident
     # through another runtime's cell. The kill is logged.
-    [ "$DRY" = 1 ] || sweep
+    [ "$DRY" = 1 ] || sweep || exit 1
     # Decision 129: the batch cap follows the run's N -- the rule written in
     # runtimes.Omlx.start_command, as oMLX's --max-concurrent-requests, OptiQ's --max-concurrent
     # and vMLX's --max-num-seqs. Osaurus takes no flags, so its cap is the host setting
@@ -111,7 +103,7 @@ for r in $RUNTIMES; do
     fi
     run_one "oq4__$r-n$n" --study format --cells "oq4__$r=$Q4" --concurrency "$n" \
         --results-dir "$OUT/oq4__$r"
-    [ "$DRY" = 1 ] || sweep
+    [ "$DRY" = 1 ] || sweep || exit 1
   done
   [ "$DRY" = 1 ] || { [ "$r" = osaurus ] && osaurus_restore_check; }
   # The next runtime reads the pin the other way round. The first runtime reads it forward.

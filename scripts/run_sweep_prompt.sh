@@ -31,16 +31,8 @@ SERVER="$HOME/.osaurus/config/server.json"
 CONF_ORIG="$CONF.sweep-prompt-orig"
 SERVER_ORIG="$SERVER.sweep-prompt-orig"
 
-sweep() {
-  for p in 8081 1337 8100 8080 8000; do
-    h=$(lsof -ti:$p 2>/dev/null | head -1); [ -n "$h" ] && { echo "  sweeping port $p pid $h"; kill -9 "$h" 2>/dev/null; }
-  done
-  # By FULL EXECUTABLE PATH, never the name `osaurus`: `osaurus mcp` is Jason's.
-  for h in $(pgrep -f "^/Applications/osaurus.app/Contents/MacOS/osaurus" 2>/dev/null); do
-    echo "  sweeping stale osaurus app pid $h"; kill -9 "$h" 2>/dev/null
-  done
-  sleep 5
-}
+# One sweep, by process (055-03): scripts/sweep.sh, which needs $PY.
+. "$(dirname "$0")/sweep.sh"
 
 osaurus_restore() {  # byte-exact, both files; the drift guard is not the check here
   [ -f "$CONF_ORIG" ] || return 0   # nothing was toggled, so nothing is Jason's to get back
@@ -49,6 +41,8 @@ osaurus_restore() {  # byte-exact, both files; the drift guard is not the check 
   git checkout -- config/osaurus-settings-baseline.json
 }
 
+# ponytail: kept rather than pointed at osaurus-pin.sh -- here the Osaurus cache state IS
+# the varied pin, so both states have to be the study's.
 osaurus_cache() {  # off | on
   if [ ! -f "$CONF_ORIG" ]; then
     cp -p "$CONF" "$CONF_ORIG"        # byte-exact; the ohyesmlx-backup differs in whitespace
@@ -101,12 +95,12 @@ for r in mlxlm omlx optiq vmlx osaurus; do
   for t in $order; do
     # Before as well as after: an Osaurus app relaunched between runs (seen 2026-09-16, origin
     # unknown) must not sit resident through another runtime's cell. The kill is logged.
-    [ "$r" = osaurus ] || sweep
+    [ "$r" = osaurus ] || sweep || exit 1
     echo "=== $r $t starting $(date +%H:%M:%S)"
     $PY -m ohyesmlx.cli run --study format --cells "oq4__$r=$Q4" --prompt-tokens "$t" \
         --results-dir "$OUT" > "$OUT/log-$r-$t.log" 2>&1
     echo "=== $r $t exit=$? $(date +%H:%M:%S)"
-    sweep
+    sweep || exit 1
   done
   [ "$r" = osaurus ] && osaurus_cache on
   [ "$order" = "$ASC" ] && order=$DESC || order=$ASC
