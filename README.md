@@ -63,7 +63,8 @@ Python backend; it never measures anything itself.
   recommendation is fitted to.
 - **Engines** — detects the serving engines already installed and can install the ones that
   are not, from hash-pinned wheels, with the user's consent. An install refuses any file
-  whose hash is not in the release's SBOM.
+  whose hash is not in its pinned lock (`pip --require-hashes`); the release's SBOM lists
+  the same hashes for anyone checking by hand.
 - **Models** — a catalog of models with a recommender that says what fits this Mac, and a
   downloader that writes into the standard Hugging Face cache.
 - **Quickbench** — two single-axis stages: the installed engines on the chosen model's
