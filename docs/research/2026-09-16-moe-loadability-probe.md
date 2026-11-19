@@ -28,6 +28,15 @@ active. Five artifacts, 21.9 GB, all newly downloaded.
 Every cell marked LOADS answered coherently. Cold loads: Osaurus 1.3 s, mlx-lm 1.9–2.5 s,
 oMLX 1.7–2.2 s, mlx-optiq 3.1–3.3 s, vMLX 18–19 s.
 
+> **Correction (2026-11-19, S5-F2):** those cold loads include the engine's version probe,
+> which sat inside the timed window until plan 05-07. Corrected, they read mlx-lm 0.07–1.49,
+> oMLX 1.55–2.09, optiq 1.34–2.27, Osaurus 0.99, vMLX 17.93–18.93. The published oMLX
+> 1.7–2.2 s against mlx-lm 1.9–2.5 s overlap was the probe: corrected, the two bands do not
+> touch — mlx-lm tops out at 1.49 s warm while oMLX starts at 1.55 s cold — and mlx-lm is the
+> faster loader by 0.06–2.02 s, not the slower one. Osaurus remains first and vMLX last; the
+> `LOADS` verdicts are untouched.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.5.
+
 The MoE grid therefore has the same shape as the dense one: four portable formats across four
 runtimes, plus a JANG format that only its two runtimes can load. That is what makes the two
 grids readable the same way.

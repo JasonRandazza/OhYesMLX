@@ -605,6 +605,13 @@ load this runtime deferred past readiness). Ranking on `cold_load_s` alone would
 **5.5–5.7x** the faster loader; ranking on the sum names it 2.1–2.3x, and the sum is what the
 design's §5.5 says to use.
 
+> **Correction (2026-11-19, S5-F2):** the `cold_load_s` figures carry the engine's version
+> probe, which sat inside the timed window until plan 05-07. Corrected, ranking on
+> `cold_load_s` alone would name Osaurus **6.7–7.4×** the faster loader, not 5.5–5.7x. The
+> argument strengthens: the gap widens, and the sum remains the figure to use — Osaurus
+> 0.94 and vMLX 6.99 are the corrected load levels.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §4.1.
+
 ### 7.3 A third cost this study did not intend to measure
 
 The Osaurus disk cache is not just a confound (§4.3(b)) — it is a cost. `~/.osaurus/cache/kv_v2/`

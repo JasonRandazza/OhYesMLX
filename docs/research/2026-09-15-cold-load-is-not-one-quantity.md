@@ -34,6 +34,15 @@ Three requests per runtime, **no warmups**, same artifact, timing each:
 | mlx-optiq | 4.14 | 0.31 | 0.27 | 0.27 | 0.04 |
 | vMLX | 9.09 | 0.51 | 0.43 | 0.41 | 0.10 |
 
+> **Correction (2026-11-19, S5-F2):** the reported `cold_load_s` column includes the engine's
+> version probe (plan 05-07 moved it out of the timed window). Corrected, it reads mlx-lm
+> 1.49–2.31, oMLX 2.97–3.01, optiq 2.38–3.11, vMLX 9.02. The opening comparison therefore
+> inverts at both bounds: mlx-lm reported less than oMLX even before the lazy-load
+> correction, and the 0.20 s that put oMLX first was the probe. The corrected-ranking table
+> below also needs its levels re-cut — mlx-lm 1.56–2.38, mlx-optiq 2.42–3.15, oMLX
+> 6.48–6.52, vMLX 9.12 — with the order `mlx-lm < optiq < oMLX < vMLX` unchanged.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.3.
+
 Confirmed on two further artifacts:
 
 | artifact | runtime | reported | req 1 | req 2–3 | hidden |

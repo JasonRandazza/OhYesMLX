@@ -740,6 +740,14 @@ load advantage does survive inside a column: `jang2l` is the **fastest cell to f
 Osaurus visits** (4.03 s against 4.16 / 4.74 / 4.81 / 5.20 in the primary), which is what a
 36%-smaller bundle that the runtime's loader reads natively should look like (MoE `§7.2`).
 
+> **Correction (2026-11-19, S5-F2):** the `cold_load_s` figures in the table above carry the
+> engine's version probe, which sat inside the timed window until plan 05-07. Corrected,
+> ranking on `cold_load_s` alone would name Osaurus **6.7–8.3×** the faster loader, not
+> 5.5–6.3×. The conclusion does not move: the gap widens, the sum is still the figure to use,
+> and neither study flips — Osaurus 0.94 / 0.96 and vMLX 6.99 / 7.02 are the corrected load
+> levels.
+> See docs/research/2026-11-19-cold-load-ordering-audit.md §3.11.
+
 ### 6.5 The non-comparabilities, restated once
 
 - **Peak memory is not one quantity across runtimes.** vMLX reports a footprint well above the
