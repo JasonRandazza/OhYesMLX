@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-19: Jason: Phase 5.5 (deferred cleanup, 10 items, ROADMAP) and Phase 5.6 (UI aesthetics, list pending from Jason) inserted after the Phase 5 close; Osaurus 0.25.33 / vMLX 1.6.84 baselines recorded (vMLX TTFT question carried into 5.5) | v5.0 | ROADMAP Phase 5.5 / 5.6 |
 | 2026-11-18: 05-13 closed — all seven Fable fix plans (A–G, 05-07..05-13 + 05-10b) done; Phase 5 close is next and needs Jason's live checks (quarantined download, clean-account smoke against the bundle, app-UI download/Stop now, canaries) | v5.0 review fixes | `05-13-SUMMARY.md` |
 | 2026-11-18: 05-12 closed; Jason: no run-header Osaurus snapshot (committed baseline + harness revision already identify a harness run's conditions); harness pin keeps the committed baseline, the app rebaselines from the live host; one backup dir `~/.osaurus/config.ohyesmlx-backup`. Workers back on cc-agent (Claude session budget) | v5.0 review fixes | `05-12-SUMMARY.md` |
 | 2026-11-18: 05-11 closed: P5-11 field is `mismatch_on_disk` null/"ours"/"foreign" (download repairs only blobs it wrote); exclusion sentence quotes 1.25x size rounded up, no "at peak"; tied stage A heads the card "Fastest measured here (top engines tied)"; a lab engine whose start would be refused reads not installed; install refuses `install_in_progress` while a process names an unfinished root | v5.0 review fixes | `05-11-SUMMARY.md` |
@@ -104,7 +105,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 Last session: 2026-11-18 (Claude Opus 5.5 coordinator)
 Stopped at: 05-14 closed and merged (local, not pushed); live Phase 5 checks mostly done (see 05-14-SUMMARY).
-Next action: Jason installs from dist/OhYesMLX-0.3.0.dmg (drag), checks the disk bar + Pause, runs one Stop now; `sudo rm /etc/sudoers.d/oymlxtest`; then /paul:verify (UAT) and PHASE-5-SUMMARY.md. Optional: RECORD=--record canary to adopt Osaurus 0.25.33 / vMLX 1.6.84 (quiet window).
+Next action: Phase 5 close — /paul:verify (UAT) and PHASE-5-SUMMARY.md (Jason's live checks all done 2026-11-19); then Phase 5.5 deferred cleanup (ROADMAP); Phase 5.6 aesthetics waits on Jason's list.
 Resume file: `.paul/phases/v5-onboarding/05-14-SUMMARY.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
