@@ -15,10 +15,10 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29; takes precedence over v3.1/v4.0). Phases 0-3 complete on `main`; Phase 4: 04-01, 04-01b, 04-02, 04-02b, 04-03a, 04-03b built 2026-11-02, 1144 tests; 04-03c closed 2026-11-03 (Osaurus baseline gap fixed); Phase 4 code review done 2026-11-03 (Standards + Spec, 9 verified findings fixed, 1164 tests); UAT 8/8 pass 2026-11-03 (`04-UAT.md`, one known minor). **Phase 4 complete** (`PHASE-4-SUMMARY.md`). Phase 4.5 security hardening: planning, split model→fix→smoke (Jason 2026-11-03); 045-01 closed 2026-11-03 (`docs/threat-model.md`: 6 medium + 10 low, none high; triage approved; `045-01-SUMMARY.md`). 045-02 split in two (Jason 2026-11-03): `045-02a` (server + lifecycle: T-02/03/04/05/08/09/10/11) closed 2026-11-09 (`4b35ef8`, `9bc9388`, review fixes `6c4d616`; 1222 tests; probe 32/32; code review 10 verified + 1 rejected; `045-02a-SUMMARY.md`); 045-02b (installers + fetch: T-01/06/07/12/13/16) closed 2026-11-13 (`a031ad4`, `fb4e61c`, review fixes `7393715`; `045-02b-SUMMARY.md`); 045-03 clean-account smoke closed 2026-11-13 (`743ada3`, `369f180`, `f7c22e0`; 21/21 as `oymlxtest`; two defects fixed; 1329 tests; `045-03-SUMMARY.md`). **Phase 4.5 complete** (`PHASE-4.5-SUMMARY.md`). Phase 5 (SwiftUI app): prototype answered 2026-11-13; 05-01 Stop now (`93d374c`), 05-02 app skeleton (`004171c`), 05-03 design (`99d2a55`), wave-1 review fixes (`ac0de1b`): 1366 pytest + 52 swift tests. 05-04 shell/Your Mac/Engines (`3495886`), 05-05 Models/Benchmark/Results (`bb762c6`), 05-06 packaging (`101df7c`), wave-2 review fixes; 1370 pytest + 81 swift tests; check_bundle 9/9.
+Milestone: v5.0 — Onboarding App (started 2026-10-29). Phases 0–5 complete; **Phase 5 complete 2026-11-19** (`PHASE-5-SUMMARY.md`, `05-UAT.md`). Next: Phase 5.5 deferred cleanup (10 items, ROADMAP), then Phase 5.6 UI aesthetics (Jason's list pending). Release artifact: `dist/OhYesMLX-0.3.0.dmg` (ad-hoc signed, not notarized).
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 2.5-3 code review done 2026-11-02 (Standards + Spec, 9 findings fixed, 957 tests); T2.5.5 done (pip installs use committed `ohyesmlx/constraints/` freezes, 959 tests); 04-01 closed (SUMMARY written). Handoff: `.paul/HANDOFF.md`.
-Last activity: 2026-11-03 — 04-03c: quickbench re-run live, all 5 engines PASS incl. Osaurus 131.3 tok/s, restore byte-exact; hero-model safetensors proven to be the pinned tensors. 2026-11-02: quickbench first live run (Osaurus refused by baseline-path gap). Before: 04-02 unified: jobs + SSE (live scratch download/evict). 04-01b: gpu_cores from ioreg. Before it, 04-01: `ohyesmlx app` guarded loopback API (`1c157b0`).
+Status: Phase 5 closed; nothing in flight.
+Last activity: 2026-11-19 — UAT 9/9, PHASE-5-SUMMARY, recorded canaries (Osaurus 0.25.33, vMLX 1.6.84), S5-F2 constant + cold-load ordering audit.
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
 ## Loop Position
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [05-14 closed 2026-11-19 (`05-14-SUMMARY.md`): DMG replaces zip, disk meter used/total, Pause, approval-first gatekeeper doc. Live Phase 5 checks: quarantined open PASS, app download/pause/resume PASS, clean-account smoke 21/21 vs the bundle, canaries Osaurus 0.25.33 + vMLX 1.6.84 no effect (vMLX cold load 15–22 s vs ~2.5 s), S5-F2 constant measured. Next: Jason's DMG install + Stop now + sudoers removal, then UAT and PHASE-5-SUMMARY]
+  ✓        ✓        ✓     [Phase 5 complete 2026-11-19 (`PHASE-5-SUMMARY.md`). Loop idle. Next: `/paul:plan` for Phase 5.5 (deferred cleanup, ROADMAP)]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-19: Phase 5 complete — UAT 9/9 (Jason), 4 UAT issues fixed in 05-14; cold-load audit: several published oMLX/mlx-lm/OptiQ orderings flip, 35B recommendations hold (corrections are Phase 5.5 item 10) | v5.0 Phase 5 | `PHASE-5-SUMMARY.md` |
 | 2026-11-19: Jason: Phase 5.5 (deferred cleanup, 10 items, ROADMAP) and Phase 5.6 (UI aesthetics, list pending from Jason) inserted after the Phase 5 close; Osaurus 0.25.33 / vMLX 1.6.84 baselines recorded (vMLX TTFT question carried into 5.5) | v5.0 | ROADMAP Phase 5.5 / 5.6 |
 | 2026-11-18: 05-13 closed — all seven Fable fix plans (A–G, 05-07..05-13 + 05-10b) done; Phase 5 close is next and needs Jason's live checks (quarantined download, clean-account smoke against the bundle, app-UI download/Stop now, canaries) | v5.0 review fixes | `05-13-SUMMARY.md` |
 | 2026-11-18: 05-12 closed; Jason: no run-header Osaurus snapshot (committed baseline + harness revision already identify a harness run's conditions); harness pin keeps the committed baseline, the app rebaselines from the live host; one backup dir `~/.osaurus/config.ohyesmlx-backup`. Workers back on cc-agent (Claude session budget) | v5.0 review fixes | `05-12-SUMMARY.md` |
@@ -103,10 +104,10 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 ## Session Continuity
 
-Last session: 2026-11-18 (Claude Opus 5.5 coordinator)
-Stopped at: 05-14 closed and merged (local, not pushed); live Phase 5 checks mostly done (see 05-14-SUMMARY).
-Next action: Phase 5 close — /paul:verify (UAT) and PHASE-5-SUMMARY.md (Jason's live checks all done 2026-11-19); then Phase 5.5 deferred cleanup (ROADMAP); Phase 5.6 aesthetics waits on Jason's list.
-Resume file: `.paul/phases/v5-onboarding/05-14-SUMMARY.md`
+Last session: 2026-11-19 (Claude Opus 5.5 coordinator)
+Stopped at: Phase 5 closed; all merged to main (local, not pushed). No worktrees, no running workers.
+Next action: `/paul:plan` Phase 5.5 (deferred cleanup) — start with `.paul/HANDOFF.md`.
+Resume file: `.paul/HANDOFF.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).
