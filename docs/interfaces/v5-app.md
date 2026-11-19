@@ -112,9 +112,13 @@ connection, ends after `done`). Codable types mirror the pinned JSON exactly (sn
 `CodingKeys`, byte counts `Int64`); an error body decodes to `BackendError {code, status, message}` and the UI
 shows its `message` as the backend wrote it.
 
-**Free disk (plan 05-10, S4-F3, S3-F10).** `Hardware.disk_free_bytes` is the free space of the volume the
-Hugging Face cache lives on (`hardware.free_bytes_at(fetch.default_cache_dir())`), not of `/`: the number the
-Models toolbar and Your Mac show is the one both download guards use, and `volumes` still lists every volume.
+**Free disk (plan 05-10, S4-F3, S3-F10; plan 05-14, AC-2).** `Hardware.disk_free_bytes` is the free space of the
+volume the Hugging Face cache lives on (`hardware.free_bytes_at(fetch.default_cache_dir())`), not of `/`: the number
+the Models toolbar and Your Mac show is the one both download guards use, and `volumes` still lists every volume.
+`disk_total_bytes` is that same volume's capacity, from the same `hardware.disk_bytes_at` call, and it is optional in
+the Swift client (`Hardware.diskTotalBytes: Int64?`) so a backend that does not send it still decodes. The Models
+toolbar's disk meter draws used (`total - free`) out of the total, with a running download's remaining bytes as a
+second segment, and hides the bar when the total is nil while still reading "Free disk N GB".
 `GET /quickbench/plan` carries `free_after_bytes` (that volume's free bytes minus `download_bytes`, floored at 0),
 which Benchmark shows as "Free disk after"; the client does no disk arithmetic. `download_bytes` there counts only
 what is still to fetch (a partial sibling counts its remainder). `AppModel` re-reads `hardware()` beside

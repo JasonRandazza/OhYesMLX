@@ -61,6 +61,7 @@ def hardware(budget, *, ram=8 * 1024**3, supported=True, unsupported_reason=None
         ram_bytes=ram,
         macos="15.4",
         disk_free_bytes=0,
+        disk_total_bytes=0,
         volumes=[],
         model_budget_bytes=budget,
     )

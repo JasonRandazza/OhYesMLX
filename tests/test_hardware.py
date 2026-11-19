@@ -319,6 +319,33 @@ def test_disk_free_bytes_follows_the_cache_not_the_root_volume(tmp_path):
     assert hw.disk_free_bytes == 987654321
 
 
+def test_disk_total_bytes_is_the_same_volumes_total_from_one_probe(tmp_path):
+    """AC-2: free and total are one volume's pair, and one ``disk_usage`` call answers both."""
+    calls = []
+
+    def disk_usage(path):
+        calls.append(path)
+        return Usage(total=994_000_000_000, used=0, free=123456789012)
+
+    hw = scan(
+        run=fake_run(M2_MAX_64),
+        disk_usage=disk_usage,
+        volume_paths=no_volumes,
+        cache_dir="/",
+    )
+    assert hw.disk_free_bytes == 123456789012
+    assert hw.disk_total_bytes == 994_000_000_000
+    assert calls == [os.path.realpath("/")], "one probe must answer both numbers"
+
+
+def test_disk_bytes_at_returns_free_and_total_and_free_bytes_at_keeps_its_half():
+    from ohyesmlx import hardware
+
+    usage = fake_disk_usage({"/": 123456789012})
+    assert hardware.disk_bytes_at("/", usage) == (123456789012, 0)
+    assert hardware.free_bytes_at("/", usage) == 123456789012
+
+
 def test_model_budget_takes_two_thirds_of_ram_under_36_gib_less_two_gib():
     assert model_budget(17179869184) == 9305762474
     assert model_budget(8589934592) == 3579139413

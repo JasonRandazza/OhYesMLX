@@ -502,6 +502,7 @@ final class AppModelTests: XCTestCase {
             ramBytes: 32_000_000_000,
             macos: "27.2.1",
             diskFreeBytes: 400_000_000_000,
+            diskTotalBytes: 994_662_584_320,
             volumes: [],
             modelBudgetBytes: 24_000_000_000
         )
@@ -646,6 +647,7 @@ final class AppModelTests: XCTestCase {
             ramBytes: 68_719_476_736,
             macos: "27.2.1",
             diskFreeBytes: 100_000_000,
+            diskTotalBytes: 994_662_584_320,
             volumes: [],
             modelBudgetBytes: 49_392_123_904
         )

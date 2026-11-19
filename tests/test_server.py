@@ -50,6 +50,7 @@ def this_mac(**overrides):
         ram_bytes=64 * 1024**3,
         macos="15.4",
         disk_free_bytes=100 * 1024**3,
+        disk_total_bytes=994 * 1024**3,
         volumes=[{"path": "/", "free_bytes": 100 * 1024**3}],
         model_budget_bytes=46 * 1024**3,
     )
@@ -330,7 +331,7 @@ def test_hardware_is_the_scan_as_json_with_integer_byte_counts(launch):
     assert code == 200
     body = json.loads(raw)
     assert body == dataclasses.asdict(fake)
-    for key in ("cpu_cores", "ram_bytes", "disk_free_bytes", "model_budget_bytes"):
+    for key in ("cpu_cores", "ram_bytes", "disk_free_bytes", "disk_total_bytes", "model_budget_bytes"):
         assert isinstance(body[key], int) and not isinstance(body[key], bool), key
     assert isinstance(body["volumes"][0]["free_bytes"], int)
 

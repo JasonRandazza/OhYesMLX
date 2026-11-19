@@ -9,6 +9,7 @@
  "ram_bytes": 68719476736,
  "macos": "27.2.1",
  "disk_free_bytes": 43377606656,
+ "disk_total_bytes": 994662584320,
  "volumes": [
   {
    "path": "/",

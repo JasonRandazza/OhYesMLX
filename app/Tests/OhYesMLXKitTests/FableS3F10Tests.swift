@@ -44,6 +44,7 @@ final class FableS3F10Tests: XCTestCase {
             ramBytes: base.ramBytes,
             macos: base.macos,
             diskFreeBytes: freeBytes,
+            diskTotalBytes: base.diskTotalBytes,
             volumes: base.volumes,
             modelBudgetBytes: base.modelBudgetBytes
         )
