@@ -21,10 +21,10 @@
       "format": "oq4",
       "repo": "RepublicOfKorokke/Qwen3.5-4B-oQ4",
       "workload": "decode",
-      "decode_tok_s": 63.05020546273651,
-      "ttft_s": 0.31147595797665417,
-      "measured": "2026-11-02",
-      "version_measured": "0.25.29"
+      "decode_tok_s": 59.87176830014199,
+      "ttft_s": 0.30818808398908004,
+      "measured": "2026-11-19",
+      "version_measured": "0.25.33"
     }
   },
   "omlx": {
@@ -63,10 +63,10 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": 74.52152487760338,
-      "ttft_s": 0.1810105839977041,
-      "measured": "2026-10-29",
-      "version_measured": "1.6.82"
+      "decode_tok_s": 73.39730725751417,
+      "ttft_s": 0.1955814579850994,
+      "measured": "2026-11-19",
+      "version_measured": "1.6.84"
     }
   }
 }
