@@ -1,0 +1,76 @@
+I'll start by reading the required documents.
+Now let me read the README, PROJECT.md, STATE.md, and the charter record.
+
+Let me examine the target research docs at their cited lines, and verify the CLI/script surfaces for the README.
+
+
+
+
+Now let me check the CLI surfaces, script/link existence, and the test baseline.
+
+
+
+I have everything I need. Starting Task 3 — the correction notes. First, `grid-loadability-probe.md`.
+
+
+
+
+
+
+Now the multiturn sweep's lifecycle row.
+Now the 35B cold/warm attribution doc — its four cited places.
+
+
+
+
+
+
+
+
+
+
+Task 3 is complete. Now the README rewrite — let me check the docs tree I intend to link.
+
+Now writing the README — first half.
+
+Now the link and command checks.
+Now the full suite.
+
+
+
+
+
+
+
+
+A timing-sensitive server test failed on this run. Let me check whether it's flaky (my changes are docs-only).
+
+All green. Committing the README and the ten research docs.
+
+
+**Commit** `33233c6`. **Files changed:** README.md and the ten `docs/research/` files in the plan's `files_modified`; nothing else.
+
+**Correction notes** (16, one per cited sentence/table; audit §5.1 rows 1–11 all covered)
+- grid-loadability-probe.md:19 — stock-4bit: mlx-lm 2.18–3.00, oMLX 2.96–3.00, optiq 2.44–3.17, vMLX 18.06 (§3.2)
+- grid-loadability-probe.md:124 — oMLX 2.03–2.07, optiq 1.47–2.20, mlx-lm 2.02–2.84, vMLX 16.06; ratio 7.5–7.9× (§3.1); banner at :99–107 amended with the struck claim
+- cold-load-is-not-one-quantity.md:37 — mlx-lm 1.49–2.31, oMLX 2.97–3.01, optiq 2.38–3.11, vMLX 9.02; re-cut table 1.56–2.38 / 2.42–3.15 / 6.48–6.52 / 9.12 (§3.3)
+- first-live-run.md:42 — mlx-lm 1.65–2.47, oMLX 2.96–3.00 (§3.4); :61 — "about three and a half seconds" → 1.6–2.5 s (§3.4)
+- moe-loadability-probe.md:31 — mlx-lm 0.07–1.49, oMLX 1.55–2.09, optiq 1.34–2.27, Osaurus 0.99, vMLX 17.93–18.93; 0.06–2.02 s (§3.5)
+- multiturn-conversation-sweep.md:92 — mlx-lm 0.31–1.20, osaurus 2.35, oMLX 2.95–2.99, optiq 1.54–2.34, vMLX 8.05 (§3.6)
+- cold-warm-load-attribution-35b.md:17 — 5.40–7.04 GB/s, 4.06×/2.65×, denominator 2.70–3.52 s (§4.3, flagged); :34 — osaurus 3.11, mlx-lm 2.81–3.63, oMLX 7.30–7.34, vMLX 8.59, optiq 10.68–11.41 (§3.8); :72 — osaurus 1.08, oMLX 2.02–2.06, optiq 1.52–2.25, mlx-lm 2.16–2.98, vMLX 8.01 (§3.7); :88 — same 5.40–7.04 GB/s flag (§4.3)
+- 35b-moe-serving.md:67 — osaurus 1.13, oMLX 2.94–2.98, optiq 1.49–2.22, mlx-lm 2.17–2.99, vMLX 10.02; 0.76–1.45 s (§3.9); :203 — osaurus 2.36, oMLX 2.99–3.03, optiq 1.56–2.29, mlx-lm 1.75–2.57, vMLX 10.04 (§3.10)
+- dense-jang-study.md:608 — 6.7–7.4×, Osaurus 0.94 / vMLX 6.99 (§4.1)
+- moe-jang-study.md:820 — 6.7–8.3×, Osaurus 0.96 / vMLX 7.02 (§4.1)
+- jang-cross-runtime.md:743 — 6.7–8.3×, Osaurus 0.94 / 0.96, vMLX 6.99 / 7.02 (§3.11)
+
+**README sections:** what OhYesMLX is + core value · the rule and the two axes (A/B table, ragged matrix) · the app v5.0 (scan/engines/models/quickbench, distribution status + Gatekeeper, build) · the CLI (install, studies, `--cells`, pins and sweeps, grid/sweep, canary, quickbench) · what is measured (metrics copied from AGENTS.md) · supported runtimes and formats + what does not work · published research · lineage (LMRE) · status · license.
+
+**Checks:** 33/33 relative links `test -e` OK; all 6 CLI subcommands and 3 scripts exist; 1669 passed, 3 skipped (baseline 1669).
+
+**Concerns:** (1) the audit contradicts itself on ordinals — §3.6 says "fourth to second", §5.1 says "third → second" — so I stated only the corrected order. (2) `python3 -m pip install -e .` is the one command not in any `--help`; it is the install step AC-4 requires. (3) `test_server.py::test_the_handler_thread_cap...` failed once mid-suite, passed alone and on the rerun — timing-sensitive, untouched by me. (4) No red-check: nothing test-observable changed and the boundary forbids adding a file.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     51    5564191    5412480    42576   97.3%   0.064540
+
+== cc-agent: git status ==
+?? .paul/orders/055-03/

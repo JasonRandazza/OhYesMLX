@@ -30,18 +30,18 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Complete 2026-11-13 (045-01, 02a, 02b, 03; reviewed; clean-account smoke 21/21; `PHASE-4.5-SUMMARY.md`) |
 | 5 | SwiftUI app and packaging | **Complete 2026-11-19** (`PHASE-5-SUMMARY.md`): first pass 05-01..05-06, Fable fix plans A–G (05-07..05-13 + 05-10b), close 05-14; UAT 9/9 (`05-UAT.md`), clean-account smoke 21/21, check_bundle all PASS |
 
-| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | In progress — 055-01 backend (items 4, 6, 7) done 2026-11-19; 055-02 app (2, 3, 8) done 2026-11-19; 055-03 scripts/docs (1, 5, 10) planning |
+| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | In progress — 055-01 backend (items 4, 6, 7) done 2026-11-19; 055-02 app (2, 3, 8) done 2026-11-19; 055-03 scripts/docs (1, 5, 10) done 2026-11-19; item 9 remains |
 | 5.6 | UI aesthetics [INSERTED 2026-11-19] | Waiting on Jason's list |
 
 ### Phase 5.5 — Deferred cleanup [INSERTED 2026-11-19, Jason]
 
 These are the deferrals from Phases 4.5–5 that are worth doing. Each one is inventoried with its origin in `.paul/phases/v5-onboarding/05-14-SUMMARY.md` and in the conversation of 2026-11-19. Phase 5.5 runs after the Phase 5 close: UAT and `PHASE-5-SUMMARY.md`.
 
-1. **README full rewrite (M).** It covers the CLI and the app as a whole, and adds a lineage section naming LMRE and linking its archived repository. The source wording is the Deep Wiki charter record.
+1. **README full rewrite (M).** **Done 2026-11-19 (055-03).** It covers the CLI and the app as a whole, and adds a lineage section naming LMRE and linking its archived repository. The source wording is the Deep Wiki charter record.
 2. **Retrying an interrupted evict (S).** **Done 2026-11-19 (055-02).** The retry opens the Models screen but not the confirm sheet; it should auto-open the sheet. The change is in `ModelsView.swift`, and it comes from 05-08.
 3. **The `alreadyRunning` handler (S).** **Done 2026-11-19 (055-02).** It activates `.first` of the processes with this bundle id, which can be the app itself. It should activate the *other* instance. From 05-08.
 4. **Malformed `lab-paths.json` (S).** **Done 2026-11-19 (055-01).** It makes the `_engine_command` reads raise for plain `lsof`/`ps` calls. Those calls should not consult the lab files. From 05-07.
-5. **The old runner scripts (M).**
+5. **The old runner scripts (M).** **Done 2026-11-19 (055-03).**
    - Point the remaining Osaurus pin copies at `scripts/osaurus-pin.sh` where their semantics match. The copies are in `run_grid*.sh`, `run_sweep_*.sh`, `run_accuracy_*`, `run_jang_*` and `run_sweep_prompt.sh`.
    - Replace their `sweep()` kill -9-by-port with the `runtimes.resident_engines` process scan.
    - From v3.1 and 05-10b.
@@ -51,7 +51,7 @@ These are the deferrals from Phases 4.5–5 that are worth doing. Each one is in
 9. **vMLX 1.6.84 (S).**
    - TTFT read 0.183 → 0.189 → 0.196 s across three canaries against a baseline of 0.181 s. Confirm or rule out the rise with a quiet-machine repeat.
    - Investigate the 15–22 s cold load against about 2.5 s at 1.6.82.
-10. **The S5-F2 cold-load audit (S).** Add correction notes to every published cold-load ordering that `docs/research/2026-11-19-cold-load-ordering-audit.md` finds would flip.
+10. **The S5-F2 cold-load audit (S).** **Done 2026-11-19 (055-03).** Add correction notes to every published cold-load ordering that `docs/research/2026-11-19-cold-load-ordering-audit.md` finds would flip.
 
 Closed with no action: the disk audit (191 GiB free on 2026-11-19). Also closed: the eight pre-`first_request_workload_id` run directories, which need a schema migration only if those columns are ever wanted. Accepted by design, with the rationale in each AUDIT: the pidfd TOCTOU, the bind/spawn port race, another user's engine, the estimate races, the duplicate global and app OptiQ installs, orphan-file retries, the hero models' re-serialised safetensors, no XCUITest host, and the 05-01 audit items. Parked outside v5: the thinking-off MMLU arm, notarization (no Apple Developer account), and the stage-B tie policy (Jason's measurement-policy call).
 

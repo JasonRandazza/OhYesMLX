@@ -1,0 +1,116 @@
+I'll start by reading the contract documents and understanding the current state.
+Now let me look at the relevant code in `runtimes.py` and the scripts.
+
+
+
+
+
+
+
+
+
+
+
+Let me check the exception hierarchy, `_process_alive`, and the remaining scripts I need to edit.
+
+
+
+
+
+
+
+Now I'll write the test file first (red), as the order requires.
+
+Red: 12 failed, 1 passed. Now the Python kill loop.
+Now `scripts/sweep.sh`.
+Now converting each runner's `sweep()` to the shared one.
+
+
+
+
+Now the call sites. I'll apply the uniform `|| exit 1` rule with a small script, then review the diff.
+
+
+
+
+Now the sweep-related comments in the scripts that described the old port sweep. Let me check what stale text remains.
+
+
+
+
+Now let me run the sweep tests to see where Task 1 stands.
+
+
+
+
+Now converting `run_jang_moe.sh` — its edit is exactly the pin's three keys.
+
+
+
+
+
+
+
+
+Now the AGENTS.md hazard sentences.
+
+
+Now let me run the full suite and the syntax check.
+
+
+
+
+Now the red-check: I'll temporarily revert each fix and confirm the new tests fail with the reported symptom.
+
+
+
+
+
+Let me verify the shell propagation and the `$PY` guard with stubs (no real interpreter, no process touched).
+
+
+
+
+
+
+
+
+
+
+
+Committed. Report:
+
+**Commit:** `0f3dfc7` on `fix/055-03-w1` (25 files, +478/−346)
+
+**Files changed:** `ohyesmlx/runtimes.py` (one function), `scripts/sweep.sh` (new, 644 like the other sourced files), `scripts/osaurus-pin.sh`, 20 × `scripts/run_*.sh`, `AGENTS.md`, `tests/test_055_03_sweep.py` (new).
+
+**Tests:** full suite `1683 passed, 3 skipped`; `sh -n` clean on every `scripts/*.sh`. Baseline: I did not capture a full-suite count before the first edit — the new file was run red first (`12 failed, 1 passed`); the pre-existing 1669 tests all pass.
+
+**Red line:** `FAILED tests/test_055_03_sweep.py::test_no_script_kills_a_listener_by_port - assert not ['run_accuracy_dense.sh', ... 20 scripts]`. Red-checked again at the end: renaming the function → `AttributeError: module 'ohyesmlx.runtimes' has no attribute 'sweep_resident_engines'`; reverting one call → `['run_canary.sh: sweep']`; adding `exit` to sweep.sh → its test fails. All restored, 14/14 green.
+
+**AC-2 table**
+
+| script | verdict | why |
+|---|---|---|
+| run_jang_moe.sh | **matched → `osaurus_pin`/`osaurus_restore_check`** | its `osaurus_cache off` set exactly `PINNED_KEYS` (idle 900, prefix+blockDisk off, byte-exact restore) |
+| run_accuracy_dense/moe/thinkoff.sh | kept | idle 900 only, caches untouched |
+| run_jang_dense.sh | kept | idle 900 only |
+| run_grid.sh, run_grid_moe.sh | kept | idle 900 only (and no baseline file) |
+| run_sweep_cache.sh, run_sweep_cache_nonhybrid.sh | kept | the cache state IS the varied pin |
+| run_sweep_prompt.sh | kept | same — toggles both states |
+
+Each kept copy now carries a two-line `# ponytail:` naming that difference; osaurus-pin.sh's header list is updated.
+
+**AGENTS.md:** two sentences — the Ports bullet's "The runner scripts' `sweep()` still kill -9 whatever holds a default port…" now says the runners share one sweep that signals exactly `resident_engines()`; the Stale-Osaurus bullet's "so a port sweep misses it by design" now says a port sweep would miss it, which is why the sweep is a process scan.
+
+**Concerns**
+- AC-1's "no script under `scripts/` defines its own `sweep()`" conflicts with the boundaries: `smoke_clean_account.sh` keeps one (TERM-then-KILL, only the smoke account's leftovers). The test names it as the one allowance with that reason. This is the one place I did not follow the AC literally.
+- `run_grid.sh`/`run_grid_moe.sh` had the kill-by-port loop inline rather than as `sweep()`; I converted them too, so `lsof -ti:` appears nowhere in `scripts/`.
+- The run_jang_moe conversion changes its baseline write from `write_baseline()` (live host) to the committed baseline with only the pinned keys overridden, and its backup dir from `$CONF.grid-orig` to `~/.osaurus/config.ohyesmlx-backup`.
+- Not verified: no runner, sweep or runtime was executed (per the hard rules). A dry-mode guard moved from thinkoff's function to its five call sites (`[ "$DRY_MODE" = 1 ] || sweep || exit 1`); no real sweep was run to confirm the shared one end to end.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     81   10946735   10593024    65044   96.8%   0.123862
+
+== cc-agent: git status ==
+?? .paul/orders/055-03/
