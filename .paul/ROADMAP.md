@@ -30,7 +30,7 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Complete 2026-11-13 (045-01, 02a, 02b, 03; reviewed; clean-account smoke 21/21; `PHASE-4.5-SUMMARY.md`) |
 | 5 | SwiftUI app and packaging | **Complete 2026-11-19** (`PHASE-5-SUMMARY.md`): first pass 05-01..05-06, Fable fix plans A–G (05-07..05-13 + 05-10b), close 05-14; UAT 9/9 (`05-UAT.md`), clean-account smoke 21/21, check_bundle all PASS |
 
-| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | In progress — 055-01 backend (items 4, 6, 7) done 2026-11-19; 055-02 app (2, 3, 8) done 2026-11-19; 055-03 scripts/docs (1, 5, 10) done 2026-11-19; item 9 remains |
+| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | In progress — 055-01 backend (items 4, 6, 7) done 2026-11-19; 055-02 app (2, 3, 8) done 2026-11-19; 055-03 scripts/docs (1, 5, 10) done 2026-11-19; item 9 done 2026-11-20 — all 10 items done, phase close pending Jason |
 | 5.6 | UI aesthetics [INSERTED 2026-11-19] | Waiting on Jason's list |
 
 ### Phase 5.5 — Deferred cleanup [INSERTED 2026-11-19, Jason]
@@ -48,7 +48,7 @@ These are the deferrals from Phases 4.5–5 that are worth doing. Each one is in
 6. **`_verify` mid-file cancel (S).** **Done 2026-11-19 (055-01).** Cancellation is honoured only between files today, so a 20 GB file runs about 10 s before a cancel takes effect. From 05-10.
 7. **A legacy bare-pid `download.lock` (S).** **Done 2026-11-19 (055-01).** One whose pid was recycled by the same user still wedges the downloader. Treat an identity-less lock as stale once its pid no longer belongs to an ohyesmlx process. From 05-09.
 8. **"Free disk" copy (S).** **Done 2026-11-19 (055-02).** It now means the HF cache volume, and the label should say so when that volume is not `/`. From 05-10.
-9. **vMLX 1.6.84 (S).**
+9. **vMLX 1.6.84 (S).** **Done 2026-11-20** (`docs/research/2026-11-20-vmlx-1.6.84-quiet-canaries.md`): TTFT rise not confirmed (+1.7% vs 1.6.82, under the 5% floor); no cold-load regression — the "about 2.5 s at 1.6.82" was a misread load average, 1.6.82 recorded 13.2 s and quiet 1.6.84 11.2 s. Open for Jason: the manifest baseline (73.40 tok/s) is the low outlier; re-record?
    - TTFT read 0.183 → 0.189 → 0.196 s across three canaries against a baseline of 0.181 s. Confirm or rule out the rise with a quiet-machine repeat.
    - Investigate the 15–22 s cold load against about 2.5 s at 1.6.82.
 10. **The S5-F2 cold-load audit (S).** **Done 2026-11-19 (055-03).** Add correction notes to every published cold-load ordering that `docs/research/2026-11-19-cold-load-ordering-audit.md` finds would flip.

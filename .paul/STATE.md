@@ -17,8 +17,8 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 Milestone: v5.0 — Onboarding App (started 2026-10-29). Phases 0–5 complete; **Phase 5 complete 2026-11-19** (`PHASE-5-SUMMARY.md`, `05-UAT.md`). Next: Phase 5.5 deferred cleanup (10 items, ROADMAP), then Phase 5.6 UI aesthetics (Jason's list pending). Release artifact: `dist/OhYesMLX-0.3.0.dmg` (ad-hoc signed, not notarized).
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 5.5 — 9 of 10 items done (055-01, 055-02, 055-03 merged); only item 9 (vMLX 1.6.84 quiet-machine measurement) remains, waiting on Jason's 'when'.
-Last activity: 2026-11-19 — 055-03 unified (`055-03-SUMMARY.md`), pytest 1686.
+Status: Phase 5.5 — all 10 items done (item 9 measured 2026-11-20). Phase close (transition) pending Jason; open question: re-record the vMLX canary baseline.
+Last activity: 2026-11-20 — item 9: three quiet vMLX canaries (`docs/research/2026-11-20-vmlx-1.6.84-quiet-canaries.md`).
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
 ## Loop Position
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [055-03 complete. Next: item 9 (vMLX measurement) when Jason says, then Phase 5.5 transition]
+  ✓        ✓        ✓     [Phase 5.5 items all done. Next: Phase 5.5 transition (Jason), then 5.6 when his list arrives]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-20: Item 9 measured (Jason authorised, away): vMLX 1.6.84 TTFT rise not confirmed (+1.7% vs 1.6.82); no cold-load regression (the 2.5 s at 1.6.82 was a misread load average; 1.6.82 13.2 s, quiet 1.6.84 11.2 s); canary 'moved +5–7%' is a low recorded baseline (73.40, lowest of six). Baseline re-record is Jason's call | v5.0 Phase 5.5 | `docs/research/2026-11-20-vmlx-1.6.84-quiet-canaries.md` |
 | 2026-11-19: 055-03 closed: `scripts/sweep.sh` over `runtimes.sweep_resident_engines` (process scan; non-trap `sweep \|\| exit 1`; never exits); only run_jang_moe's pin matched osaurus-pin.sh; 16 S5-F2 correction notes; README rewritten with LMRE lineage | v5.0 Phase 5.5 | `055-03-SUMMARY.md` |
 | 2026-11-19: Jason approved 055-03 incl. new sourced `scripts/sweep.sh`. Enterprise audit: 2 must-have, 2 strongly-recommended applied, 2 deferred; conditionally acceptable | v5.0 Phase 5.5 | non-trap calls `sweep \|\| exit 1`; sweep never exits (osaurus-pin trap must still restore); survivor after SIGKILL fails |
 | 2026-11-19: 055-02 closed: `AppModel.evictRequest`/`takeEvictRequest` (waits for picks; Remove's own `canRemove` gate); `BackendLauncher.otherInstance`/`otherPID`; `Hardware.disk_volume` + `freeDiskLabel` ("Free disk on Storage", unchanged on `/`, null on probe failure) | v5.0 Phase 5.5 | `055-02-SUMMARY.md` |
@@ -111,8 +112,8 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-19 (Claude Opus 5.5 coordinator)
-Stopped at: 055-03 closed and merged to main (local, not pushed).
-Next action: Phase 5.5 item 9 (vMLX 1.6.84 TTFT + cold load) — needs Jason's 'when' and a quiet machine; then close Phase 5.5
+Stopped at: item 9 measured and written up; Phase 5.5 items all done (local, not pushed).
+Next action: Jason: (a) re-record the vMLX canary baseline from a quiet run? (b) close Phase 5.5 (transition). Chrome/Obsidian/Activity Monitor were quit for the run; reopen them
 Resume file: `.paul/phases/v5-onboarding/055-03-SUMMARY.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
