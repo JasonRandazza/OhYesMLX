@@ -1013,8 +1013,10 @@ def _canary(args) -> int:
             text,
             spec["version_measured"],
             version,
-            min(loads[name]),
-            max(loads[name]),
+            # One visit keeps today's before -> after pair; N visits carry their low and high,
+            # so `Reading.noisy` sees a busy middle rep.
+            loads[name][0] if args.repeat == 1 else min(loads[name]),
+            loads[name][-1] if args.repeat == 1 else max(loads[name]),
         )
         print(reading.line())
         if not args.record:
@@ -1022,6 +1024,8 @@ def _canary(args) -> int:
 
         if median.failure is not None:
             print("    not recorded: the cell did not PASS")
+        elif median.decode_tok_s is None or median.ttft_s is None:
+            print("    not recorded: a metric was undefined (see the row's notes)")
         elif reading.noisy and not args.allow_noisy:
             print(
                 "    not recorded: this machine was noisy (1-minute load above "

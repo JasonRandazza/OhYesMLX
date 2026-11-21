@@ -492,3 +492,41 @@ def test_the_docs_say_what_repeat_does_one_sentence_each():
     assert "--repeat 3" in (root / "docs/interfaces/v5-onboarding.md").read_text(
         encoding="utf-8"
     )
+
+
+# --- coordinator review (055-04) ---------------------------------------------------------------
+
+
+def test_one_visit_still_prints_its_load_before_then_after_even_when_it_fell(monkeypatch, capsys):
+    """N=1 output is today's byte for byte: the pair is before -> after, not low -> high."""
+    fake_measure(monkeypatch)
+    fake_detect(monkeypatch)
+    fake_baseline(monkeypatch)
+    fake_load(monkeypatch, [2.5, 1.5])
+
+    assert cli.main(["canary", "--yes", "--engines", "mlxlm"]) == 0
+
+    assert "load 2.5 -> 1.5" in capsys.readouterr().out
+
+
+def test_the_estimate_the_consent_gate_prints_says_repeat_multiplies_it():
+    assert "--repeat" in cli.canary.ESTIMATE
+
+
+def test_record_refuses_a_median_with_an_undefined_metric(monkeypatch, tmp_path, capsys):
+    """A PASS row can lack a decode rate (one content delta); recording null is not a baseline."""
+    fake_measure(monkeypatch)
+    fake_detect(monkeypatch)
+    fake_load(monkeypatch, [1.0] * 2)
+    path = tmp_manifest(monkeypatch, tmp_path)
+    before = path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        cli.canary,
+        "median_reading",
+        lambda rows: cli.canary.MedianReading(None, 0.4, None),
+    )
+
+    cli.main(["canary", "--yes", "--engines", "mlxlm", "--record"])
+
+    assert "not recorded" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before

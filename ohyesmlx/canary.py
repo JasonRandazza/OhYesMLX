@@ -61,7 +61,10 @@ QUIET_MACHINE = (
     f"{LOAD_NOISY} the engine is marked noisy and --record refuses its baseline unless "
     "--allow-noisy is passed."
 )
-ESTIMATE = "One cell per engine on the decode workload: about 10-15 minutes for the five."
+ESTIMATE = (
+    "One cell per engine on the decode workload: about 10-15 minutes for the five, "
+    "and --repeat N multiplies that by N."
+)
 
 
 @dataclass(frozen=True)
