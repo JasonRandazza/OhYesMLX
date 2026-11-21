@@ -315,13 +315,13 @@ explanation.
 What it does to this paper:
 
 - **§1, the level shift, does not reproduce for mlx-lm or OptiQ.**
-  - At unchanged versions both read 10–21% *below* r3 on every workload. That is within about 6% of the 09-20 published grid; for example, `decode` `stock4bit`: mlx-lm 64.1 / 78.3 / 67.2 and OptiQ 66.6 / 79.4 / 70.6 (09-20 / r3 / r4).
+  - At unchanged versions both read 9.8–21.0% *below* r3 on every workload. That is within about 6% of the 09-20 published grid; for example, `decode` `stock4bit`: mlx-lm 64.1 / 78.3 / 67.2 and OptiQ 66.6 / 79.4 / 70.6 (09-20 / r3 / r4).
   - So the r2/r3 level is not the settled one that Decision 127 took it to be for these two runtimes. The cause of either shift is not established.
   - oMLX reads 7–16% above r3, alongside its version change, and its TTFT falls from about 0.42 s to 0.17–0.20 s.
-- **§2, the format axis, still holds.** r4 reads `stock4bit > oq4 > optiq` in the mlx-lm, oMLX and OptiQ columns, and Osaurus's `stock4bit > optiq > oq4` as in r3. In the vMLX column `jangtq4` stays above `optiq` on all three workloads, by 0.3–4.8%; `decode` is a 0.2% tie.
+- **§2, the format axis, still holds.** r4 reads `stock4bit > oq4 > optiq` in the mlx-lm, oMLX and OptiQ columns, and Osaurus's `stock4bit > optiq > oq4` as in r3. In the vMLX column `jangtq4` stays above `optiq` on all three workloads, by 0.2–4.8%; `decode`'s 0.2% is a tie.
 - **§3, the runtime axis, moves again.**
   - oMLX is first in all nine r4 rows, by 23–31% over second place.
   - vMLX moves from 4th–5th up to **2nd in seven of nine rows**. On `decode` `optiq` it ties mlx-lm at 58.8, and on `prefill` `optiq` it is 4th.
-  - mlx-lm is 4th or 5th in eight of nine.
+  - mlx-lm is 4th or 5th in seven of nine. It is 3rd on `chat` `optiq`, and 3rd on `decode` `optiq` in a tie with vMLX.
   - Osaurus is last in seven of nine; it is 4th on `prefill` `oq4` and 2nd on `prefill` `optiq`.
   - Below the top place, these orderings change with the engine versions and with the session. Read them as this grid's own, not as a stable ranking.
