@@ -772,6 +772,17 @@ def _parser() -> argparse.ArgumentParser:
         "format, repo and workload come from `ohyesmlx/engines-tested.json`.",
     )
     canary_cmd.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help="measure each engine's cell N times, interleaved across the engines -- every "
+        "engine once, then every engine again -- and take the median of its N readings as "
+        "the verdict and the recorded baseline. --repeat 3 is recommended for --record, "
+        "because a session-to-session swing of 5-10%% is wider than the 5%% noise floor one "
+        "reading is compared against (default: 1).",
+    )
+    canary_cmd.add_argument(
         "--record",
         action="store_true",
         help="write each passing engine's baseline, detected version and date into the "
@@ -892,12 +903,28 @@ def _canary(args) -> int:
     discipline a grid run gets. The decode workload alone, because that is the number the
     cell was pinned for.
 
+    ``--repeat N`` visits every engine N times before any verdict is taken -- rep 1 on the
+    whole list, then rep 2, and so on -- because taking one engine's N visits back to back
+    would alias a thermal drift across the run onto whichever engine went last. Each
+    engine's line, and the baseline ``--record`` writes, is ``canary.median_reading``'s
+    answer for its N rows: the median per metric, or a ``FAIL`` naming the rep that did not
+    pass. A visit that could not start at all aborts that engine with its reason on stderr
+    and no verdict line, because a median over the visits that ran is not the reading N
+    visits ask for.
+
     The quiet-machine rule is not a formality: the harness cannot detect contention, so the
-    1-minute load average is read around each cell and carried on the verdict line, and a
-    baseline recorded over ``canary.LOAD_NOISY`` is refused unless ``--allow-noisy`` says
-    the number is wanted anyway. A row that is not ``PASS`` is a ``FAIL`` line and nothing
-    is recorded from it, whatever its numbers say.
+    1-minute load average is read around each visit and carried on the verdict line as the
+    low and high reading of that engine's visits, and a baseline recorded over
+    ``canary.LOAD_NOISY`` is refused unless ``--allow-noisy`` says the number is wanted
+    anyway. A row that is not ``PASS`` is a ``FAIL`` line and nothing is recorded from it,
+    whatever its numbers say.
     """
+    if args.repeat < 1:
+        print(
+            f"ohyesmlx canary: --repeat must be at least 1, not {args.repeat}",
+            file=sys.stderr,
+        )
+        return 2
     if not args.yes:
         print(canary.QUIET_MACHINE)
         print(canary.ESTIMATE)
@@ -920,47 +947,80 @@ def _canary(args) -> int:
     measure = _load_measure()
     statuses = {status.name: status for status in engines.detect_all()}
     code = 0
+    shapes_of = {}
     for name in names:
         spec = engines.MANIFEST[name]["canary"]
         shapes = [shape for shape in workloads(measure) if shape.id == spec["workload"]]
-        if not shapes:
-            print(
-                f"ohyesmlx canary: {name}: the manifest's canary workload "
-                f"{spec['workload']!r} is not one of the pinned shapes",
-                file=sys.stderr,
-            )
-            code = 2
+        if shapes:
+            shapes_of[name] = shapes
             continue
+        print(
+            f"ohyesmlx canary: {name}: the manifest's canary workload "
+            f"{spec['workload']!r} is not one of the pinned shapes",
+            file=sys.stderr,
+        )
+        code = 2
 
-        load_before = canary.load()
-        try:
-            results = measure.run_cells(
-                build_cells(measure.Cell, canary.cells(name, spec)),
-                shapes,
-                results_dir=str(Path("results") / "canary" / f"{_stamp()}-{name}"),
+    rows = {name: [] for name in shapes_of}
+    loads = {name: [] for name in shapes_of}
+    unstarted = set()
+    for rep in range(1, args.repeat + 1):
+        for name in shapes_of:
+            if name in unstarted:
+                continue
+            spec = engines.MANIFEST[name]["canary"]
+            suffix = "" if args.repeat == 1 else f"-r{rep}"
+            loads[name].append(canary.load())
+            try:
+                results = measure.run_cells(
+                    build_cells(measure.Cell, canary.cells(name, spec)),
+                    shapes_of[name],
+                    results_dir=str(
+                        Path("results") / "canary" / f"{_stamp()}-{name}{suffix}"
+                    ),
+                )
+            except ValueError as exc:
+                print(f"ohyesmlx canary: {name}: rep {rep}: {exc}", file=sys.stderr)
+                code = 2
+                unstarted.add(name)
+                continue
+            loads[name].append(canary.load())
+            summarized = report.summarize(results)
+            rows[name].append(
+                next(row for row in summarized if row["workload_id"] == spec["workload"])
             )
-        except ValueError as exc:
-            print(f"ohyesmlx canary: {name}: {exc}", file=sys.stderr)
-            code = 2
-            continue
-        load_after = canary.load()
 
-        rows = report.summarize(results)
-        row = next(row for row in rows if row["workload_id"] == spec["workload"])
+    for name in shapes_of:
+        if name in unstarted:
+            continue
+        spec = engines.MANIFEST[name]["canary"]
+        median = canary.median_reading(rows[name])
+        if median.failure is None:
+            text = canary.verdict_line(
+                spec,
+                {
+                    "status": "PASS",
+                    "decode_tps": median.decode_tok_s,
+                    "ttft_p50_s": median.ttft_s,
+                    "runtime": name,
+                },
+            )
+        else:
+            text = median.failure
         version = statuses[name].version
         reading = canary.Reading(
             name,
-            canary.verdict_line(spec, row),
+            text,
             spec["version_measured"],
             version,
-            load_before,
-            load_after,
+            min(loads[name]),
+            max(loads[name]),
         )
         print(reading.line())
         if not args.record:
             continue
 
-        if row["status"] != "PASS":
+        if median.failure is not None:
             print("    not recorded: the cell did not PASS")
         elif reading.noisy and not args.allow_noisy:
             print(
@@ -974,13 +1034,17 @@ def _canary(args) -> int:
             canary.record(
                 engines.MANIFEST_PATH,
                 name,
-                decode_tok_s=row["decode_tps"],
-                ttft_s=row["ttft_p50_s"],
+                decode_tok_s=median.decode_tok_s,
+                ttft_s=median.ttft_s,
                 version_measured=version,
                 measured=date.today().isoformat(),
+                runs=[
+                    {"decode_tok_s": row["decode_tps"], "ttft_s": row["ttft_p50_s"]}
+                    for row in rows[name]
+                ],
             )
             print(
-                f"    recorded: {row['decode_tps']:.1f} tok/s, {row['ttft_p50_s']:.3f} s "
+                f"    recorded: {median.decode_tok_s:.1f} tok/s, {median.ttft_s:.3f} s "
                 f"TTFT at version {version}"
             )
     return code

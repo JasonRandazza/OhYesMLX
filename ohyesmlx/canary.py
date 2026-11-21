@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import statistics
 from dataclasses import dataclass
 
 from ohyesmlx import fetch
@@ -98,6 +99,22 @@ class Reading:
         if self.noisy:
             loads += f", noisy: above {LOAD_NOISY}"
         return f"{self.engine}: {self.text}  [{versions}; {loads}]"
+
+
+@dataclass(frozen=True)
+class MedianReading:
+    """One engine's N canary rows reduced to the reading its verdict and baseline use.
+
+    ``decode_tok_s`` and ``ttft_s`` are the medians of the N rows. ``failure`` is set instead
+    when one of the reps did not PASS, and names the first such rep when there is more than one
+    visit: a number from a cell that failed the coherence gate is not a measurement, however
+    fast it was. A metric some rep left undefined stays ``None`` -- the median of the reps that
+    had one is not the median of N.
+    """
+
+    decode_tok_s: float | None
+    ttft_s: float | None
+    failure: str | None  # "FAIL: rep <k>: <reason>", or None
 
 
 def _pct(change: float) -> str:
@@ -165,6 +182,35 @@ def verdict_line(baseline, row, floor=NOISE_FLOOR) -> str:
     return f"{reading.text}: re-run the grids containing {row['runtime']}"
 
 
+def median_reading(rows) -> MedianReading:
+    """One engine's N canary rows as the reading its verdict and baseline are taken from.
+
+    The rows are ``report.summarize``'s, one per visit in rep order. The canary makes one
+    statement per engine, so this is the one place N readings become one: the median per
+    metric, which is what a 5-10% session-to-session swing (the reason for revisiting at all)
+    cannot move on its own. An even N is the midpoint of the two middle readings, which is
+    ``statistics.median``'s definition and the one this command publishes.
+
+    A rep that did not PASS returns the FAIL line naming it instead: the engine's verdict is
+    the failure, and nothing is compared or recorded from the visits that did pass. The rep is
+    named only when there is more than one visit, because a single-visit line has no second
+    rep to be mistaken for and the line a one-visit run prints is unchanged. This is the only
+    median the canary computes; the CLI reads its answer rather than reducing rows itself.
+    """
+    rows = list(rows)
+    for rep, row in enumerate(rows, start=1):
+        if row["status"] != "PASS":
+            where = f"rep {rep}: " if len(rows) > 1 else ""
+            return MedianReading(None, None, f"FAIL: {where}{row['reason']}")
+    decode = [row["decode_tps"] for row in rows]
+    ttft = [row["ttft_p50_s"] for row in rows]
+    return MedianReading(
+        None if None in decode else statistics.median(decode),
+        None if None in ttft else statistics.median(ttft),
+        None,
+    )
+
+
 def artifact_dir(repo: str, root=None) -> str:
     """The newest Hugging Face cache snapshot of *repo* that carries a ``config.json``.
 
@@ -204,14 +250,20 @@ def load() -> float:
     return os.getloadavg()[0]
 
 
-def record(path, engine: str, *, decode_tok_s, ttft_s, version_measured, measured) -> dict:
+def record(
+    path, engine: str, *, decode_tok_s, ttft_s, version_measured, measured, runs=None
+) -> dict:
     """Write one engine's baseline into the manifest at *path*, and nothing else.
 
     The four fields are the canary block's mutable half: the cell (format, repo, workload)
-    stays as the manifest pins it, and each other engine's entry is untouched. The tested
-    *version* and its verified date are deliberately not written here -- a baseline recorded
-    on an untested build is evidence for the next decision, never the decision, and adopting
-    the version silently is how a published table comes to claim a build nobody chose.
+    stays as the manifest pins it, and each other engine's entry is untouched. *runs* is the
+    engine's per-visit ``{decode_tok_s, ttft_s}`` readings in rep order, kept beside the
+    medians so the baseline stays recomputable from what was measured -- raw observations are
+    never discarded. A caller that measured one visit and passes no *runs* writes exactly the
+    fields it always has. The tested *version* and its verified date are deliberately not
+    written here -- a baseline recorded on an untested build is evidence for the next
+    decision, never the decision, and adopting the version silently is how a published table
+    comes to claim a build nobody chose.
     """
     path = pathlib.Path(path)
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -224,5 +276,7 @@ def record(path, engine: str, *, decode_tok_s, ttft_s, version_measured, measure
             "measured": measured,
         }
     )
+    if runs is not None:
+        entry["runs"] = list(runs)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return entry
