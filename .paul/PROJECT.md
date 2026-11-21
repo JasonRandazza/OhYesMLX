@@ -32,8 +32,8 @@ runtime or their quantization is what's actually costing them speed and memory.
 |-----------|-------|
 | Type | Application (CLI tool + SwiftUI onboarding app) |
 | Version | 0.3.0 released 2026-09-23; v3.1 Hardening (0.3.1) in progress |
-| Status | Active — v5.0 Phases 0–5 complete (2026-11-19); Phase 5.5 deferred cleanup next, 5.6 UI aesthetics after (STATE.md is the live position) |
-| Last Updated | 2026-11-19 |
+| Status | Active — v5.0 Phases 0–5.5 complete (5.5 on 2026-11-21); Phase 5.6 UI aesthetics next, waiting on Jason's list (STATE.md is the live position) |
+| Last Updated | 2026-11-21 |
 
 > This file is the 2026-09-14 charter. The requirement lists and metrics below are kept as
 > written then; `.paul/STATE.md` and `.paul/ROADMAP.md` hold what has shipped since.
@@ -57,7 +57,8 @@ runtime or their quantization is what's actually costing them speed and memory.
 ### Active (In Progress)
 
 - [x] v5.0 Phase 5 — SwiftUI app and packaging. Complete 2026-11-19 (`PHASE-5-SUMMARY.md`): `app/` Swift package, `scripts/build_app.sh` → ad-hoc-signed DMG with bundled CPython 3.14.10, `.sha256` and an SBOM; Fable 5.2 review fixed (plans A–G); UAT 9/9; clean-account smoke 21/21.
-- [ ] v5.0 Phase 5.5 — deferred cleanup (ROADMAP); Phase 5.6 — UI aesthetics (Jason's list pending).
+- [x] v5.0 Phase 5.5 — deferred cleanup. Complete 2026-11-21 (`PHASE-5.5-SUMMARY.md`): 10 items in 055-01..03, median-of-N canary baselines (055-04), 35B r4 and the vMLX cold-load probe.
+- [ ] v5.0 Phase 5.6 — UI aesthetics (Jason's list pending).
 
 ### Planned (Next)
 

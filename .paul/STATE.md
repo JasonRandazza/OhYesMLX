@@ -15,9 +15,9 @@ See: .paul/PROJECT.md (updated 2026-09-14)
 
 ## Current Position
 
-Milestone: v5.0 — Onboarding App (started 2026-10-29). Phases 0–5 complete; **Phase 5 complete 2026-11-19** (`PHASE-5-SUMMARY.md`, `05-UAT.md`). Next: Phase 5.5 deferred cleanup (10 items, ROADMAP), then Phase 5.6 UI aesthetics (Jason's list pending). Release artifact: `dist/OhYesMLX-0.3.0.dmg` (ad-hoc signed, not notarized).
+Milestone: v5.0 — Onboarding App (started 2026-10-29). Phases 0–5.5 complete; **Phase 5.5 complete 2026-11-21** (`PHASE-5.5-SUMMARY.md`). Next: Phase 5.6 UI aesthetics (Jason's list pending). Release artifact: `dist/OhYesMLX-0.3.0.dmg` (ad-hoc signed, not notarized; 055-02 app changes not yet in a rebuilt DMG).
 Plan: `.paul/phases/v5-onboarding/PLAN.md`; per-phase plans, audits and summaries beside it.
-Status: Phase 5.5 — all 10 items done plus follow-ups (055-04 median baselines, 35B notes, vMLX cold-load probe). Phase close pending Jason's yes.
+Status: Phase 5.5 closed; nothing in flight.
 Last activity: 2026-11-21 — 055-04 median-of-3 baselines recorded for all five engines; vMLX 35B cold-load probe; 35B paper notes.
 v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 
@@ -26,7 +26,7 @@ v3.1 (0.3.1 bump) and v4.0 MTPLX (branch `mtplx-wip`) are paused, not abandoned.
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Phase 5.5 items all done. Next: Phase 5.5 transition (Jason), then 5.6 when his list arrives]
+  ✓        ✓        ✓     [Phase 5.5 complete 2026-11-21. Loop idle. Next: Phase 5.6 when Jason's list arrives]
 ```
 
 ## Performance Metrics
@@ -44,6 +44,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
+| 2026-11-21: Phase 5.5 complete (Jason) — 10 items + follow-ups; `PHASE-5.5-SUMMARY.md` | v5.0 | Next: 5.6 on Jason's list; fix the claude-mem/cloudflare MCP orphan leak before the next measurement |
 | 2026-11-21: 055-04 closed: `canary --repeat N` (median per metric, interleaved, `runs` kept); all five baselines re-recorded median-of-3 (spread ≤3.7%; OptiQ now on its real build 0.5.13). vMLX 35B cold-load probe: ~4 s page cache, ~11 s fixed warm floor, 1–3 s vs 1.6.59. 35B papers noted with r4. Measurement hazard: claude-mem worker's background sessions orphan `mcp-server-cloudflare` at 100% CPU (Jason's config) | v5.0 Phase 5.5 | `055-04-SUMMARY.md`, `docs/research/2026-11-20-canaries-and-35b-r4.md` §4 |
 | 2026-11-20: Day run (Jason away, authorised): vMLX canary baseline re-recorded 81.67 tok/s / 0.1843 s @1.6.84; five-engine canary: oMLX/vMLX no effect, mlx-lm/Osaurus/OptiQ 'moved' trace to baselines (OptiQ's is the wrong build 0.7.8 vs 0.5.13); 35B r4 all PASS: every format ordering holds, mlx-lm/OptiQ −10–19% back to 09-20 levels, oMLX 0.7.3 +7–16% and TTFT halved, vMLX 1.6.84 35B cold load +4–9 s vs 1.6.59 | v5.0 Phase 5.5 | `docs/research/2026-11-20-canaries-and-35b-r4.md`; 3 decisions open for Jason |
 | 2026-11-20: Item 9 measured (Jason authorised, away): vMLX 1.6.84 TTFT rise not confirmed (+1.7% vs 1.6.82); no cold-load regression (the 2.5 s at 1.6.82 was a misread load average; 1.6.82 13.2 s, quiet 1.6.84 11.2 s); canary 'moved +5–7%' is a low recorded baseline (73.40, lowest of six). Baseline re-record is Jason's call | v5.0 Phase 5.5 | `docs/research/2026-11-20-vmlx-1.6.84-quiet-canaries.md` |
@@ -114,9 +115,9 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 ## Session Continuity
 
 Last session: 2026-11-19 (Claude Opus 5.5 coordinator)
-Stopped at: item 9 measured and written up; Phase 5.5 items all done (local, not pushed).
-Next action: Jason: close Phase 5.5? Fix the orphaned `mcp-server-cloudflare` leak (claude-mem background sessions) before the next measurement. Then 5.6 when his list arrives
-Resume file: `.paul/phases/v5-onboarding/055-03-SUMMARY.md`
+Stopped at: Phase 5.5 closed; all merged to main (local, not pushed). No worktrees, no running workers.
+Next action: Phase 5.6 (UI aesthetics) when Jason's list arrives; before any measurement, fix the orphaned `mcp-server-cloudflare` leak (claude-mem background sessions)
+Resume file: `.paul/HANDOFF.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).
 Engine builds on this host (2026-11-02): Osaurus 0.25.29 and oMLX 0.7.3 (tested, Decision 139), vMLX 1.6.82 still untested (same-build canary 2026-11-02 13:10 read decode 74.5 -> 70.4 tok/s, -5.5%, TTFT +3.9%, load 2.4-2.6: session variance at the 5% floor, not a version effect; 1.6.59 has no baseline, so adoption needs a cool-machine repeat or a 1.6.59 canary, `results/canary/20261102T180945Z-vmlx`), OptiQ 0.7.8 global (0.5.13 lab copy used by the harness via `lab-paths.json`), mlx-lm 0.31.3, vMLX 1.6.82 (untested build).

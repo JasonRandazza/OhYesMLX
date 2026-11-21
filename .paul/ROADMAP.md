@@ -30,7 +30,7 @@ Takes precedence over v4.0 (MTPLX, parked on branch `mtplx-wip`) and the pending
 | 4.5 | Security hardening [INSERTED 2026-11-02] | Complete 2026-11-13 (045-01, 02a, 02b, 03; reviewed; clean-account smoke 21/21; `PHASE-4.5-SUMMARY.md`) |
 | 5 | SwiftUI app and packaging | **Complete 2026-11-19** (`PHASE-5-SUMMARY.md`): first pass 05-01..05-06, Fable fix plans A–G (05-07..05-13 + 05-10b), close 05-14; UAT 9/9 (`05-UAT.md`), clean-account smoke 21/21, check_bundle all PASS |
 
-| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | In progress — 055-01 backend (items 4, 6, 7) done 2026-11-19; 055-02 app (2, 3, 8) done 2026-11-19; 055-03 scripts/docs (1, 5, 10) done 2026-11-19; item 9 done 2026-11-20 — all 10 items done, phase close pending Jason |
+| 5.5 | Deferred cleanup [INSERTED 2026-11-19] | **Complete 2026-11-21** (`PHASE-5.5-SUMMARY.md`): 055-01..04; item 9 measured; median-of-3 canary baselines |
 | 5.6 | UI aesthetics [INSERTED 2026-11-19] | Waiting on Jason's list |
 
 ### Phase 5.5 — Deferred cleanup [INSERTED 2026-11-19, Jason]
