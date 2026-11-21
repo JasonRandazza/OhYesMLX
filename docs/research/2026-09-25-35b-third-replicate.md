@@ -302,3 +302,26 @@ explanation.
 3. **The runtime-axis tie problem is now measured, not hypothetical:** six of nine r2↔r3 rows
    differ, five of them on 0.6–3.7% gaps. STATE already carries "mark unresolvable ties" as the
    next renderer improvement; this grid is the case that justifies it.
+
+## Update 2026-11-20: a fourth replicate (r4) on current builds
+
+`results/harden-35b-r4/` re-ran this grid on 2026-11-20 on a quiet, load-gated machine. It used the same script (`scripts/run_grid_35b.sh`), the same cells and `--cache-state off`. The write-up is `docs/research/2026-11-20-canaries-and-35b-r4.md` §3. All 15 cells × 3 workloads PASS.
+
+**r4 is not a same-build replicate.**
+- Three engine versions changed: oMLX 0.6.4 → 0.7.3, vMLX 1.6.59 → 1.6.84 and Osaurus 0.25.12 → 0.25.33.
+- The harness carries the 05-07 fixes: a per-engine lab PATH, and `cold_load_s` measured spawn to ready.
+- mlx-lm (0.31.3) and OptiQ (0.5.13) did not change version.
+
+What it does to this paper:
+
+- **§1, the level shift, does not reproduce for mlx-lm or OptiQ.**
+  - At unchanged versions both read 10–21% *below* r3 on every workload. That is within about 6% of the 09-20 published grid; for example, `decode` `stock4bit`: mlx-lm 64.1 / 78.3 / 67.2 and OptiQ 66.6 / 79.4 / 70.6 (09-20 / r3 / r4).
+  - So the r2/r3 level is not the settled one that Decision 127 took it to be for these two runtimes. The cause of either shift is not established.
+  - oMLX reads 7–16% above r3, alongside its version change, and its TTFT falls from about 0.42 s to 0.17–0.20 s.
+- **§2, the format axis, still holds.** r4 reads `stock4bit > oq4 > optiq` in the mlx-lm, oMLX and OptiQ columns, and Osaurus's `stock4bit > optiq > oq4` as in r3. In the vMLX column `jangtq4` stays above `optiq` on all three workloads, by 0.3–4.8%; `decode` is a 0.2% tie.
+- **§3, the runtime axis, moves again.**
+  - oMLX is first in all nine r4 rows, by 23–31% over second place.
+  - vMLX moves from 4th–5th up to **2nd in seven of nine rows**. On `decode` `optiq` it ties mlx-lm at 58.8, and on `prefill` `optiq` it is 4th.
+  - mlx-lm is 4th or 5th in eight of nine.
+  - Osaurus is last in seven of nine; it is 4th on `prefill` `oq4` and 2nd on `prefill` `optiq`.
+  - Below the top place, these orderings change with the engine versions and with the session. Read them as this grid's own, not as a stable ranking.

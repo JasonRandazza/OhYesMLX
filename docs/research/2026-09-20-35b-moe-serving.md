@@ -241,3 +241,13 @@ says what the two re-runs do to it.
 - **No cause for this grid's low levels has been established.** Two later nights on the same
   gridspec, pins and runtime versions put the shortfall in this grid's unrecorded conditions rather
   than in a standing harness behaviour; what those conditions were is still unknown.
+
+## Update 2026-11-20: a fourth run (r4) does not reproduce the r2/r3 levels for mlx-lm and OptiQ
+
+The 2026-09-25 update above says to read cross-runtime levels from the r2/r3 pair. A fourth run, `results/harden-35b-r4/` on 2026-11-20, qualifies that. It is written up in `docs/research/2026-11-20-canaries-and-35b-r4.md` §3, and in the update at the end of `2026-09-25-35b-third-replicate.md`.
+
+- **mlx-lm (0.31.3) and OptiQ (0.5.13) are back within about 6% of this paper's §4 levels** at unchanged versions. `decode` `stock4bit` reads 67.2 and 70.6 tok/s, against 64.1 and 66.6 here. Neither the 09-20 level nor the r2/r3 level is established as the true one.
+- **oMLX 0.7.3 reads 95.2 tok/s** on `decode` `stock4bit`, against 67.9 here at 0.6.4.
+- **§8's "Maximum Generation Throughput" row still names the right winner,** `stock4bit` in `omlx`. Its "67.9–70.3 tok/s" range, and the "(or `optiq` / `vmlx`)" alternatives, no longer describe the current builds: r4 puts vMLX 1.6.84 second at 75.0 tok/s.
+- **The format orderings stand,** as the 09-25 update says.
+- **The vMLX cold load is longer at 1.6.84:** 13.2–19.2 s in r4 against 8.2–10.2 s in r3. Page-cache state is not separated from the version effect.
