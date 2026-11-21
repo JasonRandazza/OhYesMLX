@@ -1,0 +1,69 @@
+I'll start by reading the plan and the files I may touch.
+Now let me look at the CLI canary implementation and existing tests.
+
+Let me look at the existing canary test patterns.
+Let me read the fake infrastructure and the record tests.
+Let me check `FakeMeasure`/`FakeCell` and whether any test asserts the canary results dir.
+Let me read the remaining canary CLI tests and check `report.summarize`'s row shape.
+
+Now the docs I may touch — the canary paragraph and README section.
+Let me check the remaining canary references in other tests, and the CLI imports.
+Baseline first, so I can report the starting count.
+
+Baseline is 1683 passed, 3 skipped. Now I'll write the tests first.
+
+Red confirmed. Let me capture one line of the red output for the report.
+Red recorded. Now the implementation in `canary.py`.
+
+Now the `median_reading` function, after `verdict_line`.
+Now `record` gets the optional `runs`.
+Now the CLI: the `--repeat` flag, then the restructured `_canary`.
+
+Let me check the configured line length before running the tests.
+
+
+
+My fake is missing `Workload`. Let me add it.
+
+
+Two test bugs of mine (the abort fake hits every engine; decode rates are float-inexact). Fixing them.
+Now the interface doc's canary paragraph.
+
+Now the README's Canary section.
+
+
+
+
+All 17 new tests pass. Now the full suite.
+Two real issues: argparse needs `%%` for literal percent in help, and the existing FAIL test pins today's `FAIL: <reason>` text for a single visit. Fixing both.
+
+
+Green: 1701 passed, 3 skipped. Now I'll red-check the three claims, starting with the percent escaping.
+
+
+All three red-checks confirmed, files restored. Let me review the final diff.
+Let me check the tool config and that the help renders correctly.
+
+
+
+Full suite green. Committing.
+Committed as `a8ce9e6`.
+
+**Files changed:** `ohyesmlx/canary.py` (`MedianReading` + `median_reading`, `record(runs=…)`), `ohyesmlx/cli.py` (`--repeat`, reps outer/engines inner, one median-based verdict per engine), `tests/test_055_04_canary_repeat.py` (new, 17 tests / 18 cases), `docs/interfaces/v5-onboarding.md` (canary paragraph), `README.md` (Canary section).
+
+**Tests:** 1701 passed, 3 skipped (baseline 1683 passed, 3 skipped).
+
+**Red:** `AttributeError: module 'ohyesmlx.canary' has no attribute 'median_reading'` (16 failed before the code). Red-checked each fix by reverting it: bare `%` in `--repeat` help → `TypeError: %i format: a real number is required, not dict`; dropping the single-visit `where` guard → existing `test_the_canary_is_a_fail_line…` fails; `decode[0]` instead of `statistics.median` → `60.0 == 62.0` on the median tests. All restored.
+
+**Concerns:**
+- AC-1 says every run's dir is `<stamp>-<engine>-r<k>`, but "repeat=1 … existing canary tests stay unmodified" — the existing test pins `results_dir.endswith("-<engine>")`. Resolution: `-r<k>` only when N > 1; N=1 keeps today's dir name.
+- Same tension in AC-2: an existing test pins `FAIL: <reason>` for one visit, so the rep is named only when N > 1 (`FAIL: rep 2: <reason>`).
+- The printed load pair is now the min→max across an engine's visits, which is what makes `Reading.noisy` (unchanged) catch a busy middle rep; for N=1 with falling load the two printed numbers can swap order (no test covers it).
+- `canary.ESTIMATE` still says 10–15 minutes for a `--repeat 3` run (~30–45). It is not one of AC-3's three doc places, so I left it; the consent gate under-states a repeated run.
+- Pre-existing, carried over: `--record` on a PASS row with `decode_tps is None` writes null and then raises formatting `{None:.1f}`; a partial-None median can now reach it.
+- Not verified: no canary run, no runtime, no model; the live `RECORD="--record --repeat 3"` run remains the coordinator's.
+
+model                         turns      input    cacheRd   output  cache%        USD
+deepseek/deepseek-v4.1-flash     50    5054289    4917632    61757   97.3%   0.072306
+
+== cc-agent: git status ==

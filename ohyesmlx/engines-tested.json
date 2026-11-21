@@ -7,10 +7,24 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": 67.07261391595476,
-      "ttft_s": 0.24614979099715129,
-      "measured": "2026-10-29",
-      "version_measured": "0.31.3"
+      "decode_tok_s": 69.74320114084344,
+      "ttft_s": 0.22204612498171628,
+      "measured": "2026-11-21",
+      "version_measured": "0.31.3",
+      "runs": [
+        {
+          "decode_tok_s": 67.15510124735788,
+          "ttft_s": 0.22435695899184793
+        },
+        {
+          "decode_tok_s": 69.74320114084344,
+          "ttft_s": 0.2200802500010468
+        },
+        {
+          "decode_tok_s": 69.822250951068,
+          "ttft_s": 0.22204612498171628
+        }
+      ]
     }
   },
   "osaurus": {
@@ -21,10 +35,24 @@
       "format": "oq4",
       "repo": "RepublicOfKorokke/Qwen3.5-4B-oQ4",
       "workload": "decode",
-      "decode_tok_s": 59.87176830014199,
-      "ttft_s": 0.30818808398908004,
-      "measured": "2026-11-19",
-      "version_measured": "0.25.33"
+      "decode_tok_s": 64.97553902301907,
+      "ttft_s": 0.29514429095434025,
+      "measured": "2026-11-21",
+      "version_measured": "0.25.33",
+      "runs": [
+        {
+          "decode_tok_s": 63.70364896868636,
+          "ttft_s": 0.30414120899513364
+        },
+        {
+          "decode_tok_s": 64.97553902301907,
+          "ttft_s": 0.29514429095434025
+        },
+        {
+          "decode_tok_s": 65.02288860125752,
+          "ttft_s": 0.2938675829791464
+        }
+      ]
     }
   },
   "omlx": {
@@ -35,10 +63,24 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": 83.24513772445239,
-      "ttft_s": 0.17637925001326948,
-      "measured": "2026-11-02",
-      "version_measured": "0.7.3"
+      "decode_tok_s": 82.72849845497176,
+      "ttft_s": 0.1732170830364339,
+      "measured": "2026-11-21",
+      "version_measured": "0.7.3",
+      "runs": [
+        {
+          "decode_tok_s": 82.35843070467543,
+          "ttft_s": 0.17395633400883526
+        },
+        {
+          "decode_tok_s": 82.74345013286003,
+          "ttft_s": 0.1732170830364339
+        },
+        {
+          "decode_tok_s": 82.72849845497176,
+          "ttft_s": 0.17266416596248746
+        }
+      ]
     }
   },
   "optiq": {
@@ -49,10 +91,24 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": 76.88047799989513,
-      "ttft_s": 0.16520683400449343,
-      "measured": "2026-10-29",
-      "version_measured": "0.7.8"
+      "decode_tok_s": 75.36497735076497,
+      "ttft_s": 0.23190537502523512,
+      "measured": "2026-11-21",
+      "version_measured": "0.5.13",
+      "runs": [
+        {
+          "decode_tok_s": 75.54348892627708,
+          "ttft_s": 0.23136525001609698
+        },
+        {
+          "decode_tok_s": 75.3579595028445,
+          "ttft_s": 0.23190537502523512
+        },
+        {
+          "decode_tok_s": 75.36497735076497,
+          "ttft_s": 0.2329086660174653
+        }
+      ]
     }
   },
   "vmlx": {
@@ -63,10 +119,24 @@
       "format": "stock4bit",
       "repo": "mlx-community/Qwen3.5-4B-4bit",
       "workload": "decode",
-      "decode_tok_s": 81.67450874677614,
-      "ttft_s": 0.18433025002013892,
-      "measured": "2026-11-20",
-      "version_measured": "1.6.84"
+      "decode_tok_s": 80.67642295998225,
+      "ttft_s": 0.17852141603361815,
+      "measured": "2026-11-21",
+      "version_measured": "1.6.84",
+      "runs": [
+        {
+          "decode_tok_s": 80.80635005275435,
+          "ttft_s": 0.1784715410321951
+        },
+        {
+          "decode_tok_s": 80.67642295998225,
+          "ttft_s": 0.1796354170073755
+        },
+        {
+          "decode_tok_s": 79.91559280107982,
+          "ttft_s": 0.17852141603361815
+        }
+      ]
     }
   }
 }
