@@ -197,11 +197,15 @@ manifest records for that engine:
 ohyesmlx canary --yes
 ohyesmlx canary --engines omlx,optiq --yes
 ohyesmlx canary --engines omlx --record --allow-noisy --yes
+ohyesmlx canary --repeat 3 --record --yes
 ```
 
 Each engine gets one verdict — `no effect on our tables`, or `moved N%: re-run the grids
-containing <engine>`. Nothing is written to the manifest unless `--record` is passed, and
-without `--yes` the quiet-machine rule is printed and nothing starts.
+containing <engine>`. `--repeat N` visits every engine N times, interleaved, and takes the
+median of its N readings as that verdict, which is why `--repeat 3` is the recommended
+recording run: a 5–10% session-to-session swing is wider than the 5% noise floor a single
+reading is compared against. Nothing is written to the manifest unless `--record` is passed,
+and without `--yes` the quiet-machine rule is printed and nothing starts.
 
 ### Quickbench from the CLI
 
