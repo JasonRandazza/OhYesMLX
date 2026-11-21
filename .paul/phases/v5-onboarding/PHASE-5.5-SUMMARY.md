@@ -46,7 +46,7 @@ about: "OhYesMLX"
 
 ## Carried forward
 
-- **Measurement hazard (Jason's config, not the repo).** The claude-mem worker's background Claude sessions orphan `mcp-server-cloudflare` processes at 100% CPU. Four of them voided the first baseline attempt on 2026-11-21. Fix this before the next measurement.
+- **Measurement hazard (Jason's config, not the repo).** Orca's 15-minute Antigravity usage poll (`agy -p /usage`) starts the Cloudflare MCP server from `~/.gemini/config/mcp_config.json`, and some instances outlive `agy` and spin at 100% CPU (first misattributed to claude-mem; corrected 2026-11-21). Four of them voided the first baseline attempt on 2026-11-21. Fix this before the next measurement.
 - **35B runtime-axis ranking below the top.** It moves with engine versions and with the session. Any future runtime-axis claim needs replicates.
 - **Release.** The 055-02 app changes ship only after the next `scripts/build_app.sh` + `check_bundle.sh`.
 - **Phase 5.6** (UI aesthetics) waits on Jason's list.

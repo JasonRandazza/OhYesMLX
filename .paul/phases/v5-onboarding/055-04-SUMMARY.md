@@ -31,7 +31,7 @@ about: "OhYesMLX"
 ## The live recording (2026-11-21)
 
 - **Attempt 1, 12:37–13:48: nothing recorded.** The load reached 6–7 and the harness correctly refused every baseline as noisy. The cause was four orphaned `mcp-server-cloudflare` processes, each at 100% CPU.
-  - They are left behind by the claude-mem worker's background Claude sessions, which start about every 15 minutes, launch the Cloudflare MCP server, and leave it orphaned when they end.
+  - **Correction, same day:** they were first blamed on the claude-mem worker. A live capture showed the launcher is Orca's 15-minute Antigravity usage poll (`agy -p /usage`), which starts every MCP server in `~/.gemini/config/mcp_config.json`. Pausing claude-mem was unnecessary; clearing the orphans was the effective part.
   - The fix: the orphans were killed and the worker was paused for the re-run, then restarted with its own command line.
   - The root cause is in Jason's Claude configuration, not in this repo.
 - **Attempt 2, 13:57–15:00: all five recorded.** Load was 1.7–3.8, under `LOAD_NOISY`. Osaurus was restored byte-exact.

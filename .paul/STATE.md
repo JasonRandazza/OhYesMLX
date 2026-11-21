@@ -44,8 +44,8 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 | Decision | Phase | Impact |
 |----------|-------|--------|
-| 2026-11-21: Phase 5.5 complete (Jason) — 10 items + follow-ups; `PHASE-5.5-SUMMARY.md` | v5.0 | Next: 5.6 on Jason's list; fix the claude-mem/cloudflare MCP orphan leak before the next measurement |
-| 2026-11-21: 055-04 closed: `canary --repeat N` (median per metric, interleaved, `runs` kept); all five baselines re-recorded median-of-3 (spread ≤3.7%; OptiQ now on its real build 0.5.13). vMLX 35B cold-load probe: ~4 s page cache, ~11 s fixed warm floor, 1–3 s vs 1.6.59. 35B papers noted with r4. Measurement hazard: claude-mem worker's background sessions orphan `mcp-server-cloudflare` at 100% CPU (Jason's config) | v5.0 Phase 5.5 | `055-04-SUMMARY.md`, `docs/research/2026-11-20-canaries-and-35b-r4.md` §4 |
+| 2026-11-21: Phase 5.5 complete (Jason) — 10 items + follow-ups; `PHASE-5.5-SUMMARY.md` | v5.0 | Next: 5.6 on Jason's list; fix the orphaned cloudflare MCP leak (Orca's agy usage poll) before the next measurement |
+| 2026-11-21: 055-04 closed: `canary --repeat N` (median per metric, interleaved, `runs` kept); all five baselines re-recorded median-of-3 (spread ≤3.7%; OptiQ now on its real build 0.5.13). vMLX 35B cold-load probe: ~4 s page cache, ~11 s fixed warm floor, 1–3 s vs 1.6.59. 35B papers noted with r4. Measurement hazard: Orca's 15-min `agy -p /usage` poll orphans `mcp-server-cloudflare` at 100% CPU (Jason's config; first misattributed to claude-mem) | v5.0 Phase 5.5 | `055-04-SUMMARY.md`, `docs/research/2026-11-20-canaries-and-35b-r4.md` §4 |
 | 2026-11-20: Day run (Jason away, authorised): vMLX canary baseline re-recorded 81.67 tok/s / 0.1843 s @1.6.84; five-engine canary: oMLX/vMLX no effect, mlx-lm/Osaurus/OptiQ 'moved' trace to baselines (OptiQ's is the wrong build 0.7.8 vs 0.5.13); 35B r4 all PASS: every format ordering holds, mlx-lm/OptiQ −10–19% back to 09-20 levels, oMLX 0.7.3 +7–16% and TTFT halved, vMLX 1.6.84 35B cold load +4–9 s vs 1.6.59 | v5.0 Phase 5.5 | `docs/research/2026-11-20-canaries-and-35b-r4.md`; 3 decisions open for Jason |
 | 2026-11-20: Item 9 measured (Jason authorised, away): vMLX 1.6.84 TTFT rise not confirmed (+1.7% vs 1.6.82); no cold-load regression (the 2.5 s at 1.6.82 was a misread load average; 1.6.82 13.2 s, quiet 1.6.84 11.2 s); canary 'moved +5–7%' is a low recorded baseline (73.40, lowest of six). Baseline re-record is Jason's call | v5.0 Phase 5.5 | `docs/research/2026-11-20-vmlx-1.6.84-quiet-canaries.md` |
 | 2026-11-19: 055-03 closed: `scripts/sweep.sh` over `runtimes.sweep_resident_engines` (process scan; non-trap `sweep \|\| exit 1`; never exits); only run_jang_moe's pin matched osaurus-pin.sh; 16 S5-F2 correction notes; README rewritten with LMRE lineage | v5.0 Phase 5.5 | `055-03-SUMMARY.md` |
@@ -116,7 +116,7 @@ Recent only. The full log, every row verbatim, is `.paul/DECISIONS.md`.
 
 Last session: 2026-11-19 (Claude Opus 5.5 coordinator)
 Stopped at: Phase 5.5 closed; all merged to main (local, not pushed). No worktrees, no running workers.
-Next action: Phase 5.6 (UI aesthetics) when Jason's list arrives; before any measurement, fix the orphaned `mcp-server-cloudflare` leak (claude-mem background sessions)
+Next action: Phase 5.6 (UI aesthetics) when Jason's list arrives; before any measurement, fix the orphaned `mcp-server-cloudflare` leak (Orca's `agy -p /usage` poll; report in `~/AI/Agent-Environment/reports/`)
 Resume file: `.paul/HANDOFF.md`
 Open Design: MCP registration (Codex) points at the 0.24.1 payload; the app is 0.26.1. This session ran a headless daemon on 127.0.0.1:17456 plus a stdio shim. Jason to refresh it in the app.
 Osaurus on this host is 0.25.33 and vMLX 1.6.84: both canaried 2026-11-19, no effect on our tables (not yet recorded in engines-tested.json).

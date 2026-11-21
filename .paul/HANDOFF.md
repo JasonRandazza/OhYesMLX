@@ -27,10 +27,10 @@ It waits on Jason's list. Do not start it without that list. When the list arriv
 ## Before any measurement
 
 - **Fix, or route around, the orphaned `mcp-server-cloudflare` processes.**
-  - **The cause:** the claude-mem worker (`bun …/claude-mem/…/worker-service.cjs --daemon`) starts a Claude Haiku session about every 15 minutes. That session launches the Cloudflare MCP server, which is orphaned at 100% CPU when the session ends.
+  - **The cause:** Orca's 15-minute Antigravity usage poll (`agy -p /usage`) starts every MCP server in `~/.gemini/config/mcp_config.json`, and the Cloudflare one (`npx -y @cloudflare/mcp-server-cloudflare`) can outlive `agy` and spin at 100% CPU (captured 2026-11-21; report `~/AI/Agent-Environment/reports/2026-11-21-orphaned-cloudflare-mcp.md`; first blamed on claude-mem, which was wrong).
   - **The cost:** four of them voided the first baseline attempt on 2026-11-21.
-  - **The workaround used:** kill the orphans, stop the worker for the duration of the run, and restart it afterwards with its own command line.
-  - **The real fix** is in Jason's Claude configuration.
+  - **The workaround used:** kill the orphans (`pkill -f mcp-server-cloudflare`, never by `node`). Pausing claude-mem, done on 2026-11-21, was unnecessary.
+  - **The real fix** is in Orca or Antigravity configuration, outside this repo; the report lists the options.
 - **The rest of the quiet-machine checklist** (Spotlight, Wallspace, Sidecar, Chrome, Obsidian) and the load gate are unchanged. They are in `.paul/archive/2026-11-19-handoff-phase-5.5-start.md`, under "Measurement rules".
 - **Background tool waits** time out at 1–2 hours. Run long measurements detached (`nohup`), wait on them with a re-armable `until grep` loop, and never put a measurement inside the tool's background slot.
 - **`scripts/sweep.sh`** (055-03) has now run live three times, all clean.
