@@ -100,3 +100,24 @@ Cross-runtime `cold_load_s` remains uncomparable for ranking (Decision 120); the
 1. **Canary baselines.** OptiQ's is from the wrong build, 0.7.8 where the harness runs 0.5.13. mlx-lm's predates 05-07. Osaurus's reads 10% low. Re-record all three, and decide whether a baseline should be the median of several runs.
 2. **35B runtime-axis claims.** The order below oMLX changed between r3 and r4. Should the 35B papers get a note citing r4?
 3. **vMLX 1.6.84 cold load at 35B (+4–9 s against 1.6.59).** A page-cache-controlled probe (purge, then load) would separate cache state from version.
+
+## 4. Follow-up (2026-11-21): the vMLX 1.6.84 35B cold-load probe
+
+The probe is `results/vmlx-coldload-probe-20261121/` (script, raw `probe.jsonl`, log). Jason started it in a terminal because `sudo purge` needs his password, and it was load-gated. It ran each 35B format 6 times through the harness's own `RUNTIMES['vmlx'].start` with cache off: 3 starts right after `sudo purge`, then 3 warm. No request was sent. The version was 1.6.84 throughout.
+
+| Format | After purge (s) | Warm (s) |
+|---|---|---|
+| stock4bit | 19.16, 15.14, 15.14 | 11.11, 11.12, 11.12 |
+| oq4 | 15.14, 15.14, 15.15 | 11.13, 11.13, 11.14 |
+| optiq | 15.11, 16.17, 16.16 | 11.15, 12.16, 11.14 |
+| jangtq4 | 18.23, 17.25, 17.24 | 13.19, 13.19, 13.21 |
+
+**Resolution.** Readiness is polled every `READY_POLL_S` = 1.0 s (`runtimes.py:96`), so each reading is quantised to about 1 s. That is why the readings fall on 11.1, 12.2, 13.2, 15.1… s. Differences under about 1 s are not resolvable here.
+
+### Findings
+
+1. **Page-cache state explains about 4 s, never more than about 8 s.** Purged starts take 15.1–19.2 s; warm starts take 11.1–13.2 s. r4's 13.2–19.2 s spans both states: the grid's first visit to each cell can find its weights evicted by the previous 20 GB column.
+2. **Warm, 1.6.84 has a floor of about 11 s that does not scale with the model.** The 35B warm floor (11.1 s) equals the 4B canary's warm cold load (11.2 s, `2026-11-20-vmlx-1.6.84-quiet-canaries.md`), though 35B weights are about 6× larger. Most of the 11 s is fixed startup work, not weight loading. Only jangtq4 sits a step higher, at 13.2 s.
+3. **Against 1.6.59 (r3: 8.2–10.2 s)** warm 1.6.84 is about 1–3 s slower, two or three poll steps. That is the most this data can attribute to the version. It is not separated from r3's own unknown page-cache state, and it is consistent with a higher fixed startup cost.
+
+`cold_load_s` remains a within-runtime quantity (Decision 120). Nothing here is a cross-runtime claim.
